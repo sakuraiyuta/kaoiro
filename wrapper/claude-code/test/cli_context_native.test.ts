@@ -11,7 +11,7 @@ import { AgentHost } from "../src/host.js";
 import { runClaudeCli } from "../src/cli.js";
 
 describe.skipIf(process.env.KAOIRO_LIVE_CLAUDE !== "1")("native Claude context error", () => {
-  it("classifies an SDK-observed preflight block", async () => {
+  it.each(["blocked", "rate429"] as const)("classifies SDK-observed %s", async scenario => {
     const root = mkdtempSync(join(tmpdir(), "momo-522-native-"));
     const events: Array<Record<string, unknown>> = [];
     const sent: Envelope[] = [];
@@ -19,7 +19,13 @@ describe.skipIf(process.env.KAOIRO_LIVE_CLAUDE !== "1")("native Claude context e
     let requests = 0;
     const server = createServer((req, res) => {
       req.resume();
-      if (req.url?.startsWith("/v1/messages") && !req.url.includes("count_tokens")) requests++;
+      if (req.url?.startsWith("/v1/messages") && !req.url.includes("count_tokens")) {
+        requests++;
+        if (scenario === "rate429") {
+          res.writeHead(429, { "content-type": "application/json", "retry-after": "0" });
+          res.end('{"type":"error","error":{"type":"rate_limit_error","message":"rate limit exceeded"}}'); return;
+        }
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(req.url?.includes("count_tokens") ? '{"input_tokens":10}' : "{}");
     });
@@ -30,7 +36,8 @@ describe.skipIf(process.env.KAOIRO_LIVE_CLAUDE !== "1")("native Claude context e
     Object.assign(env, { PATH: process.env.PATH ?? "", HOME: root, TMPDIR: root,
       ANTHROPIC_API_KEY: "placeholder", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
       CLAUDE_CONFIG_DIR: join(root, "config"), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "32000", CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE: "10", DISABLE_AUTO_COMPACT: "1" });
+      CLAUDE_CODE_MAX_RETRIES: "0",
+      ...(scenario === "blocked" ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "32000", CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE: "10", DISABLE_AUTO_COMPACT: "1" } : {}) });
     const config: WrapperConfig = { agent_id: "test.native", persona: { id: "p", name: "P", sprite_set: "p" },
       display_name: "P", server_url: "ws://unused", model: "haiku" };
     let host: AgentHost | undefined;
@@ -68,12 +75,16 @@ describe.skipIf(process.env.KAOIRO_LIVE_CLAUDE !== "1")("native Claude context e
     void running.catch(error => { startupError = error; });
     try {
       await vi.waitFor(() => { if (startupError !== undefined) throw startupError; expect(ends).toHaveLength(1); }, { timeout: 30_000 });
-      expect(requests).toBe(0);
-      expect(events).toContainEqual({ type: "assistant", error: "invalid_request" });
-      expect(events).toContainEqual({ type: "result", subtype: "success", is_error: true, terminal_reason: "blocking_limit" });
-      expect(ends[0]).toEqual({ reason: "prompt_too_long" });
-      expect(classifyInterAgentError(ends[0]!).code).toBe("context_overflow");
-      expect(sent.find(e => e.type === "result")?.payload).toMatchObject({ error_code: "invalid_request", error_summary: "コンテキストの上限に達しました。" });
+      expect(requests).toBe(scenario === "blocked" ? 0 : 1);
+      expect(events).toContainEqual({ type: "assistant", error: scenario === "blocked" ? "invalid_request" : "rate_limit" });
+      expect(events).toContainEqual({ type: "result", subtype: "success", is_error: true, terminal_reason: scenario === "blocked" ? "blocking_limit" : "api_error" });
+      expect(ends[0]).toEqual(scenario === "blocked" ? { reason: "prompt_too_long" } : { detail: "rate limit" });
+      const classified = classifyInterAgentError(ends[0]!);
+      expect(classified.code).toBe(scenario === "blocked" ? "context_overflow" : "rate_limit");
+      if (scenario === "rate429") expect(classified).not.toHaveProperty("reset_delay_seconds");
+      expect(sent.find(e => e.type === "result")?.payload).toMatchObject(scenario === "blocked"
+        ? { error_code: "invalid_request", error_summary: "コンテキストの上限に達しました。" }
+        : { error_code: "rate_limit", error_summary: "レート制限に達しました。" });
     } finally {
       host?.close();
       try { await running; } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }

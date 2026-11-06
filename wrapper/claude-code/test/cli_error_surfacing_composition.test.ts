@@ -158,7 +158,10 @@ describe("Claude CLI error surfacing — production sink negative control (issue
   });
 });
 
-it("sends a context overflow notice and bounded failure diagnostics for a blocked Claude turn", async () => {
+it.each([
+  { reason: "blocking_limit", errorClass: "invalid_request", code: "context_overflow", summary: "コンテキストの上限に達しました。" },
+  { reason: "api_error", errorClass: "rate_limit", code: "rate_limit", summary: "レート制限に達しました。" },
+] as const)("sends a $code notice for Claude failure", async scenario => {
   vi.stubEnv("KAOIRO_CLAUDE_NATIVE_CONTINUATIONS", "0");
   let linkOptions!: Record<string, any>;
   const sent: Envelope[] = [];
@@ -171,9 +174,9 @@ it("sends a context overflow notice and bounded failure diagnostics for a blocke
       await args.options.hooks.UserPromptSubmit.at(-1).hooks[0]({ hook_event_name: "UserPromptSubmit",
         session_id: "s", prompt_id: "p", prompt: root.message.content as string }, undefined, { signal: new AbortController().signal });
       yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
-      yield { type: "assistant", message: { content: [] }, error: "invalid_request" } as unknown as SDKMessage;
+      yield { type: "assistant", message: { content: [] }, error: scenario.errorClass } as unknown as SDKMessage;
       yield { type: "result", subtype: "success", is_error: true, result_index: 0, session_id: "s",
-        terminal_reason: "blocking_limit", result: "private content" } as SDKMessage;
+        terminal_reason: scenario.reason, result: "private content" } as SDKMessage;
     }
     return Object.assign(gen(), { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
   }) as QueryFn;
@@ -199,10 +202,14 @@ it("sends a context overflow notice and bounded failure diagnostics for a blocke
       payload: { to: config.agent_id, conversation_id: "c1", turn_number: 1, kind: "request", body: "hello" } });
     await running;
     await vi.waitFor(() => expect(notices).toContainEqual(expect.objectContaining({
-      payload: expect.objectContaining({ conversation_id: "c1", error: expect.objectContaining({ code: "context_overflow" }) }),
+      payload: expect.objectContaining({ conversation_id: "c1", error: expect.objectContaining({ code: scenario.code }) }),
     })));
-    expect(sent.find(e => e.type === "result")?.payload).toMatchObject({ error_code: "invalid_request", error_summary: "コンテキストの上限に達しました。" });
-    expect(stderr.calls.some(call => String(call[0]).includes('"terminal_reason":"blocking_limit","assistant_error_class":"invalid_request"'))).toBe(true);
+    expect(sent.find(e => e.type === "result")?.payload).toMatchObject({ error_code: scenario.errorClass, error_summary: scenario.summary });
+    expect(stderr.calls.some(call => String(call[0]).includes(`"terminal_reason":"${scenario.reason}","assistant_error_class":"${scenario.errorClass}"`))).toBe(true);
+    if (scenario.code === "rate_limit") {
+      const notice = notices.find(e => e.payload.conversation_id === "c1")!;
+      expect(notice.payload.error).not.toHaveProperty("reset_delay_seconds");
+    }
     expect(JSON.stringify(stderr.calls)).not.toContain("private content");
   } finally { host?.close(); await running; stderr.restore(); vi.unstubAllEnvs(); }
 }, 10_000);

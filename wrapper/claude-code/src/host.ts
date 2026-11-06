@@ -3452,10 +3452,12 @@ export class AgentHost implements EngineAdapter {
             this.#emitResult(result, sdkMessageToCost(message));
             const terminalReason = sdkMessageToTerminalReason(message);
             this.#warn(`[kaoiro] claude turn failure: ${JSON.stringify({ terminal_reason: boundedFailureField(terminalReason, FAILURE_REASONS), assistant_error_class: boundedFailureField(result.error_code, FAILURE_CLASSES) })}`);
+            const rateLimit = message.type === "result" && message.subtype === "success" && message.is_error &&
+              terminalReason === "api_error" && result.error_code === "rate_limit";
             this.#completeActiveTurn(
               {
-                ...(terminalReason !== undefined ? { reason: terminalReason === "blocking_limit" ? "prompt_too_long" : terminalReason } : {}),
-                ...(result.error_detail !== undefined
+                ...(!rateLimit && terminalReason !== undefined ? { reason: terminalReason === "blocking_limit" ? "prompt_too_long" : terminalReason } : {}),
+                ...(rateLimit ? { detail: "rate limit" } : result.error_detail !== undefined
                   ? { detail: result.error_detail }
                   : {}),
               },
