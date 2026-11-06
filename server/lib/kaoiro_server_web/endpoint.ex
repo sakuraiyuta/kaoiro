@@ -70,7 +70,7 @@ defmodule KaoiroServerWeb.Endpoint do
     at: "/",
     from: :kaoiro_server,
     gzip: not code_reloading?,
-    only: ~w(index.html assets manifest.webmanifest icons)
+    only: ~w(index.html assets manifest.webmanifest icons notification-worker)
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
