@@ -18,3 +18,5 @@ pnpm -C runner build
 (cd server && mix deps.get)
 (cd dashboard && pnpm install --frozen-lockfile && pnpm exec playwright install chromium && pnpm build && pnpm exec playwright test)
 ```
+
+`notification-worker.spec.ts` needs the dashboard build served by a running Phoenix server and full Chromium (`channel: 'chromium'`); after starting the built server, run `(cd dashboard && KAOIRO_NOTIFICATION_TEST_ORIGIN=http://127.0.0.1:4000 pnpm exec playwright test e2e/notification-worker.spec.ts --workers=1)`. Without `KAOIRO_NOTIFICATION_TEST_ORIGIN`, these tests are skipped. The current remote test image lacks `libglib-2.0.so.0`, so Chromium cannot start there without its system dependencies. Playwright tests are not included in CI.

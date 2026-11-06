@@ -1,3 +1,4 @@
+import "./isolation.setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Envelope } from "../src/lib/protocol";
 
