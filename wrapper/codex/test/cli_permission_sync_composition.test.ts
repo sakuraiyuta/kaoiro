@@ -369,7 +369,11 @@ it("retires a pre-start sync failure through the real CLI and allows delivery tw
   const thread:CodexThreadLike={async runStreamed(){dispatches++;async function* events():AsyncGenerator<ThreadEvent>{yield {type:"thread.started",thread_id:"cli-sync-timeout"};yield completed();}return {events:events()};}};
   const running=runCodexCli({parseCliArgs:()=>({configPath:"test"}),loadConfig:()=>({...config}),
     createServerLink:(url,id,options)=>{const link=createServerLink(url,id,options);vi.spyOn(link,"waitForPermissionSync").mockRejectedValueOnce(new PermissionSyncTimeoutError());return link;},
-    createHost:(cfg,options)=>host=new CodexHost(cfg,{...options,codexFactory:()=>({startThread:()=>thread,resumeThread:()=>thread})})});
+    createHost:(cfg,options)=>host=new CodexHost(cfg,{
+      ...options,codexFactory:()=>({startThread:()=>thread,resumeThread:()=>thread}),
+      // The dispatch deadline covers permission recovery, not native account-probe shutdown.
+      startupRateLimitResolver:async()=>new Map(),
+    })});
   const item=(seq:number)=>({version:"0",agent_id:"peer",persona:config.persona,display_name:"Peer",ts:"2026-11-06T00:00:00Z",type:"inter_agent_message",state:"thinking",ext:{},delivery_seq:seq,payload:{to:config.agent_id,conversation_id:`sync-${seq}`,turn_number:1,kind:"request",body:"input",meta:{done:false,propose_next:""},owner:{kind:"user",id:"operator"}}});
   try{
     await vi.waitFor(()=>expect(transport.joinReceivers.get("ok")).toBeTypeOf("function"));
