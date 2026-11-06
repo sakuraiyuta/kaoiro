@@ -10,7 +10,7 @@ function deferred() { let resolve!: () => void;const promise = new Promise<void>
 function fixture(resume = true) {
   const events: unknown[] = [], jobs: AppServerHistoryJob[] = [];
   let connected = true, generation = 1;
-  const readTranscript = vi.fn(() => [row("exec")]), readSidecar = vi.fn((): SidecarRecord[] => []), warn = vi.fn();
+  const readSidecar = vi.fn((): SidecarRecord[] => []), warn = vi.fn();
   const replay = new CodexHistoryReplay({ schedule: job => jobs.push(job),
     captureFence: () => { const captured = generation;return () => connected && captured === generation; },
     seedState: () => events.push("state"), sessionId: () => "thread", readSidecar,

@@ -600,3 +600,12 @@ it("rolls a rejected model switch back on the same session and keeps the error f
   f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(3));
   expect(f.createSession).toHaveBeenCalledTimes(1);
 });
+
+it("completes an app-server turn when diagnostic capture storage is unavailable", async () => {
+  const f = fixture({ turnTraceDir: "/dev/null/kaoiro-trace" });
+  await f.host.send("continue without diagnostic storage");
+  await f.until(1);
+  f.terminal();
+  await vi.waitFor(() => expect(f.ends).toHaveBeenCalledOnce());
+  expect(f.ends.mock.calls[0]?.[0]).not.toHaveProperty("error");
+});

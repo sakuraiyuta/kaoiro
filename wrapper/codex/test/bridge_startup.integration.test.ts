@@ -9,12 +9,12 @@ import { AppServerSession } from "../src/app_server_session.js";
 import { AppServerTransport, type AppServerThreadOptions } from "../src/app_server_transport.js";
 import { CodexHost } from "../src/host.js";
 
-// The child, SDK, bridge, socket, and handler are real. Only the bridge's entry
+// The child, bridge, socket, and handler are real. Only the bridge's entry
 // point is delayed; required/startup policy comes from production composition.
 // Analytics/plugins are disabled in the isolated home (plugin clones can race
 // cleanup); CLI update traffic remains possible on offline runners.
 it.each([
-  ["app-server", false], ["exec", false], ["app-server", true], ["exec", true],
+  ["app-server", false], ["app-server", true],
 ] as const)("%s waits for the bridge and fails closed on startup timeout=%s", async (engine, timeout) => {
   const home = await mkdtemp(join(tmpdir(), "fuji-348-bridge-startup-"));
   const requests: Array<{ input: Array<Record<string, unknown>> }> = [];

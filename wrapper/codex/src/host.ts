@@ -456,13 +456,13 @@ export class CodexHost implements EngineAdapter {
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   /** Queued SDK input. A local_image temp directory belongs to exactly one
-   * turn and is deleted from #runTurn's finally path. `conversationIds`
+   * turn and is deleted from #runAppServerTurn's finally path. `conversationIds`
    * (issue #127 must-fix 1; extended issue #211 段階3 direction 2 for
    * coalescing) tags a turn injected to answer inter-agent message(s);
    * undefined for an ordinary operator instruction, one entry for an
    * ordinary inter-agent turn, multiple entries when several same-peer
    * pending messages were coalesced into this one turn. Threaded through
-   * #runTurn so onTurnEnd resolves exactly this turn's conversation(s). */
+   * #runAppServerTurn so onTurnEnd resolves exactly this turn's conversation(s). */
   readonly #queue: QueuedTurn[] = [];
   #arrivalSeq = 0;
   readonly #steers = new Map<string, ActiveSteer>();
@@ -680,7 +680,7 @@ export class CodexHost implements EngineAdapter {
   /**
    * Loads an already-written rollout snapshot before the CLI emits its
    * startup state. A fresh spawn has no session id yet, so this is a no-op
-   * until thread.started establishes one in #runTurn.
+   * until thread.started establishes one in #runAppServerTurn.
    */
   async initializeRateLimits(): Promise<void> {
     const sessionId = this.#sessionId;
@@ -971,7 +971,7 @@ export class CodexHost implements EngineAdapter {
     this.#machine = initialMachineState("error");
     this.#emitState("error");
 
-    // These entries have not reached #runTurn. They are safe to discard and,
+    // These entries have not reached #runAppServerTurn. They are safe to discard and,
     // when they belong to inter-agent batches, must settle as cancellations so
     // the caller can report the drop without touching the active token.
     const queuedTurns = this.#queue.splice(0);
@@ -2168,7 +2168,7 @@ export class CodexHost implements EngineAdapter {
     // issue #253: SDK-agnostic result fields (ResultPayload, issue #123) —
     // Claude's adapter fills these from the SDK's own subtype/errors; Codex
     // has no SDK-native equivalent, so this host sets error_subtype only for
-    // its own rollout-corruption classification (see #runTurn's catch(err)).
+    // structured runtime and provider failures.
     error_subtype?: string;
     error_detail?: string;
     // issue #300: error_code is the codex-sdk exec-failure JSON's own

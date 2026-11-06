@@ -138,7 +138,8 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         return {
           sendInterAgent: async (envelope: Envelope) =>
             envelope.payload.kind === "done" ? doneAcceptance : { kind: "accepted", stamp: null },
-          send: () => {}, close: () => {}, currentSessionId: () => null,
+          send: () => {}, close: () => {}, deliveryModes: () => ({ early: "none" }),
+      currentSessionId: () => null,
           deliveryIncarnation: () => identity,
           deliveryGeneration: () => "generation",
           reportDeliveryStage: (report: Record<string, unknown>) => { reports.push(report); return true; },
@@ -203,6 +204,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     const link = {
       acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
       close: () => {},
+      deliveryModes: () => ({ early: "none" }),
       currentSessionId: () => null,
       send: () => {},
     };
@@ -380,6 +382,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     const link = {
       acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
       close: () => {},
+      deliveryModes: () => ({ early: "none" }),
       currentSessionId: () => null,
       send: () => {},
     };
@@ -456,7 +459,8 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         options = callbacks;
         queueMicrotask(() => callbacks.onPersonaPrompt?.("system"));
         return {
-          currentSessionId: () => null, send: () => {},
+          deliveryModes: () => ({ early: "none" }),
+      currentSessionId: () => null, send: () => {},
           acknowledgeInterAgentDelivery: () => {},
           retireInterAgentDeliveries: (envelopes: Envelope[]) => retired.push(...envelopes.map((envelope) => (envelope as Envelope & { delivery_seq: number }).delivery_seq)),
           flushInterAgentRetirements: async () => { closing.push("flush"); },
@@ -534,7 +538,8 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     async ({ finish }) => {
       let hostOptions!: Record<string, any>;
       let fallbackStops = 0;
-      const link = { close: () => {}, currentSessionId: () => null, send: () => {} };
+      const link = { close: () => {}, deliveryModes: () => ({ early: "none" }),
+      currentSessionId: () => null, send: () => {} };
       const host = {
         state: "idle",
         statusExtSnapshot: () => ({}),
@@ -598,7 +603,8 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         let hostOptions!: Record<string, any>;
         let interrupts = 0;
         let failStops = 0;
-        const link = { close: () => {}, currentSessionId: () => null, send: () => {} };
+        const link = { close: () => {}, deliveryModes: () => ({ early: "none" }),
+      currentSessionId: () => null, send: () => {} };
         const host = {
           state: "idle",
           statusExtSnapshot: () => ({}),
@@ -654,7 +660,8 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     });
     let hostOptions!: Record<string, any>;
     let fallbackStops = 0;
-    const link = { close: () => {}, currentSessionId: () => null, send: () => {} };
+    const link = { close: () => {}, deliveryModes: () => ({ early: "none" }),
+      currentSessionId: () => null, send: () => {} };
     const host = {
       state: "idle",
       statusExtSnapshot: () => ({}),
@@ -710,6 +717,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     const sentTokens: string[] = [];
     const link = {
       close: () => {},
+      deliveryModes: () => ({ early: "none" }),
       currentSessionId: () => null,
       send: () => {},
     };
@@ -806,6 +814,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     let fallbackStops = 0;
     const link = {
       close: () => {},
+      deliveryModes: () => ({ early: "none" }),
       currentSessionId: () => null,
       send: () => {},
     };
@@ -871,7 +880,8 @@ describe("permission gate cancellation notice composition", () => {
         onMessage = options.onInterAgentMessage!;
         queueMicrotask(() => { options.onReplyBasisMode?.("v1"); options.onPersonaPrompt?.("test"); });
         return {
-          close() {}, currentSessionId: () => null,
+          close() {}, deliveryModes: () => ({ early: "none" }),
+      currentSessionId: () => null,
           send: (envelope: Envelope) => sent.push(envelope),
           sendInterAgent: async (envelope: Envelope) => { sent.push(envelope); return { kind: "accepted", stamp: null }; },
           acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),

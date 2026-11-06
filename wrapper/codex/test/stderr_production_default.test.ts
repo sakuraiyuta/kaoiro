@@ -14,7 +14,7 @@ const SECRET = "abcdef123456";
 const MASKED = "api_key=********3456";
 
 describe("CodexHost stderr — production default", () => {
-  it("masks a real default app-server config failure on the child process stderr and wire", async () => {
+  it("buffers native stderr and masks a real default app-server config failure on the wire", async () => {
     const codexHome = await mkdtemp(join(tmpdir(), "kaoiro-codex-home-"));
     await writeFile(join(codexHome, "config.toml"), `api_key=${SECRET}\n`);
     const childSource = `
@@ -62,7 +62,7 @@ describe("CodexHost stderr — production default", () => {
       const output = JSON.parse(stdout) as { ended: boolean; logs: unknown[] };
 
       expect(output.ended).toBe(true);
-      expect(stderr).toContain(MASKED);
+      expect(stderr).toBe("");
       expect(stderr).not.toContain(SECRET);
       expect(JSON.stringify(output.logs)).toContain(MASKED);
       expect(JSON.stringify(output.logs)).not.toContain(SECRET);
