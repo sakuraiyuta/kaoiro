@@ -267,7 +267,7 @@ test("restore rejects a non-fresh target before opening credentials", async () =
   }
 });
 
-for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup", "changed-rpc"]) test(`default local observe and remove-pin use real evidence and config bytes (${format})`, async t => {
+for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host"]) test(`default local observe and remove-pin use real evidence and config bytes (${format})`, async t => {
   const root = await mkdtemp(join(tmpdir(), "kogane564-maintenance-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configPath = join(root, "runner.json"), evidencePath = join(root, "maintenance.json");
@@ -292,7 +292,7 @@ for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup
     }
     if (argv.includes("--show-cursor")) { cursorCalls++; return "-- cursor: test-cursor"; }
     if (argv.some(a => a.startsWith("--after-cursor="))) return `runner: codex backend=${backend} for subsequent wrappers`;
-    if (argv.includes("--output=cat")) return format === "missing-startup" ? "later log without a startup record" : `runner: host=${selectedHost} rev=${revision} connecting to ws://example.invalid/runner`;
+    if (argv.includes("--output=cat")) return format === "missing-startup" ? "later log without a startup record" : `runner: host=${format === "wrong-startup-host" ? "different-host" : selectedHost} rev=${revision}${format === "dirty-startup" ? "-dirty" : ""} connecting to ws://example.invalid/runner`;
     return JSON.stringify({ MESSAGE: `runner: codex backend=${backend} for subsequent wrappers`, __REALTIME_TIMESTAMP: Math.floor(statSync(configPath).mtimeMs * 1000) + 1000 });
   };
   const localArgs = phase => {
@@ -302,10 +302,12 @@ for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup
   };
   const observed = io(), result = await main(localArgs("observe"), undefined, observed, { runCommand });
   assert.deepEqual(await readFile(configPath), beforeBytes);assert.equal(cursorCalls, 0);
-  if (["missing", "missing-startup", "changed-rpc"].includes(format)) {
+  if (["missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host"].includes(format)) {
     assert.equal(result, 1);
     assert.match(observed.stderr.text, format === "missing" ? /server-observation-unavailable/
-      : format === "missing-startup" ? /runner-start-record-unavailable/ : /supervisor-identity-mismatch/);
+      : format === "missing-startup" ? /runner-start-record-unavailable/
+      : format === "dirty-startup" ? /runner-identity-dirty/
+      : format === "wrong-startup-host" ? /runner-observation-unavailable/ : /supervisor-identity-mismatch/);
     return;
   }
   assert.equal(result, 0, observed.stderr.text);assert.equal(supervisorCalls, 2);

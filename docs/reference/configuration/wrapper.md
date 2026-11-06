@@ -75,7 +75,9 @@ Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
 
 - `codex_backend?: "app-server"` — runner-local `codex.backend`,
   resolved to `"app-server"` when omitted and relayed only for Codex launches. The
-  wrapper rejects explicit `"exec"` with pre-retirement migration guidance. It is not accepted from `spawn` or a
+  wrapper rejects explicit `"exec"` with pre-retirement migration guidance. The
+  protocol type still includes `"exec"` for legacy producer compatibility; it
+  is not an accepted current configuration value. It is not accepted from `spawn` or a
   resume snapshot and is not a wire capability. Reload affects subsequent
   wrapper lifetimes, including resumes; existing wrappers retain their backend.
 
