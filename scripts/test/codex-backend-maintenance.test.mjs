@@ -1,5 +1,7 @@
 import "./fixtures/test-isolation.mjs";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -267,7 +269,7 @@ test("restore rejects a non-fresh target before opening credentials", async () =
   }
 });
 
-for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host", "unknown-engine"]) test(`default local observe and remove-pin use real evidence and config bytes (${format})`, async t => {
+for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host", "unknown-engine", "overflow", "missing-pid", "registry-changed"]) test(`default local observe and remove-pin use real evidence and config bytes (${format})`, async t => {
   const root = await mkdtemp(join(tmpdir(), "kogane564-maintenance-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configPath = join(root, "runner.json"), evidencePath = join(root, "maintenance.json");
@@ -282,10 +284,11 @@ for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup
   const { readFileSync, statSync } = await import("node:fs");
   const runCommand = (command, argv) => {
     const bytes = readFileSync(configPath), config = JSON.parse(bytes), backend = config.codex.backend ?? "app-server";
-    if (command === "systemctl") return argv.includes("MainPID") ? "100" : invocation;
+    if (command === "systemctl") return argv.includes("MainPID") ? (format === "missing-pid" ? "0" : "100") : invocation;
     if (command === "docker") {
       const isHost = argv.at(-1).includes("observe_host");
       if (isHost && format === "missing") return "no observation frame";
+      if (!isHost && format === "registry-changed") return JSON.stringify({ error: "runner_registry_changed" });
       const value = isHost ? f.state.h : { ...f.state.s, applied_backend: backend,
         request_id: String(++supervisorCalls).padStart(32, "0"),
         pid: format === "changed-rpc" && supervisorCalls === 2 ? 101 : 100 };
@@ -301,15 +304,32 @@ for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup
     if (phase !== "observe") a[a.indexOf("--maintenance-evidence") + 1] = evidencePath;
     return a;
   };
-  const observed = io(), result = await main(localArgs("observe"), undefined, observed, { runCommand });
+  let processBoundary, overflowCode;
+  if (format === "overflow") {
+    const originalExecFileSync = childProcess.execFileSync;
+    processBoundary = t.mock.method(childProcess, "execFileSync", (command, argv, options) => {
+      if (command !== "journalctl" || !argv.includes("--output=cat")) return runCommand(command, argv);
+      assert.equal(options.maxBuffer, 8 * 1024 * 1024);
+      try {
+        return originalExecFileSync(process.execPath, ["-e", "process.stdout.write(Buffer.alloc(9 * 1024 * 1024))"], options);
+      } catch (error) { overflowCode = error.code;throw error; }
+    });
+    syncBuiltinESMExports();
+  }
+  const observed = io(); let result;
+  try { result = await main(localArgs("observe"), undefined, observed, format === "overflow" ? {} : { runCommand }); }
+  finally { if (processBoundary) { processBoundary.mock.restore();syncBuiltinESMExports(); } }
+  if (format === "overflow") assert.equal(overflowCode, "ENOBUFS");
+  if (format === "missing-pid") assert.equal(supervisorCalls, 0);
   assert.deepEqual(await readFile(configPath), beforeBytes);assert.equal(cursorCalls, 0);
-  if (["missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host", "unknown-engine"].includes(format)) {
+  if (["missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host", "unknown-engine", "overflow", "missing-pid", "registry-changed"].includes(format)) {
     assert.equal(result, 1);
     assert.match(observed.stderr.text, format === "missing" ? /server-observation-unavailable/
-      : format === "missing-startup" ? /runner-start-record-unavailable/
+      : ["missing-startup", "overflow"].includes(format) ? /runner-start-record-unavailable/
       : format === "dirty-startup" ? /runner-identity-dirty/
       : format === "wrong-startup-host" ? /runner-observation-unavailable/
-      : format === "unknown-engine" ? /observation-invalid/ : /supervisor-identity-mismatch/);
+      : format === "unknown-engine" ? /observation-invalid/
+      : format === "registry-changed" ? /runner-registry-changed/ : /supervisor-identity-mismatch/);
     return;
   }
   assert.equal(result, 0, observed.stderr.text);assert.equal(supervisorCalls, 2);
