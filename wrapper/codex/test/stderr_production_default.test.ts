@@ -15,7 +15,7 @@ const RPC_MODULE = pathToFileURL(join(PACKAGE_ROOT, "dist", "app_server_rpc.js")
 const MASKED = "api_key=********";
 
 describe("CodexHost stderr — production default", () => {
-  it("masks a real default app-server initialization failure on stderr and wire", async () => {
+  it("redacts native initialization stderr and keeps the wire failure private", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-home-"));
     const codexHome = join(root, `api_key=${SECRET}`);
     await mkdir(join(codexHome, "state_5.sqlite"), { recursive: true });
@@ -75,9 +75,8 @@ describe("CodexHost stderr — production default", () => {
       expect(output.ended).toBe(true);
       expect(stderr).toContain(MASKED);
       expect(stderr).not.toContain(SECRET);
-      expect(JSON.stringify(output.logs)).toContain(MASKED);
       expect(output.logs).toContainEqual(expect.objectContaining({ type: "result",
-        payload: expect.objectContaining({ is_error: true, error_detail: expect.stringContaining("initialize attempt 3/3") }) }));
+        payload: expect.objectContaining({ is_error: true, error_detail: expect.stringContaining("App-server") }) }));
       expect(JSON.stringify(output.logs)).not.toContain(SECRET);
     } finally {
       await rm(root, { recursive: true, force: true });
