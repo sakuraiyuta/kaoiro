@@ -1,17 +1,17 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
 import type {
   PermissionControlExt,
   PermissionObservation,
   PermissionSelection,
   WrapperPermissionLifecycleMessage,
 } from "@kaoiro/protocol";
-import { CodexHost } from "../src/host.js";
-import type { CodexClientLike, CodexHostOptions, CodexThreadLike } from "../src/host.js";
+import { appServerHostFixture } from "./fixtures/host_app_server.js";
+import type { CodexHostOptions } from "../src/host.js";
 import { effectiveNetworkAccess } from "../src/network_access.js";
 
 const SESSION_ID = "permission-boundary-session";
@@ -101,60 +101,30 @@ async function createHarness(options: {
   let sdkCalls = 0;
   let running: Promise<void> | undefined;
   let releaseCleanupWait = () => {};
-  const threadOptions: ThreadOptions[] = [];
   const audits: WrapperPermissionLifecycleMessage[] = [];
-  const thread: CodexThreadLike = {
-    async runStreamed() {
-      sdkCalls += 1;
-      if (options.writeContext !== false) {
-        await appendFile(rollout, context(
-          `current-turn-${sdkCalls}`,
-          "workspace-write",
-          options.observedNetwork ?? true,
-        ));
-      }
-      async function* events(): AsyncGenerator<ThreadEvent> {
-        yield { type: "thread.started", thread_id: SESSION_ID };
-        yield {
-          type: "turn.completed",
-          usage: {
-            input_tokens: 1,
-            cached_input_tokens: 0,
-            output_tokens: 1,
-            reasoning_output_tokens: 0,
-            cache_write_input_tokens: 0,
-          },
-        };
-      }
-      return { events: events() };
-    },
-  };
-  const captureOptions = (value?: ThreadOptions): CodexThreadLike => {
-    if (value !== undefined) threadOptions.push(value);
-    return thread;
-  };
-  const client: CodexClientLike = {
-    startThread: captureOptions,
-    resumeThread: (_id, value) => captureOptions(value),
-  };
-  const host = new CodexHost({
-    agent_id: "permission.boundary",
-    display_name: "Permission boundary",
-    persona: { id: "p", name: "P", sprite_set: "p" },
-    server_url: "ws://localhost:4000/wrapper",
-    sandbox: "read-only",
-    network_access: false,
-  }, {
-    onState: () => {},
+  const f = appServerHostFixture({
     appendSystemPrompt: "p",
-    backend: "exec", codexFactory: () => client,
     resumeSessionId: SESSION_ID,
     permissionRolloutRoot: root,
     permissionSyncSupported: true,
     turnTraceDir: join(root, "traces"),
     onPermissionLifecycle: (event) => audits.push(event),
     ...options.host,
-  });
+  }, {
+    agent_id: "permission.boundary",
+    display_name: "Permission boundary",
+    persona: { id: "p", name: "P", sprite_set: "p" },
+    server_url: "ws://localhost:4000/wrapper",
+    sandbox: "read-only",
+    network_access: false,
+  }, false, { threadId: SESSION_ID, onTurnStart: (_request, number) => {
+    sdkCalls = number;
+    if (options.writeContext !== false) appendFileSync(rollout, context(
+      `turn-${number}`, "workspace-write", options.observedNetwork ?? true,
+    ));
+    queueMicrotask(() => f.terminal());
+  } });
+  const { host } = f;
   cleanups.push(async () => {
     host.close();
     releaseCleanupWait();
@@ -167,11 +137,12 @@ async function createHarness(options: {
   return {
     host,
     audits,
-    threadOptions,
+    get turnRequests() { return f.turns(); },
     get sdkCalls() { return sdkCalls; },
     ext: () => host.statusExtSnapshot(),
     run() {
-      running = host.run("first");
+      void host.send("first");
+      running = f.running;
       return running;
     },
     setCleanupRelease(release: () => void) { releaseCleanupWait = release; },
@@ -211,11 +182,11 @@ describe("permission state boundaries", () => {
       version: "0", control: rejected(request, baseline), next: baseline,
     });
     void h.run();
-    await vi.waitFor(() => expect(h.threadOptions).toHaveLength(1));
-    expect(h.threadOptions[0]?.sandboxMode).toBe("read-only");
+    await vi.waitFor(() => expect(h.turnRequests).toHaveLength(1));
+    expect(h.turnRequests[0]?.params).toMatchObject({ sandboxPolicy: { type: "readOnly" } });
   });
 
-  it("keeps a prior process observation historical before the first exec", async () => {
+  it("keeps a prior process observation historical before the first dispatch", async () => {
     const h = await createHarness();
     const request = selection(1);
     h.host.applyPermissionSync({ version: "0", control: applied(request), next: request });

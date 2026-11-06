@@ -283,8 +283,8 @@ function captureStderrTail(): { tail: () => string; restore: () => void } {
   };
 }
 
-function findCodexExecPidOnce(parentPid: number): number | null {
-  const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.includes("codex exec"));
+function findCodexExecPidOnce(parentPid: number, backend: "exec" | "app-server"): number | null {
+  const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.includes(`codex ${backend}`));
   return direct[0]?.pid ?? null;
 }
 
@@ -397,9 +397,9 @@ async function waitFor(
   throw new Error(`timed out after ${timeoutMs}ms${diagnostics?.() ?? ""}`);
 }
 
-it.skipIf(!isLinux)(
-  "SIGTERM triggers close() -> the real codex exec child and its sandboxed grandchild both terminate (issue #391 M1/S2, Linux-only)",
-  async () => {
+it.skipIf(!isLinux).each(["exec", "app-server"] as const)(
+  "%s: SIGTERM triggers close() -> the real Codex child and its sandboxed grandchild both terminate (issue #391 M1/S2, Linux-only)",
+  async (backend) => {
     const home = await mkdtemp(join(tmpdir(), "ao391-cli-exec-sigterm-"));
     const wire = await phoenixLoopback();
     let turnCount = 0;
@@ -476,7 +476,7 @@ enabled=false
         parseCliArgs: () => ({ configPath: "fixture", prompt: "run sleep 77 via exec_command", resume: undefined }),
         loadConfig: () => ({
           agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P",
-          server_url: wire.url, model: "gpt-5.6-sol", codex_backend: "exec",
+          server_url: wire.url, model: "gpt-5.6-sol", codex_backend: backend,
         }),
       });
       void running.catch(() => {});
@@ -485,7 +485,7 @@ enabled=false
       wire.push("persona_prompt", { prompt: "test" });
       wire.push("permission_sync", { version: "0", control: null, next: null });
 
-      await waitFor(() => (execChildPid = findCodexExecPidOnce(process.pid)) !== null, 15_000, describeTimeout);
+      await waitFor(() => (execChildPid = findCodexExecPidOnce(process.pid, backend)) !== null, 15_000, describeTimeout);
       await waitFor(() => (sleepPid = findDescendantByExactArgs(execChildPid!, "sleep 77")) !== null, 15_000, describeTimeout);
       expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!)).toBe(true);

@@ -108,8 +108,8 @@ function findDescendantByExactArgs(rootPid: number, command: string): number | n
   return null;
 }
 
-function findCodexExecPidOnce(parentPid: number): number | null {
-  const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.includes("codex exec"));
+function findCodexExecPidOnce(parentPid: number, backend: "exec" | "app-server"): number | null {
+  const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.includes(`codex ${backend}`));
   return direct[0]?.pid ?? null;
 }
 
@@ -196,7 +196,7 @@ async function waitFor(
   throw new Error(`timed out after ${timeoutMs}ms${diagnostics?.() ?? ""}`);
 }
 
-async function writeRunnerScript(root: string, wireUrl: string): Promise<string> {
+async function writeRunnerScript(root: string, wireUrl: string, backend: "exec" | "app-server"): Promise<string> {
   const script = join(root, "runner.mjs");
   await writeFile(
     script,
@@ -210,7 +210,7 @@ await runCodexCli({
     display_name: "P",
     server_url: ${JSON.stringify(wireUrl)},
     model: "gpt-5.6-sol",
-    codex_backend: "exec",
+    codex_backend: ${JSON.stringify(backend)},
   }),
 });
 `,
@@ -218,9 +218,9 @@ await runCodexCli({
   return script;
 }
 
-it.skipIf(!isLinux || !existsSync(distCliPath))(
-  "the spawned wrapper process exits with code 0 and no signal after SIGTERM, and the real exec child + grandchild both terminate (issue #391 M2, Linux-only, requires build)",
-  async () => {
+it.skipIf(!isLinux || !existsSync(distCliPath)).each(["exec", "app-server"] as const)(
+  "%s: the spawned wrapper process exits with code 0 and no signal after SIGTERM, and the real Codex child + grandchild both terminate (issue #391 M2, Linux-only, requires build)",
+  async (backend) => {
     const home = await mkdtemp(join(tmpdir(), "ao391-m2-exec-"));
     const wire = await phoenixLoopback();
     let turnCount = 0;
@@ -272,7 +272,7 @@ plugins=false
 enabled=false
 `);
 
-    const runnerScript = await writeRunnerScript(home, wire.url);
+    const runnerScript = await writeRunnerScript(home, wire.url, backend);
 
     const ownerTag = newOwnerTag();
     const env = {
@@ -301,7 +301,7 @@ enabled=false
 
       await waitFor(() => {
         if (child.pid === undefined) return false;
-        execChildPid = findCodexExecPidOnce(child.pid);
+        execChildPid = findCodexExecPidOnce(child.pid, backend);
         return execChildPid !== null;
       }, 15_000, describeTimeout);
       await waitFor(() => {
