@@ -16,7 +16,7 @@ const row = (id, engine = "codex") => ({ id, engine, directory: true, live: fals
 const args = (phase, ...extra) => ["--phase", phase, "--host", host, "--runner-sha", revision,
   "--compose-file", "fixture.yml", "--runner-config", "fixture.json", "--runner-unit", "fixture.service",
   ...(phase === "observe" ? ["--phase-target", "remove-pin"] : ["--maintenance-evidence", "maintenance.json"]),
-  ...(phase === "restore-fresh" ? ["--agent", agent, "--backend", "exec", "--operator-config", "operator.json"] : []), ...extra];
+  ...(phase === "restore-fresh" ? ["--agent", agent, "--backend", "app-server", "--operator-config", "operator.json"] : []), ...extra];
 const io = () => ({ stdout: { text: "", write(s) { this.text += s; } }, stderr: { text: "", write(s) { this.text += s; } } });
 
 function fixture() {
@@ -58,12 +58,15 @@ function fixture() {
 async function accept(f, phase = "remove-pin") {
   const output = io(), argv = args("observe");
   argv[argv.indexOf("--phase-target") + 1] = phase;
-  if (phase === "restore-fresh") argv.push("--agent", agent, "--backend", "exec");
+  if (phase === "restore-fresh") {
+    argv.push("--agent", agent, "--backend", "app-server");
+    f.state.r.configuredBackend = f.state.r.appliedBackend = f.state.r.appliedReceipt.backend = f.state.s.applied_backend = "app-server";
+  }
   assert.equal(await main(argv, f.adapters, output), 0, output.stderr.text);
   const evidence = JSON.parse(output.stdout.text).maintenance_template;
   evidence.maintenance_owner_accepted = true;
   for (const entry of evidence.agents) {
-    entry.current_backend = entry.classification === "codex" ? "exec" : "not-applicable";
+    entry.current_backend = entry.classification === "codex" ? f.state.r.appliedBackend : "not-applicable";
     entry.evidence_refs = ["isolated-test-record"];
   }
   f.state.evidence = JSON.stringify(evidence);
@@ -165,13 +168,6 @@ test("failure after the write does not restore a pin or send restore", async () 
   const output = io(); assert.equal(await main(args("remove-pin"), f.adapters, output), 1);
   assert.match(output.stderr.text, /after-write/);
   assert.equal(f.state.r.configuredBackend, "omitted"); assert.equal(f.calls.write, 1); assert.equal(f.calls.restore, 0);
-});
-
-test("pin-exec-fresh already-selected still requires fresh work and matching observations", async () => {
-  const f = fixture(); await accept(f, "pin-exec-fresh"); const output = io();
-  assert.equal(await main(args("pin-exec-fresh"), f.adapters, output), 0);
-  assert.equal(JSON.parse(output.stdout.text).status, "already-selected"); assert.equal(f.calls.write, 0); assert.equal(f.calls.cursor, 0);
-  assert.equal(f.calls.supervisor, 2);
 });
 
 test("restore-fresh permits a connected same-backend sibling and checks actual target connection", async () => {
@@ -444,3 +440,25 @@ test("restore guard deadline", async t => {
   assert.equal(JSON.parse(output.stderr.text).reason, "restore-unconfirmed"); assert.match(output.stderr.text, /restore-outcome-unknown/);
   assert.equal(f.calls.host, 6); assert.equal(f.calls.restore, 1); assert.equal(f.calls.close, 1);
 });
+
+for (const operation of ["prepare", "pin-exec-fresh", "restore-exec", "observe-pin", "observe-restore-exec"]) {
+  for (const selection of [undefined, "exec", { malformed: true }]) test(`retired ${operation} refuses before adapters (${JSON.stringify(selection)})`, async () => {
+    const f = fixture(), output = io();
+    f.state.r.configuredBackend = selection;
+    let argv;
+    if (operation === "prepare") argv = ["--phase", "prepare", "--host", host, "--runner-sha", revision,
+      "--compose-file", "fixture.yml", "--runner-config", "fixture.json", "--runner-unit", "fixture.service", "--origin-evidence", "origin.json"];
+    else if (operation === "pin-exec-fresh") argv = args("pin-exec-fresh");
+    else if (operation === "restore-exec") { argv = args("restore-fresh");argv[argv.indexOf("--backend") + 1] = "exec"; }
+    else {
+      argv = args("observe");argv[argv.indexOf("--phase-target") + 1] = operation === "observe-pin" ? "pin-exec-fresh" : "restore-fresh";
+      if (operation === "observe-restore-exec") argv.push("--agent", agent, "--backend", "exec");
+    }
+    assert.equal(await main(argv, f.adapters, output), 1);
+    assert.match(output.stderr.text, /exec backend is retired/);
+    assert.match(output.stderr.text, /last pre-retirement release/);
+    assert.equal(output.stdout.text, "");
+    assert.equal(f.calls.write, 0);assert.equal(f.calls.restore, 0);
+    assert.ok(Object.values(f.calls).every(n => n === 0));
+  });
+}

@@ -1,18 +1,20 @@
 ---
 title: "Codex backends and ownership"
 status: implemented
-last_updated: 2026-10-31
+last_updated: 2026-11-07
 ---
 
 # Codex backends and ownership
 
 The staged transport decision is recorded in [ADR-0058](../adr/0058-codex-app-server-turn-steer.md).
-The exec contract is documented in [Codex exec events](../reference/engines/codex-exec-events.md).
+The historical exec contract is documented in [Codex exec events](../reference/engines/codex-exec-events.md).
 For app-server, read [transport](../reference/engines/codex-app-server.md),
 [session and bridge](../reference/engines/codex-app-server-session.md),
 [events and telemetry](../reference/engines/codex-app-server-events.md),
 [settings and permission](../reference/engines/codex-app-server-settings.md) and
 [display history](../reference/engines/codex-app-server-history.md).
+The public wrapper supports only app-server; explicit exec configuration is rejected.
+Preparation and exec recovery require the retained pre-retirement release.
 The launch-selection contract is in [runner configuration](../reference/configuration/runner.md#codex-backend).
 The switching and rollback procedure is in the [backend switching runbook](../operations/codex-backend-switch.md).
 The [Host composition evidence](../evidence/codex-app-server/host-composition.md)
@@ -48,7 +50,7 @@ interrupt, fail-stop and lifecycle callbacks are the production implementation.
 During fail-stop, the CLI explicitly retires
 each cancelled, unstarted Host batch before forgetting its ownership. Coordinator
 pending batches are retired at freeze; the SDK-active batch is not retired and
-cannot produce a late result. Both exec and app-server exercise this ordering.
+cannot produce a late result. App-server exercises this ordering.
 
 Host admission failure never creates another app-server child or selects exec.
 The runner Supervisor has a separate existing policy: unexpected wrapper exit
@@ -57,7 +59,7 @@ replaying the initial prompt. Deliberate stop does not restart.
 
 ## Context snapshot publication
 
-App-server advertises `supports_context_usage: true`; exec remains false. The
+App-server advertises `supports_context_usage: true`. Old exec wrappers report false. The
 Host owns `AppServerContextMeter`, and transport/session/runtime forward typed
 bound-thread facts separately from turn projection. Compaction invalidates even
 when idle. The transport's existing bounded start buffer supplies validated

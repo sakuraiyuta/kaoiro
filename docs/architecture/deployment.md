@@ -2,7 +2,7 @@
 title: Multi-host deployment architecture
 description: Why deployment is shaped as one server plus any number of runner hosts behind nginx, and the stop-boundary constraint an in-place build imposes on checkout-direct hosts.
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-07
 related: [deployment]
 ---
 
@@ -19,6 +19,16 @@ generation for **initial deployment**; this document fully records areas the
 wizard does not handle, such as DETS paths and nginx settings. **Updating an
 existing deployment (section 4) is outside the wizard** and is being automated in
 issues #218 / #219 / #220.
+
+## Codex retirement release boundary
+
+Codex exec retirement is a coordinated release of all approved units; the test
+transfer and refusal units must not be released separately. Retain and identify
+the exact last pre-retirement artifact before updating. Preparation, the
+origin/pointer inventory, state-aware rollback and fresh exec recovery are
+operator steps in the [retirement runbook](../operations/codex-backend-switch.md#exec-retirement).
+The release author records these prerequisites in its production release note.
+Develop landing does not authorize production reflection.
 
 ## Overall architecture
 

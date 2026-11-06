@@ -98,7 +98,7 @@ export type ChatGptPlan =
   | "enterprise";
 
 export interface CodexConfig extends CodexBehaviourConfig {
-  /** Applies to subsequent wrapper lifetimes, including resume. Omitted = exec. */
+  /** Applies to subsequent wrapper lifetimes, including resume. Omitted = app-server. */
   backend?: "exec" | "app-server";
   /** Explicit auth mode declaration for the Codex adapter's catalog resolve
    *  (Phase-24, dogfood 環境依存の catalog 空回帰対策)。closed-enum:
@@ -453,8 +453,11 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
     }
     const codex: CodexConfig = {};
     if (raw.codex.backend !== undefined) {
+      if (raw.codex.backend === "exec") {
+        throw new ConfigError("codex.backend=exec is retired. Use app-server or omit the setting. Prepare existing exec sessions with the last pre-retirement release and docs/operations/codex-backend-switch.md before updating; no automatic migration is performed.");
+      }
       if (raw.codex.backend !== "exec" && raw.codex.backend !== "app-server") {
-        throw new ConfigError("codex.backend must be one of: exec, app-server");
+        throw new ConfigError("codex.backend must be app-server when specified");
       }
       codex.backend = raw.codex.backend;
     }

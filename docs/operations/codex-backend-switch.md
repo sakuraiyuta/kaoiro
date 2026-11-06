@@ -1,7 +1,7 @@
 ---
 title: "Codex backend switching and rollback"
 status: implemented
-last_updated: 2026-11-06
+last_updated: 2026-11-07
 ---
 
 # Codex backend switching and rollback
@@ -12,6 +12,49 @@ Package handoff measurements and limits are retained in the
 remain in the [production deployment manual](production.md). U1's producer
 coverage and remaining limits are recorded in the
 [compatibility evidence](../evidence/codex-app-server/issue-564-u1-compatibility-2026-10-27.md).
+
+## Exec retirement
+
+The current runner and direct wrapper accept only omitted or explicit
+`app-server` configuration. Explicit exec is refused with migration guidance;
+there is no warning-only release. `auth_mode: "apikey"` remains accepted, but
+app-server API-key account defaults and credential lifecycle are unmeasured.
+Do not infer them from controlled local-provider tests with explicit models.
+Upstream app-server remains Experimental; the N11–N15 limits below still apply.
+
+Before installing a retirement release, the operator must retain and identify
+the exact last pre-retirement release artifact and its native pin. Use that
+release and the legacy procedures below to prepare exec sessions. If app-server
+fails, code rollback to the retained release plus `pin-exec-fresh` and a fresh
+exec restart is the replacement fallback. **Context is lost.** Returning to old
+app-server code alone does not select exec. Follow state-aware rollback and
+coordinated server/runner compatibility rules; do not resume app-server IDs
+through exec. Remove the old exec pin on the old release before moving forward
+again. No current command automatically migrates, resets or rewrites pointers.
+
+In the current tree, `prepare`, `pin-exec-fresh`, `restore-fresh --backend exec`,
+`observe --phase-target pin-exec-fresh`, and exec restore observation are refused
+before adapters, configuration writes or restore calls. Observation for
+app-server restore and `restore-fresh --backend app-server` remain supported.
+`remove-pin` retains its applied-exec precondition for compatibility; it is
+normally used on the retained old release.
+
+A release must contain all approved retirement units; do not release the test
+transfer or refusal unit alone. Keep
+[issue 1008](https://github.com/sakuraiyuta/kaoiro/issues/1008) open until the first
+release containing retirement. The release author records the final artifact,
+operator steps and limitations in that production release's note. At release
+preparation, re-inventory actual applied backends, invocations and every server
+pointer, including missing rollouts. Allow only rollout metadata with exactly
+`originator=kaoiro` and `source=vscode`; stop on other, missing, malformed,
+unreadable or unparseable origins, conflicting routing, or missing pointer
+rollouts. The pair is an operational allowlist, not proof of every file's origin.
+Unresolved or exec routing requires old-release preparation or operator judgment.
+
+## Legacy procedures on the retained pre-retirement release
+
+The remaining switching commands below describe that release's tool. They are
+not instructions to run exec preparation or exec restore with the current tree.
 
 ## Preparation before a default change
 
@@ -330,11 +373,9 @@ accepts the following limits; they are not claims of full backend parity:
 - N15: explicit and automatic compaction used controlled, lowered thresholds;
   the default automatic threshold was not measured.
 
-The app-server default was not measured with API-key authentication
-(model/effort defaults and credential lifecycle). If you use API-key auth and
-need the previous backend behavior, set `codex.backend` to `exec` explicitly.
-If the host already has app-server sessions, first follow the guarded
-fresh-backend transition; selecting exec does not authorize resuming existing
-app-server IDs through exec. API-key mode remains supported as a configuration
-option; local-provider tests with an explicit model do not establish its
-account-default behavior.
+App-server API-key model/effort defaults and credential lifecycle remain
+unmeasured. `auth_mode: "apikey"` is accepted; no current exec selector is an
+alternative. Recovery through exec requires code rollback to the retained
+pre-retirement release and a fresh restart. Do not resume app-server IDs
+through exec. A local provider with an explicit model does not establish
+account-default or credential behavior.

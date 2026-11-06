@@ -2,7 +2,7 @@
 title: Runner control and launch
 description: The runner:<host_id> control channel (register/spawn/stop/restart/session enumeration/session reset) and the client-facing launch-control routes that feed it.
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-07
 related: [protocol, architecture]
 ---
 
@@ -44,7 +44,8 @@ disconnect and caller death release the pending request.
 
 `codex_work_observed` echoes version, schema and request ID, and adds `host`,
 `build_revision` (40 lowercase hex characters), positive Node `pid`,
-process-lifetime `instance_id`, `applied_backend` (`exec` or `app-server`),
+process-lifetime `instance_id`, `applied_backend` (`exec` or `app-server`;
+`exec` remains accepted from old runners although current config readers reject it),
 `children: [{agent_id, stopping, restarting, reset_pending}]`,
 `pending_spawns: [agent_id]`, and `pending_switches: [agent_id]`.
 Unknown work engines replace the backend and three lists with

@@ -713,12 +713,16 @@ describe("parseConfig", () => {
   });
 });
 
-it.each(["exec", "app-server"])("accepts the explicit Codex backend %s", backend => {
+it.each(["app-server"])("accepts the explicit Codex backend %s", backend => {
   expect(parseConfig({ ...valid, codex_backend: backend }).codex_backend).toBe(backend);
 });
 it.each([null, "", "auto", true, {}, []])("rejects malformed Codex backend %#", backend => {
-  expect(() => parseConfig({ ...valid, codex_backend: backend })).toThrow("codex_backend must be one of");
+  expect(() => parseConfig({ ...valid, codex_backend: backend })).toThrow("codex_backend must be app-server");
 });
 it("does not infer a backend from unknown config fields", () => {
   expect(parseConfig({ ...valid, backend: "app-server", codex: { backend: "app-server" } }).codex_backend).toBeUndefined();
+});
+
+it("refuses the retired exec selector with migration guidance", () => {
+  expect(() => parseConfig({ ...valid, codex_backend: "exec" })).toThrow("exec is retired");
 });

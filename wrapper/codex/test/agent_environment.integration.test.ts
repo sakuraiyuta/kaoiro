@@ -14,7 +14,7 @@ import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const execFileAsync = promisify(execFile);
 
-it.each([undefined, "exec", "app-server"] as const)("marks native %s shells with inherit-none across cold resumes", async backend => {
+it.each([undefined, "app-server"] as const)("marks native %s shells with inherit-none across cold resumes", async backend => {
   const root = await mkdtemp(join(homedir(), ".fuji659-codex-"));
   const requests: Array<Record<string, unknown>> = [];
   const wire = await phoenixLoopback();

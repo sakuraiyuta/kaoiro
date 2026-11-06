@@ -1,7 +1,7 @@
 ---
-title: Codex exec event reference
+title: Historical Codex exec event reference
 status: accepted
-last_updated: 2026-09-30
+last_updated: 2026-11-07
 related: [protocol, plugin-model, system-overview, claude-events]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -10,11 +10,12 @@ related: [protocol, plugin-model, system-overview, claude-events]
 
 ## Backend scope
 
-This page documents the explicit exec SDK backend. Runner-local
-`codex.backend = "exec"` selects it; omission selects app-server for
-subsequent wrapper launches/resumes; its pinned notification mappings and
+This is a historical reference for the retired wrapper exec SDK backend.
+Current runner and wrapper configuration reject explicit exec; use the
+[app-server reference](codex-app-server.md). Native `codex exec` is a separate
+CLI feature and is not removed. On pre-retirement releases, its pinned notification mappings and
 acceptance evidence are in [ADR-0058 Appendix C](../../evidence/codex-app-server/stage1-compatibility.md#appendix-c--stage-1-compatibility-gate-2026-09-18-jst)
-and the [wrapper README](../../../wrapper/codex/README.md). Exec retains queued input and fixed `approval=never`; app-server capabilities
+and the [wrapper README](../../../wrapper/codex/README.md). Historical exec uses queued input and fixed `approval=never`; app-server capabilities
 are described in the [transport reference](codex-app-server.md). Both retain
 the existing log/result/lifecycle wire. App-server does not silently fall back to exec.
 

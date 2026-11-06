@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-10-09
+last_updated: 2026-11-07
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -213,7 +213,7 @@ event), optional `included` (evidence `ticket_used` in v1), `settled`,
 not retired or reported lost, and the prefix crosses it when earlier gaps close.
 Stage changes are never injected into model input.
 
-For Codex exec, `exec_input_written` means the first `iterator.next()` on
+For old Codex exec wrappers, `exec_input_written` means the first `iterator.next()` on
 `runStreamed(input).events` resolves with the child’s first stdout JSONL value.
 By then the SDK has spawned the child, written the input, and closed stdin;
 `runStreamed()` itself resolves before spawn. The name is historical: the
@@ -328,7 +328,8 @@ the recipient ledger's lifetime and resets when that ledger is deleted.
 
 `yield` is downgraded to early steering when eligible; Codex has no measured
 tool-boundary cut. An omitted Codex backend selects app-server; the runner's
-`codex.backend` can explicitly select exec, which advertises no in-flight input.
+`codex.backend: "exec"` is rejected by current configuration readers. Old exec
+wrappers advertise no in-flight input; their wire values remain accepted.
 Existing hosts follow the [guarded fresh backend transition](../../operations/codex-backend-switch.md#fresh-backend-migration)
 before changing backends. The default change is tracked by
 [issue 564](https://github.com/sakuraiyuta/kaoiro/issues/564), and the dated
@@ -358,8 +359,8 @@ that server is not proof that negotiated delivery cannot happen.
 Old runners and wrappers can disagree between launch projection and live
 capability during a mixed install; use the actual wrapper declaration and
 server policy state for live delivery.
-A Codex app-server wrapper advertises `early: "steer", yield: "none"`; Codex exec
-advertises `early: "none", yield: "none"`. An Antigravity wrapper declares no
+A Codex app-server wrapper advertises `early: "steer", yield: "none"`; old Codex exec wrappers
+advertise `early: "none", yield: "none"`. An Antigravity wrapper declares no
 delivery modes at join: the server sends no `inter_agent_delivery_modes` echo,
 the wrapper treats the link as `legacy`, and messages queue (phase 4 is tracked by
 [issue 567](https://github.com/sakuraiyuta/kaoiro/issues/567)). The Codex app-server

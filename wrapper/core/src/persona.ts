@@ -451,8 +451,11 @@ export function parseConfig(raw: unknown): WrapperConfig {
     );
   }
   if (raw.codex_backend !== undefined) {
+    if (raw.codex_backend === "exec") {
+      throw new ConfigError("codex_backend=exec is retired. Use app-server or omit the setting. Prepare existing exec sessions with the last pre-retirement release and docs/operations/codex-backend-switch.md before updating; no automatic migration is performed.");
+    }
     if (raw.codex_backend !== "exec" && raw.codex_backend !== "app-server") {
-      throw new ConfigError("codex_backend must be one of: exec, app-server");
+      throw new ConfigError("codex_backend must be app-server when specified");
     }
     config.codex_backend = raw.codex_backend;
   }

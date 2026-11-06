@@ -11,7 +11,7 @@ related: [protocol]
 ## Managed engine environment
 
 The wrapper exports the following non-secret output to each managed engine
-process (Claude Code, Codex exec/app-server, Antigravity, and Grok), on both
+process (Claude Code, Codex app-server, Antigravity, and Grok), on both
 fresh starts and resumes:
 
 | Variable | Wrapper value | Meaning |
@@ -73,9 +73,9 @@ Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
   Antigravity still omits delivery declarations. Changes apply to later wrapper
   lifetimes; the live per-agent policy remains a separate gate.
 
-- `codex_backend?: "exec" | "app-server"` — runner-local `codex.backend`,
+- `codex_backend?: "app-server"` — runner-local `codex.backend`,
   resolved to `"app-server"` when omitted and relayed only for Codex launches. The
-  wrapper validates the closed enum. It is not accepted from `spawn` or a
+  wrapper rejects explicit `"exec"` with pre-retirement migration guidance. It is not accepted from `spawn` or a
   resume snapshot and is not a wire capability. Reload affects subsequent
   wrapper lifetimes, including resumes; existing wrappers retain their backend.
 
@@ -118,7 +118,7 @@ ceiling (`in_flight_delivery_enabled`, relayed from `in_flight_delivery.codex.en
 `false` declares `early: "none"`) and the stored per-agent policy decide the
 rest, so an operator turns it off per agent from the dashboard or for the host
 through the runner configuration (see [Runner configuration](runner.md#host-delivery-ceilings-and-defaults)).
-The exec backend and a false ceiling declare `early: "none"`, so the server stamps
+A false ceiling declares `early: "none"`, so the server stamps
 operator input `normal` instead of deriving the default from the inter-agent
 declaration. The wrapper logs `codex: operator_steer=on|off` at startup. See
 [Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
@@ -136,8 +136,8 @@ A directly launched wrapper uses its `in_flight_delivery_enabled` ceiling.
 The app-server backend advertises inter-agent `early: "steer"` and
 `yield: "none"` independently of operator steering. It uses the
 early path only after the server echoes delivery modes and
-`notice_attribution: "v1"`, and grants the message early intent. The exec
-backend advertises no early mechanism. There is no phase-3 environment
+`notice_attribution: "v1"`, and grants the message early intent. Old exec
+wrappers advertise no early mechanism. There is no phase-3 environment
 toggle or live dashboard policy switch; the revisioned per-agent switch is
 tracked by issue #463. A Codex yield request can receive an early downgrade,
 never a tool-boundary interruption.
@@ -157,7 +157,7 @@ sync is negotiated, writes the operator's selected approval into each
 operator. Approvals have no deadline unless `permission_timeout_ms` is set.
 `codex.approval_axis: true` in `runner.config.json` is the same global opt-in as the
 variable `1`, and a set `KAOIRO_CODEX_APPROVAL_AXIS` wins over it. Config false is equivalent to absence and does not override a
-persona-list opt-in. The exec backend ignores both variables. The wrapper logs
+persona-list opt-in. These controls apply to app-server. The wrapper logs
 `codex: approval_axis=on|off` at startup. See
 [Codex app-server transport](../engines/codex-app-server.md#approval-requests-adr-0064)
 and [ADR-0064](../../adr/0064-codex-app-server-approval-requests.md).

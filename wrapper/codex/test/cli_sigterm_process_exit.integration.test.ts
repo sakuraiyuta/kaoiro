@@ -67,7 +67,7 @@ function timeoutDiagnostics(stderr: string, home: string): string {
 }
 
 // Exact match: see findDescendantByExactArgs in
-// cli_sigterm_exec_real_process.integration.test.ts for why `includes` races.
+// cli_sigterm_native_process.integration.test.ts for why `includes` races.
 function findDescendantByExactArgs(rootPid: number, command: string): number | null {
   const all = allProcesses();
   const byPpid = new Map<number, typeof all>();
@@ -199,7 +199,7 @@ await runCodexCli({
   return script;
 }
 
-it.skipIf(!isLinux || !existsSync(distCliPath)).each(["exec", "app-server"] as const)(
+it.skipIf(!isLinux || !existsSync(distCliPath)).each(["app-server"] as const)(
   "%s: the spawned wrapper process exits with code 0 and no signal after SIGTERM, and the real Codex child + grandchild both terminate (issue #391 M2, Linux-only, requires build)",
   async (backend) => {
     const home = await mkdtemp(join(tmpdir(), "ao391-m2-exec-"));

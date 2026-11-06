@@ -1,6 +1,6 @@
 # Codex wrapper internals
 
-The public Codex engine defaults to `app-server`; exec remains an explicit selection. Select the backend through
+The public Codex engine uses `app-server`; explicit exec configuration is rejected. Select the backend through
 `runner.config.json` → `codex.backend`; see the [configuration contract](../../docs/reference/configuration/runner.md#codex-backend)
 and [switching and rollback runbook](../../docs/operations/codex-backend-switch.md).
 
@@ -14,7 +14,7 @@ See [backend ownership and CLI composition](../../docs/architecture/codex-backen
 
 ## Context meter
 
-App-server publishes qualified native context snapshots; exec remains unsupported.
+App-server publishes qualified native context snapshots.
 Unknown intervals retain capability but omit context. Native totals and windows
 are preserved even when their ratio exceeds 100%; they do not promise provider
 admission. See [ADR-0040](../../docs/adr/0040-context-usage-capability.md#addendum-2026-10-03--app-server-context-snapshots).
@@ -30,7 +30,7 @@ run separately with `env -u CODEX_HOME pnpm -C wrapper/codex test`.
 The CLI and SDK are pinned together at 0.164.0. The SDK retains the LF-only
 stream-reader patch; Node 24 splits literal U+2028/U+2029 with the upstream
 readline reader. Native checks use isolated homes and a loopback provider,
-including `runCodexCli` with its production factories on both backends.
+including `runCodexCli` with its production app-server factories. Historical exec checks belong to pre-retirement releases.
 See [the 0.164.0 evidence](../../docs/evidence/codex-app-server/pin-0.164.0-adoption-gates-2026-10-27.md)
 for fixture provenance, negative controls and remaining limits. The
 [U2 acceptance limits](../../docs/operations/codex-backend-switch.md#accepted-measurement-limits)

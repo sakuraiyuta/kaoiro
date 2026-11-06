@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { CodexWorkObserved, WrapperConfig } from "@kaoiro/protocol";
-import { loadRunnerConfig } from "../src/config.js";
 import { runRunnerCli } from "../src/runner-cli.js";
 import type { RunnerLinkOptions } from "../src/transport.js";
 import { Supervisor, type ManagedChild } from "../src/supervisor.js";
@@ -16,7 +15,7 @@ it("relays the runner-local backend at bootstrap/reload and preserves running wr
   const configs: WrapperConfig[] = [], children: Array<ManagedChild & { exit: () => void }> = [];
   const resumes: Array<string | undefined> = [];
   const observed: CodexWorkObserved[] = [];
-  let callbacks!: RunnerLinkOptions, reload!: () => void;
+  let callbacks!: RunnerLinkOptions;
   const diagnostic = vi.spyOn(process.stderr, "write");
   file("app-server");
   const runtime = await runRunnerCli({
@@ -29,7 +28,6 @@ it("relays the runner-local backend at bootstrap/reload and preserves running wr
       callbacks = options;
       return { sendSpawnResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {}, sendCodexWorkObserved(value) { observed.push(value); }, sendCatalogResult() {}, updateRegister() {}, reconnect() {}, close() {} };
     },
-    watchRunnerConfig: (path, onReload) => { reload = () => onReload(loadRunnerConfig(path));return { close() {} }; },
     installSignalHandlers: false,
   }, [configPath]);
   const spawn = (id: string, extra = {}) => ({ version: "0", agent_id: id, persona: { id: "p", name: "P", sprite_set: "p" }, cwd: root, engine: "codex", ...extra });
@@ -55,20 +53,26 @@ it("relays the runner-local backend at bootstrap/reload and preserves running wr
     expect(first).toMatchObject({ applied_backend: "app-server", children: [], pending_spawns: [], pending_switches: [] });
     callbacks.onSpawn?.(spawn("a", { backend: "exec", codex_backend: "exec", resume_snapshot: { backend: "exec" } }));
     expect(configs[0]?.codex_backend).toBe("app-server");
-    file("exec");reload();await runtime!.waitForReloads();
+    file("exec");
+    await vi.waitFor(() => expect(diagnostic.mock.calls.some(([line]) => String(line).includes("config reload skipped") && String(line).includes("exec is retired"))).toBe(true));
+    await runtime!.waitForReloads();
     expect(children[0]?.kill).not.toHaveBeenCalled();expect(configs[0]?.codex_backend).toBe("app-server");
-    expect(diagnostic.mock.calls.some(([s]) => String(s).includes("codex backend=exec for subsequent wrappers"))).toBe(true);
+    expect(diagnostic.mock.calls.some(([s]) => String(s).includes("codex backend=exec for subsequent wrappers"))).toBe(false);
     callbacks.onSpawn?.(spawn("b", { backend: "app-server", codex_backend: "app-server" }));
-    expect(configs[1]?.codex_backend).toBe("exec");
-    expect(observe()).toMatchObject({ instance_id: first.instance_id, applied_backend: "exec", children: [
+    expect(configs[1]?.codex_backend).toBe("app-server");
+    expect(observe()).toMatchObject({ instance_id: first.instance_id, applied_backend: "app-server", children: [
       { agent_id: "a", stopping: false }, { agent_id: "b", stopping: false },
     ] });
     callbacks.onResetSession?.({ agent_id: "a", mode: "new", request_id: "reset", previous_session_id: "old" });
-    children[0]!.exit();expect(configs[2]?.codex_backend).toBe("exec");
-    file("app-server");reload();await runtime!.waitForReloads();
+    children[0]!.exit();expect(configs[2]?.codex_backend).toBe("app-server");
+    diagnostic.mockClear();file("app-server");
+    await vi.waitFor(() => expect(diagnostic.mock.calls.some(([line]) => String(line).includes("codex backend=app-server for subsequent wrappers"))).toBe(true));
+    await runtime!.waitForReloads();
     children[1]!.exit();expect(configs[3]?.codex_backend).toBe("app-server");
     diagnostic.mockClear();
-    file();reload();await runtime!.waitForReloads();
+    file();
+    await vi.waitFor(() => expect(diagnostic.mock.calls.some(([line]) => String(line).includes("codex backend=app-server for subsequent wrappers"))).toBe(true));
+    await runtime!.waitForReloads();
     callbacks.onSpawn?.(spawn("c"));expect(configs[4]?.codex_backend).toBe("app-server");
     expect(observe()).toMatchObject({ applied_backend: "app-server" });
     expect(diagnostic.mock.calls.some(([s]) => String(s).includes("codex backend=app-server for subsequent wrappers"))).toBe(true);
@@ -76,4 +80,15 @@ it("relays the runner-local backend at bootstrap/reload and preserves running wr
     expect(configs[5]).not.toHaveProperty("codex_backend");
     expect(resumes).toEqual(Array(6).fill(undefined));
   } finally { runtime?.close();diagnostic.mockRestore();rmSync(root, { recursive: true, force: true }); }
+});
+
+it("refuses exec through the runner CLI loader before creating a launcher", async () => {
+  const root = mkdtempSync(join(tmpdir(), "runner-retired-exec-"));
+  const path = join(root, "runner.json");
+  writeFileSync(path, JSON.stringify({ host_id: "fixture", server_url: "ws://fixture/runner", cwd_allowlist: [root], codex: { backend: "exec" } }));
+  const makeLauncher = vi.fn(() => { throw new Error("launcher must not start"); });
+  try {
+    await expect(runRunnerCli({ makeLauncher, installSignalHandlers: false }, [path])).rejects.toThrow("exec is retired");
+    expect(makeLauncher).not.toHaveBeenCalled();
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
