@@ -452,7 +452,7 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     );
     await tick();
 
-    expect(rowByLabel(target, "過去の観測")?.textContent).toBe(
+    expect(normalizedText(rowByLabel(target, "過去の観測")!)).toBe(
       "rev 2 — 現在の許可ではありません: 書込: read-only / 承認: never / network_access: true",
     );
     const withoutHistory = target.cloneNode(true) as HTMLElement;
