@@ -131,6 +131,17 @@ Use `in_flight_delivery.codex.enabled` for the next-spawn ceiling,
 `in_flight_delivery.codex.default` for new agents, or the per-agent live policy.
 A directly launched wrapper uses its `in_flight_delivery_enabled` ceiling.
 
+## Codex inter-agent early delivery
+
+The app-server backend advertises inter-agent `early: "steer"` and
+`yield: "none"` independently of operator steering. It uses the
+early path only after the server echoes delivery modes and
+`notice_attribution: "v1"`, and grants the message early intent. The exec
+backend advertises no early mechanism. There is no phase-3 environment
+toggle or live dashboard policy switch; the revisioned per-agent switch is
+tracked by issue #463. A Codex yield request can receive an early downgrade,
+never a tool-boundary interruption.
+
 ## Codex approval axis controls
 
 `KAOIRO_CODEX_APPROVAL_AXIS=1` in the Codex wrapper process environment
