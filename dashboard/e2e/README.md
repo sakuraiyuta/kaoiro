@@ -9,7 +9,7 @@ description: Prerequisites for the Vite fixture suite and its server integration
 
 Most specs run against the fixture harness served by Vite and do not start Phoenix. The default Playwright setup uses Chromium; install its browser with `pnpm exec playwright install chromium`.
 
-`launchDeliveryIntegration.spec.ts` also runs `mix test test/integration/delivery_launch_acceptance.exs` from `server/` and serves the built client from `server/priv/static`. It needs the server's Mix dependencies and a dashboard build. From the repository root, prepare and run the full suite with:
+`deliveryPolicy.spec.ts` and `launchDeliveryIntegration.spec.ts` serve the built client from `server/priv/static`, so both need a dashboard build. The latter also runs `mix test test/integration/delivery_launch_acceptance.exs` from `server/` and needs the server's Mix dependencies. From the repository root, prepare and run the full suite with:
 
 ```sh
 (cd server && mix deps.get)
