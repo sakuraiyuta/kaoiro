@@ -6,15 +6,15 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { resolveAppServerBinary } from "../src/app_server_rpc.js";
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const HOST_MODULE = pathToFileURL(join(PACKAGE_ROOT, "dist", "host.js")).href;
 const SECRET = "abcdef123456";
-const MASKED = "api_key=********3456";
 
 describe("CodexHost stderr — production default", () => {
-  it("buffers native stderr and masks a real default app-server config failure on the wire", async () => {
+  it("keeps a real default app-server parser diagnostic off stderr and wire", async () => {
     const codexHome = await mkdtemp(join(tmpdir(), "kaoiro-codex-home-"));
     await writeFile(join(codexHome, "config.toml"), `api_key=${SECRET}\n`);
     const childSource = `
@@ -49,6 +49,9 @@ describe("CodexHost stderr — production default", () => {
     const { CODEX_API_KEY: _codexApiKey, OPENAI_API_KEY: _openAiApiKey, ...environment } = process.env;
 
     try {
+      await expect(execFileAsync(resolveAppServerBinary(), ["app-server", "--listen", "stdio://"], {
+        cwd: PACKAGE_ROOT, encoding: "utf8", env: { ...environment, CODEX_HOME: codexHome }, timeout: 10_000,
+      })).rejects.toMatchObject({ stderr: expect.stringContaining(SECRET) });
       const { stdout, stderr } = await execFileAsync(
         process.execPath,
         ["--input-type=module", "--eval", childSource],
@@ -64,7 +67,8 @@ describe("CodexHost stderr — production default", () => {
       expect(output.ended).toBe(true);
       expect(stderr).toBe("");
       expect(stderr).not.toContain(SECRET);
-      expect(JSON.stringify(output.logs)).toContain(MASKED);
+      expect(output.logs).toContainEqual(expect.objectContaining({ type: "result",
+        payload: expect.objectContaining({ is_error: true, error_detail: expect.stringContaining("App-server") }) }));
       expect(JSON.stringify(output.logs)).not.toContain(SECRET);
     } finally {
       await rm(codexHome, { recursive: true, force: true });
