@@ -30,7 +30,9 @@ exec restart is the replacement fallback. **Context is lost.** Returning to old
 app-server code alone does not select exec. Follow state-aware rollback and
 coordinated server/runner compatibility rules; do not resume app-server IDs
 through exec. Remove the old exec pin on the old release before moving forward
-again. No current command automatically migrates, resets or rewrites pointers.
+again. If the rollback target defaults an omitted setting to exec, explicitly
+prepare app-server on that release before moving forward. No current command
+automatically migrates, resets or rewrites pointers.
 
 In the current tree, `prepare`, `pin-exec-fresh`, `restore-fresh --backend exec`,
 `observe --phase-target pin-exec-fresh`, and exec restore observation are refused

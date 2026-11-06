@@ -11,9 +11,8 @@ import { runCodexCli } from "../src/cli.js";
 import { resolveAppServerBinary } from "../src/app_server_rpc.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
-// Only the external peers are scripted. No CLI construction seam is injected;
-// the exec case also measures the SDK reader on actual native command output.
-it.each([undefined, "exec", "app-server"] as const)("runs the %s production factories against a local provider", async backend => {
+// Only the external peers are scripted; the production CLI factories are used.
+it.each([undefined, "app-server"] as const)("runs the %s production factories against a local provider", async backend => {
   const hosts = vi.spyOn(CodexHost.prototype, "run");
   const home = await mkdtemp(join(homedir(), "niko-539-cli-native-"));
   const nonce = `native-${randomUUID()}`;
@@ -65,7 +64,7 @@ it.each([undefined, "exec", "app-server"] as const)("runs the %s production fact
     expect((results()[0]!.payload.payload as Record<string, unknown>).is_error).not.toBe(true);
     const observedHost = hosts.mock.contexts.at(-1) as CodexHost | undefined;
     expect(observedHost?.historyBackend).toBe(backend ?? "app-server");
-    expect(observedHost?.statusExtSnapshot()?.session_capabilities).toMatchObject({ supports_context_usage: backend !== "exec" });
+    expect(observedHost?.statusExtSnapshot()?.session_capabilities).toMatchObject({ supports_context_usage: true });
     expect(requests).toHaveLength(2);
     expect(requests[0]!.model).toBe("gpt-6-luna");
     expect(JSON.stringify(requests[1]!.input)).toContain(unicode);
