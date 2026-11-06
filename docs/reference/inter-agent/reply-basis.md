@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-10-27
+last_updated: 2026-11-07
 related: [messages, conversations, delivery, send-and-wait]
 ---
 

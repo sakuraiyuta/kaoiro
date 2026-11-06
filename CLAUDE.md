@@ -7,7 +7,7 @@ kaoiro — a system that visualizes the state of multiple CLI AI agents as chara
 ## Stack
 
 - Wrapper: TypeScript packages per engine. Claude Code uses the Claude Agent
-  SDK, Codex uses the Codex SDK, Antigravity hosts its CLI, and Grok Build
+  SDK, Codex uses app-server JSON-RPC, Antigravity hosts its CLI, and Grok Build
   hosts resident ACP. The six packages are `core`, `agent-common`,
   `claude-code`, `codex`, `antigravity` and `grok` (ADR-0017/0032/0057).
 - Server: Elixir / OTP + Phoenix.

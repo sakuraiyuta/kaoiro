@@ -138,7 +138,7 @@ troubleshooting) hold the full procedures.
 Three layers plus a host-resident supervision layer (the runner):
 
 - **Wrapper** — launches agents and mediates their input and output. It hosts
-  the Claude Agent SDK for Claude Code, the Codex SDK for Codex, and the
+  the Claude Agent SDK for Claude Code, the Codex app-server for Codex, and the
   Antigravity CLI, translating engine-specific events into a common format.
 - **Server** — aggregates multiple wrappers, keeps their state, delivers it to
   clients in real time, and routes instructions to the appropriate agent.
@@ -154,7 +154,7 @@ data flow.
 ### Technology stack
 
 - **Wrapper: TypeScript** — engine packages host the Claude Agent SDK
-  (`@anthropic-ai/claude-agent-sdk`), Codex SDK, or Antigravity CLI.
+  (`@anthropic-ai/claude-agent-sdk`), Codex app-server, or Antigravity CLI.
 - **Server: Elixir / OTP + Phoenix**
   - Aggregates wrappers through WebSocket (Phoenix Channels).
   - Fans out updates through PubSub to clients in real time.
@@ -174,8 +174,7 @@ The supported engines are **Claude Code**, **Codex**, **Antigravity**, and
 engine is selectable at launch. Engine-specific differences are represented by
 `ext.session_capabilities` in the envelope, so the UI does not branch on engine
 names. Additional engines can use the same adapter boundary
-([extensions](docs/architecture/extensions.md)). Codex supports both exec and
-app-server backends ([backend design](docs/architecture/codex-backends.md)).
+([extensions](docs/architecture/extensions.md)). Codex uses the app-server backend ([backend design](docs/architecture/codex-backends.md)).
 
 ## Documentation
 

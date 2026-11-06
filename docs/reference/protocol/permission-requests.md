@@ -1,7 +1,7 @@
 ---
 title: Permission request contract
 status: accepted
-last_updated: 2026-09-30
+last_updated: 2026-11-07
 description: The set_permission wire contract -- request validation, relay, and acknowledgement.
 ---
 

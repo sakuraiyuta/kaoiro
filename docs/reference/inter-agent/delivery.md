@@ -248,8 +248,8 @@ turn that was being started carries it: inputs still queued behind it were never
 written and settle with `failed_before_handoff`. The asynchronous peer notice for
 an unknown outcome carries the `timeout` code ("the peer may still be mid-turn,
 wait before retrying"), not `api_error`, so the sender is not told to retry an
-input that may already have been processed. The Codex exec backend does not
-have this: its SDK writes the input without a callback, so a failure before the
+input that may already have been processed. Older Codex exec wrappers do not
+have this: their SDK writes the input without a callback, so a failure before the
 first event still settles with `failed_before_handoff`.
 
 The server rejects an unknown `handoff` value with `invalid_delivery_stage`, and

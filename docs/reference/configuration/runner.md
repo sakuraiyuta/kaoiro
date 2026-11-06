@@ -192,7 +192,7 @@ by the runner itself and are never relayed to a wrapper.
 
 `CODEX_HOME` in `runner.env` selects the Codex state directory (auth, sessions,
 state databases) for the whole runner. It is an environment variable, not a
-`runner.config.json` key: the runner, Codex wrappers, the Codex SDK and the
+`runner.config.json` key: the runner, Codex wrappers and the
 `codex app-server` child retain it for state and resume. Claude Code and
 Antigravity wrapper children receive an environment without it. Codex shell
 tools receive a separate private home through `shell_environment_policy.set`.

@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server display history"
 status: implemented
-last_updated: 2026-09-30
+last_updated: 2026-11-07
 ---
 
 # Codex app-server display history
@@ -57,8 +57,7 @@ Close/EOF rejects outstanding requests. Normal RPC deadlines still apply.
 The internal app-server Host prepares successful snapshots before
 passing them to the existing synchronous `HistoryReplayer`.
 
-The history coordinator reads the constructed Host's backend. Exec retains
-its synchronous rollout reader. App-server hydration occupies one replaceable Host job, after current
+App-server hydration occupies one replaceable Host job, after current
 turn settlement and image cleanup but before the next queued turn. Resume can
 read before its first turn; a fresh Host with no session id replays an empty
 window without opening a thread. History does not require turn permission.

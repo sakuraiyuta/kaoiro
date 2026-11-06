@@ -1,7 +1,7 @@
 ---
 title: Permission state contract
 status: accepted
-last_updated: 2026-09-30
+last_updated: 2026-11-07
 description: The ext.permission two-axis model and the requested/submitted/effective state machine for a permission change.
 ---
 
@@ -57,7 +57,7 @@ Codex coalesces repeated `turn_context` records only when the execution turn ID
 and all observed policy axes agree. Compaction may emit such repeats; conflicting
 observations remain unconfirmed.
 
-A blocked Codex dispatch publishes `waiting_permission` without starting the SDK turn.
+A blocked Codex dispatch publishes `waiting_permission` without submitting `turn/start`.
 After 30 seconds it cancels that never-started instruction, reports
 `permission_gate_blocked` to its sending peer, and returns to `waiting_input`.
 Interrupt and close also cancel a waiting instruction without a start acknowledgement.
