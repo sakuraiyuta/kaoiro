@@ -350,7 +350,9 @@ export function sdkMessageToResult(
     }
     if (assistantErrorCode !== undefined) {
       payload.error_code = assistantErrorCode;
-      const { summary, hint } = assistantErrorSummary(assistantErrorCode);
+      const { summary, hint } = message.terminal_reason === "blocking_limit" || message.terminal_reason === "prompt_too_long"
+        ? { summary: "コンテキストの上限に達しました。", hint: "内容を要約するか、セッションを新しくしてください。" }
+        : assistantErrorSummary(assistantErrorCode);
       payload.error_summary = summary;
       if (hint !== undefined) payload.recovery_hint = hint;
     }

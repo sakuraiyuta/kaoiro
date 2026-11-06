@@ -73,6 +73,7 @@ import {
   TASKLIST_TASK_ID,
 } from "@kaoiro/agent-common";
 import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
+
 import type {
   ModelFallbackNotice,
   TaskEvent,
@@ -132,6 +133,11 @@ import {
 } from "./upload.js";
 
 /** Cap on queued user turns; send() throws beyond this (fail fast). */
+const FAILURE_REASONS = new Set(["blocking_limit", "prompt_too_long", "rapid_refill_breaker", "api_error"]);
+const FAILURE_CLASSES = new Set(["invalid_request", "rate_limit", "authentication_failed", "oauth_org_not_allowed", "account_on_hold", "billing_error", "overloaded", "model_not_found", "server_error", "max_output_tokens", "unknown"]);
+const boundedFailureField = (value: string | undefined, allowed: ReadonlySet<string>): string =>
+  value === undefined ? "absent" : allowed.has(value) ? value : "unknown";
+
 const MAX_QUEUED_TURNS = 1000;
 
 /** Settles a canUseTool wait whose own turn was torn down before the
@@ -3445,9 +3451,10 @@ export class AgentHost implements EngineAdapter {
           } else if (result.is_error) {
             this.#emitResult(result, sdkMessageToCost(message));
             const terminalReason = sdkMessageToTerminalReason(message);
+            this.#warn(`[kaoiro] claude turn failure: ${JSON.stringify({ terminal_reason: boundedFailureField(terminalReason, FAILURE_REASONS), assistant_error_class: boundedFailureField(result.error_code, FAILURE_CLASSES) })}`);
             this.#completeActiveTurn(
               {
-                ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
+                ...(terminalReason !== undefined ? { reason: terminalReason === "blocking_limit" ? "prompt_too_long" : terminalReason } : {}),
                 ...(result.error_detail !== undefined
                   ? { detail: result.error_detail }
                   : {}),

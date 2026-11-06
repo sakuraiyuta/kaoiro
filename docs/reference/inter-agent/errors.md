@@ -99,8 +99,9 @@ Send the notice when AC9 rejects a stale turn, but not unconditionally:
 
 Engine differences are absorbed in the shared classifier (engine-agnostic,
 [ADR-0032](../../adr/0032-codex-adapter.md) F5); unclassifiable events fall back
-to `api_error`. Engine reason/detail strings are used **only for internal
-keyword classification**. Always use a fixed code-specific template for
+to `api_error`. Claude normalizes its observed `blocking_limit` context reason
+before classification; Antigravity retains its quota meaning. Engine
+reason/detail strings are used **only for internal classification**. Always use a fixed code-specific template for
 `error.message` and `body`, never exposing raw exception text to a peer LLM;
 the template also guarantees the required secret masking.
 

@@ -1520,6 +1520,14 @@ describe("classifyInterAgentError (issue #131)", () => {
     });
   });
 
+  it("prioritizes context detail over ambiguous rate-limit numbers", () => {
+    expect(classifyInterAgentError({ detail: "context window contains 1,000,429 tokens" }).code).toBe("context_overflow");
+    expect(classifyInterAgentError({ detail: "rate limit exceeded in context window" }).code).toBe("context_overflow");
+    expect(classifyInterAgentError({ detail: "rate limit exceeded" }).code).toBe("rate_limit");
+    expect(classifyInterAgentError({ reason: "blocking_limit", detail: "context window" })).toMatchObject({ code: "rate_limit" });
+    expect(classifyInterAgentError({ reason: "blocking_limit", rateLimitResetSeconds: 104 })).toMatchObject({ code: "rate_limit", reset_delay_seconds: 104 });
+  });
+
   it("API 障害は api_error のままにする", () => {
     expect(classifyInterAgentError({ reason: "api_error" })).toEqual({
       code: "api_error",
