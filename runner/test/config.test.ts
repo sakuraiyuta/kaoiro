@@ -1132,12 +1132,16 @@ describe("mergeExtraModels", () => {
   });
 });
 
-it.each(["exec", "app-server"])("accepts codex.backend=%s", backend => {
+it.each(["app-server"])("accepts codex.backend=%s", backend => {
   expect(parseRunnerConfig({ ...valid, codex: { backend } }).codex?.backend).toBe(backend);
 });
 it.each([null, "", "auto", true, {}, []])("rejects malformed codex.backend %#", backend => {
-  expect(() => parseRunnerConfig({ ...valid, codex: { backend } })).toThrow("codex.backend must be one of");
+  expect(() => parseRunnerConfig({ ...valid, codex: { backend } })).toThrow("codex.backend must be app-server");
 });
 it("leaves an absent backend unspecified without accepting top-level hints", () => {
   expect(parseRunnerConfig({ ...valid, backend: "app-server", codex_backend: "app-server", codex: {} }).codex?.backend).toBeUndefined();
+});
+
+it("refuses the retired exec selector with migration guidance", () => {
+  expect(() => parseRunnerConfig({ ...valid, codex: { backend: "exec" } })).toThrow("exec is retired");
 });

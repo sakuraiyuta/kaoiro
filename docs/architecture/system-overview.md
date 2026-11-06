@@ -2,7 +2,7 @@
 title: Architecture
 description: A three-layer structure of wrapper (TS/engine SDK), server (Elixir/Phoenix), and client (Web), with a host-resident runner, and its data flow.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-07
 related: [plugin-model, protocol, antigravity-adapter, codex-backends]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -34,8 +34,8 @@ The wrapper is a five-package pnpm workspace (`core` / `agent-common` /
 - **`wrapper/codex` (`@kaoiro/codex`)** — concrete Codex CLI adapter
   (implemented in
   [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)); see
-  [codex-backends](codex-backends.md) for its two transport backends
-  (`exec` default, `app-server` opt-in,
+  [codex-backends](codex-backends.md) for its app-server transport
+  (explicit exec configuration is rejected,
   [ADR-0058](../adr/0058-codex-app-server-turn-steer.md))
 - **`wrapper/antigravity` (`@kaoiro/antigravity`)** — concrete Antigravity
   (`agy` CLI) adapter, driving the CLI headless with a hook-based permission
@@ -90,8 +90,7 @@ flowchart LR
 
 The wrapper hosts each engine's official SDK or CLI and uses one mechanism for
 observation, control, and permission routing. Claude Code uses the Claude
-Agent SDK (TS: `@anthropic-ai/claude-agent-sdk`); Codex uses the Codex SDK
-(`exec` transport, default) or an opt-in app-server JSON-RPC transport
+Agent SDK (TS: `@anthropic-ai/claude-agent-sdk`); Codex uses the app-server JSON-RPC transport
 ([ADR-0058](../adr/0058-codex-app-server-turn-steer.md)); Antigravity has no
 Node/TS SDK, so it drives the `agy` CLI headless
 ([ADR-0057](../adr/0057-antigravity-adapter.md)). All three sit behind the

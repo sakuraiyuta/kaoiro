@@ -223,56 +223,37 @@ Operator procedure, verification and rollback:
 
 ## Codex backend
 
-The public Codex engine defaults to `app-server`. An omitted `codex.backend`
-or explicit `"app-server"` in `runner.config.json` selects the persistent child;
-set `"exec"` explicitly to retain exec. The setting is host-wide and applies
-only to new Codex wrapper lifetimes, including resume, reset, and automatic
-restart. Existing children retain their launch-time selection after reload.
-The runner relays only its local selection as `codex_backend` in the wrapper
-startup config; direct wrapper launches may use that same field. No environment
-variable, command-line backend flag, dashboard selector, spawn payload, or
-resume snapshot selects a backend.
+Codex uses `app-server`. Omit `codex.backend` or specify `"app-server"`.
+Explicit `"exec"` is rejected at runner startup and on reload; direct wrapper
+configuration rejects `codex_backend: "exec"` too. The refusal explains the
+pre-retirement preparation procedure. There is no warning-only release,
+automatic conversion, fallback, reset, or cross-backend resume.
 
-Unknown values reject startup; a bad reload is skipped without replacing the
-last valid configuration. After a valid reload, wait for the runner's
-`codex backend=... for subsequent wrappers` diagnostic: the earlier `config
-reload` line is not an application receipt. New launches and resumes use the
-new selection, and the wrapper logs its selected backend at startup. There is
-no automatic fallback to exec. Use a runner release that bundles this selector
-and both backends; older wrapper releases may ignore the new field. For
-a backend change, use the guarded whole-host fresh-session procedure;
-selecting a backend does not authorize cross-backend resume of stored IDs.
-A code rollback preserving app-server must retain and verify explicit
-app-server before activating old code. See the
-[rollback runbook](../../operations/codex-backend-switch.md#backend-selection-and-code-rollback)
-and [ADR-0058](../../adr/0058-codex-app-server-turn-steer.md).
+A rejected reload keeps the last applied configuration and existing children.
+The runner relays only its local selection as `codex_backend`; environment
+variables, command-line backend flags, dashboard selectors, spawn payloads and
+resume snapshots cannot select a backend. New wrapper lifetimes use the valid
+local setting; a reload never rewrites a running child's selection.
 
-Before installing the omitted-default-changing release on an affected legacy host,
-run the preparation command
-introduced for [issue 564](https://github.com/sakuraiyuta/kaoiro/issues/564),
-following the [backend switching runbook](../../operations/codex-backend-switch.md#preparation-before-a-default-change)
-on the preparation release. It keeps the legacy route on exec and persists an explicit
-exec setting only after the current route and complete session-origin evidence
-are established. It does not remove settings or restore sessions. The runner's
-public `--version --json` output reports its full `revision` and JSON boolean
-`dirty`; verify the expected revision and `dirty: false` when checking a built
-artifact. Preparation also checks the active invocation's startup record; if
-that record is unavailable, the preparation command stops with
-`runner-start-record-unavailable` before server observation or configuration
-write. It searches the whole invocation; an 8 MiB read overflow uses the same
-stop code. A `-dirty` startup revision stops with `runner-identity-dirty`.
-Follow the runbook's controlled-restart impact or postpone path rather than
-inferring an identity. The preparation command never restarts the service.
-The synchronous `execFileSync` capture reports this overflow as `ENOBUFS`;
-U1 preserves that error through the command boundary and maps it to
-`runner-start-record-unavailable` when reading the startup record.
+Prepare existing exec sessions using the retained **last pre-retirement
+release** before installing this code. If app-server fails, the operator can
+roll code back to that release and use its `pin-exec-fresh` and fresh restore
+procedure. **Context is lost.** Keep the release artifact and verify its exact
+native/state compatibility. Before moving forward again, remove its exec pin
+using that release's `remove-pin` procedure. See the
+[retirement and rollback runbook](../../operations/codex-backend-switch.md#exec-retirement).
+
+The current maintenance script refuses `prepare`, `pin-exec-fresh`,
+`restore-fresh --backend exec` and their exec observation targets before
+creating adapters or writing configuration. App-server observation and fresh
+restore remain; `remove-pin` retains its old-backend compatibility preconditions.
 
 ### Codex backend selection
 
-This subsection is retained as a fragment-compatible pointer. The selector,
-reload, compatibility, and rollback contract is in
-[Codex backend](#codex-backend); the operator procedure is in the
-[backend switching runbook](../../operations/codex-backend-switch.md#fresh-backend-migration).
+Only omitted or `"app-server"` is supported. `auth_mode: "apikey"` remains
+accepted; account model/effort defaults and credential lifecycle under API-key
+authentication are unmeasured. A local provider with an explicit model does not
+establish them.
 
 ## Codex configuration
 

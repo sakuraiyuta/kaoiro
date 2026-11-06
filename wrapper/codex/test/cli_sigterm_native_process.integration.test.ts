@@ -379,7 +379,7 @@ async function waitFor(
   throw new Error(`timed out after ${timeoutMs}ms${diagnostics?.() ?? ""}`);
 }
 
-it.skipIf(!isLinux).each(["exec", "app-server"] as const)(
+it.skipIf(!isLinux).each(["app-server"] as const)(
   "%s: SIGTERM triggers close() -> the real Codex child and its sandboxed grandchild both terminate (issue #391 M1/S2, Linux-only)",
   async (backend) => {
     const home = await mkdtemp(join(tmpdir(), "ao391-cli-exec-sigterm-"));

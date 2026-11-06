@@ -793,12 +793,21 @@ async function loadAdapterModule(args) {
 export async function main(argv = process.argv.slice(2), adapters = undefined, io = process, runtime = {}) {
   try {
     const args = parseArgs(argv);
+    if (args.phase === "prepare") stop("exec-backend-retired");
+    if (args.phase === "pin-exec-fresh") stop("exec-backend-retired");
+    if (args.phase === "restore-fresh" && args.backend === "exec") stop("exec-backend-retired");
+    if (args.phase === "observe" && args.phase_target === "pin-exec-fresh") stop("exec-backend-retired");
+    if (args.phase === "observe" && args.phase_target === "restore-fresh" && args.backend === "exec") stop("exec-backend-retired");
     const selectedAdapters = adapters ?? (args.adapter_module ? await loadAdapterModule(args) : localAdapters(args, runtime.runCommand));
     const result = await (args.phase === "prepare" ? runPrepare(args, selectedAdapters) : runMaintenance(args, selectedAdapters));
     io.stdout.write(`${JSON.stringify(result)}\n`);
     return 0;
   } catch (error) {
     const code = error instanceof Stop ? error.message : "adapter-failed";
+    if (code === "exec-backend-retired") {
+      io.stderr.write("Codex exec backend is retired; this operation is unavailable. Use app-server. For preparation or exec recovery, use the retained last pre-retirement release and docs/operations/codex-backend-switch.md; rollback then fresh restart loses context. No adapter, config write or restore was started.\n");
+      return 1;
+    }
     if (error instanceof Stop && error.stage) {
       io.stderr.write(`${JSON.stringify({ status: "stopped", reason: code, stage: error.stage })}\n`);
       return 1;

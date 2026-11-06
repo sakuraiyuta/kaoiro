@@ -2,7 +2,7 @@
 title: Setup wizards (configuration / env generation)
 description: Exact contract for the interactive wizards that generate the server .env and runner configuration (runner.config.json / runner.env).
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-07
 related: [deployment]
 ---
 
@@ -90,8 +90,9 @@ startup**.
   `antigravity.probe_timeout_ms` / `antigravity.max_sandbox` /
   `antigravity.max_approval` / `antigravity.max_network_access` /
   `context_work_budget_percent`) are manual-edit only, added to the generated
-  `runner.config.json` by hand. `codex.backend` selects the next wrapper
-  lifetime; the Antigravity `max_*` fields are host-local permission ceilings.
+  `runner.config.json` by hand. `codex.backend` may only be omitted or
+  `"app-server"`; explicit `"exec"` is rejected. The setting applies to later wrapper
+  lifetimes; the Antigravity `max_*` fields are host-local permission ceilings.
   See runner/README.md's "設定ウィザード" section and
   [Runner configuration](runner.md)'s "Codex 設定" /
   "Antigravity configuration" sections.
