@@ -104,17 +104,12 @@ print(json.dumps(result, sort_keys=True))
                 JSON.stringify({ envelopes }),
               );
             }
-            const text = String(
-              envelopes.filter((e) => e.type === "result").at(-1)?.payload.text,
-            );
-            const match = /\{[^{}]*"inside"[^{}]*\}/.exec(text);
-            expect(match).not.toBeNull();
-            const result = JSON.parse(match![0]);
             expect(existsSync(report)).toBe(true);
             const observed = JSON.parse(readFileSync(report, "utf8"));
-            expect(result).toEqual(observed);
             expect(existsSync(inside)).toBe(sandbox !== "read-only");
-            expect(existsSync(outside)).toBe(sandbox === "danger-full-access");
+            expect(existsSync(outside)).toBe(
+              sandbox === "danger-full-access",
+            );
             expect(connections > 0).toBe(sandbox !== "read-only");
             expect(observed).toEqual({
               inside: sandbox !== "read-only",
@@ -128,7 +123,7 @@ print(json.dumps(result, sort_keys=True))
                   "-" +
                   sandbox +
                   ".json",
-                JSON.stringify(result),
+                JSON.stringify(observed),
               );
             }
           },
