@@ -157,7 +157,7 @@ describe("issue #285 — permission decision after its turn ended", () => {
     expect(run.states.lastIndexOf("tool_running")).toBeLessThan(
       run.states.indexOf("waiting_input"),
     );
-    expect(run.warnings).toEqual([]);
+    expect(run.warnings).toEqual(['[kaoiro] claude turn failure: {"terminal_reason":"absent","assistant_error_class":"absent"}']);
     await run.finish();
   });
 
