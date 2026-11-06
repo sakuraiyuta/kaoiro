@@ -1228,6 +1228,10 @@ export class AgentHost implements EngineAdapter {
     return this.#machine.state;
   }
 
+  get closed(): boolean {
+    return this.#closed;
+  }
+
   /** Opaque identity of the SDK turn currently executing, if any. The common
    * inter-agent tool uses this as a lease when a model sends a reply. */
   readonly toolOrigins = new ToolOrigins();
@@ -5410,8 +5414,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** EOF is terminal for the host, not merely its current SDK input. Mark
-   * closed before notifying callbacks so any next batch the CLI attempts to
-   * dispatch fails visibly instead of being appended behind a dead stream. */
+   * closed before notifying callbacks so they observe terminal admission. */
   #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
     this.#terminalReduction?.finish();
     if (this.#pendingPushedReceipt?.kind === "resume") this.#rejectResumeReceipt(this.#pendingPushedReceipt, "stream_eof");

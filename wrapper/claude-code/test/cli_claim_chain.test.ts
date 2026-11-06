@@ -275,3 +275,117 @@ describe("Claude claimed-cut final receipt deadline", () => {
     }
   }, 10_000);
 });
+
+describe("pushed receipt successor after host close", () => {
+  it.each(["same-peer-close", "other-peer-close", "open-mismatch"] as const)(
+    "handles %s without losing a queued successor", async scenario => {
+      vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
+      const ready = deferred<void>();
+      const pushed = deferred<void>();
+      const finishRoot = deferred<void>();
+      const rootEnded = deferred<void>();
+      const decide = deferred<void>();
+      const end = deferred<void>();
+      const attempts: Array<{ closed: boolean; cids: readonly string[] }> = [];
+      const decisions: Array<{ kind: string; reason?: string }> = [];
+      const notices: Envelope[] = [];
+      const lifecycle: Array<Record<string, unknown>> = [];
+      const stderrWrite = process.stderr.write;
+      process.stderr.write = ((chunk: string | Uint8Array) => {
+        const line = String(chunk);
+        const prefix = "[kaoiro][claude-code-lifecycle] ";
+        if (line.startsWith(prefix)) lifecycle.push(JSON.parse(line.slice(prefix.length)));
+        return true;
+      }) as typeof process.stderr.write;
+      let linkOptions!: Record<string, any>;
+      let host!: AgentHost;
+      let closed = false;
+      const running = runClaudeCli({
+        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        loadConfig: () => ({ ...config }),
+        createServerLink: (_url, _id, options) => {
+          linkOptions = options as unknown as Record<string, any>;
+          options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
+          queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+          return {
+            deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
+            deliveryIncarnation: () => "inc", deliveryGeneration: () => "gen",
+            reportDeliveryStage: () => {}, acknowledgeInterAgentDelivery: () => {},
+            retireInterAgentDeliveries: () => true, flushInterAgentRetirements: async () => {},
+            sendInterAgent: async (notice: Envelope) => { notices.push(notice); return { kind: "accepted", stamp: null }; },
+            send: () => {}, close: () => {}, currentSessionId: () => null,
+            setSessionId: () => {}, reportDisconnectIntent: async () => true,
+          } as never;
+        },
+        createHost: (cfg, options) => {
+          host = new AgentHost(cfg, {
+            ...options,
+            onTurnEnd: info => { options.onTurnEnd?.(info); if (info.cancellation === undefined) rootEnded.resolve(); },
+            onPushedInputDecision: decision => {
+              decisions.push({ kind: decision.kind, reason: decision.reason });
+              options.onPushedInputDecision?.(decision);
+            },
+            queryFn: (({ prompt, options: sdk }: { prompt: AsyncIterable<SDKUserMessage>; options: any }) => Object.assign((async function* () {
+              const input = prompt[Symbol.asyncIterator]();
+              const signal = { signal: new AbortController().signal };
+              const hook = sdk.hooks.UserPromptSubmit.at(-1).hooks[0];
+              const root = (await input.next()).value!;
+              await hook({ hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: root.message.content as string }, undefined, signal);
+              yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
+              ready.resolve();
+              const fold = (await input.next()).value!;
+              pushed.resolve();
+              if (scenario !== "other-peer-close") {
+                await finishRoot.promise;
+                yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "done" } as SDKMessage;
+              }
+              await decide.promise;
+              if (scenario === "open-mismatch") {
+                await hook({ hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2", prompt: `${fold.message.content as string} altered` }, undefined, signal);
+              }
+              await end.promise;
+            })(), { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query) as never,
+          });
+          host.probeRateLimits = async () => {};
+          const send = host.send.bind(host);
+          host.send = (...args) => { attempts.push({ closed, cids: args[2] ?? [] }); return send(...args); };
+          return host;
+        },
+      });
+      const incoming = (seq: number, grant?: "early") => {
+        const item = envelope(seq, grant);
+        if (scenario === "other-peer-close") item.agent_id = seq === 1 ? "peer-a" : "peer-b";
+        return item;
+      };
+      try {
+        await vi.waitFor(() => expect(host).toBeDefined());
+        linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
+        await linkOptions.onInterAgentMessage(incoming(1));
+        await ready.promise;
+        await linkOptions.onInterAgentMessage(incoming(2, "early"));
+        await pushed.promise;
+        await linkOptions.onInterAgentMessage(incoming(3));
+        if (scenario !== "other-peer-close") { finishRoot.resolve(); await rootEnded.promise; }
+        if (scenario === "open-mismatch") {
+          decide.resolve();
+          await vi.waitFor(() => expect(decisions).toContainEqual({ kind: "unknown", reason: "digest_mismatch" }));
+          await vi.waitFor(() => expect(lifecycle).toContainEqual(expect.objectContaining({ event: "dispatch_queued", seq_first: 3 })));
+          await vi.waitFor(() => expect(attempts.some(attempt => attempt.cids.includes("c3"))).toBe(true));
+          expect(attempts.find(attempt => attempt.cids.includes("c3"))?.closed).toBe(false);
+        } else {
+          closed = true; host.close(); finishRoot.resolve(); decide.resolve(); end.resolve();
+          await running;
+          expect(decisions).toContainEqual({ kind: "unknown", reason: "stream_eof" });
+          expect(attempts.filter(attempt => attempt.closed)).toEqual([]);
+          expect(lifecycle.filter(event => event.event === "dispatch_queued" && event.seq_first === 3)).toEqual([]);
+          await vi.waitFor(() => expect(notices).toContainEqual(expect.objectContaining({
+            payload: expect.objectContaining({ conversation_id: "c3", notice_type: "turn_failure", error: expect.objectContaining({ code: "api_error" }) }),
+          })));
+        }
+      } finally {
+        finishRoot.resolve(); decide.resolve(); end.resolve(); host?.close();
+        try { await running; } finally { process.stderr.write = stderrWrite; vi.unstubAllEnvs(); }
+      }
+    }, 10_000,
+  );
+});

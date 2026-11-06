@@ -1416,7 +1416,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         deliveryStages.unknownEnvelopes(decision.envelopes, decision.reason ?? "fold_authorization_unavailable");
         resolveInterAgentTurn(interAgentTurns.settle(batch.turnToken),
           { detail: decision.reason ?? "fold_authorization_unavailable" },
-          { dispatchNext: decision.reason !== "root_hook_timeout" });
+          { dispatchNext: !host.closed && decision.reason !== "root_hook_timeout" });
       }
       attemptFoldCandidates();
       attemptYieldCandidates();
