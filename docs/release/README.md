@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-11-04
+last_updated: 2026-11-06
 ---
 
 # Release notes
@@ -66,6 +66,8 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.06.1](v2026.11.06.1.md) | 2026-11-06 | v2026.11.05.1 | Codex launches default to app-server, the Claude delivery opt-in is retired, compaction no longer fail-stops a busy Claude peer, a deadline on the permission-sync wait |
+| [v2026.11.05.1](v2026.11.05.1.md) | 2026-11-05 | v2026.11.04.1 | Work items reduced to five operations, release canary and Codex recovery table retired |
 | [v2026.11.04.1](v2026.11.04.1.md) | 2026-11-04 | v2026.11.01.1 | Dashboard controls follow the design by default; no server, runner or wrapper product change |
 | [v2026.11.01.1](v2026.11.01.1.md) | 2026-11-01 | v2026.10.28.2 | OAuth device authorization grant for native clients, environment-consistency checks in the server deploy CLI, read-only observation of runner Codex work, live grid order and grid card faces in the dashboard |
 | [v2026.10.28.2](v2026.10.28.2.md) | 2026-10-28 | v2026.10.28.1 | New persona anzu, readable status-line links in the dashboard, a Service column in the Codex state recovery table of the runner runbook |
