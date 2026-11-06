@@ -225,14 +225,8 @@ export interface WrapperConfig {
   /** Antigravity idle-epoch lifetime. Relayed to Antigravity wrappers only;
    *  omitted = the environment variable, then 30 minutes. */
   antigravity_epoch_idle_ms?: number;
-  /** Retired (issue #563): no longer gates Codex operator steer. A direct
-   *  launch that still sets it gets a startup warning; the runner does not
-   *  relay it. */
-  operator_steer?: boolean;
-  /** Global opt-in for the Codex approval axis. Same rule as operator_steer. */
+  /** Global opt-in for the Codex approval axis; false is the same as absent. */
   approval_axis?: boolean;
-  /** Retired: recognized for direct-launch warnings, ignored for delivery. */
-  phase2_delivery?: boolean;
   /** Claude phase-2 server claim wait. Omitted defaults to 2,000 ms. */
   yield_claim_timeout_ms?: number;
   /** Claude phase-2 wait for the root hook after the old result. */

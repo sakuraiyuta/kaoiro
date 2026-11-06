@@ -52,8 +52,7 @@ it.each([
     expect(sourceLogs[0]).not.toContain("unrelated-env-value");
     expect(sourceLogs[0]).not.toContain(personas ?? "KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS");
     const warnings = writes.filter(line => line.startsWith("claude: warn - "));
-    expect(warnings).toHaveLength(Number(Boolean(flag)) + Number(Boolean(personas)));
-    expect(warnings.join("")).toContain("is retired and has no effect");
+    expect(warnings).toEqual([]);
     expect(warnings.join("")).not.toContain("unrelated-env-value");
   } finally {
     stderr.mockRestore();
@@ -61,7 +60,7 @@ it.each([
   }
 });
 
-it.each([undefined,false,true] as const)("warns for a direct wrapper legacy file key %s without gating",async fileKey=>{
+it.each([undefined,false,true] as const)("ignores a direct wrapper obsolete file key %s without gating",async fileKey=>{
   vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY",undefined);vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS",undefined);
   const writes:string[]=[];const stderr=vi.spyOn(process.stderr,"write").mockImplementation(chunk=>{writes.push(String(chunk));return true;});
   let modes:unknown;
@@ -72,7 +71,6 @@ it.each([undefined,false,true] as const)("warns for a direct wrapper legacy file
       createHost:()=>({state:"idle",statusExtSnapshot:()=>({}),run:async()=>{}})as never});
     expect(modes).toMatchObject({early:"fold",yield:"tool_boundary"});
     const warnings=writes.filter(x=>x.startsWith("claude: warn - "));
-    expect(warnings).toHaveLength(fileKey===undefined?0:1);
-    if(fileKey!==undefined){expect(warnings[0]).toContain("phase2_delivery in the wrapper config");expect(warnings[0]).toContain("in_flight_delivery_enabled");}
+    expect(warnings).toEqual([]);
   }finally{stderr.mockRestore();vi.unstubAllEnvs();}
 });

@@ -183,7 +183,7 @@ fail() {
 # carry: the runner validates them at start with the fixture's capabilities (claude-code only)
 carry='KAOIRO_CLAUDE_[A-Z0-9_]+|KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS|KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS'
 # blind: validated only for an enabled engine, which the fixture does not enable
-blind='KAOIRO_CODEX_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|OPERATOR_STEER|APPROVAL_AXIS)|KAOIRO_ANTIGRAVITY_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|TOOL_TIMEOUT_MS|EPOCH_IDLE_MS)'
+blind='KAOIRO_CODEX_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|APPROVAL_AXIS)|KAOIRO_ANTIGRAVITY_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|TOOL_TIMEOUT_MS|EPOCH_IDLE_MS)'
 # paths: would make the shim read other settings than the default directory's
 paths='KAOIRO_RUNNER_(DIR|CONFIG|ENV)'
 # one strict grammar for the carried lines, used to copy AND to check

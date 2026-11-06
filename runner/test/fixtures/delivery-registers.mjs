@@ -14,12 +14,14 @@ function maximumMetadata() {
 const config = parseRunnerConfig({ host_id: "delivery-integration", server_url: "ws://127.0.0.1/runner", cwd_allowlist: ["/tmp"],
   allowed_personas: ["ao"], capabilities: ids, codex: { backend: "app-server", auth_mode: "chatgpt", chatgpt_plan: "plus" },
   in_flight_delivery: { codex: { default: false } } });
-const snapshot = createDeliverySnapshot(config, {});
+const snapshot = createDeliverySnapshot(config);
 const actual = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, snapshot);
 const disabledConfig = { ...config, in_flight_delivery: { codex: { enabled: false, default: false } } };
-const disabled = buildRegister(disabledConfig, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(disabledConfig, {}));
-const oversized = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined,
-  createDeliverySnapshot(config, { KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: Array.from({ length: 65 }, (_, i) => `p${i}`).join(",") }));
+const disabled = buildRegister(disabledConfig, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(disabledConfig));
+const oversized = preflightDeliveryRegister({ ...actual, engines: actual.engines.map(entry => entry.id !== "codex" ? entry : {
+  ...entry, launch_delivery_policy: { ...entry.launch_delivery_policy,
+    persona_overrides: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`p${i}`, none])) },
+}) }, () => {});
 const minimal = { version: "0", host_id: "delivery-size", cwd_allowlist: ["/tmp"], capabilities: ids,
   in_flight_defaults: { "claude-code": true, codex: true, antigravity: false } };
 const rawMaximum = { ...minimal, engines: ids.map(id => ({ id, models: [], launch_delivery_policy: maximumMetadata() })) };

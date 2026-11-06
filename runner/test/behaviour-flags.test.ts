@@ -66,40 +66,15 @@ describe.each(FLAGS)("%s.%s", (block, engine, key, variable) => {
 });
 
 describe.each([
-  ["codex", "codex", "operator_steer", "KAOIRO_CODEX_OPERATOR_STEER"],
-  ["claude_code", "claude-code", "phase2_delivery", "KAOIRO_CLAUDE_PHASE2_DELIVERY"],
-] as const)("%s.%s retired input", (block, engine, key, variable) => {
-  const withFile = (value: boolean): RunnerConfig => ({ ...base, [block]: { [key]: value } });
-
-  it("file: still a JSON boolean only", () => {
-    const parse = (value: unknown) =>
-      (parseRunnerConfig({ ...base, [block]: { [key]: value } })[block] as Record<string, unknown>)[key];
-    expect(parse(true)).toBe(true);
-    expect(parse(false)).toBe(false);
-    for (const bad of [1, 0, "true", "1", null, []]) {
-      expect(() => parse(bad), JSON.stringify(bad)).toThrow(`${block}.${key} must be a boolean`);
-    }
-  });
-
-  it("variable: still parsed, so a set variable is read and an empty one is unset", () => {
-    expect(readSetVariables(base, { [variable]: "" })).toEqual([]);
-    expect(readSetVariables(base, { [variable]: "1" }).map((s) => s.value)).toEqual([true]);
-    expect(readSetVariables(base, { [variable]: "0" }).map((s) => s.value)).toEqual([false]);
-  });
-
-  it("relay: never relayed to a wrapper, whatever the file and the variable say", () => {
-    expect(computeBehaviourRelay(withFile(true), {})).toEqual({});
-    expect(computeBehaviourRelay(withFile(false), {})).toEqual({});
-    expect(computeBehaviourRelay(withFile(true), { [variable]: "0" })).toEqual({});
-  });
-
-  it("warnings: neither the deprecation text nor a shadow line, which the retirement warnings replace", () => {
-    for (const [file, value] of [[withFile(true), "0"], [withFile(true), "1"], [withFile(false), "1"], [base, "1"]] as const) {
-      expect(behaviourWarnings(undefined, file, readSetVariables(file, { [variable]: value }), new Set()), `${value}`).toEqual([]);
-    }
-  });
-
-  it("does not read the variable of a disabled engine", () => {
-    expect(readSetVariables({ ...base, capabilities: (["claude-code", "codex", "antigravity"] as const).filter(candidate => candidate !== engine) }, { [variable]: "1" })).toEqual([]);
+  ["codex", "operator_steer", "KAOIRO_CODEX_OPERATOR_STEER"],
+  ["claude_code", "phase2_delivery", "KAOIRO_CLAUDE_PHASE2_DELIVERY"],
+] as const)("removed %s.%s input", (block, key, variable) => {
+  it.each([undefined, true, false, "invalid", null, []])("ignores obsolete file value %j and variables", value => {
+    const file = parseRunnerConfig({ ...base, [block]: { [key]: value } });
+    expect(file[block]).not.toHaveProperty(key);
+    const env = { [variable]: "0", [`${variable}_PERSONAS`]: "other" };
+    expect(readSetVariables(file, env)).toEqual([]);
+    expect(computeBehaviourRelay(file, env)).toEqual({});
+    expect(behaviourWarnings(undefined, file, readSetVariables(file, env), new Set())).toEqual([]);
   });
 });

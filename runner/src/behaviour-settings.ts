@@ -81,13 +81,10 @@ export interface AntigravityBehaviourConfig extends WatchdogConfig {
 
 /** Codex global opt-ins next to its watchdog keys. */
 export interface CodexBehaviourConfig extends WatchdogConfig {
-  /** Retired (issue #563): parsed and ignored, never relayed. */
-  operator_steer?: boolean;
   approval_axis?: boolean;
 }
 
 export interface ClaudeCodeConfig extends WatchdogConfig {
-  phase2_delivery?: boolean;
   yield_claim_timeout_ms?: number;
   pending_receipt_root_timeout_ms?: number;
   urgent_overtake_limit?: number;
@@ -108,9 +105,6 @@ interface BehaviourRow {
   /** A file value of `false` is the same as an absent key (global opt-in
    *  flags): it is neither relayed nor reported as shadowed. */
   readonly falseIsAbsent?: true;
-  /** No longer gates anything: still parsed, never relayed, and reported by
-   *  the retirement warnings instead of the generic deprecation text. */
-  readonly retired?: true;
   readonly env: string;
   readonly envIsSet: (raw: string | undefined) => boolean;
   /** Parses a runner.config.json value; throws ConfigError. */
@@ -279,16 +273,15 @@ const PERMISSION_TIMEOUT_ROW: BehaviourRow = {
 
 const ANTIGRAVITY_MIN_TIMING_MS = 1_000;
 
-/** The three global opt-in flags. Config `true` is the global opt-in, the same
+/** The approval-axis opt-in. Config `true` is the global opt-in, the same
  *  as the variable being exactly "1"; `false` is the same as absent. A set
  *  variable is not relayed (the wrapper's flag argument takes the variable
  *  first, so omission and "variable first" agree). */
 function flagRow(
   block: BehaviourBlock,
   engine: EngineKind,
-  key: "operator_steer" | "approval_axis" | "phase2_delivery",
+  key: "approval_axis",
   env: string,
-  retired?: true,
 ): BehaviourRow {
   return {
     block,
@@ -296,7 +289,6 @@ function flagRow(
     wrapperField: key,
     engine,
     falseIsAbsent: true,
-    ...(retired === undefined ? {} : { retired }),
     env,
     envIsSet: (raw) => raw !== undefined && raw !== "",
     parseFile: (value) => {
@@ -311,15 +303,7 @@ function flagRow(
 }
 
 const FLAG_ROWS: readonly BehaviourRow[] = [
-  flagRow("codex", "codex", "operator_steer", "KAOIRO_CODEX_OPERATOR_STEER", true),
   flagRow("codex", "codex", "approval_axis", "KAOIRO_CODEX_APPROVAL_AXIS"),
-  flagRow(
-    "claude_code",
-    "claude-code",
-    "phase2_delivery",
-    "KAOIRO_CLAUDE_PHASE2_DELIVERY",
-    true,
-  ),
 ];
 
 /** Antigravity's two timing keys beside the watchdog. A set variable is parsed
@@ -517,7 +501,7 @@ export function computeBehaviourRelay(
 ): BehaviourRelay {
   const relay: Record<string, Record<string, BehaviourValue>> = {};
   for (const row of BEHAVIOUR_ROWS) {
-    if (row.engine === "runner" || row.wrapperField === undefined || row.retired) continue;
+    if (row.engine === "runner" || row.wrapperField === undefined) continue;
     if (row.envIsSet(env[row.env])) continue;
     const value = fileValue(config, row);
     if (value === undefined) continue;
@@ -541,7 +525,6 @@ export function behaviourWarnings(
 ): string[] {
   const lines: string[] = [];
   for (const { row, value } of set) {
-    if (row.retired) continue;
     const path = behaviourConfigPath(row);
     if (!seen.has(row.env)) {
       seen.add(row.env);

@@ -135,7 +135,7 @@ describe("parseConfig timing fields", () => {
 });
 
 describe("parseConfig global opt-in flags", () => {
-  it.each(["operator_steer", "approval_axis", "phase2_delivery"] as const)(
+  it.each(["approval_axis"] as const)(
     "%s: a JSON boolean only",
     (field) => {
       expect(parseConfig({ ...base, [field]: true })[field]).toBe(true);
@@ -148,4 +148,10 @@ describe("parseConfig global opt-in flags", () => {
       expect(parseConfig({ ...base })[field]).toBeUndefined();
     },
   );
+});
+
+it.each(["operator_steer", "phase2_delivery"])("ignores removed wrapper field %s", field => {
+  for (const value of [true, false, "invalid", null]) {
+    expect(parseConfig({ ...base, [field]: value })).not.toHaveProperty(field);
+  }
 });

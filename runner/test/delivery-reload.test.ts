@@ -70,8 +70,8 @@ describe("applied delivery snapshot publication", () => {
       const next = { claude_code: { phase2_delivery: true }, codex: { auth_mode: "chatgpt", backend: "app-server", operator_steer: true },
         in_flight_delivery: { "claude-code": { default: false }, codex: { default: false } } };
       await h.reload(next);
-      expect(original.phase2_delivery).toBeUndefined();
-      expect(h.spawn()).not.toHaveProperty("phase2_delivery"); expect(h.spawn("codex").operator_steer).toBeUndefined();
+      expect(original).not.toHaveProperty("phase2_delivery");
+      expect(h.spawn()).not.toHaveProperty("phase2_delivery"); expect(h.spawn("codex")).not.toHaveProperty("operator_steer");
       expect(mode(h.registers.at(-1)!, "claude-code").mechanisms.inter_agent_early).toBe("fold");
       expect(mode(h.registers.at(-1)!, "codex").mechanisms.operator_early).toBe("steer");
       expect(h.registers.at(-1)!.in_flight_defaults).toEqual({ "claude-code": false, codex: false, antigravity: false });
@@ -126,64 +126,20 @@ describe("applied delivery snapshot publication", () => {
   });
 });
 
-describe("retirement warnings through the runner", () => {
-  const flag = "KAOIRO_CODEX_OPERATOR_STEER", list = "KAOIRO_CODEX_OPERATOR_STEER_PERSONAS";
-  const retired = (h: { stderr: string[] }) => h.stderr.filter(line => line.startsWith("runner: warn - ") && line.includes("is retired"));
-  const codexWith = (extra: Record<string, unknown>) => ({ codex: { auth_mode: "chatgpt", backend: "app-server", ...extra } });
-  it("startup reports each retired variable once, with the retirement text and no deprecation text", async () => {
-    const h = await harness({}, {}, { [flag]: "0", [list]: "secret-persona-id" });
-    try {
-      const lines = retired(h);
-      expect(lines).toHaveLength(2);
-      expect(lines[0]).toContain(`${flag} is retired`);
-      expect(lines[1]).toContain(`${list} is retired`);
-      expect(h.stderr.join("")).not.toContain("secret-persona-id");
-      expect(h.stderr.filter(line => line.includes(`${flag} is deprecated`) || line.includes("is shadowed by"))).toEqual([]);
-    } finally { h.close(); }
+it("ignores removed inputs at startup and reload without warnings", async () => {
+  const h = await harness({ codex: { auth_mode: "chatgpt", operator_steer: false }, claude_code: { phase2_delivery: false } }, {}, {
+    KAOIRO_CODEX_OPERATOR_STEER: "0", KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: "private-sentinel",
+    KAOIRO_CLAUDE_PHASE2_DELIVERY: "0", KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "private-sentinel",
   });
-  it("startup is silent without a retired input", async () => {
-    const h = await harness();
-    try { expect(retired(h)).toEqual([]); } finally { h.close(); }
-  });
-  it("a reload that introduces the key reports it once and never again for the same name", async () => {
-    const h = await harness();
-    try {
-      await h.reload(codexWith({ operator_steer: false }));
-      expect(retired(h)).toHaveLength(1);
-      expect(retired(h)[0]).toContain('"codex.operator_steer" in runner.config.json is retired');
-      await h.reload(codexWith({ operator_steer: true }));
-      await h.reload(codexWith({}));
-      await h.reload(codexWith({ operator_steer: true, backend: "exec" }));
-      expect(retired(h)).toHaveLength(1);
-    } finally { h.close(); }
-  });
-  it("a reload with an empty diff and Antigravity disabled neither repeats nor loses the dedup state", async () => {
-    const h = await harness({ capabilities: ["claude-code", "codex"], ...codexWith({ operator_steer: true }) }, {}, { [flag]: "1" });
-    try {
-      expect(retired(h)).toHaveLength(2);
-      await h.reload({ capabilities: ["claude-code", "codex"], ...codexWith({ operator_steer: true }) });
-      expect(h.registers).toHaveLength(1);
-      expect(retired(h)).toHaveLength(2);
-      await h.reload({ capabilities: ["claude-code", "codex"], ...codexWith({ operator_steer: true }),
-        in_flight_delivery: { codex: { default: false } } });
-      expect(h.registers).toHaveLength(2);
-      expect(retired(h)).toHaveLength(2);
-    } finally { h.close(); }
-  });
-});
-
-it("warns once per Claude legacy input at startup and reload without stale shadow warnings", async () => {
-  const h = await harness({}, {}, { KAOIRO_CLAUDE_PHASE2_DELIVERY: "0", KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "private-sentinel" });
-  const warnings = () => h.stderr.filter(line => line.startsWith("runner: warn - ") && line.includes("is retired") && /CLAUDE|claude_code/.test(line));
   try {
-    expect(warnings()).toHaveLength(2);
-    await h.reload({ claude_code: { phase2_delivery: false } });
-    expect(warnings()).toHaveLength(3);
-    await h.reload({ claude_code: { phase2_delivery: true } });
-    expect(warnings()).toHaveLength(3);
+    const oldInputs = /KAOIRO_CODEX_OPERATOR_STEER|KAOIRO_CLAUDE_PHASE2_DELIVERY|codex\.operator_steer|claude_code\.phase2_delivery/;
+    expect(h.stderr.filter(line => oldInputs.test(line))).toEqual([]);
+    await h.reload({ codex: { auth_mode: "chatgpt", operator_steer: "invalid" }, claude_code: { phase2_delivery: null } });
+    expect(h.stderr.filter(line => oldInputs.test(line))).toEqual([]);
     expect(h.spawn()).not.toHaveProperty("phase2_delivery");
+    expect(h.spawn("codex")).not.toHaveProperty("operator_steer");
+    expect(mode(h.registers.at(-1)!, "codex").mechanisms.operator_early).toBe("steer");
+    expect(mode(h.registers.at(-1)!, "claude-code").mechanisms.inter_agent_early).toBe("fold");
     expect(h.stderr.join("")).not.toContain("private-sentinel");
-    expect(h.stderr.join("")).not.toContain("still overrides");
-    expect(h.stderr.join("")).not.toContain("is deprecated");
   } finally { h.close(); }
 });

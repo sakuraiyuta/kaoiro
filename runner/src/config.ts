@@ -661,7 +661,7 @@ export function buildRegister(
   claudeCatalogOverride?: EngineCatalogEntry["models"],
   buildInfo?: BuildInfo,
   antigravityCatalogOverride?: EngineCatalogEntry["models"],
-  deliverySnapshot: AppliedDeliverySnapshot = createDeliverySnapshot(config, process.env),
+  deliverySnapshot: AppliedDeliverySnapshot = createDeliverySnapshot(config),
   grokCatalogOverride?: EngineCatalogEntry["models"],
 ): RunnerRegister {
   const capabilities = effectiveCapabilities(config);

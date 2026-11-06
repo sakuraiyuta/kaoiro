@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 
 // The built CLI is launched directly, with no runner, as docs/reference/configuration/wrapper.md allows.
-// Only the wrapper can print a retirement line here.
+// Obsolete inputs must not change the startup declaration or emit warnings.
 const cli = join(dirname(fileURLToPath(import.meta.url)), "../dist/cli.js");
 const secret = "secret-persona-id";
 
@@ -23,7 +23,7 @@ async function startup(env: Record<string, string>, extra: Record<string, unknow
   child.stderr.on("data", chunk => { output += chunk; });
   const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
   try {
-    // cli.ts writes this line after the retirement warnings, so its complete line ends the startup block.
+    // The complete approval-axis line marks the end of startup declarations.
     await vi.waitFor(() => expect(output).toMatch(/codex: approval_axis=(on|off)\n/), { timeout: 20_000, interval: 20 });
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
@@ -33,18 +33,13 @@ async function startup(env: Record<string, string>, extra: Record<string, unknow
   return output;
 }
 
-it("a direct launch with every retired input prints one line per input and never a persona id", async () => {
+it("a direct launch ignores every obsolete input without warning or persona disclosure", async () => {
   const output = await startup({ KAOIRO_CODEX_OPERATOR_STEER: "0", KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: secret },
     { operator_steer: false });
   const lines = output.split("\n").filter(line => line.startsWith("codex: warn - "));
-  expect(lines).toHaveLength(3);
-  expect(lines[0]).toContain("KAOIRO_CODEX_OPERATOR_STEER is retired");
-  expect(lines[1]).toContain("KAOIRO_CODEX_OPERATOR_STEER_PERSONAS is retired");
-  expect(lines[2]).toContain("operator_steer in the wrapper config is retired");
+  expect(lines).toEqual([]);
   expect(output).not.toContain(secret);
   expect(output).toContain("codex: operator_steer=on");
-  // startup() stops at the approval_axis line, so the block is only complete if the warnings precede it.
-  expect(output.lastIndexOf("codex: warn - ")).toBeLessThan(output.indexOf("codex: approval_axis="));
 }, 40_000);
 
 it("a direct launch with no retired input prints no retirement line", async () => {

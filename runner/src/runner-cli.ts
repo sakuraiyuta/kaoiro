@@ -1,7 +1,6 @@
 import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import { randomUUID } from "node:crypto";
-import { captureDeliveryEnvironment } from "@kaoiro/agent-common";
-import { createDeliverySnapshot, deliveryBehaviourRelay, deliveryEnvironment, retiredDeliveryWarnings } from "./delivery-settings.js";
+import { createDeliverySnapshot, deliveryBehaviourRelay } from "./delivery-settings.js";
 // Runner CLI runtime — loads the runner config, connects to the kaoiro server
 // on `runner:<host_id>`, registers the host, heartbeats, and supervises the
 // host's wrapper processes on operator spawn/stop/restart (ADR-0023, phases
@@ -181,7 +180,6 @@ export async function runRunnerCli(
   // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #135) — applied here
   // and again on every config-watcher reload below, so the precedence
   // holds across hot-reloads too.
-  const deliveryEnvAtStart = captureDeliveryEnvironment(process.env);
   let fileConfig = loadConfig(configPath);
   let config = applyOverride(fileConfig);
   const token = process.env.KAOIRO_RUNNER_TOKEN;
@@ -198,11 +196,10 @@ export async function runRunnerCli(
       readSetVariables(config, process.env),
       deprecationSeen,
     ),
-    ...retiredDeliveryWarnings(fileConfig, deliveryEnvAtStart, deprecationSeen),
   ]) {
     process.stderr.write(line);
   }
-  let appliedDelivery = createDeliverySnapshot(config, deliveryEnvAtStart);
+  let appliedDelivery = createDeliverySnapshot(config);
   let behaviourRelay = deliveryBehaviourRelay(config, process.env, appliedDelivery);
   // Read per Phoenix log line, so a reload changes it without a reconnect.
   let heartbeatLogging = resolveHeartbeatLogging(config, process.env);
@@ -303,7 +300,7 @@ export async function runRunnerCli(
   const supervisor = createSupervisor({
     hostId: config.host_id,
     ...initialRuntime,
-    launch: createLauncher(deliveryEnvAtStart),
+    launch: createLauncher(),
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
     sendResetResult: (result) => link.sendResetResult(result),
@@ -425,7 +422,7 @@ export async function runRunnerCli(
   ): Promise<void> => {
     // Validate the variables first: an invalid one skips this reload (the
     // caller logs "config apply failed") and the last valid config stays.
-    const nextEnvironment = deliveryEnvironment(process.env, deliveryEnvAtStart);
+    const nextEnvironment = process.env;
     const setVariables = readSetVariables(next, nextEnvironment);
     // Warnings are written only once the reload is applied, so a reload that
     // fails later is never reported as having taken effect.
@@ -437,9 +434,8 @@ export async function runRunnerCli(
         setVariables,
         seenAfterReload,
       ),
-      ...retiredDeliveryWarnings(nextFile, deliveryEnvAtStart, seenAfterReload),
     ];
-    const nextDelivery = createDeliverySnapshot(next, deliveryEnvAtStart);
+    const nextDelivery = createDeliverySnapshot(next);
     const nextBehaviourRelay = deliveryBehaviourRelay(next, nextEnvironment, nextDelivery);
     const nextHeartbeatLogging = resolveHeartbeatLogging(next, nextEnvironment);
     const diff = changedFields(config, next);

@@ -1,62 +1,24 @@
 import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import {
-  captureDeliveryEnvironment, DELIVERY_ENGINE_SETTINGS, DELIVERY_ENV_KEYS,
-  resolveDelivery, RETIRED_CODEX_OPERATOR_STEER_ENV, RETIRED_CLAUDE_PHASE2_ENV,
-  retiredCodexOperatorSteerInputs, retiredCodexOperatorSteerMessage, retiredClaudePhase2Inputs, retiredClaudePhase2Message,
-  type DeliveryEnvironment, type DeliveryInputs,
+  DELIVERY_ENGINE_SETTINGS,
+  resolveDelivery, type DeliveryInputs,
 } from "@kaoiro/agent-common";
 import type { EngineCatalogEntry, EngineKind, LaunchDeliveryPolicyMetadata, RunnerRegister } from "@kaoiro/protocol";
 import type { RunnerConfig } from "./config.js";
 import { computeBehaviourRelay, type BehaviourRelay } from "./behaviour-settings.js";
 
 export interface AppliedDeliverySnapshot {
-  readonly env: DeliveryEnvironment;
   readonly engines: Readonly<Record<EngineKind, Readonly<DeliveryInputs & { ceiling: boolean; default: boolean }>>>;
 }
 
-export function createDeliverySnapshot(config: RunnerConfig, env: Readonly<Record<string, string | undefined>>): AppliedDeliverySnapshot {
-  const captured = captureDeliveryEnvironment(env);
+export function createDeliverySnapshot(config: RunnerConfig): AppliedDeliverySnapshot {
   const engines = Object.fromEntries(DELIVERY_ENGINE_SETTINGS.map(row => [row.engine, Object.freeze({
     engine: row.engine,
     ceiling: config.in_flight_delivery?.[row.engine]?.enabled ?? row.enabled,
     default: config.in_flight_delivery?.[row.engine]?.default ?? row.default,
     codexBackend: config.codex?.backend ?? DEFAULT_CODEX_BACKEND,
-    env: captured,
   })])) as Record<EngineKind, DeliveryInputs & { ceiling: boolean; default: boolean }>;
-  return Object.freeze({ env: captured, engines: Object.freeze(engines) });
-}
-
-export function deliveryEnvironment(base: NodeJS.ProcessEnv, captured: DeliveryEnvironment): NodeJS.ProcessEnv {
-  const env = { ...base };
-  for (const key of DELIVERY_ENV_KEYS) {
-    if (captured[key] === undefined) delete env[key];
-    else env[key] = captured[key];
-  }
-  return env;
-}
-
-export function withoutRetiredDeliveryInputs(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const result = { ...env };
-  for (const key of [...RETIRED_CODEX_OPERATOR_STEER_ENV, ...RETIRED_CLAUDE_PHASE2_ENV]) delete result[key];
-  return result;
-}
-
-export function retiredDeliveryWarnings(file: RunnerConfig, env: DeliveryEnvironment, seen: Set<string>): string[] {
-  const lines: string[] = [];
-  const add = (input: string, message: string) => {
-    if (seen.has(input)) return;
-    seen.add(input);
-    lines.push(`runner: warn - ${message}\n`);
-  };
-  if (file.capabilities?.includes("codex") ?? true) {
-    for (const input of retiredCodexOperatorSteerInputs({ env, fileKey: file.codex?.operator_steer }))
-      add(input, retiredCodexOperatorSteerMessage(input, "runner"));
-  }
-  if (file.capabilities?.includes("claude-code") ?? true) {
-    for (const input of retiredClaudePhase2Inputs({ env, fileKey: file.claude_code?.phase2_delivery }))
-      add(input, retiredClaudePhase2Message(input, "runner"));
-  }
-  return lines;
+  return Object.freeze({ engines: Object.freeze(engines) });
 }
 
 export function buildLaunchDeliveryMetadata(snapshot: AppliedDeliverySnapshot, engine: EngineKind): LaunchDeliveryPolicyMetadata {
@@ -120,7 +82,7 @@ export function projectDeliveryRegister(register: RunnerRegister, snapshot: Appl
 }
 
 export function deliveryBehaviourRelay(config: RunnerConfig, env: NodeJS.ProcessEnv, snapshot: AppliedDeliverySnapshot): BehaviourRelay {
-  const relay = computeBehaviourRelay(config, deliveryEnvironment(env, snapshot.env));
+  const relay = computeBehaviourRelay(config, env);
   for (const { engine } of DELIVERY_ENGINE_SETTINGS) {
     relay[engine] = { ...relay[engine], in_flight_delivery_enabled: snapshot.engines[engine].ceiling };
   }

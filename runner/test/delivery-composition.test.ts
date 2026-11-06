@@ -113,7 +113,7 @@ describe("built runner and wrapper delivery composition", () => {
       }
     } finally { await h.stop(); }
   }, 40_000);
-  it("the child observes captured present and absent environment values after process.env changes", async () => {
+  it("the child ignores obsolete environment values after process.env changes", async () => {
     const h = await start({}, { KAOIRO_CLAUDE_PHASE2_DELIVERY: "1" }, true);
     try {
       const claude = declaration(await h.wrapper("claude", "claude-code"));
@@ -137,14 +137,14 @@ describe("built runner and wrapper delivery composition", () => {
       expect(metadata(exec.registers[0]!, "codex").mechanisms).toEqual(actual);
     } finally { await exec.stop(); }
   }, 60_000);
-  it("reports each retired Codex variable once at the runner and not again at the managed wrapper", async () => {
+  it("ignores old Codex variables at the runner and managed wrapper", async () => {
     const h = await start({}, { KAOIRO_CODEX_OPERATOR_STEER: "0", KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: "secret-persona-id" });
     try {
       const declared = declaration(await h.wrapper("codex", "codex"));
       expect(declared.operator_early).toBe("steer");
       const lines = h.output().split("\n");
-      expect(lines.filter(line => line.startsWith("runner: warn - KAOIRO_CODEX_OPERATOR_STEER is retired"))).toHaveLength(1);
-      expect(lines.filter(line => line.startsWith("runner: warn - KAOIRO_CODEX_OPERATOR_STEER_PERSONAS is retired"))).toHaveLength(1);
+      expect(lines.filter(line => line.startsWith("runner: warn - KAOIRO_CODEX_OPERATOR_STEER is retired"))).toHaveLength(0);
+      expect(lines.filter(line => line.startsWith("runner: warn - KAOIRO_CODEX_OPERATOR_STEER_PERSONAS is retired"))).toHaveLength(0);
       expect(lines.filter(line => line.startsWith("codex: warn - "))).toEqual([]);
       expect(h.output()).not.toContain("secret-persona-id");
     } finally { await h.stop(); }
@@ -162,7 +162,7 @@ it("R1-era relay inputs cannot gate a built W2 declaration even when launch meta
     await vi.waitFor(()=>expect(wire.joins.has("mixed.direct")).toBe(true),{timeout:10000});
     expect(declaration(wire.joins.get("mixed.direct")!)).toEqual({operator_early:"fold",inter_agent_early:"fold",inter_agent_yield:"tool_boundary"});
     const lines=output.split("\n").filter(x=>x.startsWith("claude: warn - "));
-    expect(lines).toHaveLength(3);expect(output).not.toContain("private-excluded-persona");
+    expect(lines).toHaveLength(0);expect(output).not.toContain("private-excluded-persona");
   }finally{
     const exited=child.exitCode!==null ? Promise.resolve() : once(child,"exit");child.kill("SIGTERM");await exited;await wire.close();rmSync(root,{recursive:true,force:true});
   }

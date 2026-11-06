@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-11-06
+last_updated: 2026-11-07
 ---
 
 # Runner configuration
@@ -111,19 +111,16 @@ rules. A successful reload publishes one snapshot for the next wrapper config,
 register defaults and launch metadata; an awaited catalog refresh reads the
 latest applied snapshot. Existing wrappers keep their launch declaration.
 
-The runner captures `KAOIRO_CLAUDE_PHASE2_DELIVERY`,
+The removed inputs `KAOIRO_CLAUDE_PHASE2_DELIVERY`,
 `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS`, `KAOIRO_CODEX_OPERATOR_STEER` and
-`KAOIRO_CODEX_OPERATOR_STEER_PERSONAS` at startup only to identify retired inputs.
-All four are removed from child environments, and neither retired file key is
-relayed. A nonempty variable or a present file key (including false) produces
-one warning per input name per runner process, at startup or a reload that
-introduces it, only for an advertised engine. Empty variables do not warn.
-Warnings name the input and replacement controls without printing its value.
-The old Claude flag/list and `claude_code.phase2_delivery` no longer gate delivery.
+`KAOIRO_CODEX_OPERATOR_STEER_PERSONAS` are no longer read or warned about.
+Neither `codex.operator_steer` nor `claude_code.phase2_delivery` is parsed or
+relayed; like other unknown engine-block keys, they are silently ignored,
+even if their values are not booleans. They cannot restrict delivery.
 Use the engine's ceiling, new-row default or per-agent live policy instead.
-Keep old settings through the [rollback window](../../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement);
-their readers are removed only after a released warning version and that window.
-No new environment variable is added.
+Approval-axis controls, including `KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS`, remain.
+The first release containing C5 requires the operator's old-version clean-start
+check and [rollback-window completion](../../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement).
 
 The runner explicitly registers every advertised engine's resolved default and
 bounded [launch metadata](../protocol/runner-control.md#launch-delivery-metadata).
@@ -172,9 +169,7 @@ hidden by a variable.
 | `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` | `antigravity.tool_timeout_ms` | integer | 1000..2147483647 | 600000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` | `antigravity.epoch_idle_ms` | integer | 1000..2147483647 | 1800000 | Antigravity wrapper (`resolveEpochIdleMs`) | variable > file > default |
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | 1..2147483647 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
-| `KAOIRO_CODEX_OPERATOR_STEER` | `codex.operator_steer` | boolean | `true` / `false` (variable: exactly `1` is on) | retired: no effect | none (the runner warns and does not relay or pass it) | not applicable |
 | `KAOIRO_CODEX_APPROVAL_AXIS` | `codex.approval_axis` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |
-| `KAOIRO_CLAUDE_PHASE2_DELIVERY` | `claude_code.phase2_delivery` | boolean | retained for warnings | ignored | runner / direct wrapper warning | retired; use ceiling and per-agent policy |
 | `KAOIRO_RUNNER_SERVER_URL` | `server_url` | string | `ws://` or `wss://` URL | required in the file | the runner (`applyServerUrlOverride`) | variable > file |
 | `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` | `log_phoenix_heartbeats` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | the runner (live, per log line) | variable > file > default |
 

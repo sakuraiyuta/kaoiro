@@ -3,7 +3,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { captureDeliveryEnvironment } from "@kaoiro/agent-common";
 import { makeLauncher, resolveWrapperLaunch, toManagedChild } from "../src/spawn.js";
 
 describe("resolveWrapperLaunch", () => {
@@ -135,7 +134,7 @@ process.exit(0);`);
   }
 });
 
-it("the default launcher gives a wrapper child no retired Codex or Claude variables and preserves approval inputs", async () => {
+it("the default launcher inherits inert old variables and preserves approval inputs", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "ao563-runner-env-"));
   const names = ["KAOIRO_CODEX_OPERATOR_STEER", "KAOIRO_CODEX_OPERATOR_STEER_PERSONAS", "KAOIRO_CLAUDE_PHASE2_DELIVERY",
     "KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS", "KAOIRO_CODEX_APPROVAL_AXIS", "KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS"] as const;
@@ -151,8 +150,7 @@ process.exit(0);`);
     for (const name of names) process.env[name] = name.endsWith("PERSONAS") ? "P" : "1";
     process.env.NODE_OPTIONS = `--require=${capture}`;
     process.env.AO563_CAPTURE = scratch;
-    const captured = captureDeliveryEnvironment(process.env);
-    const launch = makeLauncher(captured);
+    const launch = makeLauncher();
     for (const engine of ["codex", "claude-code"] as const) {
       const id = `ao563-${engine}`;
       await new Promise<void>((resolve, reject) => {
@@ -162,15 +160,10 @@ process.exit(0);`);
       });
       const dump = join(scratch, `${id}-${engine === "codex" ? 0 : 1}.json.env`);
       const child = JSON.parse(readFileSync(dump, "utf8")) as Record<string, string>;
-      expect(child, engine).not.toHaveProperty("KAOIRO_CODEX_OPERATOR_STEER");
-      expect(child, engine).not.toHaveProperty("KAOIRO_CODEX_OPERATOR_STEER_PERSONAS");
-      for (const name of names.slice(0, 4)) expect(child, engine).not.toHaveProperty(name);
-      for (const name of names.slice(4)) expect(child[name], `${engine} ${name}`).toBe(name.endsWith("PERSONAS") ? "P" : "1");
+      for (const name of names) expect(child[name], `${engine} ${name}`).toBe(name.endsWith("PERSONAS") ? "P" : "1");
     }
     expect(process.env.KAOIRO_CODEX_OPERATOR_STEER).toBe("1");
     expect(process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS).toBe("P");
-    expect(captured.KAOIRO_CODEX_OPERATOR_STEER).toBe("1");
-    expect(captured.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS).toBe("P");
   } finally {
     for (const [name, value] of keep) {
       if (value === undefined) delete process.env[name];

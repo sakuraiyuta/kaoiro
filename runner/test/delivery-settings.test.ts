@@ -6,7 +6,7 @@ import { changedFields } from "../src/config-diff.js";
 import generations from "../../protocol/fixtures/claude-delivery-generations.json" with { type: "json" };
 import { HOST_DELIVERY_ROWS } from "../src/behaviour-settings.js";
 import { buildLaunchDeliveryMetadata, createDeliverySnapshot, deliveryJsonBytes, preflightDeliveryRegister,
-  registerSizeEstimate, retiredDeliveryWarnings, withoutRetiredDeliveryInputs } from "../src/delivery-settings.js";
+  registerSizeEstimate } from "../src/delivery-settings.js";
 
 const raw = { host_id: "delivery-test", server_url: "ws://localhost/runner", cwd_allowlist: ["/tmp"], codex: { backend: "app-server", auth_mode: "chatgpt", chatgpt_plan: "plus" } };
 const none = { operator_early: "none", inter_agent_early: "none", inter_agent_yield: "none" } as const;
@@ -33,20 +33,19 @@ describe("host delivery settings", () => {
     expect(config.in_flight_delivery).toEqual({ "claude-code": { enabled: false, default: false }, codex: { enabled: false, default: true }, antigravity: { default: true } });
     expect(config.claude_code).toEqual({});
     expect(HOST_DELIVERY_ROWS.map(row => row.engine)).toEqual(["claude-code", "codex", "antigravity", "grok"]);
-    const base = parseRunnerConfig(raw); const snapshot = createDeliverySnapshot(base, {});
+    const base = parseRunnerConfig(raw); const snapshot = createDeliverySnapshot(base);
     const defaults = buildRegister(base, undefined, "chatgpt", undefined, undefined, undefined, snapshot);
     expect(defaults.in_flight_defaults).toEqual({ "claude-code": true, codex: true, antigravity: false, grok: false });
     expect(defaults.engines?.map(e => [e.id, e.launch_delivery_policy?.ceiling])).toEqual([["claude-code", true], ["codex", true], ["antigravity", false], ["grok", false]]);
-    const changed = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(config, {}));
+    const changed = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(config));
     expect(changed.in_flight_defaults).toEqual({ "claude-code": false, codex: true, antigravity: true, grok: false });
     expect(changed.engines?.every(e => Object.values(e.launch_delivery_policy!.mechanisms).every(mode => mode === "none"))).toBe(true);
     expect(changedFields(base, { ...base, in_flight_delivery: { codex: { default: false } } })).toEqual(["in_flight_delivery"]);
   });
-  it("captures immutable inputs and ignores both retired persona lists", () => {
+  it("captures immutable configuration inputs", () => {
     const config = parseRunnerConfig(raw);
-    const env = { KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "P,__proto__", KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: "P,__proto__" };
-    const snapshot = createDeliverySnapshot(config, env);
-    env.KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS = "other"; env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS = "other"; config.codex!.backend = "exec";
+    const snapshot = createDeliverySnapshot(config);
+    config.codex!.backend = "exec";
     const codex = buildLaunchDeliveryMetadata(snapshot, "codex");
     const claude = buildLaunchDeliveryMetadata(snapshot, "claude-code");
     const fold = { operator_early: "fold", inter_agent_early: "fold", inter_agent_yield: "tool_boundary" };
@@ -59,14 +58,13 @@ describe("host delivery settings", () => {
   it("projects the Codex mechanisms from the ceiling and the backend alone", () => {
     const steer = { ...none, operator_early: "steer", inter_agent_early: "steer" };
     const metadata = (codex: Record<string, unknown>) => buildLaunchDeliveryMetadata(
-      createDeliverySnapshot(parseRunnerConfig({ ...raw, codex: { ...raw.codex, ...codex } }), {}), "codex");
+      createDeliverySnapshot(parseRunnerConfig({ ...raw, codex: { ...raw.codex, ...codex } })), "codex");
     expect(metadata({}).mechanisms).toEqual(steer);
     expect(metadata({ operator_steer: false }).mechanisms).toEqual(steer);
     expect(metadata({ backend: "exec" })).toMatchObject({ ceiling: true, mechanisms: none });
     expect(metadata({ backend: "exec", operator_steer: true }).mechanisms).toEqual(none);
     const closed = buildLaunchDeliveryMetadata(createDeliverySnapshot(
-      parseRunnerConfig({ ...raw, in_flight_delivery: { codex: { enabled: false } } }),
-      { KAOIRO_CODEX_OPERATOR_STEER: "1", KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: "P" }), "codex");
+      parseRunnerConfig({ ...raw, in_flight_delivery: { codex: { enabled: false } } })), "codex");
     expect(closed).toMatchObject({ ceiling: false, mechanisms: none });
   });
   it("omits whole metadata at either independent bound and preserves defaults with a size-only warning", () => {
@@ -105,95 +103,31 @@ describe("host delivery settings", () => {
   it("the production builder retains normal metadata and emits the size-only omission diagnostic", () => {
     const warn = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const config = parseRunnerConfig(raw);
-    buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(config, {}));
-    expect(warn).not.toHaveBeenCalled();
-    const personas = Array.from({ length: 4000 }, (_, i) => `private-persona-${i}`).join(",");
-    const retired = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined,
-      createDeliverySnapshot(config, { KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: personas }));
-    expect(retired.engines!.find(e => e.id === "codex")).toHaveProperty("launch_delivery_policy");
-    expect(warn).not.toHaveBeenCalled();
-    const register = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined,
-      createDeliverySnapshot(config, { KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: personas }));
-    expect(register.engines!.find(e => e.id === "claude-code")).toHaveProperty("launch_delivery_policy");
+    const ordinary = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(config));
     expect(warn).not.toHaveBeenCalled();
     const largeCatalog = Array.from({ length: 32 }, (_, i) => ({ value: `model-${i}`, display_name: "界".repeat(80) }));
     const largeConfig = parseRunnerConfig(raw);
-    const pressured = buildRegister(largeConfig, undefined, "chatgpt", largeCatalog, undefined, largeCatalog, createDeliverySnapshot(largeConfig, {}), largeCatalog);
+    const pressured = buildRegister(largeConfig, undefined, "chatgpt", largeCatalog, undefined, largeCatalog, createDeliverySnapshot(largeConfig), largeCatalog);
     expect(pressured.engines!.every(e => e.launch_delivery_policy === undefined)).toBe(true);
-    expect(register.engines!.find(e => e.id === "codex")).toHaveProperty("launch_delivery_policy");
-    expect(register.in_flight_defaults?.["claude-code"]).toBe(true);
+    expect(ordinary.engines!.find(e => e.id === "codex")).toHaveProperty("launch_delivery_policy");
+    expect(ordinary.in_flight_defaults?.["claude-code"]).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]![0])).toContain('"reason":"register_pressure"');
     expect(String(warn.mock.calls[0]![0])).not.toContain("private-persona");
   });
 });
 
-describe("retired Codex operator-steer inputs in the runner", () => {
-  const flag = "KAOIRO_CODEX_OPERATOR_STEER", list = "KAOIRO_CODEX_OPERATOR_STEER_PERSONAS";
-  const config = (extra: Record<string, unknown> = {}) => parseRunnerConfig({ ...raw, ...extra });
-  it("prints one runner line per present input, once per process, and none for an absent input", () => {
-    const seen = new Set<string>();
-    const file = config({ codex: { ...raw.codex, operator_steer: false } });
-    const first = retiredDeliveryWarnings(file, { [flag]: "0", [list]: "secret-persona-id" }, seen);
-    expect(first).toHaveLength(3);
-    expect(first[0]).toMatch(new RegExp(`^runner: warn - ${flag} is retired and has no effect`));
-    expect(first[1]).toMatch(new RegExp(`^runner: warn - ${list} is retired and has no effect`));
-    expect(first[2]).toContain('"codex.operator_steer" in runner.config.json is retired');
-    expect(first.join("")).not.toContain("secret-persona-id");
-    expect(first.every(line => line.endsWith("\n"))).toBe(true);
-    expect(retiredDeliveryWarnings(file, { [flag]: "0", [list]: "secret-persona-id" }, seen)).toEqual([]);
-    expect(retiredDeliveryWarnings(config(), {}, new Set())).toEqual([]);
-    expect(retiredDeliveryWarnings(config(), { [flag]: "", [list]: "" }, new Set())).toEqual([]);
-  });
-  it("adds a line only for an input that is new since the last call sharing the same seen set", () => {
-    const seen = new Set<string>();
-    expect(retiredDeliveryWarnings(config(), { [flag]: "1" }, seen)).toHaveLength(1);
-    const withKey = config({ codex: { ...raw.codex, operator_steer: true } });
-    const next = retiredDeliveryWarnings(withKey, { [flag]: "1" }, seen);
-    expect(next).toHaveLength(1);
-    expect(next[0]).toContain('"codex.operator_steer"');
-  });
-  it("does not warn for a host that does not enable Codex", () => {
-    const file = { ...config({ capabilities: ["claude-code"], codex: undefined }), codex: { operator_steer: true } };
-    expect(retiredDeliveryWarnings(file, { [flag]: "1", [list]: "P" }, new Set())).toEqual([]);
-    expect(retiredDeliveryWarnings({ ...file, capabilities: ["claude-code", "codex"] }, { [flag]: "1" }, new Set())).toHaveLength(2);
-  });
-  it("removes exactly the four retired variables from a child environment", () => {
-    const base = { [flag]: "1", [list]: "P", KAOIRO_CLAUDE_PHASE2_DELIVERY: "1", KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "P",
-      KAOIRO_CODEX_APPROVAL_AXIS: "1", KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS: "P", PATH: "/bin" };
-    const child = withoutRetiredDeliveryInputs(base);
-    expect(child).toEqual({ KAOIRO_CODEX_APPROVAL_AXIS: "1", KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS: "P", PATH: "/bin" });
-    expect(base[flag]).toBe("1");
-  });
-});
-
 it("resolves omitted Codex selection before publishing delivery metadata", () => {
-  const snapshot = createDeliverySnapshot(parseRunnerConfig({ ...raw, codex: {} }), {});
+  const snapshot = createDeliverySnapshot(parseRunnerConfig({ ...raw, codex: {} }));
   expect(snapshot.engines.codex.codexBackend).toBe("app-server");
   expect(buildLaunchDeliveryMetadata(snapshot, "codex").mechanisms).toMatchObject({ operator_early: "steer", inter_agent_early: "steer" });
 });
 
-it("warns only on Claude hosts and never relays a retired Claude key", () => {
-  const flag = "KAOIRO_CLAUDE_PHASE2_DELIVERY", list = "KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS";
-  const file = parseRunnerConfig({ ...raw, capabilities: ["codex"], claude_code: { phase2_delivery: false } });
-  expect(retiredDeliveryWarnings(file, { [flag]: "0", [list]: "private-sentinel" }, new Set())).toEqual([]);
-  file.capabilities = ["claude-code"];
-  const seen = new Set<string>();
-  const lines = retiredDeliveryWarnings(file, { [flag]: "0", [list]: "private-sentinel" }, seen);
-  expect(lines).toHaveLength(3);
-  expect(lines.join("")).not.toContain("private-sentinel");
-  expect(lines.join("")).toContain('"claude_code.phase2_delivery"');
-  expect(retiredDeliveryWarnings(file, { [flag]: "1", [list]: "other" }, seen)).toEqual([]);
-});
-
 it("keeps runner projection independent from the measured W1 declaration in mixed generations", () => {
-  const env={KAOIRO_CLAUDE_PHASE2_DELIVERY:"0",KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS:"other"};
   const file=parseRunnerConfig({...raw,claude_code:{phase2_delivery:false}});
-  const metadata=buildLaunchDeliveryMetadata(createDeliverySnapshot(file,env),"claude-code");
-  const stripped=withoutRetiredDeliveryInputs(env);
-  expect(stripped).toEqual({});
+  const metadata=buildLaunchDeliveryMetadata(createDeliverySnapshot(file),"claude-code");
   expect(metadata.mechanisms.inter_agent_early).toBe("fold");
-  // The W1 parent measurement covers the absent inputs an R2 child receives.
+  // W1 declaration is historical; C5 preserves the policy-based projection.
   expect(generations.w1.absent.inter_agent_delivery_modes.early).toBe("none");
   // R1's resolver with false/excluding inputs projects none at cc585534.
   const r1Projection={...none};

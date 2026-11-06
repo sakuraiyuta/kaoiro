@@ -326,7 +326,7 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config[field] = value;
   }
 
-  for (const field of ["operator_steer", "approval_axis", "phase2_delivery", "in_flight_delivery_enabled"] as const) {
+  for (const field of ["approval_axis", "in_flight_delivery_enabled"] as const) {
     const value = raw[field];
     if (value === undefined) continue;
     if (typeof value !== "boolean") {

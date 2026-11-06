@@ -202,12 +202,8 @@ export type { ReplyOrigin, ReplyAttempt, ReplyAuthorization, DetachedReplyBasis,
 
 export { ToolOrigins } from "./tool_origins.js";
 export { workToolDescriptors } from "./work_tools.js";
-export {
-  DELIVERY_ENGINE_SETTINGS, DELIVERY_ENV_KEYS, RETIRED_CODEX_OPERATOR_STEER_ENV, captureDeliveryEnvironment,
-  resolveDelivery, retiredCodexOperatorSteerInputs, retiredCodexOperatorSteerMessage,
-  RETIRED_CLAUDE_PHASE2_ENV, retiredClaudePhase2Inputs, retiredClaudePhase2Message,
-} from "./delivery_modes.js";
-export type { DeliveryEnvironment, DeliveryInputs, RetiredCodexOperatorSteerInput, RetiredClaudePhase2Input } from "./delivery_modes.js";
+export { DELIVERY_ENGINE_SETTINGS, resolveDelivery } from "./delivery_modes.js";
+export type { DeliveryInputs } from "./delivery_modes.js";
 export { deliveryPersonaList } from "./persona_opt_in.js";
 export type { WorkToolHandlers } from "./work_tools.js";
 

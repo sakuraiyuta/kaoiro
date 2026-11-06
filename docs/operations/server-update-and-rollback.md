@@ -41,8 +41,18 @@ operator-priority roots; a false ceiling preserves FIFO scheduling.
 Retain the old settings (enabling or disabling) and their inventoried values
 through the C4C rollback window, even though warnings say they have no effect on W2.
 A rollback preserves W1 behavior only when its runner/relay is restored too
-and its old input remains effective. Remove old settings only after that
-window and at least one released version with warnings, coordinated with C5.
+and its old input remains effective. C5 removal follows at least one released warning version. For the first
+release containing [C5](https://github.com/sakuraiyuta/kaoiro/issues/566), the
+operator removes `codex.operator_steer` and `claude_code.phase2_delivery` from
+runner.config.json, restarts the current warning-capable runner and confirms
+zero retirement/deprecation warnings for the obsolete inputs. Completion of
+that procedure ends the C4C rollback window (operator Q7=A); record execution
+and window end on issue 566. Keep that issue open until the first C5 release,
+and include this prerequisite and its evidence on the release card.
+Develop may contain C5 before this production step (Q6=A), so release ranges
+containing it require the FS/TL procedure. Removing warning readers in C5
+cannot itself establish a clean start. A deliberate W1 rollback after input
+removal requires restoring the inventoried old settings as well.
 
 A C4C-only rollback restores W1 wrapper/runner code atop C4B U2. Reverting U2
 as well is a separate rollback requiring its [Codex backend preparation](codex-backend-switch.md#backend-selection-and-code-rollback).

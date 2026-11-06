@@ -224,11 +224,15 @@ for all peers since then.
 
 [Issue #565](https://github.com/sakuraiyuta/kaoiro/issues/565) makes Claude
 fold/tool-boundary delivery available under the existing launch ceiling and
-live policy without legacy opt-ins. Old inputs remain recognized for warnings;
-managed children receive neither the variables nor the old file key. Keep
+live policy without legacy opt-ins. C5 removes the obsolete input readers after the warning release. Old file
+keys are ignored without warnings; managed children inherit ordinary
+environment values but no longer read these delivery variables. Keep
 negotiation, revision acknowledgement, final acceptance and ordering fences.
-C4B U2 and C4C land adjacently in one window. Reader removal waits for C5,
-a released warning version and the documented rollback window.
+C4B U2 and C4C land adjacently in one window. C5 may land on develop before production cleanup (Q6=A). Its first release
+requires the operator to remove the two old file keys, restart the current
+warning-capable runner and confirm zero warnings. Executing that procedure
+ends the rollback window (Q7=A), recorded on
+[issue 566](https://github.com/sakuraiyuta/kaoiro/issues/566) and the release card.
 
 ## Amendment (2026-10-16, launch-bound native continuations)
 

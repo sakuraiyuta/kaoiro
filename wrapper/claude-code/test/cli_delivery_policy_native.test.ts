@@ -115,7 +115,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,options){
     await check(() => expect(wire.joins).toBe(2));
     const declaration = wire.received.find(item => item.event === "phx_join" && item.payload.delivery_policy === "v1")!.payload;
     expect(declaration.inter_agent_delivery_modes).toMatchObject({early:ceiling ? "fold" : "none",yield:ceiling ? "tool_boundary" : "none"});
-    expect(JSON.parse(await readFile(observationPath,"utf8"))).toEqual({ceiling,legacy_key:false,legacy_env:[]});
+    expect(JSON.parse(await readFile(observationPath,"utf8"))).toEqual({ceiling,legacy_key:false,legacy_env:legacy === "false" ? ["KAOIRO_CLAUDE_PHASE2_DELIVERY"] : legacy === "persona-list" ? ["KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS"] : []});
     await ack(1); wire.push("persona_prompt", { version: "0", prompt: "Native policy verification." });
     await check(() => expect(wire.received.some(item => item.event === "envelope" && item.payload.type === "state_change")).toBe(true));
     input(1, "BASE-NATIVE", "normal");

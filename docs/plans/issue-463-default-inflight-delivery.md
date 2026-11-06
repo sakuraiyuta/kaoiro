@@ -2,7 +2,7 @@
 title: Default-on in-flight delivery with a per-agent opt-out
 description: Design for making in-flight delivery the default on every engine, with a revisioned per-agent opt-out stored on the server and switchable from the dashboard at launch and live.
 status: approved
-last_updated: 2026-11-05
+last_updated: 2026-11-07
 ---
 
 # Default-on in-flight delivery with a per-agent opt-out
@@ -55,8 +55,8 @@ Codex operator-steer gates. On the app-server backend, with the host ceiling not
 `KAOIRO_CODEX_OPERATOR_STEER_PERSONAS` and `codex.operator_steer` gate nothing and
 are read only to warn (the runner once per process, a directly launched wrapper at
 startup). The runner removes the two variables from every wrapper's environment and
-does not relay the key. The readers are removed by C5 after one released version
-with these warnings. The omitted-setting Codex backend stays with C4B, and the
+does not relay the key. C5 removes these readers after the released warning version; its release
+requires the old-version clean-start observation below. The omitted-setting Codex backend stays with C4B, and the
 Claude opt-ins with C4C.
 
 ## C4B implementation boundary
@@ -81,10 +81,23 @@ wrappers warn independently. Managed child environments strip both variables.
 No stored row is rewritten. Preserve old-runner persona-override wire decoding
 and size preflight even though the current runner no longer produces overrides.
 The [rollback window](../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement)
-retains old settings for W1 recovery, and C5 waits for a released warning version.
+retains old settings for W1 recovery, and C5 requires a released warning version and the operator-defined window
+completion before production release.
 The [W1 parent observation](../evidence/issue-463/2026-11-05-c4c-parent-declaration.md)
 records the historical declaration used by compatibility tests; those tests do
 not build a second wrapper revision. C4B U2 and C4C remain adjacent.
+
+## C5 implementation boundary
+
+[Issue 566](https://github.com/sakuraiyuta/kaoiro/issues/566) removes only the
+four obsolete in-flight variables/lists and two runner/wrapper config keys,
+including warning-only readers and capture/relay state. Unknown old keys are
+silently ignored. Approval-axis controls, scheduler tuning, ceilings, stored
+policy and explicit exec behavior remain. Develop may land ahead of cleanup
+(Q6=A). Before a release containing C5, the operator removes the two file keys,
+restarts the current warning-capable runner and confirms zero warnings; that
+execution ends the rollback window (Q7=A). Record it on issue 566 and the
+release card; keep the issue open through the first C5 release.
 
 ## Design baseline (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
 

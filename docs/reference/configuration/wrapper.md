@@ -2,7 +2,7 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-10-16
+last_updated: 2026-11-07
 related: [protocol]
 ---
 
@@ -123,52 +123,30 @@ operator input `normal` instead of deriving the default from the inter-agent
 declaration. The wrapper logs `codex: operator_steer=on|off` at startup. See
 [Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
 
-Three inputs used to open this gate and are retired. They are still read, but only
-to warn; none changes the declared mode, and a stored `off` or a false ceiling is
-never reopened by any of them:
-
-| Retired input | What it did | Now |
-|---|---|---|
-| `KAOIRO_CODEX_OPERATOR_STEER` | `1` enabled steering for every persona; `0` beat a file `true` (it did not disable a persona-list entry) | no effect |
-| `KAOIRO_CODEX_OPERATOR_STEER_PERSONAS` | a listed `persona.id` enabled steering for that persona; a list that omitted a persona did not disable a global `1` | no effect |
-| `codex.operator_steer` in `runner.config.json`, and the wrapper config field `operator_steer` | `true` was the same as the variable `1` (`false` was the same as absent) | no effect; not relayed |
-
-Replacements: `in_flight_delivery.codex.enabled: false` stops the mechanism for
-every agent of the host at the next spawn, `in_flight_delivery.codex.default: false`
-makes new agents start with it off, and the per-agent switch changes a running
-agent. Each retired input that is present produces one warning line (the input's
-name only, never a persona id or list content): the runner prints it once per
-process on `stderr` and removes the two variables from the environment of every
-wrapper it launches; a directly launched wrapper prints its own `codex: warn -`
-line at startup. Removing the readers is a later change, after one released
-version with these warnings.
-
-## Codex inter-agent early delivery
-
-The app-server backend advertises inter-agent `early: "steer"` and
-`yield: "none"` independently of operator steering. It uses the
-early path only after the server echoes delivery modes and
-`notice_attribution: "v1"`, and grants the message early intent. The exec
-backend advertises no early mechanism. There is no phase-3 environment
-toggle or live dashboard policy switch; the revisioned per-agent switch is
-tracked by issue #463. A Codex yield request can receive an early downgrade,
-never a tool-boundary interruption.
+The old variables `KAOIRO_CODEX_OPERATOR_STEER` and
+`KAOIRO_CODEX_OPERATOR_STEER_PERSONAS`, runner key `codex.operator_steer`
+and wrapper field `operator_steer` are no longer recognized. They are silently
+ignored without warnings, including obsolete non-boolean file values.
+Use `in_flight_delivery.codex.enabled` for the next-spawn ceiling,
+`in_flight_delivery.codex.default` for new agents, or the per-agent live policy.
+A directly launched wrapper uses its `in_flight_delivery_enabled` ceiling.
 
 ## Codex approval axis controls
 
 `KAOIRO_CODEX_APPROVAL_AXIS=1` in the Codex wrapper process environment
 makes approval a mutable axis for every Codex peer on the app-server
 backend; `KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS=momo,other` enables only the
-listed `persona.id` values. Both use `personaOptInSource` with the same rules
-as the steer controls above, and the default is off. An enabled wrapper
+listed `persona.id` values. Both use `personaOptInSource`; only flag `1` enables globally. Otherwise a
+comma-separated list of exact persona IDs decides, with whitespace trimmed;
+an empty/invalid item invalidates the list. The default is off. An enabled wrapper
 advertises `permission_switch_axes.approval` with `values: ["untrusted",
 "on-request", "never"]` (launch value and ceiling `never`) once permission
 sync is negotiated, writes the operator's selected approval into each
 `turn/start`, and routes command and file-change approval requests to the
 operator. Approvals have no deadline unless `permission_timeout_ms` is set.
 `codex.approval_axis: true` in `runner.config.json` is the same global opt-in as the
-variable `1`, and a set `KAOIRO_CODEX_APPROVAL_AXIS` wins over it (same rule as
-above). The exec backend ignores both variables. The wrapper logs
+variable `1`, and a set `KAOIRO_CODEX_APPROVAL_AXIS` wins over it. Config false is equivalent to absence and does not override a
+persona-list opt-in. The exec backend ignores both variables. The wrapper logs
 `codex: approval_axis=on|off` at startup. See
 [Codex app-server transport](../engines/codex-app-server.md#approval-requests-adr-0064)
 and [ADR-0064](../../adr/0064-codex-app-server-approval-requests.md).
@@ -221,18 +199,18 @@ v1, and live delivery still requires the existing per-agent policy and final
 host acceptance checks. `enabled: false` declares none; stored off prevents
 new in-flight acceptance without changing the negotiated declaration.
 
-`KAOIRO_CLAUDE_PHASE2_DELIVERY`, `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS` and
-`phase2_delivery` are retired. A direct wrapper warns once for each nonempty
-variable or present file key (true or false), naming no values. They no longer
-enable or disable delivery. Direct-launch warnings point to the wrapper-local
+`KAOIRO_CLAUDE_PHASE2_DELIVERY`, `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS`,
+runner key `claude_code.phase2_delivery` and wrapper field `phase2_delivery`
+are no longer recognized and are silently ignored without warnings. They do
+not enable or disable delivery. A direct wrapper uses its local
 `in_flight_delivery_enabled` ceiling and per-agent policy; runner settings do
-not control a directly launched wrapper. The startup diagnostic is
+not control a direct launch. The startup diagnostic remains
 `[claude phase2 delivery] source=policy`, or `source=off` under a false ceiling.
 
-The runner warns for its own old inputs, removes both variables from child
-environments and does not relay `claude_code.phase2_delivery`. It also keeps
-`CODEX_HOME` out of Claude wrappers. See [host delivery settings](runner.md#host-delivery-ceilings-and-defaults)
-and the [rollback retention requirement](../../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement).
+The runner no longer captures or strips these obsolete variables and does not
+relay the old config keys. It still keeps `CODEX_HOME` out of Claude wrappers.
+See [host delivery settings](runner.md#host-delivery-ceilings-and-defaults)
+and the [C5 release prerequisite](../../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement).
 A false ceiling retains FIFO root scheduling. With negotiated mechanisms,
 stored off still allows operator-priority root scheduling while preventing
 new folds/cuts; replacing an old false with stored off can change root order.
