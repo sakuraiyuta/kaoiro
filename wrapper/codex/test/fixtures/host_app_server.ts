@@ -70,4 +70,3 @@ export function appServerHostFixture(overrides: Partial<CodexHostOptions> = {}, 
     set holdHistory(value: Promise<void>) { holdHistory = value; }, set invalidHistory(value: boolean) { invalidHistory = value; },
     get maxActive() { return maxActive; }, set autocomplete(value: boolean) { autocomplete = value; }, set holdConfig(value: Promise<void>) { holdConfig = value; }, set interrupted(value: boolean) { interrupted = value; } };
 }
-
