@@ -9,7 +9,7 @@ test("detail shows the connected wrapper build identity", async ({ page }) => {
   await page.goto(`${DETAIL}&wrapperBuild=1`);
   await expect(
     page.locator('[data-testid="wrapper-build-info"] dd'),
-  ).toHaveText("kaoiro dev wrapper v2026.9.0 / 0123456");
+  ).toHaveText("kaoiro dev wrapper v2026.9.0 / unknown / 0123456");
 });
 
 // T11 (issue #180 follow-up) 幾何回帰の共通ヘルパー。
