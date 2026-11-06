@@ -17,7 +17,12 @@ coverage and remaining limits are recorded in the
 
 The current runner and direct wrapper accept only omitted or explicit
 `app-server` configuration. Explicit exec is refused with migration guidance;
-there is no warning-only release. `auth_mode: "apikey"` remains accepted, but
+there is no warning-only release. Startup rejection prevents the entire runner
+(all engines) from starting, even when `capabilities` excludes Codex.
+The [production-shape start gate](high-risk-change-release.md#3-production-shape-start)
+keeps this Codex block while selecting Claude-only capabilities and rejects a
+runner that exits before the required timeout result (124).
+`auth_mode: "apikey"` remains accepted, but
 app-server API-key account defaults and credential lifecycle are unmeasured.
 Do not infer them from controlled local-provider tests with explicit models.
 Upstream app-server remains Experimental; the N11–N15 limits below still apply.

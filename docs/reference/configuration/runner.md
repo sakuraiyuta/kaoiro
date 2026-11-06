@@ -226,7 +226,8 @@ Operator procedure, verification and rollback:
 Codex uses `app-server`. Omit `codex.backend` or specify `"app-server"`.
 Explicit `"exec"` is rejected at runner startup and on reload; direct wrapper
 configuration rejects `codex_backend: "exec"` too. The refusal explains the
-pre-retirement preparation procedure. There is no warning-only release,
+pre-retirement preparation procedure. Startup rejects the entire runner, including
+other engines and hosts whose `capabilities` excludes Codex. There is no warning-only release,
 automatic conversion, fallback, reset, or cross-backend resume.
 
 A rejected reload keeps the last applied configuration and existing children.

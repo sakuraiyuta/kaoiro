@@ -82,10 +82,10 @@ it("relays the runner-local backend at bootstrap/reload and preserves running wr
   } finally { runtime?.close();diagnostic.mockRestore();rmSync(root, { recursive: true, force: true }); }
 });
 
-it("refuses exec through the runner CLI loader before creating a launcher", async () => {
+it.each([["codex"], ["claude-code"]])("refuses exec through the runner CLI loader before creating a launcher (capabilities=%s)", async engine => {
   const root = mkdtempSync(join(tmpdir(), "runner-retired-exec-"));
   const path = join(root, "runner.json");
-  writeFileSync(path, JSON.stringify({ host_id: "fixture", server_url: "ws://fixture/runner", cwd_allowlist: [root], codex: { backend: "exec" } }));
+  writeFileSync(path, JSON.stringify({ host_id: "fixture", server_url: "ws://fixture/runner", cwd_allowlist: [root], capabilities: [engine], codex: { backend: "exec" } }));
   const makeLauncher = vi.fn(() => { throw new Error("launcher must not start"); });
   try {
     await expect(runRunnerCli({ makeLauncher, installSignalHandlers: false }, [path])).rejects.toThrow("exec is retired");
