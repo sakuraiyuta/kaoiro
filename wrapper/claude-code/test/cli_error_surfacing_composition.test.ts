@@ -157,3 +157,52 @@ describe("Claude CLI error surfacing — production sink negative control (issue
     expect(JSON.stringify(resultEnvelope?.payload)).not.toContain(TOKEN_LIKE);
   });
 });
+
+it("sends a context overflow notice and bounded failure diagnostics for a blocked Claude turn", async () => {
+  vi.stubEnv("KAOIRO_CLAUDE_NATIVE_CONTINUATIONS", "0");
+  let linkOptions!: Record<string, any>;
+  const sent: Envelope[] = [];
+  const notices: Envelope[] = [];
+  const stderr = captureWrites(process.stderr);
+  const queryFn: QueryFn = ((args: { prompt: AsyncIterable<SDKUserMessage>; options: any }) => {
+    async function* gen(): AsyncGenerator<SDKMessage, void> {
+      const input = args.prompt[Symbol.asyncIterator]();
+      const root = (await input.next()).value!;
+      await args.options.hooks.UserPromptSubmit.at(-1).hooks[0]({ hook_event_name: "UserPromptSubmit",
+        session_id: "s", prompt_id: "p", prompt: root.message.content as string }, undefined, { signal: new AbortController().signal });
+      yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
+      yield { type: "assistant", message: { content: [] }, error: "invalid_request" } as unknown as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: true, result_index: 0, session_id: "s",
+        terminal_reason: "blocking_limit", result: "private content" } as SDKMessage;
+    }
+    return Object.assign(gen(), { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
+  }) as QueryFn;
+  let host!: AgentHost;
+  const running = runClaudeCli({
+    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    loadConfig: () => ({ ...config }),
+    createServerLink: (_url, _agentId, options) => {
+      linkOptions = options as unknown as Record<string, any>;
+      queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+      return { deliveryModes: () => undefined, close: () => {}, currentSessionId: () => null, setSessionId: () => {},
+        send: (e: Envelope) => sent.push(e), sendInterAgent: async (e: Envelope) => { notices.push(e); return { kind: "accepted", stamp: null }; },
+        acknowledgeInterAgentDelivery: () => {}, retireInterAgentDeliveries: () => true,
+        flushInterAgentRetirements: async () => {}, reportDisconnectIntent: async () => true } as never;
+    },
+    createHost: (cfg, options) => { host = new AgentHost(cfg, { ...options, queryFn }); host.probeRateLimits = async () => {}; return host; },
+  });
+  try {
+    await vi.waitFor(() => expect(host).toBeDefined());
+    linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    await linkOptions.onInterAgentMessage({ version: "0", agent_id: "peer", persona: config.persona, display_name: "Peer",
+      ts: "T", type: "inter_agent_message", state: "thinking", delivery_seq: 1,
+      payload: { to: config.agent_id, conversation_id: "c1", turn_number: 1, kind: "request", body: "hello" } });
+    await running;
+    await vi.waitFor(() => expect(notices).toContainEqual(expect.objectContaining({
+      payload: expect.objectContaining({ conversation_id: "c1", error: expect.objectContaining({ code: "context_overflow" }) }),
+    })));
+    expect(sent.find(e => e.type === "result")?.payload).toMatchObject({ error_code: "invalid_request", error_summary: "コンテキストの上限に達しました。" });
+    expect(stderr.calls.some(call => String(call[0]).includes('"terminal_reason":"blocking_limit","assistant_error_class":"invalid_request"'))).toBe(true);
+    expect(JSON.stringify(stderr.calls)).not.toContain("private content");
+  } finally { host?.close(); await running; stderr.restore(); vi.unstubAllEnvs(); }
+}, 10_000);

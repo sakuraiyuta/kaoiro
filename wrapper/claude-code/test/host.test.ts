@@ -2395,6 +2395,43 @@ describe("AgentHost — query injection", () => {
     expect(results[1]?.payload).not.toHaveProperty("error_code");
   });
 
+  it.each(["blocking_limit", "prompt_too_long"] as const)("reports Claude context reason %s with bounded diagnostics", async reason => {
+    const logs: Envelope[] = [];
+    const ends: Array<{ error?: { reason?: string; detail?: string } }> = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {}, onLog: e => logs.push(e), onTurnEnd: info => ends.push(info), warn: line => warnings.push(line),
+      queryFn: scriptedQuery([
+        assistant([{ type: "text" }], "invalid_request"),
+        result("success", { is_error: true, result: "private content", terminal_reason: reason }),
+      ]),
+    });
+    await host.run();
+    expect(ends[0]?.error).toEqual({ reason: "prompt_too_long" });
+    expect(logs.find(e => e.type === "result")?.payload).toMatchObject({
+      error_code: "invalid_request", error_summary: "コンテキストの上限に達しました。",
+      recovery_hint: "内容を要約するか、セッションを新しくしてください。",
+    });
+    expect(warnings).toContain(`[kaoiro] claude turn failure: ${JSON.stringify({ terminal_reason: reason, assistant_error_class: "invalid_request" })}`);
+    expect(JSON.stringify(warnings)).not.toContain("private content");
+  });
+
+  it("does not expose unrecognized failure fields in diagnostic logs", async () => {
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {}, warn: line => warnings.push(line),
+      queryFn: scriptedQuery([
+        assistant([{ type: "text" }], "private_class"),
+        result("success", { is_error: true, result: "private content", terminal_reason: "private_reason" }),
+        result("error_during_execution", { errors: ["private detail"] }),
+      ]),
+    });
+    await host.run();
+    expect(warnings).toContain('[kaoiro] claude turn failure: {"terminal_reason":"unknown","assistant_error_class":"unknown"}');
+    expect(warnings).toContain('[kaoiro] claude turn failure: {"terminal_reason":"absent","assistant_error_class":"absent"}');
+    expect(JSON.stringify(warnings)).not.toMatch(/private_/);
+  });
+
   it("error result は onTurnEnd に conversationIds=[](未タグ) + terminal_reason/error_detail を渡す (issue #131)", async () => {
     const turnEnds: {
       turnToken?: string;

@@ -305,10 +305,10 @@ const TIMEOUT_REASONS = new Set(["timeout"]);
  *  text itself is discarded; only the resulting code is kept. */
 function classifyByDetailKeywords(detail: string): string | null {
   const lower = detail.toLowerCase();
-  if (/rate.?limit|too many requests|\b429\b/.test(lower)) return "rate_limit";
   if (/context (window|length)|prompt too long|token limit/.test(lower)) {
     return "context_overflow";
   }
+  if (/rate.?limit|too many requests|\b429\b/.test(lower)) return "rate_limit";
   return null;
 }
 

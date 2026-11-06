@@ -81,7 +81,7 @@ export interface ResultPayload {
    *  still round-trips instead of being dropped. */
   error_code?: string;
   /** Bounded, human-readable summary of `error_code` (issue #287). Built by
-   *  the wrapper from a closed, wrapper-owned code -> text table; NEVER a
+   *  the wrapper from a closed, wrapper-owned code/reason -> text table; NEVER a
    *  copy of raw SDK output, so the client may render it directly with no
    *  further masking/clipping. Present only alongside `error_code`. */
   error_summary?: string;
