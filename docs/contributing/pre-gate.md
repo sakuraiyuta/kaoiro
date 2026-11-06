@@ -36,6 +36,32 @@ edits that are not committed yet, commit them (or send a snapshot commit to
 the environment that runs the suite). Options: `--repo DIR`, `--rev REV`,
 `--record FILE`, `--keep` (leave the scratch tree and print its path).
 
+### Workspace dependencies and shared worktrees
+
+Evidence runs must be executed against the verified tree using
+`node scripts/pre-gate/pre-gate.mjs --exec -- <command>` (issue #428). In the
+gate's scratch tree, dependencies are built clean in dependency order, so
+stale artifacts cannot silently alter test or typecheck results.
+
+When running tests, typechecks, or probes directly per-package inside a shared
+worktree without `pre-gate --exec`, cross-package workspace dependencies resolve
+through their package `dist/` outputs (`package.json` `types` and `main` fields).
+If an upstream package source changed without its `dist/` being rebuilt,
+dependent packages can fail unexpectedly or falsely pass against stale types and
+runtime code.
+
+Build dependencies before running per-package checks in a shared worktree:
+- **Wrapper packages**: `pnpm -C wrapper build` builds the six wrapper packages
+  (`@kaoiro/wrapper-core`, `@kaoiro/agent-common`, `@kaoiro/claude-code`,
+  `@kaoiro/codex`, `@kaoiro/antigravity`, and `@kaoiro/grok`).
+- **Runner**: `runner` is built separately with `pnpm -C runner build`. It
+  depends on all six wrapper packages through their `dist/` outputs.
+- **Protocol**: `@kaoiro/protocol` exports its TypeScript source directly
+  (`types: ./src/index.ts`) and has no `dist/` artifact to rebuild.
+
+Do not assume `pnpm -C wrapper build` covers the entire monorepo: it covers only
+the six wrapper packages, not `runner`.
+
 ## What it checks
 
 Each step runs in a scratch `git worktree` of the commit, so a "clean build" is
