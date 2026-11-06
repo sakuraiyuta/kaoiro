@@ -6,7 +6,7 @@ import { runCodexCli } from "../src/cli.js";
 const config = { agent_id: "default-test", persona: { id: "p", name: "P", sprite_set: "p" },
   display_name: "P", server_url: "ws://fixture", codex_auth_mode: "apikey" as const };
 
-it.each([undefined, "exec", "app-server"] as const)("resolves raw Host options and static status independently (%s)", backend => {
+it.each([undefined, "app-server"] as const)("resolves raw Host options and static status independently (%s)", backend => {
   const options = { appendSystemPrompt: "", onState: () => {}, ...(backend === undefined ? {} : { backend }),
     appServerApprovals: { decide: vi.fn(), deadlineMs: 123, inactivityLimitMs: 456 } };
   const host = new CodexHost(config, options);
@@ -14,10 +14,10 @@ it.each([undefined, "exec", "app-server"] as const)("resolves raw Host options a
     if (backend === undefined) expect(options).not.toHaveProperty("backend");
     else expect(options.backend).toBe(backend);
     expect(host.historyBackend).toBe(backend ?? "app-server");
-    expect(host.approvalAxisSettings).toEqual(backend === "exec" ? null : { deadlineMs: 123, inactivityLimitMs: 456 });
+    expect(host.approvalAxisSettings).toEqual({ deadlineMs: 123, inactivityLimitMs: 456 });
     expect(initialStatusExt({ ...config, ...(backend === undefined ? {} : { codex_backend: backend }) }).session_capabilities)
-      .toMatchObject({ supports_context_usage: backend !== "exec" });
-    expect(host.statusExtSnapshot().session_capabilities).toMatchObject({ supports_context_usage: backend !== "exec" });
+      .toMatchObject({ supports_context_usage: true });
+    expect(host.statusExtSnapshot().session_capabilities).toMatchObject({ supports_context_usage: true });
   } finally { host.close(); }
 });
 

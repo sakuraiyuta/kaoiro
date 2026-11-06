@@ -1,8 +1,7 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { SessionResetCoordinator, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
-import { CodexHost } from "../src/host.js";
+import { SessionResetCoordinator, type WrapperConfig } from "@kaoiro/agent-common";
 import { appServerHostFixture } from "./fixtures/host_app_server.js";
 import * as turnDiagnostics from "../src/turn_diagnostics.js";
 
@@ -237,33 +236,6 @@ it("does not pin display-only default model and effort hints", async () => {
   await f.host.send("A");await f.until(1);
   expect(f.sent.find(r => r.method === "thread/start")?.params).not.toHaveProperty("model");
   expect(f.turns()[0]?.params).not.toHaveProperty("model");expect(f.turns()[0]?.params).not.toHaveProperty("effort");f.terminal();
-});
-
-it("keeps the explicit exec factory, arguments and callbacks despite unrelated config and environment hints", async () => {
-  const prior = process.env.KAOIRO_CODEX_BACKEND;process.env.KAOIRO_CODEX_BACKEND = "app-server";
-  const appFactory = vi.fn(), starts = vi.fn(), ends = vi.fn(), finals = vi.fn(), logs: Envelope[] = [];
-  const threadOptions: unknown[] = [], options: unknown[] = [];
-  const launch = { ...config, backend: "app-server", codex_backend: "app-server" as const };
-  const host = new CodexHost(launch, { appServerSessionFactory: appFactory, appendSystemPrompt: "PERSONA",
-    onState: () => {}, onLog: e => logs.push(e), onTurnStart: starts, onTurnEnd: ends, onTurnFinalized: finals,
-    backend: "exec", codexFactory: value => { options.push(value);return { startThread: value => { threadOptions.push(value);return {
-      runStreamed: async () => ({ events: (async function* () { yield { type: "turn.completed" as const, usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 } }; })() }),
-    }; }, resumeThread: () => { throw new Error("unexpected resume"); } }; },
-  });
-  let running: Promise<void> | undefined;
-  try {
-    await host.send("A", undefined, ["c"], "token");running = host.run();await vi.waitFor(() => expect(finals).toHaveBeenCalledTimes(1));
-    expect(appFactory).not.toHaveBeenCalled();
-    expect(options).toEqual([{ config: {
-      developer_instructions: "PERSONA", approvals_reviewer: "user",
-      features: { multi_agent: true },
-      shell_environment_policy: { set: { CODEX_HOME: expect.stringContaining("kaoiro-codex-tool-"), KAOIRO_AGENT: "1" } },
-    }, env: expect.objectContaining({ KAOIRO_AGENT: "1" }) }]);
-    expect(threadOptions).toEqual([expect.objectContaining({ model: "gpt-5.6-sol", modelReasoningEffort: "high", approvalPolicy: "never", sandboxMode: "workspace-write", networkAccessEnabled: false })]);
-    expect(starts).toHaveBeenCalledWith({ turnToken: "token", conversationIds: ["c"] });
-    expect(ends).toHaveBeenCalledWith({ turnToken: "token", conversationIds: ["c"], terminal: "turn.completed" });
-    expect(logs.filter(e => e.type === "result")).toHaveLength(1);
-  } finally { host.close();await running;if (prior === undefined) delete process.env.KAOIRO_CODEX_BACKEND;else process.env.KAOIRO_CODEX_BACKEND = prior; }
 });
 
 it("keeps runtime settings authoritative when an interrupted turn later completes", async () => {
@@ -570,7 +542,7 @@ it("preserves the context when compatibility rejects a model request before acce
 });
 
 it("runs the app-server runtime when raw Host backend is omitted", async () => {
-  const f = fixture({ codexFactory: () => { throw new Error("unexpected exec runtime"); } }, config, true);
+  const f = fixture({}, config, true);
   await f.host.send("omitted runtime", undefined, [], "default-turn");
   await f.until(1);
   expect(f.createSession).toHaveBeenCalledTimes(1);

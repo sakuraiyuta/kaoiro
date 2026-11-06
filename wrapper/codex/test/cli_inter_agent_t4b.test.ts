@@ -83,8 +83,7 @@ it.each([{ spend: false, cid: "X", late: false, peer: "peer" }, { spend: true, c
   vi.stubEnv("HOME", scratch);
   vi.stubEnv("CODEX_HOME", join(scratch, "codex"));
   const beforeSignals = process.listeners("SIGINT");
-  const running = runCodexCli({ backend: "app-server",
-    parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }), loadConfig: () => ({ ...config }),
+  const running = runCodexCli({     parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }), loadConfig: () => ({ ...config }),
     prepareStartup: async () => {},
     createServerLink: (_url, _id, incoming) => {
       incoming.deliveryPolicy?.acceptJoin({}, incoming.deliveryPolicy.beginJoin());

@@ -32,7 +32,7 @@ interface ComposeExtra {
 
 type SteerSchedule = "queued-successor" | "terminal-before-settle" | "included" | "ticket-use" | "item-before-response" | "accepted-unobserved" | "unwritten" | "write-failed" | "write-timeout" | "precondition";
 
-async function compose(backend: "app-server" | "exec", echo: boolean, grant: "early" | "normal" = "early",
+async function compose(backend: "app-server", echo: boolean, grant: "early" | "normal" = "early",
   schedule: SteerSchedule = "included", noticeEcho = echo, otherPeerRoot = false, extra: ComposeExtra = {}) {
   const rootSpec = extra.root ?? (otherPeerRoot ? { agent_id: "other.agent", conversation_id: "other-cid" } : undefined);
   let linkOptions!: Record<string, any>, hostOptions!: Record<string, any>;
@@ -117,7 +117,7 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
       await new Promise(resolve => setImmediate(resolve));
     } };
   const signals = process.listeners("SIGINT");
-  try { await runCodexCli({ backend,
+  try { await runCodexCli({
     parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
@@ -235,7 +235,7 @@ describe("production Codex IA steer composition", () => {
   });
 
   it.each([
-    ["exec", true, "early"], ["app-server", false, "early"], ["app-server", true, "normal"],
+    ["app-server", false, "early"], ["app-server", true, "normal"],
   ] as const)("queues when backend=%s echo=%s grant=%s", async (backend, echo, grant) => {
     const result = await compose(backend, echo, grant);
     expect(result.steer).not.toHaveBeenCalled();
@@ -279,7 +279,6 @@ describe("early input that is not steered says why", () => {
   }
 
   it.each([
-    ["the exec backend", () => compose("exec", true), "steer_not_negotiated"],
     ["a missing delivery-mode echo", () => compose("app-server", false), "steer_not_negotiated"],
     ["a missing attribution echo", () => compose("app-server", true, "early", "included", false), "steer_not_negotiated"],
     ["a queued root from the same sender", () => compose("app-server", true, "early", "included", true, false,
@@ -314,7 +313,7 @@ describe("early input that is not steered says why", () => {
   it.each([
     ["a steered early input", () => compose("app-server", true)],
     ["a normal input", () => compose("app-server", true, "normal")],
-    ["a normal input without negotiation", () => compose("exec", false, "normal")],
+    ["a normal input without negotiation", () => compose("app-server", false, "normal")],
   ] as const)("logs nothing for %s", async (_name, run) => {
     const log = captureQueuedLog();
     try {
@@ -326,7 +325,7 @@ describe("early input that is not steered says why", () => {
   it("still queues the input when the diagnostic sink fails", async () => {
     const log = captureQueuedLog(true);
     try {
-      const result = await compose("exec", true);
+      const result = await compose("app-server", true, "normal");
       expect(result.send).toHaveBeenCalledOnce();
       expect(result.reports.map(report => report.stage)).toEqual(["queued"]);
     } finally { log.restore(); }

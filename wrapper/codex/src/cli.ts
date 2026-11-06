@@ -74,7 +74,6 @@ import type { SteerResponse } from "./app_server_steer.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { CodexInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
 import { codexHome } from "./codex_home.js";
-import { readCodexHistory } from "./history.js";
 import {
   codexRolloutsRoot,
   codexSidecarPath,
@@ -121,8 +120,6 @@ type CodexHostOptions = ConstructorParameters<typeof CodexHost>[1];
  * the concrete constructors; regressions capture the exact options and live
  * whoami provider the CLI gives those components (#237, #244). */
 export interface CodexCliDependencies {
-  /** Internal override for composition tests; production selects from config. */
-  backend?: CodexHostOptions["backend"];
   watchdogClock?: Pick<TurnWatchdogOptions, "nowMs" | "setTimer" | "clearTimer">;
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;
@@ -186,7 +183,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     process.argv.slice(2),
   );
   const config = readConfig(configPath);
-  const backend = dependencies.backend ?? config.codex_backend ?? DEFAULT_CODEX_BACKEND;
+  const backend = DEFAULT_CODEX_BACKEND;
   writeRedactedStderr(`codex: backend=${backend}\n`);
   writeRedactedStderr(`codex: home=${codexHome()}\n`);
   const resolvedDelivery = resolveDelivery({
@@ -669,7 +666,6 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   // Constructed before the link: the join reply can arrive before `host`
   // exists, so the verdict has to be held until markReady() (ADR-0051 D2).
   const replayer = new CodexHistoryReplay({
-    backend: () => host?.historyBackend ?? DEFAULT_CODEX_BACKEND,
     schedule: job => host.scheduleHistoryReplay(job),
     captureFence: () => link?.captureHistoryReplayFence?.() ?? (() => false),
     seedState: () =>
@@ -683,7 +679,6 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         ),
       ),
     sessionId: () => link?.currentSessionId() ?? null,
-    readTranscript: (sessionId) => readCodexHistory(sessionId, config),
     readSidecar: () => sidecar.read(),
     sendHistoryReset: (replayId) => link?.sendHistoryReset(replayId),
     sendEnvelope: (envelope) => link?.send(envelope),
@@ -1068,7 +1063,6 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
     Omit<CodexHostOptions, "onTurnStart">
   >({
-    backend,
     deliveryPolicy,
     ...(approvalAxis ? {
       appServerApprovals: {

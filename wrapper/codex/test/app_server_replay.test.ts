@@ -7,18 +7,18 @@ import { MAX_HISTORY } from "../src/history.js";
 const config: WrapperConfig = { agent_id: "history", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://unused" };
 const row = (text: string, kind: "assistant" | "user" = "assistant") => makeLog(config, "idle", "T", { kind, text });
 function deferred() { let resolve!: () => void;const promise = new Promise<void>(r => { resolve = r; });return { promise, resolve }; }
-function fixture(backend: "exec" | "app-server" = "app-server", resume = true) {
+function fixture(resume = true) {
   const events: unknown[] = [], jobs: AppServerHistoryJob[] = [];
   let connected = true, generation = 1;
   const readTranscript = vi.fn(() => [row("exec")]), readSidecar = vi.fn((): SidecarRecord[] => []), warn = vi.fn();
-  const replay = new CodexHistoryReplay({ backend: () => backend, schedule: job => jobs.push(job),
+  const replay = new CodexHistoryReplay({ schedule: job => jobs.push(job),
     captureFence: () => { const captured = generation;return () => connected && captured === generation; },
-    seedState: () => events.push("state"), sessionId: () => "thread", readTranscript, readSidecar,
+    seedState: () => events.push("state"), sessionId: () => "thread", readSidecar,
     sendHistoryReset: id => events.push(["reset", id]), sendEnvelope: e => events.push(e),
     sendReplayIa: id => events.push(["ia", id]), sendHistoryReplayComplete: id => events.push(["complete", id]),
     ...(resume ? { legacyResumeSessionId: "thread" } : {}), warn });
   const verdict = (id: string) => replay.onVerdict({ replay_required: true, replay_id: id });
-  return { replay, events, jobs, readTranscript, readSidecar, warn, verdict,
+  return { replay, events, jobs, readSidecar, warn, verdict,
     disconnect: () => { connected = false; }, rejoin: () => { generation += 1;connected = true; } };
 }
 
@@ -28,7 +28,7 @@ it.each(["full", "tail"] as const)("publishes %s in bounded display order only a
   const job = f.jobs[0]!(async () => { await gate.promise;return { coverage, logs }; });
   expect(f.events).toEqual([]);gate.resolve();await job;
   expect(f.events).toEqual(["state", ["reset", "r1"], ...logs, ["complete", "r1"]]);
-  expect(f.readTranscript).not.toHaveBeenCalled();expect(f.readSidecar).toHaveBeenCalledTimes(1);
+  expect(f.readSidecar).toHaveBeenCalledTimes(1);
 });
 
 it("leaves the projection intact on incomplete history and retries only a new modern replay id", async () => {
@@ -46,7 +46,7 @@ it("does not retry a legacy resume after incomplete history or read a fresh lega
   const f = fixture();f.replay.onVerdict(null);f.replay.markReady();
   await f.jobs[0]!(async () => ({ coverage: "incomplete", reason: "rpc_rejected", logs: [] }));
   f.rejoin();f.replay.onVerdict(null);expect(f.jobs).toHaveLength(1);expect(f.events).toEqual([]);
-  const fresh = fixture("app-server", false);fresh.replay.onVerdict(null);fresh.replay.markReady();expect(fresh.jobs).toHaveLength(0);
+  const fresh = fixture(false);fresh.replay.onVerdict(null);fresh.replay.markReady();expect(fresh.jobs).toHaveLength(0);
 });
 
 it("discards an obsolete snapshot and carries user rows through the replacement replay", async () => {
@@ -87,13 +87,6 @@ it("coalesces obsolete requests before reading and suppresses publication after 
   const read = vi.fn(async () => ({ coverage: "full" as const, logs: [] }));await f.jobs[0]!(read);expect(read).not.toHaveBeenCalled();
   const gate = deferred(), job = f.jobs[1]!(async () => { await gate.promise;return { coverage: "full", logs: [] }; });
   f.replay.sendLiveLog(row("held", "user"));f.replay.close();gate.resolve();await job;expect(f.events).toEqual([]);
-});
-
-it("preserves synchronous exec replay and live log sending without scheduling an app-server read", () => {
-  const f = fixture("exec");f.verdict("r");f.replay.markReady();
-  expect(f.events).toEqual(["state", ["reset", "r"], row("exec"), ["complete", "r"]]);
-  expect(f.readTranscript).toHaveBeenCalledWith("thread");expect(f.jobs).toHaveLength(0);
-  f.replay.sendLiveLog(row("live", "user"));expect(f.events.at(-1)).toEqual(row("live", "user"));
 });
 
 

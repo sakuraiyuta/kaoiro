@@ -58,7 +58,7 @@ export function appServerHostFixture(overrides: Partial<CodexHostOptions> = {}, 
   const states: Envelope[] = [], logs: Envelope[] = [], tasks: Envelope[] = [];
   const starts = vi.fn(), ends = vi.fn(), finals = vi.fn(), boundaries = vi.fn();
   const createSession = vi.fn(options => AppServerSession.create({ ...options, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }));
-  const host = new CodexHost(launch, { ...(omitBackend ? {} : { backend: "app-server" as const }), appServerSessionFactory: createSession,
+  const host = new CodexHost(launch, { appServerSessionFactory: createSession,
     appendSystemPrompt: "PERSONA", onState: e => states.push(e), onLog: e => logs.push(e), onTask: e => tasks.push(e),
     onTurnStart: starts, onTurnEnd: ends, onTurnFinalized: finals, onTurnBoundary: boundaries, ...overrides });
   const running = options.autoRun === false ? Promise.resolve() : host.run();

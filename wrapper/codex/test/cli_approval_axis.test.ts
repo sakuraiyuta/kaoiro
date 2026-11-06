@@ -17,7 +17,7 @@ const config: WrapperConfig = {
 
 afterEach(() => { vi.unstubAllEnvs(); });
 
-async function compose(backend: "exec" | "app-server", env: Record<string, string>, extra: Partial<WrapperConfig> = {}) {
+async function compose(backend: "app-server", env: Record<string, string>, extra: Partial<WrapperConfig> = {}) {
   vi.stubEnv("KAOIRO_CODEX_APPROVAL_AXIS", "");
   vi.stubEnv("KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS", "");
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
@@ -26,7 +26,6 @@ async function compose(backend: "exec" | "app-server", env: Record<string, strin
   const link = { close: () => {}, currentSessionId: () => null, send: (e: Envelope) => { sent.push(e); } };
   const host = { state: "idle", statusExtSnapshot: () => ({}), send: vi.fn(async () => {}), run: async () => {}, setPendingPermission: vi.fn() };
   await runCodexCli({
-    backend,
     parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
     loadConfig: () => ({ ...config, ...extra }),
     createServerLink: (_url, _agentId, options) => {
@@ -40,9 +39,9 @@ async function compose(backend: "exec" | "app-server", env: Record<string, strin
 }
 
 describe("approval axis opt-in composition", () => {
-  it("is off by default and on the exec backend", async () => {
+  it("is off by default", async () => {
     for (const [backend, env] of [
-      ["app-server", {}], ["exec", { KAOIRO_CODEX_APPROVAL_AXIS: "1" }], ["app-server", { KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS: "other" }],
+      ["app-server", {}], ["app-server", { KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS: "other" }],
     ] as const) {
       const { hostOptions } = await compose(backend, env);
       expect(hostOptions, `${backend} ${JSON.stringify(env)}`).not.toHaveProperty("appServerApprovals");

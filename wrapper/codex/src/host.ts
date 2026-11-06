@@ -1,8 +1,7 @@
-import { DEFAULT_CODEX_BACKEND, permissionSyncFailure } from "@kaoiro/agent-common";
+import { permissionSyncFailure } from "@kaoiro/agent-common";
 import { AppServerContextMeter } from "./app_server_context.js";
-// CodexHost owns one selected backend for a wrapper lifetime. App-server is
-// persistent; explicit exec uses one SDK process per turn. Both share the
-// state machine, tool bridge, lifecycle controls and delivery accounting.
+// CodexHost owns the persistent app-server session, state machine, tool bridge
+// and delivery accounting for a wrapper lifetime.
 
 import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
@@ -13,18 +12,11 @@ import { APPROVAL_POLICIES, isApprovalPolicy, type ApprovalPolicy } from "./app_
 import { SteerRecord, type SteerOutcome, type SteerResponse } from "./app_server_steer.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
 import { codexAccountRateLimits, readStartupRateLimits, type StartupRateLimitTransportFactory } from "./startup_rate_limits.js";
-import { assessCodexPermission, type CodexPermissionAssessment } from "./app_server_permission.js";
+import { type CodexPermissionAssessment } from "./app_server_permission.js";
 import { successfulResetEffort, AppServerSettingsError } from "./app_server_settings.js";
-import { BRIDGE_MCP_POLICY } from "./bridge_policy.js";
 import { prepareCodexToolHome } from "./tool_home.js";
 export { BRIDGE_TOOL_TIMEOUT_SEC } from "./bridge_policy.js";
 import { randomUUID } from "node:crypto";
-import { Codex } from "@openai/codex-sdk";
-import type {
-  CodexOptions,
-  ThreadEvent,
-  ThreadOptions,
-} from "@openai/codex-sdk";
 import type {
   PermissionObservation,
   PermissionSelection,
@@ -33,61 +25,11 @@ import type {
   WrapperPermissionLifecycleMessage,
 } from "@kaoiro/protocol";
 import { DeliveryPolicyController, PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
-import {
-  AGENT_MARKER_ENV,
-  withAgentMarker,
-  initialMachineState,
-  makeAttachRejected,
-  makeInstructionRejected,
-  makeLog,
-  makeResult,
-  makeStateChange,
-  makeTask,
-  normalizeTasklist,
-  stepState,
-  TASKLIST_TASK_ID,
-} from "@kaoiro/agent-common";
-import type {
-  AdapterEvent,
-  EffectiveStatusSnapshot,
-  EngineAdapter,
-  Envelope,
-  KaoiroState,
-  LogEntry,
-  MachineState,
-  ModelSource,
-  PendingPermissionExt,
-  PendingQuestionExt,
-  PermissionMode,
-  AttachRejectedPayload,
-  InstructionRejectedPayload,
-  ResolvedSnapshotExt,
-  ResultPayload,
-  SwitchErrorExt,
-  TaskPayload,
-  TasklistSourceItem,
-  TasklistSnapshot,
-  ToolDescriptor,
-  WhoamiSnapshot,
-  WrapperConfig,
-} from "@kaoiro/agent-common";
+import { initialMachineState, makeAttachRejected, makeInstructionRejected, makeLog, makeResult, makeStateChange, makeTask, stepState, TASKLIST_TASK_ID } from "@kaoiro/agent-common";
+import type { AdapterEvent, EffectiveStatusSnapshot, EngineAdapter, Envelope, KaoiroState, MachineState, ModelSource, PendingPermissionExt, PendingQuestionExt, PermissionMode, AttachRejectedPayload, InstructionRejectedPayload, ResolvedSnapshotExt, ResultPayload, SwitchErrorExt, TaskPayload, TasklistSnapshot, ToolDescriptor, WhoamiSnapshot, WrapperConfig } from "@kaoiro/agent-common";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
-import {
-  clipText,
-  computeResumeDrift,
-  effectiveStatusEnvelopeFields,
-  effectiveStatusWhoamiFields,
-  logEntryToPayload,
-} from "@kaoiro/agent-common";
-import {
-  codexExecFailureRelay,
-  threadEventToErrorDetail,
-  threadEventToEvents,
-  threadEventToFinalText,
-  threadEventToLogs,
-  threadEventToSessionId,
-  threadEventToTasklist,
-} from "./adapter.js";
+import { clipText, computeResumeDrift, effectiveStatusEnvelopeFields, effectiveStatusWhoamiFields } from "@kaoiro/agent-common";
+import { codexExecFailureRelay } from "./adapter.js";
 import {
   assertCuratedModelCompatible,
   CodexClientVersionTooOldError,
@@ -107,28 +49,8 @@ import {
   setPermissionSyncSupport,
   type PermissionState,
 } from "./permission_state.js";
-import {
-  codexRateLimitsFromRolloutIn,
-  codexRolloutsRoot,
-  captureCodexPermissionRolloutCursor,
-  codexPermissionContextAfter,
-  isRolloutCorruptionDetail,
-  repairRolloutCorruption,
-  resolveCodexModel,
-  verifyRolloutCorruption,
-  type CodexRateLimitSnapshot,
-  type CodexRateLimitWindow,
-  type RolloutCorruptionVerdict,
-  type RolloutRepairResult,
-  type CodexPermissionRolloutCursor,
-} from "./rollout.js";
-import {
-  CodexTurnDiagnostics,
-  codexTurnTraceCaptureDir,
-  defaultCodexTurnTraceDir,
-  pruneCodexTurnTraceCaptureDirs,
-} from "./turn_diagnostics.js";
-import { ToolHost } from "./toolhost.js";
+import { codexRateLimitsFromRolloutIn, codexRolloutsRoot, type CodexRateLimitSnapshot, type CodexRateLimitWindow, type CodexPermissionRolloutCursor } from "./rollout.js";
+import { codexTurnTraceCaptureDir, defaultCodexTurnTraceDir, pruneCodexTurnTraceCaptureDirs } from "./turn_diagnostics.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
   MAX_INFLIGHT_UPLOADS,
@@ -146,22 +68,7 @@ import {
   validateOpen,
 } from "./upload.js";
 
-/** Structural view of the SDK surface the host drives; injectable so tests
- *  script ThreadEvents without a codex binary. */
-export interface CodexThreadLike {
-  runStreamed(
-    input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
-    turnOptions?: { signal?: AbortSignal },
-  ): Promise<{ events: AsyncIterable<ThreadEvent> }>;
-}
-export interface CodexClientLike {
-  startThread(options?: ThreadOptions): CodexThreadLike;
-  resumeThread(id: string, options?: ThreadOptions): CodexThreadLike;
-}
-
 type CodexCatalog = ReturnType<typeof resolveCodexCatalog>;
-
-const DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS = 5_000;
 const DEFAULT_PERMISSION_SYNC_WARNING_MS = 10_000;
 /** app-server child process shutdown timeout (issue #391). AppServerRpc's
  *  own default (5000ms, `app_server_rpc.ts`) matches the runner's
@@ -174,12 +81,6 @@ const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 2_000;
 /** Bounds an unstarted turn's hang, rather than budgeting human recovery time. */
 export const DEFAULT_PERMISSION_GATE_TIMEOUT_MS = 30_000;
 const PERMISSION_GATE_RECOVERY = "Permission dispatch is blocked. The operator can reapply the same sandbox/network values to allocate a new revision, then resend the cancelled instruction. No automatic resend occurs.";
-
-class PermissionDispatchError extends Error {
-  constructor(readonly reason: "permission_gate_blocked" | "interrupted" | "permission_sync_timeout") {
-    super(reason === "permission_sync_timeout" ? reason : PERMISSION_GATE_RECOVERY);
-  }
-}
 
 type PermissionDispatchWait = {
   generation: number;
@@ -216,11 +117,6 @@ export type CodexLifecycleEvent =
       reason: string;
     };
 
-type NextEventOutcome<T> =
-  | { kind: "result"; result: IteratorResult<T> }
-  | { kind: "error"; error: unknown }
-  | { kind: "timeout"; pending: Promise<IteratorResult<T>> };
-
 type AttemptedTurnSettings = {
   appServer?: { resolvedEffort?: string; switchFailureReason?: AppServerSettingsError["reason"] };
   model: string | null;
@@ -233,48 +129,6 @@ type AttemptedTurnSettings = {
     cursor: CodexPermissionRolloutCursor;
   } | null;
 };
-
-/** Wait for one post-terminal item without allowing a perpetually open SDK
- * iterator to hold the host's single-turn queue forever. The pending next()
- * is retained so the caller can abort and await the SDK's cleanup path before
- * admitting another process. */
-function nextEventBeforeDeadline<T>(
-  iterator: AsyncIterator<T>,
-  deadlineMs: number,
-): Promise<NextEventOutcome<T>> {
-  let pending: Promise<IteratorResult<T>>;
-  try {
-    pending = Promise.resolve(iterator.next());
-  } catch (error) {
-    return Promise.resolve({ kind: "error", error });
-  }
-  const remainingMs = deadlineMs - Date.now();
-  if (remainingMs <= 0) {
-    return Promise.resolve({ kind: "timeout", pending });
-  }
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      resolve({ kind: "timeout", pending });
-    }, remainingMs);
-    pending.then(
-      (result) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ kind: "result", result });
-      },
-      (error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ kind: "error", error });
-      },
-    );
-  });
-}
 
 /** The app-server approval axis (ADR-0064). An advertisement fixes every axis
  * it omits, so sandbox and network are advertised at their most permissive
@@ -290,7 +144,6 @@ function initialStatusExtFromCatalog(
   model: string | null,
   permissionSyncSupported = false,
   approvalAxis = false,
-  backend: "exec" | "app-server" = DEFAULT_CODEX_BACKEND,
 ): Record<string, unknown> {
   return {
     engine: "codex",
@@ -309,7 +162,7 @@ function initialStatusExtFromCatalog(
         effortLevelsForModel(catalog, model).length > 0,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
-      supports_context_usage: backend === "app-server",
+      supports_context_usage: true,
       supports_permission_switch: permissionSyncSupported,
       ...(permissionSyncSupported && approvalAxis
         ? { permission_switch_axes: CODEX_APPROVAL_SWITCH_AXES }
@@ -332,7 +185,7 @@ export function initialStatusExt(
     config.codex_chatgpt_plan,
     config.codex_extra_models,
   );
-  return initialStatusExtFromCatalog(catalog, config.model ?? null, false, false, config.codex_backend ?? DEFAULT_CODEX_BACKEND);
+  return initialStatusExtFromCatalog(catalog, config.model ?? null, false, false);
 }
 
 /** Who produced a `send()`; only operator input may be steered. */
@@ -386,8 +239,6 @@ export interface CodexInterAgentSteerHooks {
 
 export interface CodexHostOptions {
   deliveryPolicy?: DeliveryPolicyController;
-  /** Internal opt-in only; normal CLI/config/env launch always uses exec. */
-  backend?: "exec" | "app-server";
   appServerSessionFactory?: AppServerHostRuntimeOptions["createSession"];
   /** Invoked on every state transition with the common envelope. */
   onState: (envelope: Envelope) => void;
@@ -491,10 +342,6 @@ export interface CodexHostOptions {
    *  host stamps ext.resume_snapshot and ext.resume_drift on every
    *  state_change alongside ext.effective. */
   resumeSnapshot?: ResolvedSnapshotExt;
-  /** SDK client factory; injectable for tests. */
-  codexFactory?: (options: CodexOptions) => CodexClientLike;
-  /** Resolves the server-selected model from the Codex rollout. */
-  modelResolver?: (sessionId: string) => Promise<string | null>;
   /** Resolves the latest per-window rate-limit snapshots from the Codex
    *  rollout. Injectable so tests can script snapshots without a rollout
    *  file. Defaults to `codexRateLimitsFromRolloutIn(codexRolloutsRoot(), …)`. */
@@ -503,35 +350,21 @@ export interface CodexHostOptions {
   ) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
   startupRateLimitResolver?: (signal: AbortSignal) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
   startupRateLimitTransportFactory?: StartupRateLimitTransportFactory;
-  /** Confirms whether a resume-failure CANDIDATE is real rollout corruption
-   *  (issue #253, ふじ MF-1/MF-2). Injectable so tests can point the real
-   *  `verifyRolloutCorruption` at a fixture rollout root instead of
-   *  `~/.codex/sessions` — the default wraps `verifyRolloutCorruption`
-   *  itself (real fatal-UTF-8-decode + per-line JSON.parse), never a stub,
-   *  so an injected variant only changes WHERE it reads, not what
-   *  "corrupted" means. */
-  rolloutCorruptionVerifier?: (sessionId: string) => RolloutCorruptionVerdict;
-  /** Repairs a confirmed corrupt rollout. Injectable so tests can direct the
-   * real repairer at a fixture root; a failed repair remains on #253's
-   * permanent error/manual-fallback path. */
-  rolloutCorruptionRepairer?: (sessionId: string) => RolloutRepairResult;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
   /** Epoch clock for deterministic upload TTL tests. */
   nowMs?: () => number;
-  /** Maximum time to drain SDK output after a terminal event. */
-  terminalDrainGraceMs?: number;
   /** Overrides the bundled CLI version for deterministic compatibility tests. */
   codexClientVersion?: string;
   /** Whether the current server join negotiated the permission selector. */
   permissionSyncSupported?: boolean;
-  /** Gates each successor exec while a negotiated join awaits its sync. */
+  /** Gates each successor turn while a negotiated join awaits its sync. */
   waitForPermissionSync?: () => Promise<void>;
   /** Warns after this wait without releasing the barrier. */
   permissionSyncWarningMs?: number;
   /** Deadline override for deterministic dispatch-gate tests. */
   permissionGateTimeoutMs?: number;
-  /** Rollout root used for per-exec permission confirmation. */
+  /** Rollout root used for per-turn permission confirmation. */
   permissionRolloutRoot?: string;
   /** Persists a wrapper-observed permission lifecycle event. */
   onPermissionLifecycle?: (event: WrapperPermissionLifecycleMessage) => void;
@@ -546,14 +379,7 @@ export interface CodexHostOptions {
   /** Local directory for failure-only Codex turn traces. Production defaults
    * to ~/.kaoiro/codex-turn-traces; tests inject a temporary directory. */
   turnTraceDir?: string;
-  /** Test seam that runs after the real diagnostics directory is prepared. */
-  afterDiagnosticsBegin?: () => Promise<void>;
 }
-
-/** Bridge entry point, resolved against the built package layout. Works from
- *  dist/ (runtime) and src/ (tsx dev) alike — both point at dist/bridge.js,
- *  so dev spawns need a prior `pnpm build` of @kaoiro/codex. */
-const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 
 /** Ceiling on an operator approval wait opened from inside a bridge tool
  *  call (issue #347). Below `BRIDGE_TOOL_TIMEOUT_SEC` on purpose: codex
@@ -586,91 +412,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** The SDK types describe well-formed JSONL, but a malformed external event
- * must be traceable without entering the production adapter path.
- *
- * `runStreamed()` yields the Codex CLI's JSONL through `JSON.parse`. That
- * boundary creates data-only objects, so the property reads below cannot
- * invoke accessors or proxies. If this input ever gains another producer
- * (especially hand-constructed objects), wrap this gate before relying on
- * the same fail-soft guarantee. */
-function isUsableThreadEvent(event: unknown): event is ThreadEvent {
-  if (!isRecord(event) || typeof event.type !== "string") return false;
-  switch (event.type) {
-    case "thread.started":
-      return typeof event.thread_id === "string";
-    case "turn.started":
-    case "turn.completed":
-      return true;
-    case "turn.failed":
-      return isRecord(event.error) && typeof event.error.message === "string";
-    case "error":
-      return typeof event.message === "string";
-    case "item.started":
-    case "item.updated":
-    case "item.completed":
-      return isUsableThreadItem(event.item);
-    default:
-      return false;
-  }
-}
-
-function isUsableThreadItem(item: unknown): boolean {
-  if (!isRecord(item) || typeof item.id !== "string" || typeof item.type !== "string") {
-    return false;
-  }
-  switch (item.type) {
-    case "agent_message":
-    case "reasoning":
-      return typeof item.text === "string";
-    case "command_execution":
-      return (
-        typeof item.command === "string" &&
-        typeof item.aggregated_output === "string" &&
-        typeof item.status === "string" &&
-        (item.exit_code === undefined || typeof item.exit_code === "number")
-      );
-    case "file_change":
-      return (
-        typeof item.status === "string" &&
-        Array.isArray(item.changes) &&
-        item.changes.every(
-          (change) =>
-            isRecord(change) &&
-            typeof change.path === "string" &&
-            typeof change.kind === "string",
-        )
-      );
-    case "mcp_tool_call":
-      return (
-        typeof item.server === "string" &&
-        typeof item.tool === "string" &&
-        typeof item.status === "string" &&
-        (item.error === undefined ||
-          (isRecord(item.error) && typeof item.error.message === "string")) &&
-        (item.result === undefined ||
-          item.result === null ||
-          (isRecord(item.result) && Array.isArray(item.result.content)))
-      );
-    case "web_search":
-      return typeof item.query === "string";
-    case "todo_list":
-      return (
-        Array.isArray(item.items) &&
-        item.items.every(
-          (entry) =>
-            isRecord(entry) &&
-            typeof entry.text === "string" &&
-            typeof entry.completed === "boolean",
-        )
-      );
-    case "error":
-      return typeof item.message === "string";
-    default:
-      return false;
-  }
-}
-
 export class CodexHost implements EngineAdapter {
   readonly #config: WrapperConfig;
   /** Last-applied display_name sync revision (issue #187 段階3, D15,
@@ -689,28 +430,10 @@ export class CodexHost implements EngineAdapter {
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
   #sessionId: string | null = null;
-  /** issue #253: session id whose rollout has been CONFIRMED permanently
-   *  corrupted — a resume failure whose detail matched the candidate
-   *  pattern (`isRolloutCorruptionDetail`) AND whose rollout file itself
-   *  verified as corrupted (`verifyRolloutCorruption`, ふじ MF-1). Once
-   *  set, `#runTurn` skips the doomed `resumeThread()` call for THIS
-   *  session id and returns the same classified error immediately instead
-   *  of re-spawning `codex exec` every turn only to hit the identical
-   *  failure — the silent exit-1 retry loop this issue exists to close.
-   *  Cleared implicitly whenever `#sessionId` moves to a different value
-   *  (a fresh thread has a fresh, presumably intact, rollout); this host
-   *  never resets it pre-emptively. */
-  #corruptedRolloutSessionId: string | null = null;
-  /** issue #253 (ふじ should-fix 1): the root-cause error detail from the
-   *  FIRST turn that confirmed `#corruptedRolloutSessionId`. Later turns'
-   *  synthetic "resume skipped" error would otherwise replace it and lose
-   *  the original diagnostic text an operator needs. */
-  #corruptedRolloutDetail: string | null = null;
   #model: string | null;
   #modelPending: string | null = null;
   #modelLastGood: string | null = null;
   #modelLastGoodSource: ModelSource | null = null;
-  #modelRollbackPinned = false;
   #modelSource: ModelSource | null;
   #effort: string | null;
   #effortPending: string | null = null;
@@ -755,7 +478,6 @@ export class CodexHost implements EngineAdapter {
    * materialization observe cancellation before it can enqueue a turn. */
   #lifecycleGeneration = 0;
   readonly #nowMs: () => number;
-  readonly #terminalDrainGraceMs: number;
   #gcTimer: ReturnType<typeof setInterval> | null = null;
   #wake: (() => void) | null = null;
   #abort: AbortController | null = null;
@@ -789,8 +511,6 @@ export class CodexHost implements EngineAdapter {
   #droppedTempCleanup: Promise<void> = Promise.resolve();
   /** Invalidates an older turn's asynchronous account-default refresh. */
   #modelResolutionGeneration = 0;
-  /** tool_use_id -> tool_name for tool_result backfill (protocol.md #40). */
-  readonly #toolNames = new Map<string, string>();
   /** Exact last tasklist wire content. This de-duplicates repeated SDK
    * snapshots without applying the child-task time/token throttle. */
   #lastTasklistJson: string | null = null;
@@ -832,10 +552,6 @@ export class CodexHost implements EngineAdapter {
     );
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
-    this.#terminalDrainGraceMs = Math.max(
-      0,
-      options.terminalDrainGraceMs ?? DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS,
-    );
     this.#model = config.model ?? null;
     this.#modelSource = options.modelSource ?? null;
     this.#effort = config.effort ?? null;
@@ -1508,7 +1224,7 @@ export class CodexHost implements EngineAdapter {
     });
   }
 
-  get historyBackend(): "exec" | "app-server" { return this.#options.backend ?? DEFAULT_CODEX_BACKEND; }
+  get historyBackend(): "app-server" { return "app-server"; }
 
   /** Whether this host was built with the operator-steer mechanism. */
   get operatorSteerEnabled(): boolean { return this.#options.operatorSteer !== undefined; }
@@ -1524,12 +1240,11 @@ export class CodexHost implements EngineAdapter {
   }
 
   get #approvalAxis(): boolean {
-    return this.historyBackend === "app-server" && this.#options.appServerApprovals !== undefined;
+    return this.#options.appServerApprovals !== undefined;
   }
 
   scheduleHistoryReplay(job: AppServerHistoryJob): void {
     if (this.#closed) return;
-    if (this.historyBackend !== "app-server") throw new Error("App-server history requires the internal backend");
     this.#historyJob = job;
     this.#wake?.();
   }
@@ -1551,27 +1266,7 @@ export class CodexHost implements EngineAdapter {
       // prevent a real SDK turn or a default Codex factory from starting.
       writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
     }
-    const appServer = this.historyBackend === "app-server";
-    const descriptors = this.#options.toolDescriptors ?? [];
-    let toolHost: ToolHost | null = null;
-    const factory =
-      this.#options.codexFactory ??
-      ((options: CodexOptions) => new Codex(options) as CodexClientLike);
-    const codexConfig: Record<string, unknown> = {
-      developer_instructions: this.#options.appendSystemPrompt,
-      // Host-level auto_review can override exec's non-interactive policy.
-      // Pinning both reviewer and approvalPolicy is defense in depth.
-      approvals_reviewer: "user",
-      shell_environment_policy: { set: { CODEX_HOME: toolHome.path, ...AGENT_MARKER_ENV } },
-    };
-    // Runner config is authoritative over any user-global Codex config
-    // (ADR-0038 F2): always inject the effective toggle so a positive
-    // `internal_subagents: true` force-enables and `false` disables. Absent
-    // resolves to the effective default (true), injected explicitly.
-    codexConfig.features = {
-      multi_agent: this.#config.codex_internal_subagents ?? true,
-    };
-    if (appServer) this.#appRuntime = this.#createAppServerRuntime(toolHome.path);
+    this.#appRuntime = this.#createAppServerRuntime(toolHome.path);
 
     if (initialPrompt !== undefined) {
       this.#apply({ kind: "user_send" });
@@ -1611,51 +1306,7 @@ export class CodexHost implements EngineAdapter {
           this.#wake = null;
           continue;
         }
-        if (this.#appRuntime !== null) {
-          await this.#runAppServerTurn(turn.input, turn.tempDir, turn.conversationIds ?? [], turn.turnToken ?? randomUUID());
-          continue;
-        }
-        const originToken = turn.turnToken ?? randomUUID();
-        const endpointLifetime = new AbortController();
-        toolHost = descriptors.length ? await ToolHost.listen(descriptors, {
-          turnSignal: () => this.#activeTurnToken === originToken ? this.#turnScope?.signal ?? AbortSignal.abort() : AbortSignal.abort(),
-          resolveOrigin: () => ({ token: originToken, signal: endpointLifetime.signal }),
-        }) : null;
-        if (toolHost !== null) {
-          codexConfig.mcp_servers = {
-            kaoiro: {
-              command: process.execPath,
-              args: [BRIDGE_SCRIPT],
-              env: {
-                KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
-                // The bridge appends only its own stderr to this private local
-                // file. Each failure trace snapshots its tail; neither is sent
-                // to a peer or interpolated into the notice template.
-                KAOIRO_BRIDGE_STDERR_PATH:
-                  `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
-              },
-              // The wrapper pins approval_policy=never, which otherwise
-              // auto-cancels every MCP tool call ("user cancelled MCP tool
-              // call"). "approve" auto-approves the kaoiro tools so they run
-              // (verified 2026-07-11; the other accepted values auto/prompt/
-              // writes all leave the call cancelled). These tools are
-              // wrapper-provided and gated by the operator elsewhere
-              // (send_to_agent per-call on Claude; ask_user_question IS the
-              // operator prompt), so auto-approving them is safe. Behavior
-              // under approval_policy=on-request has not been verified.
-              ...BRIDGE_MCP_POLICY,
-            },
-          };
-        }
-        const codex = factory({
-          config: { ...codexConfig } as NonNullable<CodexOptions["config"]>,
-          env: withAgentMarker(process.env),
-        });
-        try {
-          await this.#runTurn(codex, turn.input, turn.tempDir, turn.conversationIds ?? [], originToken);
-        } finally {
-          endpointLifetime.abort(); toolHost?.close(); toolHost = null;
-        }
+        await this.#runAppServerTurn(turn.input, turn.tempDir, turn.conversationIds ?? [], turn.turnToken ?? randomUUID());
       }
     } finally {
       if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
@@ -1663,7 +1314,6 @@ export class CodexHost implements EngineAdapter {
       this.#dropPendingUploads("interrupted");
       await this.#dropQueuedTempTurns();
       await this.#watchdogQueuedCleanup;
-      toolHost?.close();
       await this.#appRuntime?.close();
     }
     } finally {
@@ -1854,650 +1504,6 @@ export class CodexHost implements EngineAdapter {
     }
   }
 
-  #threadOptions(attempted: AttemptedTurnSettings): ThreadOptions & { approvalPolicy: "never" } {
-    const { model: modelPending, effort: effortPending, effortReset } = attempted;
-    const requestedPermission = attempted.permission?.submission.requested;
-    const sandbox = requestedPermission?.sandbox ?? this.#sandbox;
-    const networkAccess = requestedPermission?.network_access ?? this.#networkAccess;
-    const options: ThreadOptions & { approvalPolicy: "never" } = {
-      approvalPolicy: "never",
-      sandboxMode: sandbox,
-      workingDirectory: this.#cwd,
-      skipGitRepoCheck: true,
-    };
-    // A model observed from turn_context is display metadata, not an explicit
-    // operator choice. Passing it back would silently pin later turns and
-    // change the semantics of the account default.
-    const model = modelPending ?? this.#model;
-    if (
-      model !== null &&
-      (modelPending !== null ||
-        this.#modelSource !== "default" ||
-        this.#modelRollbackPinned)
-    ) {
-      options.model = model;
-    }
-    // Phase-23 dogfood 回帰対策: model 側の既存 gate (L446-454) と対称に、
-    // effortSource="default" は SDK 委任継続で non-pin。display hint 復元で
-    // this.#effort が set されていても、次 turn の SDK には渡さない。
-    // operator setEffort は #effortSource="config" に上書きするため gate 通過。
-    const effort = effortPending ?? this.#effort;
-    if (
-      !effortReset &&
-      effort !== null &&
-      (effortPending !== null || this.#effortSource !== "default")
-    ) {
-      options.modelReasoningEffort = effort as NonNullable<
-        ThreadOptions["modelReasoningEffort"]
-      >;
-    }
-    if (sandbox === "workspace-write") {
-      options.networkAccessEnabled = networkAccess;
-    }
-    return options;
-  }
-
-  async #runTurn(
-    codex: CodexClientLike,
-    input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
-    tempDir?: string,
-    conversationIds: readonly string[] = [],
-    turnToken: string = randomUUID(),
-    retryAfterRepair = false,
-    settled: { value: boolean } = { value: false },
-  ): Promise<void> {
-    const gate: PermissionDispatchWait = {
-      generation: this.#lifecycleGeneration, deadline: null, blocked: null,
-    };
-    const cancel = async (reason: "permission_gate_blocked" | "interrupted" | "permission_sync_timeout"): Promise<void> => {
-      // Repair retries belong to an already-started outer turn. Its catch
-      // and finally own failure settlement and finalization, not cancellation.
-      if (retryAfterRepair) throw new PermissionDispatchError(reason);
-      if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
-      if (!settled.value) {
-        settled.value = true;
-        if (reason === "permission_sync_timeout") {
-          this.#emitResult(permissionSyncFailure());
-          this.#apply({ kind: "result", subtype: "error_during_execution" });
-        } else {
-          this.#machine = initialMachineState("waiting_input");
-          this.#emitState("waiting_input");
-        }
-        try {
-          this.#options.onTurnEnd?.({
-            turnToken, conversationIds,
-            error: { reason, detail: reason === "permission_sync_timeout" ? reason : PERMISSION_GATE_RECOVERY },
-            cancellation: { kind: "permission_gate", started: false },
-          });
-        } finally {
-          this.#options.onTurnFinalized?.({ turnToken });
-        }
-      }
-    };
-    const firstGate = await this.#awaitPermissionDispatch(turnToken, gate);
-    if (firstGate !== null || this.#closed || gate.generation !== this.#lifecycleGeneration) {
-      await cancel(firstGate ?? "interrupted");
-      return;
-    }
-    const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
-    const persistFailure = async (
-      input: Parameters<CodexTurnDiagnostics["writeFailure"]>[0],
-    ): Promise<void> => {
-      try {
-        await diagnostics.writeFailure(input);
-      } catch (error) {
-        // A local diagnostic filesystem failure must never replace the SDK
-        // turn's original outcome or suppress its fixed peer-error notice.
-        writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
-      }
-    };
-    try {
-      await diagnostics.begin();
-      await this.#options.afterDiagnosticsBegin?.();
-    } catch (error) {
-      // Match persistFailure's non-interference rule for the capture window.
-      writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
-    }
-    await this.#finishStartupRateLimitProbe();
-    // A rejoin can replace the transport barrier while diagnostics performs
-    // I/O. Recheck immediately before capture; no callback can interleave
-    // between this await and the synchronous SDK construction below.
-    const finalGate = await this.#awaitPermissionDispatch(turnToken, gate);
-    if (finalGate !== null || this.#closed || gate.generation !== this.#lifecycleGeneration) {
-      await cancel(finalGate ?? "interrupted");
-      return;
-    }
-    if (!retryAfterRepair) {
-      const prepared = this.#options.prepareInput?.(turnToken);
-      if (prepared === null) {
-        if (this.#queue.length === 0 && !this.#closed) {
-          this.#machine = initialMachineState("waiting_input");
-          this.#emitState("waiting_input");
-        }
-        this.#options.onTurnFinalized?.({ turnToken });
-        return;
-      }
-      if (prepared !== undefined) {
-        input = prepared.text;
-        conversationIds = prepared.conversationIds;
-      }
-    }
-    this.#activeTurnToken = turnToken;
-    this.#activeTurnConversationIds = conversationIds;
-    this.#turnScope = new AbortController();
-    this.#turnAbandoned = null;
-    const resolutionGeneration = ++this.#modelResolutionGeneration;
-    const attempted = {
-      model: this.#modelPending,
-      effort: this.#effortPending,
-      effortReset: this.#effortResetPending,
-      accountDefault:
-        this.#modelPending === null &&
-        (this.#model === null || this.#modelSource === "default"),
-      resolutionGeneration,
-      permission: this.#permissionState.syncSupported
-        ? {
-            submission: {
-              ...this.#permissionState.next,
-              execution_id: randomUUID(),
-            },
-            cursor: captureCodexPermissionRolloutCursor(
-              this.#options.permissionRolloutRoot ?? codexRolloutsRoot(),
-              this.#sessionId,
-            ),
-          }
-        : null,
-    };
-    if (attempted.permission !== null) {
-      this.#beginPermissionExecution(attempted.permission.submission);
-    }
-    // issue #253 (ふじ 必須pin): capture whether THIS turn is a resume
-    // attempt, and which session id it targets, BEFORE anything in the
-    // stream below can move `#sessionId`. Only a resume has a pre-existing
-    // rollout that could be corrupted — a fresh startThread's mid-stream
-    // failure must never be classified as permanent even if its text
-    // happens to match a candidate pattern, since there is no pre-existing
-    // rollout for that classification to mean anything about.
-    const resumeSessionId = this.#sessionId;
-    const isResumeAttempt = resumeSessionId !== null;
-    const threadOptions = this.#threadOptions(attempted);
-    this.#bridgeTurnApproval = { token: turnToken, approval: threadOptions.approvalPolicy };
-    // A resume already CONFIRMED permanently corrupted for THIS session id
-    // is skipped — re-spawning `codex exec` would just re-read the same
-    // broken rollout and fail identically, the silent exit-1 retry loop
-    // this issue exists to close. Substitute an already-failing thread so
-    // the ordinary catch(err) branch below handles it through the exact
-    // same emit/trace path; carrying the ORIGINAL detail forward (ふじ
-    // should-fix 1) keeps every subsequent turn's diagnostic text pointing
-    // at the real root cause, not a generic "skipped" placeholder.
-    const thread =
-      resumeSessionId !== null &&
-      resumeSessionId === this.#corruptedRolloutSessionId
-        ? {
-            runStreamed: () =>
-              Promise.reject(
-                new Error(
-                  this.#corruptedRolloutDetail ??
-                    `resume skipped: rollout for session ${resumeSessionId} already classified as permanently corrupted`,
-                ),
-              ),
-          }
-        : isResumeAttempt
-          ? codex.resumeThread(
-              resumeSessionId,
-              threadOptions,
-            )
-          : codex.startThread(
-              threadOptions,
-            );
-    // Creating/resuming the SDK thread is the last synchronous boundary
-    // before the SDK call. Confirm #237 delivery here, never when its
-    // coordinator merely accepted the queue item.
-    if (!retryAfterRepair) {
-      this.#options.onLifecycle?.({ kind: "turn_start", turnToken });
-      this.#options.onTurnStart?.({ turnToken, conversationIds });
-    }
-    this.#abort = new AbortController();
-    let finalText: string | null = null;
-    // A stream-level `error` is evidence, not a terminal boundary. Some SDK
-    // versions may still follow it with turn.completed; retain it only so a
-    // later terminal-less EOF has the best available local classification.
-    let recordedThreadError: string | null = null;
-    let sawResult = false;
-    let sdkBoundaryEnded = false;
-    const endSdkBoundary = (): void => {
-      if (sdkBoundaryEnded) return;
-      sdkBoundaryEnded = true;
-      this.#options.onTurnBoundary?.({ turnToken });
-    };
-    try {
-      const { events } = await thread.runStreamed(input, {
-        signal: this.#abort.signal,
-      });
-      const iterator = events[Symbol.asyncIterator]();
-      let terminalDrainDeadlineMs: number | null = null;
-      let terminalEventSeen = false;
-      let inputHandedOff = false;
-      while (true) {
-        let next: IteratorResult<ThreadEvent>;
-        if (terminalDrainDeadlineMs === null) {
-          next = await iterator.next();
-        } else {
-          const outcome = await nextEventBeforeDeadline(
-            iterator,
-            terminalDrainDeadlineMs,
-          );
-          if (outcome.kind === "error") throw outcome.error;
-          if (outcome.kind === "timeout") {
-            // The SDK's iterator finally kills the child but does not await
-            // its exit. Abort the pending read, then await that read and the
-            // iterator close before the host admits the next process.
-            this.#abort?.abort();
-            await outcome.pending.catch(() => undefined);
-            try {
-              await iterator.return?.();
-            } catch {
-              // The terminal result is already settled; cleanup failure is
-              // not allowed to produce a duplicate turn result.
-            }
-            break;
-          }
-          next = outcome.result;
-        }
-        if (next.done) {
-          if (!terminalEventSeen && !this.#watchdogFailStopped) {
-            endSdkBoundary();
-          }
-          this.#options.onLifecycle?.({
-            kind: "stream_eof",
-            turnToken,
-            terminalSeen: terminalEventSeen,
-          });
-          break;
-        }
-        if (!inputHandedOff && this.historyBackend === "exec") {
-          inputHandedOff = true;
-          this.#options.onInputHandedOff?.({ turnToken, handoff: "exec_input_written" });
-        }
-        const event = next.value;
-        const isUsable = isUsableThreadEvent(event);
-        const isTerminalEvent =
-          isUsable &&
-          (event.type === "turn.completed" || event.type === "turn.failed");
-        const firstTerminalEvent = isTerminalEvent && !terminalEventSeen;
-        if (firstTerminalEvent) {
-          terminalEventSeen = true;
-          if (!this.#watchdogFailStopped) endSdkBoundary();
-        }
-        diagnostics.recordEvent(event);
-        this.#options.onLifecycle?.({
-          kind: "sdk_event",
-          turnToken,
-          type: isRecord(event) && typeof event.type === "string"
-            ? event.type
-            : "unknown",
-        });
-        this.#options.onTurnProgress?.({ turnToken });
-        if (!isUsable || (terminalEventSeen && !firstTerminalEvent)) continue;
-        if (firstTerminalEvent) {
-          this.#options.onLifecycle?.({
-            kind: "terminal",
-            turnToken,
-            type: event.type,
-            authoritative: !this.#watchdogFailStopped,
-          });
-        }
-        // A watchdog fail-stop makes the active outcome unknown. Continue to
-        // consume the SDK stream for cleanup, but never re-enter the normal
-        // result/state/ack path from a late frame.
-        if (this.#watchdogFailStopped) {
-          if (isTerminalEvent) sawResult = true;
-          continue;
-        }
-        if (event.type === "error") recordedThreadError = event.message;
-        const sessionId = threadEventToSessionId(event);
-        if (sessionId !== null && sessionId !== this.#sessionId) {
-          this.#sessionId = sessionId;
-          this.#options.onSessionId?.(sessionId);
-          // A fresh thread's first token_count can be absent, but a resumed
-          // or reused rollout may already have a snapshot. Await its initial
-          // read before the following SDK event emits state, so that state
-          // carries ext.rate_limits when the rollout has data (issue #241).
-          await this.initializeRateLimits();
-        }
-        for (const entry of threadEventToLogs(event)) {
-          this.#emitLog(entry);
-        }
-        const tasklist = threadEventToTasklist(event);
-        if (tasklist !== null) this.#emitTasklist(tasklist);
-        const last = threadEventToFinalText(event);
-        if (last !== null) finalText = last;
-        let terminalTurnEnd: Parameters<NonNullable<CodexHostOptions["onTurnEnd"]>>[0] | null = null;
-        if (event.type === "turn.completed") {
-          sawResult = true;
-          settled.value = true;
-          this.#endTurnScope();
-          await this.#observePermission(attempted);
-          this.#finishTurn(true, attempted);
-          this.#emitResult({
-            ...(finalText !== null ? { text: finalText } : {}),
-          });
-          terminalTurnEnd = {
-            turnToken,
-            conversationIds,
-            terminal: "turn.completed",
-            ...(this.#turnAbandoned !== null
-              ? { abandoned: this.#turnAbandoned }
-              : {}),
-          };
-          // Resolve only after the terminal event: at turn.started an existing
-          // rollout can still expose the previous turn_context and look
-          // spuriously "resolved". Keep this background so filesystem timing
-          // never holds terminal delivery or the next instruction.
-          if (attempted.accountDefault && this.#sessionId !== null) {
-            void this.#refreshAccountDefaultModel(
-              this.#sessionId,
-              attempted.resolutionGeneration,
-            );
-          }
-          void this.#refreshRateLimits();
-        } else if (event.type === "turn.failed") {
-          sawResult = true;
-          settled.value = true;
-          this.#endTurnScope();
-          await this.#observePermission(attempted);
-          this.#finishTurn(false, attempted);
-          const detail = threadEventToErrorDetail(event);
-          // issue #300: this is the branch that actually fires for a
-          // model/request rejection surfaced as a structured SDK event
-          // (verified against a live `codex exec` 400 — the JSON error
-          // rides event.error.message here, and the LATER exec-exit
-          // rejection this same turn also triggers (see #runTurn's
-          // catch(err) below) has already lost it to a boilerplate
-          // "Reading prompt from stdin..." stderr tail by then).
-          // codexExecFailureRelay's parseCodexExecErrorMessage returns
-          // null for a bare (non-"Codex Exec exited with..."-prefixed)
-          // message like this one, so it falls through to treating the
-          // whole message as the stderr tail to run JSON extraction on —
-          // the same function works for both call sites unmodified.
-          this.#emitResult({
-            is_error: true,
-            ...(detail === null ? {} : codexExecFailureRelay(detail)),
-          });
-          await persistFailure({
-            sessionId: this.#sessionId,
-            turnToken,
-            conversationIds,
-            ...(detail === null ? {} : { detail }),
-            outcome: "turn_failed",
-          });
-          terminalTurnEnd = {
-            turnToken,
-            conversationIds,
-            error: detail !== null ? { detail } : {},
-            terminal: "turn.failed",
-            ...(this.#turnAbandoned !== null
-              ? { abandoned: this.#turnAbandoned }
-              : {}),
-          };
-          // Failure paths (429 / max-output / auth error) still write a
-          // token_count event to the rollout, so refresh on both branches.
-          void this.#refreshRateLimits();
-        }
-        for (const adapterEvent of threadEventToEvents(event)) {
-          this.#apply(adapterEvent);
-        }
-        if (terminalTurnEnd !== null) this.#options.onTurnEnd?.(terminalTurnEnd);
-        if (isTerminalEvent && terminalDrainDeadlineMs === null) {
-          // The terminal event is the SDK turn boundary, but upstream still
-          // flushes the rollout after publishing it. Drain normal EOF first;
-          // only a stuck tail may be aborted after this bounded grace.
-          terminalDrainDeadlineMs =
-            Date.now() + this.#terminalDrainGraceMs;
-        }
-      }
-      if (!sawResult && !this.#watchdogFailStopped) {
-        // Stream ended without a terminal turn event (abort, stream error
-        // event, or process death): fold into the error path so the agent
-        // never wedges in thinking/tool_running.
-        settled.value = true;
-        this.#endTurnScope();
-        await this.#observePermission(attempted);
-        this.#finishTurn(false, attempted);
-        // issue #300: recordedThreadError comes from a stream-level
-        // `error` event (distinct from turn.failed, see the branch
-        // above) and can carry the same JSON-shaped body -- same relay,
-        // same fallback-to-raw-message behaviour when it does not.
-        this.#emitResult({
-          is_error: true,
-          ...(recordedThreadError === null
-            ? {}
-            : codexExecFailureRelay(recordedThreadError)),
-        });
-        this.#apply({ kind: "result", subtype: "error_during_execution" });
-        await persistFailure({
-          sessionId: this.#sessionId,
-          turnToken,
-          conversationIds,
-          ...(recordedThreadError === null
-            ? {}
-            : { detail: recordedThreadError }),
-          outcome: "stream_ended_without_terminal",
-        });
-        this.#options.onTurnEnd?.({
-          turnToken,
-          conversationIds,
-          error:
-            recordedThreadError === null ? {} : { detail: recordedThreadError },
-          ...(this.#turnAbandoned !== null
-            ? { abandoned: this.#turnAbandoned }
-            : {}),
-        });
-      }
-    } catch (err) {
-      // runStreamed rejection or mid-stream throw (exec exited non-zero).
-      if (this.#watchdogFailStopped) return;
-      this.#endTurnScope();
-      if (!sawResult) endSdkBoundary();
-      let terminalError: unknown = err;
-      if (!sawResult) {
-        // A repair retry shares this marker with its original turn. Once the
-        // retry began terminal delivery, its callback failure must not make
-        // the original turn send a second result or peer-error notice.
-        if (settled.value) return;
-        const alreadyConfirmedCorrupted =
-          resumeSessionId !== null &&
-          resumeSessionId === this.#corruptedRolloutSessionId;
-        // issue #253 (ふじ should-fix 1): once a session is confirmed
-        // corrupted, every later turn's `err` is this file's OWN synthetic
-        // "resume skipped" Error, built from `#corruptedRolloutDetail`.
-        // Re-stringifying it here would double-wrap that Error's own
-        // "Error: " toString prefix onto an already-stringified detail —
-        // use the remembered root-cause text verbatim instead.
-        let detail = alreadyConfirmedCorrupted
-          ? (this.#corruptedRolloutDetail ?? String(err))
-          : String(err);
-        // issue #253 (ふじ MF-1 / 必須pin): a stderr keyword match alone
-        // is only a CANDIDATE — several unrelated dependencies emit the
-        // same generic wording (ふじ measured this directly against
-        // codex-sdk 0.144.1's actual runStreamed stderr; neither pattern
-        // in isRolloutCorruptionDetail is unique to the rollout reader).
-        // Committing to the permanent classification requires confirming
-        // against the ACTUAL rollout file via rolloutCorruptionVerifier /
-        // verifyRolloutCorruption — "clean" or "unknown" (unreadable /
-        // unresolvable) both fall back to the ordinary failure path rather
-        // than risk permanently refusing to resume a session that failed
-        // for an unrelated, self-recoverable reason. `isResumeAttempt`
-        // (bound before the stream ran) is what keeps a fresh
-        // startThread's mid-stream failure from ever reaching this branch,
-        // even when its text happens to match a candidate pattern — there
-        // is no pre-existing rollout for such a failure to have corrupted.
-        let rolloutCorrupted = false;
-        if (alreadyConfirmedCorrupted) {
-          // Already confirmed on an earlier turn for this exact session —
-          // no need to re-read the file every retry.
-          rolloutCorrupted = true;
-        } else if (isResumeAttempt && isRolloutCorruptionDetail(detail)) {
-          const verify =
-            this.#options.rolloutCorruptionVerifier ??
-            ((id: string) => verifyRolloutCorruption(id));
-          let verdict: RolloutCorruptionVerdict;
-          try {
-            verdict = verify(resumeSessionId);
-          } catch {
-            verdict = "unknown";
-          }
-          if (verdict === "corrupted") {
-            let repaired = false;
-            let repairedBackupPath: string | null = null;
-            if (!retryAfterRepair) {
-              try {
-                const repair =
-                  this.#options.rolloutCorruptionRepairer ??
-                  ((id: string) => repairRolloutCorruption(id));
-                const repairResult = repair(resumeSessionId);
-                repaired = repairResult.repaired;
-                if (repairResult.repaired) {
-                  repairedBackupPath = repairResult.backupPath;
-                }
-              } catch {
-                repaired = false;
-              }
-            }
-            if (repaired && repairedBackupPath !== null) {
-              try {
-                writeRedactedStderr(
-                  `codex rollout repaired for session ${resumeSessionId}; backup: ${repairedBackupPath}\n`,
-                );
-              } catch {
-                // Diagnostics must not downgrade an already atomic repair.
-              }
-            }
-            if (repaired) {
-              try {
-                await this.#runTurn(
-                  codex,
-                  input,
-                  undefined,
-                  conversationIds,
-                  turnToken,
-                  true,
-                  settled,
-                );
-                return;
-              } catch (retryError) {
-                if (settled.value) return;
-                // The retry has not reached a terminal event, so settle the
-                // original turn once through the ordinary failure path.
-                detail = String(retryError);
-                terminalError = retryError;
-              }
-            } else {
-              rolloutCorrupted = true;
-            }
-          }
-        }
-        settled.value = true;
-        await this.#observePermission(attempted);
-        this.#finishTurn(false, attempted);
-        if (rolloutCorrupted && resumeSessionId !== null) {
-          // Remember both the session id AND this confirming turn's own
-          // detail (ふじ should-fix 1) — #runTurn's guard at the top skips
-          // the doomed resumeThread() call for this session id on every
-          // later turn, and each of THOSE turns' synthetic "resume
-          // skipped" detail would otherwise overwrite the real root cause.
-          if (this.#corruptedRolloutSessionId !== resumeSessionId) {
-            this.#corruptedRolloutDetail = detail;
-          }
-          this.#corruptedRolloutSessionId = resumeSessionId;
-        }
-        if (rolloutCorrupted) {
-          // issue #300 review S1 (superseded by round 3's fix, finding
-          // M-B): this branch used to need its own redactCredentials()
-          // call here, since it bypasses codexExecFailureRelay entirely
-          // -- but makeResult (the actual choke point every engine's
-          // result path funnels through) now masks every error_detail
-          // unconditionally, so this branch is covered structurally with
-          // no producer-level call needed.
-          this.#emitResult({
-            is_error: true,
-            error_subtype: "error_rollout_corrupted",
-            error_detail: detail,
-          });
-        } else if (terminalError instanceof PermissionDispatchError && terminalError.reason === "permission_sync_timeout") {
-          this.#emitResult(permissionSyncFailure(true));
-        } else {
-          // issue #300: relay a bounded, masked stderr tail (plus a
-          // wrapper-classified error_code/summary/hint when the tail's
-          // last line is a recognizable JSON error) instead of the bare
-          // is_error: true this branch used to emit — detail was already
-          // computed above but never reached the operator.
-          const relay = codexExecFailureRelay(
-            terminalError instanceof Error ? terminalError.message : detail,
-          );
-          this.#emitResult({ is_error: true, ...relay });
-        }
-        this.#apply({ kind: "result", subtype: "error_during_execution" });
-        await persistFailure({
-          sessionId: this.#sessionId,
-          turnToken,
-          conversationIds,
-          detail,
-          outcome: "run_streamed_rejected",
-        });
-        // issue #127 must-fix 2: String(err) is unstructured, untrusted text
-        // (subprocess/exception message, possibly containing paths or other
-        // detail unsafe to inject verbatim into a peer's LLM context). Safe
-        // to pass as `detail` regardless: classifyInterAgentError uses
-        // `detail` ONLY to keyword-sniff a code and never copies it into the
-        // produced notice's message — the raw string itself never leaves
-        // this process.
-        // An operator interrupt aborts the SDK run and lands here (or on
-        // the terminal-less EOF above), so these sites must carry the
-        // recorded abandonment too, or the agent's cancellation notice
-        // falls back to the generic cause (issue #349).
-        this.#options.onTurnEnd?.({
-          turnToken,
-          conversationIds,
-          error: {
-            detail,
-            ...(terminalError instanceof PermissionDispatchError ? { reason: terminalError.reason === "permission_sync_timeout" ? "interrupted" : terminalError.reason } : {}),
-          },
-          ...(this.#turnAbandoned !== null
-            ? { abandoned: this.#turnAbandoned }
-            : {}),
-        });
-      }
-      if (!this.#closed) {
-        // issue #253: operator/runner-log visibility for the permanent
-        // classification — dashboard sees it via error_subtype above, but
-        // this stderr line is what a runner-side log tail (or the
-        // supervisor's own crash-loop diagnosis) can grep for without
-        // reaching into the envelope stream.
-        writeRedactedStderr(
-          resumeSessionId !== null &&
-            resumeSessionId === this.#corruptedRolloutSessionId
-            ? // Same double-wrap concern as the `detail` computation above:
-              // on a later turn `err` is this file's own synthetic
-              // "resume skipped" Error, so use the remembered root cause
-              // verbatim rather than re-stringifying it.
-              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId}: ${this.#corruptedRolloutDetail ?? String(terminalError)}\n`
-            : `codex turn failed: ${String(terminalError)}\n`,
-        );
-      }
-    } finally {
-      this.#endTurnScope();
-      this.#turnScope = null;
-      this.#abort = null;
-      this.#activeTurnToken = null;
-      this.#activeTurnConversationIds = [];
-      if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
-      if (!retryAfterRepair) {
-        this.#options.onTurnFinalized?.({ turnToken });
-      }
-    }
-  }
-
   #resolveAttachments(ids: string[]): PendingUpload[] | null {
     const uploads: PendingUpload[] = [];
     for (const id of ids) {
@@ -2601,7 +1607,7 @@ export class CodexHost implements EngineAdapter {
       let timer: ReturnType<typeof setTimeout> | undefined;
       if (gate.deadline !== null) timer = setTimeout(wake, Math.max(0, gate.deadline - performance.now()));
       const warning = setTimeout(() => {
-        writeRedactedStderr("codex: waiting for permission_sync; next exec remains gated\n");
+        writeRedactedStderr("codex: waiting for permission_sync; next dispatch remains gated\n");
       }, this.#permissionSyncWarningMs);
       try {
         const ready = await Promise.race([
@@ -2636,25 +1642,6 @@ export class CodexHost implements EngineAdapter {
         this.#permissionCloseWake = null;
       }
     }
-  }
-
-  async #observePermission(
-    attempted: AttemptedTurnSettings,
-  ): Promise<void> {
-    const permission = attempted.permission;
-    if (permission === null) return;
-    const sessionId = this.#sessionId;
-    let context = sessionId === null
-      ? null
-      : codexPermissionContextAfter(permission.cursor, sessionId);
-    for (let attempt = 0; context === null && attempt < 4; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      context = sessionId === null
-        ? null
-        : codexPermissionContextAfter(permission.cursor, sessionId);
-    }
-    const assessment = assessCodexPermission(permission.submission, context);
-    this.#applyPermissionAssessment(permission.submission, assessment);
   }
 
   #applyPermissionAssessment(submission: PermissionSubmission, assessment: CodexPermissionAssessment): void {
@@ -2966,7 +1953,6 @@ export class CodexHost implements EngineAdapter {
       this.#modelLastGoodSource = this.#modelSource;
       this.#effortLastGood = this.#effort;
       this.#effortLastGoodSource = this.#effortSource;
-      if (attempted.model !== null) this.#modelRollbackPinned = false;
       if (this.#modelPending === attempted.model) this.#modelPending = null;
       if (this.#effortPending === attempted.effort) this.#effortPending = null;
       if (this.#effortResetPending === attempted.effortReset) {
@@ -2993,47 +1979,12 @@ export class CodexHost implements EngineAdapter {
       this.#modelSource = this.#modelLastGoodSource;
       this.#effort = this.#effortLastGood;
       this.#effortSource = this.#effortLastGoodSource;
-      if (attempted.model !== null && this.#modelLastGood !== null) {
-        this.#modelRollbackPinned = true;
-      }
     }
     if (this.#modelPending === attempted.model) this.#modelPending = null;
     if (this.#effortPending === attempted.effort) this.#effortPending = null;
     if (this.#effortResetPending === attempted.effortReset) {
       this.#effortResetPending = false;
     }
-  }
-
-  async #refreshAccountDefaultModel(
-    sessionId: string,
-    generation: number,
-  ): Promise<void> {
-    const resolver = this.#options.modelResolver ?? resolveCodexModel;
-    let model: string | null = null;
-    for (let attempt = 0; attempt < 2 && model === null; attempt += 1) {
-      try {
-        model = await resolver(sessionId);
-      } catch {
-        // Unknown was already stamped at terminal delivery. A resolver
-        // failure must not become an unhandled rejection or disturb the next
-        // turn. Retry once; the default resolver also handles its inner
-        // filesystem write race.
-        model = null;
-      }
-      if (model === null && attempt === 0) await Promise.resolve();
-    }
-    if (
-      model === null ||
-      this.#closed ||
-      generation !== this.#modelResolutionGeneration
-    ) {
-      return;
-    }
-    this.#model = model;
-    this.#modelSource = "default";
-    this.#modelLastGood = model;
-    this.#modelLastGoodSource = "default";
-    this.#emitState(this.#machine.state);
   }
 
   /** Refreshes #rateLimits from the rollout tail after a session becomes known
@@ -3127,7 +2078,6 @@ export class CodexHost implements EngineAdapter {
         this.#model,
         this.#permissionState.syncSupported,
         this.#approvalAxis,
-        this.historyBackend,
       ),
       ...effectiveStatusEnvelopeFields(effectiveStatus),
     };
@@ -3173,7 +2123,7 @@ export class CodexHost implements EngineAdapter {
       if (consumeOneShot) this.#switchErrorOnce = null;
     }
     const context = this.#contextMeter.snapshot;
-    if (this.historyBackend === "app-server" && context !== undefined) ext.context = context;
+    if (context !== undefined) ext.context = context;
     ext.cwd = this.#cwd;
     // Only publish a model catalog when one exists (currently empty for
     // codex — the account default is used, see catalog.ts).
@@ -3192,23 +2142,6 @@ export class CodexHost implements EngineAdapter {
       ext.permission_control = permission.control;
     }
     return ext;
-  }
-
-  #emitLog(entry: LogEntry): void {
-    if (this.#options.onLog === undefined) return;
-    // logEntryToPayload owns clipping and the tool_use -> tool_result name
-    // backfill via the shared map (protocol.md #40).
-    const payload = logEntryToPayload(entry, this.#toolNames);
-    this.#options.onLog(
-      makeLog(this.#config, this.#machine.state, this.#now(), payload),
-    );
-  }
-
-  /** Sends a changed whole-list snapshot immediately. Unlike child-task
-   * progress, todo changes have no later token/tool signal that could flush a
-   * throttle-suppressed update, so only an exact content duplicate is skipped. */
-  #emitTasklist(sourceItems: readonly TasklistSourceItem[]): void {
-    this.#emitTasklistSnapshot(normalizeTasklist(sourceItems));
   }
 
   #emitTasklistSnapshot(snapshot: TasklistSnapshot): void {

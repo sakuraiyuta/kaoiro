@@ -59,7 +59,7 @@ function fixture(optIn = true, extra: Partial<CodexHostOptions> = {}) {
   stdin.on("finish", exit);child.kill = vi.fn(() => { exit();return true; });
   const logs: Envelope[] = [], rejected: Envelope[] = [];
   let available = true, syncPending = false, blocked = false;
-  const options: CodexHostOptions = { deliveryPolicy: legacyDeliveryPolicy(), backend: "app-server", appendSystemPrompt: "PERSONA",
+  const options: CodexHostOptions = { deliveryPolicy: legacyDeliveryPolicy(), appendSystemPrompt: "PERSONA",
     appServerSessionFactory: options => AppServerSession.create({ ...options, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }),
     onState: () => {}, onLog: e => logs.push(e), onInstructionRejected: e => rejected.push(e),
     permissionSyncPending: () => syncPending, liveInputBlocked: () => blocked, ...extra };

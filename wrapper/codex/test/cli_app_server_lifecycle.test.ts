@@ -142,7 +142,7 @@ it("fences interrupt by Host token, keeps the queue until interrupted terminal, 
   } finally { await f.close(); }
 });
 
-it.each(["exec", "app-server"] as const)("%s fail-stops once, retires pending and dispatched-but-unstarted IA, and ignores late terminal", async backend => {
+it.each(["app-server"] as const)("%s fail-stops once, retires pending and dispatched-but-unstarted IA, and ignores late terminal", async backend => {
   const f = await cliAppFixture(false, backend);
   const stderr = vi.spyOn(process.stderr, "write");
   try {
@@ -150,10 +150,10 @@ it.each(["exec", "app-server"] as const)("%s fail-stops once, retires pending an
     await f.inbound(2, "pending");await f.inbound(3, "queued", "queued", "other.peer");
     await f.drain();expect(f.acks()).toEqual([1]);
     f.clock.advance(60000);
-    if (backend === "app-server") await vi.waitFor(() => expect(f.interrupts()).toHaveLength(1));
+    await vi.waitFor(() => expect(f.interrupts()).toHaveLength(1));
     f.clock.advance(1000);
     expect(stderr.mock.calls.filter(([text]) => String(text).includes("turn watchdog fail-stop:"))).toHaveLength(1);
-    f.releaseExec();await f.running;
+    await f.running;
     expect(f.envelopes("result")).toHaveLength(0);expect(f.turns()).toHaveLength(1);expect(f.spawned).toBe(1);
     expect(f.envelopes("state_change").filter(e => e.state === "error")).toHaveLength(1);
     expect(stderr.mock.calls.filter(([text]) => String(text).includes("turn watchdog interrupt grace expired"))).toHaveLength(1);
@@ -203,7 +203,7 @@ it("does not let an old Host settlement resolve the next same-conversation lease
   } finally { await f.close(); }
 });
 
-it.each([undefined, "exec", "app-server"] as const)("selects only the published config backend (%s), ignoring other hints", async backend => {
+it.each([undefined, "app-server"] as const)("selects only the published config backend (%s), ignoring other hints", async backend => {
   const { runCodexCli } = await import("../src/cli.js");
   const signals = process.listeners("SIGINT"), argv = process.argv;let selected: unknown;
   process.argv = [...argv.slice(0, 2), "--backend", "app-server"];
@@ -211,15 +211,15 @@ it.each([undefined, "exec", "app-server"] as const)("selects only the published 
   try {
     await runCodexCli({
       parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
-      loadConfig: () => ({ agent_id: "ordinary", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://fixture", backend: "app-server", ...(backend === undefined ? {} : { codex_backend: backend }) }),
+      loadConfig: () => ({ agent_id: "ordinary", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://fixture", ...(backend === undefined ? {} : { codex_backend: backend }) }),
       createServerLink: (_url, _id, callbacks) => {
         queueMicrotask(() => callbacks.onPersonaPrompt?.("Fixture"));
         return { send() {}, close() {}, currentSessionId: () => null } as never;
       },
-      createHost: (_config, options) => { selected = options.backend;return { state: "idle", statusExtSnapshot: () => ({}), run: async () => {} } as never; },
+      createHost: (_config, options) => { selected = Object.hasOwn(options, "backend");return { state: "idle", statusExtSnapshot: () => ({}), run: async () => {} } as never; },
       prepareStartup: async () => {},
     });
-    expect(selected).toBe(backend ?? "app-server");
+    expect(selected).toBe(false);
   } finally {
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
     process.argv = argv;vi.unstubAllEnvs();
@@ -243,7 +243,7 @@ it("reports public app-server startup failure without exec fallback or another S
   const running = runCodexCli({
     parseCliArgs: () => ({ configPath: "fixture", prompt: "FIRST", resume: undefined }),
     loadConfig: () => ({ agent_id: "startup-failure", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, codex_backend: "app-server" }),
-    createHost: (config, options) => (host = new CodexHost(config, { ...options, codexFactory: exec, appServerSessionFactory: session })),
+    createHost: (config, options) => (host = new CodexHost(config, { ...options, appServerSessionFactory: session })),
   });
   try {
     await vi.waitFor(() => expect(wire.joins).toBe(1));wire.push("persona_prompt", { prompt: "Fixture" });
@@ -335,7 +335,7 @@ it("stale send transfers a queued body through the real recovery response withou
   } finally { await f.close(); }
 });
 
-it.each(["exec", "app-server"] as const)("%s ToolHost write applies plain and issued-ticket guidance at its real handoff boundary", async backend => {
+it.each(["app-server"] as const)("%s ToolHost write applies plain and issued-ticket guidance at its real handoff boundary", async backend => {
   const f = await cliAppFixture(false, backend, "v1");
   try {
     await f.inbound(1, "plain-reply");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
@@ -353,7 +353,7 @@ it.each(["exec", "app-server"] as const)("%s ToolHost write applies plain and is
   } finally { await f.close(); }
 });
 
-it.each(["exec", "app-server"] as const)("%s ToolHost guidance preserves ticket basis and keeps issued-ticket refusal actionable", async backend => {
+it.each(["app-server"] as const)("%s ToolHost guidance preserves ticket basis and keeps issued-ticket refusal actionable", async backend => {
   const f = await cliAppFixture(false, backend, "v1");
   try {
     await f.inbound(1, "ticketed");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));

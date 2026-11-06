@@ -10,7 +10,6 @@ const HOST_ID = /^[A-Za-z0-9._-]+$/;
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const BACKENDS = new Set(["exec", "app-server"]);
 const ENGINES = new Set(["claude-code", "codex", "antigravity", "grok"]);
-const NULL_ENGINE_ORIGINS = new Set(["exec", "none", "not-codex", "unknown"]);
 const ACK_TIMEOUT_MS = 30_000;
 
 class Stop extends Error {}
@@ -99,167 +98,8 @@ function validateRunner(runner, host) {
   return runner;
 }
 
-function verifyOriginEvidence(evidence, observation, runner) {
-  if (!isRecord(evidence) || evidence.schema !== 1 || evidence.host !== observation.host
-    || evidence.config_sha256 !== runner.configHash
-    || evidence.config_mtime_ms !== runner.configMtimeMs
-    || evidence.runner_sha !== runner.runnerSha.toLowerCase()
-    || evidence.invocation_id !== runner.invocationId
-    || evidence.all_relevant_sessions_covered !== true || !Array.isArray(evidence.agent_ids)
-    || !Array.isArray(evidence.agents)
-    || !isStable([...evidence.agent_ids].sort(), observation.rows.map((row) => row.id).sort())) stop("origin-evidence-invalid");
-
-  if (!["measured", "operator-attestation"].includes(evidence.origin_source)) stop("origin-evidence-invalid");
-  if (evidence.origin_source === "operator-attestation") {
-    const attestation = evidence.attestation;
-    if (!isRecord(attestation) || attestation.accepted !== true
-      || typeof attestation.attested_at !== "string" || attestation.attested_at.trim() === ""
-      || typeof attestation.scope !== "string" || attestation.scope.trim() === ""
-      || typeof attestation.release_range !== "string" || attestation.release_range.trim() === ""
-      || typeof attestation.statement !== "string" || attestation.statement.trim() === ""
-      || !Array.isArray(attestation.unknown_origin_rows)
-      || !Array.isArray(attestation.contrary_rows) || attestation.contrary_rows.length !== 0
-      || !Array.isArray(attestation.unresolved_rows) || attestation.unresolved_rows.length !== 0) stop("origin-evidence-invalid");
-    for (const id of attestation.unknown_origin_rows) {
-      if (typeof id !== "string" || !HOST_ID.test(id) || hostFromAgentId(id) !== observation.host) stop("origin-evidence-invalid");
-    }
-  } else if (evidence.attestation !== undefined) {
-    stop("origin-evidence-invalid");
-  }
-
-  const byId = new Map();
-  for (const entry of evidence.agents) {
-    if (!isRecord(entry) || typeof entry.id !== "string" || !HOST_ID.test(entry.id)
-      || hostFromAgentId(entry.id) !== observation.host || byId.has(entry.id)
-      || entry.complete !== true || !["exec", "none", "not-codex", "unknown", "app-server"].includes(entry.origin)) stop("origin-evidence-invalid");
-    if (entry.origin === "app-server") stop("origin-evidence-conflict");
-    if (entry.origin === "unknown") {
-      const unknownIds = evidence.attestation?.unknown_origin_rows;
-      if (evidence.origin_source !== "operator-attestation" || !unknownIds?.includes(entry.id)) stop("origin-unknown");
-    }
-    byId.set(entry.id, entry);
-  }
-
-  if (evidence.origin_source === "operator-attestation") {
-    const declaredUnknown = evidence.attestation.unknown_origin_rows;
-    const observedUnknown = [...byId.values()].filter((entry) => entry.origin === "unknown").map((entry) => entry.id).sort();
-    if (new Set(declaredUnknown).size !== declaredUnknown.length
-      || !isStable([...declaredUnknown].sort(), observedUnknown)) stop("origin-evidence-invalid");
-  }
-
-  for (const row of observation.rows) {
-    const entry = byId.get(row.id);
-    if (!entry) stop("origin-evidence-incomplete");
-    if (row.engine === "codex") {
-      if (entry.origin !== "exec" && entry.origin !== "none" && entry.origin !== "unknown") stop("origin-evidence-conflict");
-      if (row.pointer === "non_nil" && entry.origin === "none") stop("origin-evidence-conflict");
-    } else if (row.engine === null) {
-      if (!NULL_ENGINE_ORIGINS.has(entry.origin)) stop("origin-evidence-conflict");
-      if (row.pointer === "non_nil" && entry.origin === "none") stop("origin-evidence-conflict");
-    } else {
-      if (entry.origin !== "not-codex" && entry.origin !== "none") stop("origin-evidence-conflict");
-      if (row.pointer === "non_nil" && entry.origin === "none") stop("origin-evidence-conflict");
-    }
-  }
-  return evidence;
-}
-
 function isStable(a, b) {
   return stableJson(a) === stableJson(b);
-}
-
-export async function runPrepare(args, adapters) {
-  if (!adapters || typeof adapters.observeHost !== "function" || typeof adapters.observeRunner !== "function"
-    || typeof adapters.readOriginEvidence !== "function" || typeof adapters.captureAckCursor !== "function"
-    || typeof adapters.writeBackendExec !== "function" || typeof adapters.waitForAppliedBackendExec !== "function") stop();
-
-  let beforeRunner;
-  beforeRunner = await observeRunner(adapters, args, "runner-observation-unavailable");
-  validateRunner({ ...beforeRunner, expectedRunnerSha: args.runner_sha }, args.host);
-
-  if (beforeRunner.configuredBackend !== "omitted") {
-    if (beforeRunner.appliedBackend !== beforeRunner.configuredBackend) stop();
-    return { phase: "prepare", status: "already-explicit", host: args.host, backend: beforeRunner.configuredBackend };
-  }
-
-  if (beforeRunner.appliedBackend !== "exec") stop("applied-selection-not-exec");
-
-  const beforeHost = await observeHost(adapters, args.host, "server-observation-unavailable");
-  validateObservation(beforeHost, args.host);
-  // Stop before reading routing evidence when a lifecycle transition is already active.
-  if (beforeHost.rows.some((row) => row.reset_pending || row.transition_pending)) stop("pending-lifecycle");
-
-  let evidence;
-  try {
-    evidence = await adapters.readOriginEvidence(args.origin_evidence);
-  } catch {
-    stop("origin-evidence-unavailable");
-  }
-  verifyOriginEvidence(evidence, beforeHost, beforeRunner);
-
-  let cursor;
-  try {
-    cursor = await adapters.captureAckCursor(args);
-  } catch {
-    stop("ack-cursor-unavailable");
-  }
-  if (typeof cursor !== "string" || cursor.length === 0) stop();
-
-  const [currentHost, currentRunner] = await Promise.all([
-    observeHost(adapters, args.host, "pre-write-observation-unavailable"),
-    observeRunner(adapters, args, "pre-write-observation-unavailable"),
-  ]);
-  validateObservation(currentHost, args.host);
-  validateRunner({ ...currentRunner, expectedRunnerSha: args.runner_sha }, args.host);
-  // Evidence and cursor collection can take time; repeat the lifecycle gate at the write boundary.
-  if (currentHost.rows.some((row) => row.reset_pending || row.transition_pending)) stop("pending-lifecycle");
-  if (!isStable(beforeHost, currentHost) || !isStable(beforeRunner, currentRunner)) stop("observation-changed");
-  if (currentRunner.configuredBackend !== "omitted" || currentRunner.appliedBackend !== "exec") stop("applied-selection-changed");
-  let currentEvidence;
-  try {
-    currentEvidence = await adapters.readOriginEvidence(args.origin_evidence);
-  } catch {
-    stop("origin-evidence-unavailable");
-  }
-  if (!isStable(evidence, currentEvidence)) stop("origin-evidence-changed");
-  verifyOriginEvidence(currentEvidence, currentHost, currentRunner);
-
-  try {
-    await adapters.writeBackendExec({ args, expected: currentRunner });
-  } catch {
-    stop("config-write-failed");
-  }
-
-  let acknowledged = false;
-  try {
-    acknowledged = await adapters.waitForAppliedBackendExec({
-      args,
-      cursor,
-      invocationId: currentRunner.invocationId,
-      timeoutMs: ACK_TIMEOUT_MS,
-    });
-  } catch {
-    stop("applied-selection-acknowledgement-missing");
-  }
-  if (acknowledged !== true) stop("applied-selection-acknowledgement-missing");
-
-  let afterRunner;
-  try {
-    afterRunner = await adapters.observeRunner(args);
-  } catch (error) {
-    rethrowRunnerIdentityStop(error);
-    stop("post-write-observation-unavailable");
-  }
-  validateRunner({ ...afterRunner, expectedRunnerSha: args.runner_sha }, args.host);
-  if (afterRunner.configuredBackend !== "exec" || afterRunner.appliedBackend !== "exec"
-    || afterRunner.configHash === currentRunner.configHash
-    || afterRunner.invocationId !== currentRunner.invocationId
-    || afterRunner.runnerSha.toLowerCase() !== currentRunner.runnerSha.toLowerCase()
-    || !isRecord(afterRunner.appliedReceipt) || afterRunner.appliedReceipt.backend !== "exec"
-    || afterRunner.appliedReceipt.source !== "reload"
-    || afterRunner.appliedReceipt.timestampUs <= afterRunner.configMtimeMs * 1000) stop("applied-selection-unverified");
-
-  return { phase: "prepare", status: "prepared", host: args.host, backend: "exec" };
 }
 
 async function observeHost(adapters, host, failureCode) {
@@ -326,7 +166,7 @@ function maintenanceBinding({ h, r, s }) {
 function maintenanceTarget(args) {
   const phase = args.phase === "observe" ? args.phase_target : args.phase;
   return { phase, agent: phase === "restore-fresh" ? args.agent : null,
-    backend: phase === "restore-fresh" ? args.backend : phase === "remove-pin" ? "app-server" : "exec" };
+    backend: "app-server" };
 }
 
 function templateFor(args, bundle) {
@@ -390,8 +230,7 @@ function maintenanceConditions(args, { h, r, s }, rows) {
     const target = h.rows.find(row => row.id === args.agent);
     if (!target || rows.get(target.id).classification !== "codex" || target.connected || target.pointer !== "nil"
       || hasWork(s, target.id)) stop("target-not-fresh");
-    if (r.appliedBackend !== args.backend || (args.backend === "exec" ? r.configuredBackend !== "exec"
-      : !["omitted", "app-server"].includes(r.configuredBackend))) stop("restore-backend-mismatch");
+    if (r.appliedBackend !== "app-server" || !["omitted", "app-server"].includes(r.configuredBackend)) stop("restore-backend-mismatch");
     if (s.pending_spawns.length || s.pending_switches.length
       || s.children.some(row => row.stopping || row.restarting || row.reset_pending)) stop("supervisor-work-pending");
   } else {
@@ -452,12 +291,11 @@ export async function runMaintenance(args, adapters) {
       const evidence = await maintenanceFile(args, adapters);
       const rows = maintenanceEvidence(args, before, evidence.value);
       maintenanceConditions(args, before, rows);
-      const noWrite = args.phase === "pin-exec-fresh" && before.r.configuredBackend === "exec";
       let cursor;
       if (args.phase === "restore-fresh") {
         try { operator = await adapters.openOperator(args.operator_config); }
         catch { stop("operator-unavailable"); }
-      } else if (!noWrite) {
+      } else {
         try { cursor = await adapters.captureAckCursor(args); } catch { stop("ack-cursor-unavailable"); }
         if (typeof cursor !== "string" || !cursor) stop("ack-cursor-unavailable");
       }
@@ -467,7 +305,7 @@ export async function runMaintenance(args, adapters) {
       if (evidence.hash !== currentEvidence.hash) stop("maintenance-evidence-changed");
       maintenanceConditions(args, current, maintenanceEvidence(args, current, currentEvidence.value));
       const target = maintenanceTarget(args);
-      const result = { phase: args.phase, status: noWrite ? "already-selected" : "selected", host: args.host,
+      const result = { phase: args.phase, status: "selected", host: args.host,
         backend: target.backend, ...(target.agent ? { agent: target.agent } : {}), maintenance_evidence_sha256: evidence.hash };
       if (args.phase === "restore-fresh") {
         stage = "restore-outcome-unknown";
@@ -483,10 +321,9 @@ export async function runMaintenance(args, adapters) {
         } while (Date.now() < until);
         stop("restore-unconfirmed");
       }
-      if (noWrite) return result;
       stage = "write-outcome-unknown";
       let written;
-      try { written = await adapters.writeBackend({ args, expected: current.r, selection: args.phase === "remove-pin" ? "omitted" : "exec" }); }
+      try { written = await adapters.writeBackend({ args, expected: current.r, selection: "omitted" }); }
       catch { stop("config-write-failed"); }
       stage = "after-write";
       let acknowledged;
@@ -498,7 +335,7 @@ export async function runMaintenance(args, adapters) {
       if (!isStable(current.h, after.h) || !isStable(current.s, { ...after.s, applied_backend: current.s.applied_backend,
         configHash: current.s.configHash, configMtimeMs: current.s.configMtimeMs })
         || current.r.invocationId !== after.r.invocationId || current.r.runnerSha !== after.r.runnerSha
-        || after.r.configuredBackend !== (args.phase === "remove-pin" ? "omitted" : "exec") || after.r.appliedBackend !== target.backend
+        || after.r.configuredBackend !== "omitted" || after.r.appliedBackend !== target.backend
         || !written || after.r.configHash !== written.configHash || after.r.configMtimeMs !== written.configMtimeMs
         || after.r.configHash === current.r.configHash || receipt?.backend !== target.backend || receipt?.source !== "reload"
         || !Number.isFinite(receipt.timestampUs) || receipt.timestampUs <= after.r.configMtimeMs * 1000) stop("applied-selection-unverified");
@@ -643,14 +480,6 @@ function hostObservationCommand(host) {
   ].join("\n");
 }
 
-async function parseOriginFile(file) {
-  try {
-    return JSON.parse(await readFile(resolve(file), "utf8"));
-  } catch {
-    stop();
-  }
-}
-
 function validateSupervisor(value, host) {
     if (!isRecord(value) || value.version !== "0" || value.schema !== 1 || value.host !== host
       || !FULL_SHA.test(value.build_revision ?? "") || !Number.isSafeInteger(value.pid) || value.pid < 1
@@ -715,7 +544,6 @@ function localAdapters(args, runCommand = run) {
     },
     observeRunner: (runnerArgs) => readLocalRunner(runnerArgs, runCommand),
     observeSupervisor: () => observeSupervisor(args, runCommand),
-    readOriginEvidence: async (file) => parseOriginFile(file),
     readMaintenanceEvidence: (file) => readFile(resolve(file)),
     openOperator,
 
@@ -725,7 +553,6 @@ function localAdapters(args, runCommand = run) {
       if (!cursor) stop();
       return cursor;
     },
-    writeBackendExec(input) { return this.writeBackend({ ...input, selection: "exec" }); },
     async writeBackend({ expected, selection }) {
       const file = resolve(args.runner_config);
       const beforeStat = await lstat(file).catch(() => stop());
@@ -734,10 +561,9 @@ function localAdapters(args, runCommand = run) {
       if (sha256(before) !== expected.configHash || beforeStat.mtimeMs !== expected.configMtimeMs) stop();
       const config = JSON.parse(before.toString("utf8"));
       if (!isRecord(config) || config.host_id !== args.host || configuredBackend(config) !== expected.configuredBackend
-        || !["omitted", "exec"].includes(selection)) stop();
+        || selection !== "omitted") stop();
       config.codex ??= {};
-      if (selection === "omitted") delete config.codex.backend;
-      else config.codex.backend = selection;
+      delete config.codex.backend;
       const after = `${JSON.stringify(config, null, 2)}\n`;
       const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
       let handle;
@@ -764,7 +590,6 @@ function localAdapters(args, runCommand = run) {
         stop();
       }
     },
-    waitForAppliedBackendExec(input) { return this.waitForAppliedBackend({ ...input, backend: "exec" }); },
     async waitForAppliedBackend({ cursor, invocationId, timeoutMs, backend }) {
       const until = Date.now() + timeoutMs;
       while (Date.now() < until) {
@@ -799,7 +624,7 @@ export async function main(argv = process.argv.slice(2), adapters = undefined, i
     if (args.phase === "observe" && args.phase_target === "pin-exec-fresh") stop("exec-backend-retired");
     if (args.phase === "observe" && args.phase_target === "restore-fresh" && args.backend === "exec") stop("exec-backend-retired");
     const selectedAdapters = adapters ?? (args.adapter_module ? await loadAdapterModule(args) : localAdapters(args, runtime.runCommand));
-    const result = await (args.phase === "prepare" ? runPrepare(args, selectedAdapters) : runMaintenance(args, selectedAdapters));
+    const result = await runMaintenance(args, selectedAdapters);
     io.stdout.write(`${JSON.stringify(result)}\n`);
     return 0;
   } catch (error) {

@@ -109,8 +109,7 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
     reportDisconnectIntent: async () => {},
   };
   const signals = process.listeners("SIGINT");
-  const cli = runCodexCli({ backend: "app-server",
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+  const cli = runCodexCli({     parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;
@@ -121,8 +120,7 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
     createHost: (hostConfig, hostOptionsArg) => {
       const o0 = hostOptionsArg as CodexHostOptions;
       hostOptions = o0;
-      const created = new CodexHost(hostConfig, { ...o0, backend: "app-server",
-        appServerSessionFactory: o => AppServerSession.create({ ...o, transport: { spawnChild: () => child, shutdownTimeoutMs: 100,
+      const created = new CodexHost(hostConfig, { ...o0,         appServerSessionFactory: o => AppServerSession.create({ ...o, transport: { spawnChild: () => child, shutdownTimeoutMs: 100,
           ...(options.steerOutcome === "none" ? { requestTimeoutMs: 300 } : {}) } }) });
       const originalSteer = created.steerInterAgentInput.bind(created);
       vi.spyOn(created, "steerInterAgentInput").mockImplementation((text, hooks, batchId) =>

@@ -21,7 +21,7 @@ afterEach(() => {
 
 interface Legacy { flag?: string; list?: string; fileKey?: boolean; ceiling?: boolean }
 
-async function compose(backend: "exec" | "app-server", legacy: Legacy = {}, echoed: unknown = null,
+async function compose(backend: "app-server", legacy: Legacy = {}, echoed: unknown = null,
   during: (linkOptions: Record<string, any>) => void = () => {}) {
   delete process.env[flag];
   delete process.env[list];
@@ -42,7 +42,6 @@ async function compose(backend: "exec" | "app-server", legacy: Legacy = {}, echo
     during(linkOptions);
   } };
   await runCodexCli({
-    backend,
     parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
     loadConfig: () => ({ ...config,
       ...(legacy.ceiling === undefined ? {} : { in_flight_delivery_enabled: legacy.ceiling }),
@@ -96,10 +95,10 @@ describe("operator steer without an opt-in", () => {
     expect(lines).toEqual(["Operator steering is unavailable: the server did not acknowledge operator_input_modes."]);
   });
 
-  it("declares early none and no steering host options under a false ceiling or on exec, whatever the legacy inputs", async () => {
+  it("declares early none and no steering host options under a false ceiling, whatever the legacy inputs", async () => {
     for (const [backend, legacy] of [
       ["app-server", { ceiling: false }], ["app-server", { ceiling: false, flag: "1", list: "p", fileKey: true }],
-      ["exec", {}], ["exec", { flag: "1", list: "p", fileKey: true }],
+
     ] as const) {
       // The echo is present here: an acknowledged `none` must not wire steering.
       const off = await compose(backend, legacy, { version: "v1", early: "none" });
@@ -135,7 +134,5 @@ describe("removed inputs of a directly launched wrapper", () => {
     expect((await compose("app-server", { flag: "", list: "" })).warnings).toEqual([]);
   });
 
-  it("ignores obsolete inputs on exec too", async () => {
-    expect((await compose("exec", { flag: "1" })).warnings).toEqual([]);
-  });
+
 });

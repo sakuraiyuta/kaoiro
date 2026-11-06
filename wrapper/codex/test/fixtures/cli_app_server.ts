@@ -36,7 +36,7 @@ export function watchdogClock() {
 
 // Only the external app-server child and time are simulated. CLI callbacks,
 // Host/Session, Unix ToolHost, ServerLink, brokers, IA and reset coordinator run.
-export async function cliAppFixture(permissionSync = false, backend: "exec" | "app-server" = "app-server", replyBasis: "v1" | "legacy" = "legacy",
+export async function cliAppFixture(permissionSync = false, backend: "app-server" = "app-server", replyBasis: "v1" | "legacy" = "legacy",
   fixtureOptions: {
     approvalAxis?: boolean;
     resume?: string;
@@ -56,8 +56,6 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   const stdout = new PassThrough(), stderr = new PassThrough();
   let turn = 0, socketPath = "", spawned = 0;
   let pendingRateLimitRead: RpcObject | undefined;
-  let releaseExec!: () => void;
-  const execTerminal = new Promise<void>(resolve => { releaseExec = resolve; });
   const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
   const reply = (request: RpcObject, result: unknown) => send({ id: request.id, result });
   const terminal = (status = "completed", id = `turn-${turn}`) => send({ method: "turn/completed", params: { threadId: "thread", turn: { id, status } } });
@@ -108,7 +106,7 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   let nextInbound: { enter: () => void; pending: Promise<void> } | undefined;
   const received: number[] = [], finalized: string[] = [], queued: string[] = [];
   let callbacks!: CodexHostOptions;
-  const running = runCodexCli({ backend, watchdogClock: clock,
+  const running = runCodexCli({ watchdogClock: clock,
     parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: fixtureOptions.resume }),
     loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, model: "gpt-5.6-sol", approval_axis: fixtureOptions.approvalAxis ?? false, ...(fixtureOptions.permissionTimeoutMs === undefined ? {} : { permission_timeout_ms: fixtureOptions.permissionTimeoutMs }) }),
     createServerLink: (url, id, options) => {
@@ -126,12 +124,6 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
       startupRateLimitResolver: async () => new Map(),
       waitForPermissionSync: () => { permissionWaits += 1;return options.waitForPermissionSync!(); },
       onTurnFinalized: info => { options.onTurnFinalized?.(info);finalized.push(info.turnToken); },
-      codexFactory: options => { spawned += 1;
-        socketPath = (((options.config as any).mcp_servers?.kaoiro?.env.KAOIRO_BRIDGE_SOCKET) as string | undefined) ?? "";
-        const thread = { runStreamed: async () => { sent.push({ method: "turn/start" });return { events: (async function* () {
-        yield { type: "thread.started" as const, thread_id: "thread" };await execTerminal;
-        yield { type: "turn.completed" as const, usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0, cache_write_input_tokens: 0 } };
-      })() }; } };return { startThread: () => thread, resumeThread: () => thread }; },
       appServerSessionFactory: async options => {
         session = await AppServerSession.create({ ...options, transport: {
           spawnChild: () => { spawned += 1;return child; }, shutdownTimeoutMs: fixtureOptions.shutdownTimeoutMs ?? 20,
@@ -162,7 +154,7 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   return {
     permissionDecision: (id: string, allow: boolean) => permissionDecision?.({ request_id: id, allow }),
     rejectNextSend: (error: Record<string, unknown>) => { rejection = error; },
-    clock, wire, host, callbacks, sent, send, terminal, exit, releaseChildClose: exit, running, envelopes, releaseExec, finalized, queued,
+    clock, wire, host, callbacks, sent, send, terminal, exit, releaseChildClose: exit, running, envelopes,  finalized, queued,
     get spawned() { return spawned; }, get permissionWaits() { return permissionWaits; }, get rateLimits() { return session?.rateLimits; },
     get rateLimitReadPending() { return pendingRateLimitRead !== undefined; },
     completeRateLimitRead(value: unknown) {
@@ -200,7 +192,7 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
       });
     },
     async close() {
-      host.close();releaseExec();await running;await wire.close();
+      host.close();await running;await wire.close();
       for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
       vi.unstubAllEnvs();await rm(home, { recursive: true, force: true });
     },

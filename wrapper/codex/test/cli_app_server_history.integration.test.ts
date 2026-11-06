@@ -84,8 +84,7 @@ enabled = false
     running = runCodexCli({
       parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: threadId }), loadConfig: () => config,
       createHost: (value, options) => {
-        host = new CodexHost(value, { ...options, backend: "app-server",
-          onTurnStart: info => { starts.push(info.turnToken);options.onTurnStart?.(info); },
+        host = new CodexHost(value, { ...options,           onTurnStart: info => { starts.push(info.turnToken);options.onTurnStart?.(info); },
           onTurnFinalized: info => { finals.push(info.turnToken);options.onTurnFinalized?.(info); },
         });return host;
       },
