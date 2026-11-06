@@ -3374,7 +3374,7 @@
                   > (advisory, wrapper enforced)</span>{/if} /
                   承認: {permAxes.approval}{#if codexApprovalHostFixed}<span
                     class="axes-hostfixed"
-                    title="upstream 制約 (codex-exec-approval-upstream)"
+                    title="ホスト設定により固定"
                   > (host-fixed)</span>{/if}
                 </span>
               </dd>
@@ -3396,7 +3396,7 @@
                     : (permRequestView?.requested.approval ??
                       permControl.constraints.approval)}{#if codexApprovalHostFixed}<span
                     class="axes-hostfixed"
-                    title="upstream 制約 (codex-exec-approval-upstream)"
+                    title="ホスト設定により固定"
                   > (host-fixed)</span>{/if}
                 </span>
               </dd>

@@ -243,7 +243,7 @@ See [policy recovery](../../operations/server-update-and-rollback.md#delivery-po
 An absent policy echo is an old server: the wrapper follows its launch-time
 mechanism only when it has no valid policy history or its last valid policy
 was on. Remembered off remains fenced. A present unsupported echo stays
-fenced. Antigravity does not declare policy support; Codex exec participation
+fenced. Antigravity does not declare policy support; Older Codex exec wrapper participation
 does not enable steering.
 
 Older wrappers discard unknown policy downgrade reasons while retaining
