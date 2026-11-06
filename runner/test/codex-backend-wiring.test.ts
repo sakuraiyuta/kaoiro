@@ -65,12 +65,12 @@ it("relays the runner-local backend at bootstrap/reload and preserves running wr
     ] });
     callbacks.onResetSession?.({ agent_id: "a", mode: "new", request_id: "reset", previous_session_id: "old" });
     children[0]!.exit();expect(configs[2]?.codex_backend).toBe("app-server");
-    diagnostic.mockClear();file("app-server");
+    diagnostic.mockClear();file();
     await vi.waitFor(() => expect(diagnostic.mock.calls.some(([line]) => String(line).includes("codex backend=app-server for subsequent wrappers"))).toBe(true));
     await runtime!.waitForReloads();
     children[1]!.exit();expect(configs[3]?.codex_backend).toBe("app-server");
     diagnostic.mockClear();
-    file();
+    file("app-server");
     await vi.waitFor(() => expect(diagnostic.mock.calls.some(([line]) => String(line).includes("codex backend=app-server for subsequent wrappers"))).toBe(true));
     await runtime!.waitForReloads();
     callbacks.onSpawn?.(spawn("c"));expect(configs[4]?.codex_backend).toBe("app-server");
