@@ -98,7 +98,7 @@ async function createHarness(options: {
     }) + "\n";
   }
   await writeFile(rollout, context("prior-process-turn", "read-only", false));
-  let sdkCalls = 0;
+  let dispatches = 0;
   let running: Promise<void> | undefined;
   let releaseCleanupWait = () => {};
   const audits: WrapperPermissionLifecycleMessage[] = [];
@@ -110,6 +110,10 @@ async function createHarness(options: {
     turnTraceDir: join(root, "traces"),
     onPermissionLifecycle: (event) => audits.push(event),
     ...options.host,
+    ...(options.host?.resumeSnapshot ? { resumeSnapshot: {
+      model: "gpt-5.6-sol", model_source: "default", effort: "medium", effort_source: "default",
+      ...options.host.resumeSnapshot,
+    } } : {}),
   }, {
     agent_id: "permission.boundary",
     display_name: "Permission boundary",
@@ -118,7 +122,7 @@ async function createHarness(options: {
     sandbox: "read-only",
     network_access: false,
   }, false, { threadId: SESSION_ID, onTurnStart: (_request, number) => {
-    sdkCalls = number;
+    dispatches = number;
     if (options.writeContext !== false) appendFileSync(rollout, context(
       `turn-${number}`, "workspace-write", options.observedNetwork ?? true,
     ));
@@ -138,7 +142,7 @@ async function createHarness(options: {
     host,
     audits,
     get turnRequests() { return f.turns(); },
-    get sdkCalls() { return sdkCalls; },
+    get dispatches() { return dispatches; },
     ext: () => host.statusExtSnapshot(),
     run() {
       void host.send("first");
@@ -190,7 +194,7 @@ describe("permission state boundaries", () => {
     const h = await createHarness();
     const request = selection(1);
     h.host.applyPermissionSync({ version: "0", control: applied(request), next: request });
-    expect(h.sdkCalls).toBe(0);
+    expect(h.dispatches).toBe(0);
     expect(h.ext().permission).toBeUndefined();
     expect(h.ext().permission_control).not.toHaveProperty("effective");
   });
@@ -256,7 +260,7 @@ describe("permission state boundaries", () => {
       new Promise<boolean>(resolve => setTimeout(() => resolve(false), 100)),
     ]);
     expect(finished).toBe(true);
-    expect(h.sdkCalls).toBe(1);
+    expect(h.dispatches).toBe(1);
   });
 
   it("does not re-audit prior applied next after a rejected successor and restart", async () => {
@@ -284,7 +288,7 @@ it.each(["live", "sync"] as const)("reconciles a blocked request through a newer
   const newer = selection(2);
   if (delivery === "live") await h.host.setPermission(newer);
   else h.host.applyPermissionSync({ version: "0", control: pending(newer), next: newer });
-  await vi.waitFor(() => expect(h.sdkCalls).toBe(2), { timeout: 300 });
+  await vi.waitFor(() => expect(h.dispatches).toBe(2), { timeout: 300 });
 });
 
 it("keeps a blocked selection stopped when a successor is rejected before application", async () => {
@@ -300,7 +304,7 @@ it("keeps a blocked selection stopped when a successor is rejected before applic
     next: blocked,
   });
   await new Promise(resolve => setTimeout(resolve, 30));
-  expect(h.sdkCalls).toBe(1);
+  expect(h.dispatches).toBe(1);
 });
 
 it("keeps unknown permission drift suppressed after capability downgrade", async () => {
@@ -329,8 +333,8 @@ it.each([false, true])("keeps a blocked selection blocked when a newer request i
   });
   if (isRejected) {
     await new Promise(resolve => setTimeout(resolve, 80));
-    expect(h.sdkCalls).toBe(1);
+    expect(h.dispatches).toBe(1);
   } else {
-    await vi.waitFor(() => expect(h.sdkCalls).toBe(2));
+    await vi.waitFor(() => expect(h.dispatches).toBe(2));
   }
 });
