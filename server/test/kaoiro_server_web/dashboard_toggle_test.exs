@@ -75,6 +75,38 @@ defmodule KaoiroServerWeb.DashboardToggleTest do
     assert get(build_conn(), "/icons/__gate_icon__.png").status == 404
   end
 
+  test "notification worker is gated and served with browser security headers", %{conn: conn} do
+    fixture =
+      Path.join([:code.priv_dir(:kaoiro_server), "static", "notification-worker", "sw.js"])
+
+    prior = if File.exists?(fixture), do: File.read!(fixture), else: nil
+    File.mkdir_p!(Path.dirname(fixture))
+    File.write!(fixture, "")
+
+    on_exit(fn ->
+      if prior != nil, do: File.write!(fixture, prior), else: File.rm(fixture)
+    end)
+
+    response = get(conn, "/notification-worker/sw.js")
+    assert response.status == 200
+    assert response.resp_body == ""
+    assert get_resp_header(response, "content-type") |> hd() =~ "javascript"
+    assert get_resp_header(response, "x-content-type-options") == ["nosniff"]
+    assert get_resp_header(response, "cache-control") == ["public"]
+    assert [_] = get_resp_header(response, "etag")
+    assert get_resp_header(response, "content-security-policy") |> hd() =~ "script-src 'self'"
+
+    Application.put_env(:kaoiro_server, :serve_dashboard, false)
+    assert get(build_conn(), "/notification-worker/sw.js").status == 404
+  end
+
+  @tag :dashboard_build
+  test "fresh dashboard build serves the empty notification worker", %{conn: conn} do
+    response = get(conn, "/notification-worker/sw.js")
+    assert response.status == 200
+    assert response.resp_body == ""
+  end
+
   @tag :dashboard_build
   test "fresh dashboard build の hashed asset を endpoint 経由で配信する", %{conn: conn} do
     static_root = Path.join(:code.priv_dir(:kaoiro_server), "static")

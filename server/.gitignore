@@ -32,3 +32,4 @@ kaoiro_server-*.tar
 /priv/static/assets/
 /priv/static/manifest.webmanifest
 /priv/static/icons/
+/priv/static/notification-worker/

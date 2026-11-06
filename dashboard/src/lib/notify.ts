@@ -1,9 +1,8 @@
 // Hand-wait notifications (#7): alert the operator the moment an agent hands
 // control back — waiting_input ("your turn") or waiting_permission ("approve
 // this tool?") — so a backgrounded tab still surfaces the hand-off. Fires a
-// desktop Notification plus a short, per-state cue sound; both degrade
-// silently where the browser API is unavailable (non-secure context,
-// test/node env).
+// notification plus a short, per-state cue sound. Mobile browsers can use
+// the registered service worker when the page constructor is unavailable.
 
 import { expressionFor } from "./expression";
 import type { Envelope } from "./protocol";
@@ -17,6 +16,63 @@ const WAIT_STATES = new Set([
   "waiting_permission",
   "waiting_question",
 ]);
+
+let registration: Promise<ServiceWorkerRegistration | null> = Promise.resolve(null);
+let warned = false;
+
+export function registerNotificationWorker(): void {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+  try {
+    registration = navigator.serviceWorker
+      .register("/notification-worker/sw.js")
+      .catch(() => null);
+  } catch {
+    registration = Promise.resolve(null);
+  }
+}
+
+function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
+  return new Promise((resolve) => {
+    let finished = false;
+    let worker: ServiceWorker | undefined;
+    const finish = (result: ServiceWorkerRegistration | null) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      worker?.removeEventListener("statechange", changed);
+      resolve(result);
+    };
+    let current: ServiceWorkerRegistration | null = null;
+    const changed = () => {
+      if (current?.active?.state === "activated") finish(current);
+      else if (worker?.state === "redundant") finish(null);
+    };
+    const timer = setTimeout(() => finish(null), 5000);
+    void registration.then((result) => {
+      if (finished) return;
+      current = result;
+      if (!result) return finish(null);
+      if (result.active?.state === "activated") return finish(result);
+      worker = result.active ?? result.installing ?? result.waiting ?? undefined;
+      if (!worker) return finish(null);
+      worker.addEventListener("statechange", changed);
+      changed();
+    });
+  });
+}
+
+async function showWorkerNotification(title: string, options: NotificationOptions): Promise<void> {
+  try {
+    const active = await activeRegistration();
+    if (!active) throw new Error("notification worker unavailable");
+    await active.showNotification(title, options);
+  } catch {
+    if (!warned) {
+      warned = true;
+      console.warn("Unable to show a hand-wait notification");
+    }
+  }
+}
 
 /**
  * True only when an agent crosses from a non-wait state into a wait state, so
@@ -86,7 +142,7 @@ function playWaitSound(state: string): void {
   }
 }
 
-/** Fire the hand-wait alert for a wait-state envelope: a desktop notification
+/** Fire the hand-wait alert for a wait-state envelope: a notification
  *  (when granted) tagged by agent so repeats replace rather than stack, plus a
  *  beep. Safe to call where the APIs are missing. */
 export function notifyWait(envelope: Envelope): void {
@@ -95,10 +151,11 @@ export function notifyWait(envelope: Envelope): void {
     typeof Notification !== "undefined" &&
     Notification.permission === "granted"
   ) {
+    const options = { body, tag: `kaoiro:${envelope.agent_id}` };
     try {
-      new Notification(title, { body, tag: `kaoiro:${envelope.agent_id}` });
+      new Notification(title, options);
     } catch {
-      // Some contexts only allow notifications via a service worker; ignore.
+      void showWorkerNotification(title, options);
     }
   }
   playWaitSound(envelope.state);

@@ -94,6 +94,7 @@
   } from "./lib/protocol";
   import {
     isWaitTransition,
+    registerNotificationWorker,
     notifyWait,
     requestNotificationPermission,
   } from "./lib/notify";
@@ -1798,6 +1799,8 @@
 
   onMount(() => {
     refreshServerHealth();
+
+    registerNotificationWorker();
 
     // Ask once so wait-state hand-offs can raise a desktop notification (#7).
     requestNotificationPermission();
