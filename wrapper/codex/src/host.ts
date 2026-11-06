@@ -408,10 +408,6 @@ function rateLimitsDiffer(
   return false;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 export class CodexHost implements EngineAdapter {
   readonly #config: WrapperConfig;
   /** Last-applied display_name sync revision (issue #187 段階3, D15,
