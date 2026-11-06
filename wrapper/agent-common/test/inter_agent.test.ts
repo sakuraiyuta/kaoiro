@@ -1570,6 +1570,28 @@ describe("classifyInterAgentError (issue #131)", () => {
     expect(result.message).toBe("the peer reported an unspecified error");
   });
 
+  it("maps receipt_unknown only for that exact reason", () => {
+    expect(classifyInterAgentError({
+      reason: "receipt_unknown",
+      detail: "epoch_exit_before_turn",
+    })).toEqual({
+      code: "receipt_unknown",
+      message: "the input may already have been read; do not send it again",
+    });
+    expect(classifyInterAgentError({
+      detail: "receipt_unknown may already have been read",
+    })).toEqual({
+      code: "api_error",
+      message: "the peer reported an unspecified error",
+    });
+    expect(classifyInterAgentError({
+      detail: "epoch_exit_before_turn",
+    })).toEqual({
+      code: "api_error",
+      message: "the peer reported an unspecified error",
+    });
+  });
+
   it("disconnected はサーバ専管のため wrapper 側の分類結果には現れない", () => {
     const reasons = [
       "blocking_limit",
