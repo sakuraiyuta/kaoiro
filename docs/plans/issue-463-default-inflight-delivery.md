@@ -96,7 +96,7 @@ silently ignored. Approval-axis controls, scheduler tuning, ceilings, stored
 policy and explicit exec behavior remain. Develop may land ahead of cleanup
 (Q6=A). Before a release containing C5, the operator removes the two file keys,
 restarts the current warning-capable runner and confirms zero warnings; that
-execution ends the rollback window (Q7=A). Record it on issue 566 and the
+execution ends the rollback window (Q7=A). Record it on [issue 566](https://github.com/sakuraiyuta/kaoiro/issues/566) and the
 release card; keep the issue open through the first C5 release.
 
 ## Design baseline (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
