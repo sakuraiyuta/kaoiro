@@ -27,10 +27,9 @@ single-consumer notification stream. Thread setup and turn admission reject
 overlapping operations. Another turn is allowed after the terminal notification,
 including when an earlier consumer still has buffered events to read.
 
-`AppServerHostRuntime` is an internal execution owner above `AppServerSession`;
-omitted `CodexHostOptions.backend` or explicit `"app-server"` selects it. The CLI alone
-translates the validated startup config into that option; constructing a Host
-directly does not read config or environment hints.
+`CodexHost` always constructs `AppServerHostRuntime`, the internal execution
+owner above `AppServerSession`. Constructing a Host directly does not read config
+or environment hints.
 It creates one session, opens or resumes once, and rejects overlapping calls.
 The Host owns the existing serial queue.
 
@@ -40,16 +39,16 @@ a turn/result; active disconnection settles the existing turn once and retires
 queued inputs. Intentional close does not report an abnormal disconnect. Neither
 path creates a replacement child or falls back to exec.
 
-`runCodexCli({ backend: "app-server" })` is an internal composition seam. The
-ordinary entrypoint calls `runCodexCli()` with no arguments and selects from
-`config.codex_backend ?? DEFAULT_CODEX_BACKEND` (`"app-server"`). Only internal tests may override this with the
-dependency object; environment and flags cannot select a backend.
+The ordinary entrypoint calls `runCodexCli()` with no arguments and validates
+startup configuration before constructing the Host. Backend overrides are absent
+from the Host and CLI dependency interfaces; environment and flags cannot select
+a backend.
 The optional watchdog clock supplies only time and timer operations. Settings,
 interrupt, fail-stop and lifecycle callbacks are the production implementation.
 
 During fail-stop, the CLI explicitly retires
 each cancelled, unstarted Host batch before forgetting its ownership. Coordinator
-pending batches are retired at freeze; the SDK-active batch is not retired and
+pending batches are retired at freeze; the active Host batch is not retired and
 cannot produce a late result. App-server exercises this ordering.
 
 Host admission failure never creates another app-server child or selects exec.

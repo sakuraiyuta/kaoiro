@@ -192,7 +192,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   });
   const operatorSteer = resolvedDelivery.mechanisms.operator_early === "steer";
   writeRedactedStderr(`codex: operator_steer=${operatorSteer ? "on" : "off"}\n`);
-  const approvalAxis = backend === "app-server" && personaOptInSource(
+  const approvalAxis = personaOptInSource(
     config.persona.id,
     flagArgument(process.env.KAOIRO_CODEX_APPROVAL_AXIS, config.approval_axis),
     process.env.KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS,
