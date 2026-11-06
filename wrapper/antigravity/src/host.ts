@@ -1689,13 +1689,11 @@ export class AntigravityHost implements EngineAdapter {
         addDirs: [this.#options.cwd, customization.path],
       };
 
-      const adopted = await this.#replaceExitedEpoch(
-        spec,
-        generation,
-        customization,
-        executable,
-      );
-      if (adopted === "stale") return { kind: "stale" };
+      const exited = this.#epoch;
+      if (exited !== null && childHasExited(exited.child)) {
+        await exited.deathPromise;
+        if (!this.#isCurrent(generation)) return { kind: "stale" };
+      }
 
       // issue #377 Stage 2: a live epoch whose spec no longer matches this
       // turn's requirements (model/effort rollback or switch, a different
@@ -1988,32 +1986,6 @@ export class AntigravityHost implements EngineAdapter {
     }, this.#closeGraceMs);
     timer.unref();
     epoch.closeAfterExitTimer = timer;
-  }
-
-  /** Waits out an exited epoch, then spawns once when none is current.
-   *  A live epoch is left for the caller. */
-  async #replaceExitedEpoch(
-    spec: EpochSpec,
-    generation: number,
-    customization: CustomizationDir,
-    executable: string,
-  ): Promise<"ok" | "stale"> {
-    if (!this.#isCurrent(generation)) return "stale";
-    const exited = this.#epoch;
-    if (exited !== null && childHasExited(exited.child)) {
-      await exited.deathPromise;
-      if (!this.#isCurrent(generation)) return "stale";
-    }
-    if (this.#epoch === null) {
-      const spawnedEpoch = await this.#spawnEpoch(
-        spec,
-        generation,
-        customization,
-        executable,
-      );
-      if (!spawnedEpoch.ok) return "stale";
-    }
-    return "ok";
   }
 
   /** issue #377 Stage 1 M4, adapted for Stage 2: writes the turn's prompt as
