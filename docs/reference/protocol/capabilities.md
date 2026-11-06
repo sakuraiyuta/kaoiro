@@ -27,14 +27,14 @@ cannot represent.
 - `supports_session_reset: boolean` / `session_reset_modes?: ("new" | "clear")[]` — whether the operator can run `session_reset` and which modes are available. This is separate from exposing the agent's `request_session_reset` tool, which both engines now register behind per-call operator approval — Claude through canUseTool, Codex through the wrapper-side gate inside the bridge tool call (ADR-0043, 2026-09-14 amendment). The same advertisement gates an agent as the **target** of a director's `request_peer_session_reset` ([ADR-0068](../../adr/0068-director-requested-peer-session-reset.md)): `false` answers `unsupported_session_reset` to the director as it does to the operator.
 - `supports_context_usage: boolean` — whether this session provides an authoritative context-window snapshot in `ext.context` (phase 21, [ADR-0040](../../adr/0040-context-usage-capability.md)). UI has three states:
   - **absent** — unstamped capability from an old wrapper during rolling upgrade; hide the context row rather than treating it as unsupported.
-  - **explicit `false`** — adapter cannot provide a context snapshot (Codex exec and Antigravity); show “unsupported”.
+  - **explicit `false`** — adapter cannot provide a context snapshot (older Codex exec wrappers and Antigravity); show “unsupported”.
   - **explicit `true`** — adapter promises to stamp `ext.context`; show a meter when it arrives and a loading placeholder before then.
-- Claude is `true`: SDK `getContextUsage()` can return exact `totalTokens`/`maxTokens`/`percentage` (best-effort even immediately after init; failures leave “loading”). Codex app-server is `true`: it publishes a qualified native response snapshot and omits `ext.context` while the reading is unknown. Codex exec remains `false`: its input-only completion usage is not a context snapshot. See [app-server events](../engines/codex-app-server-events.md) and [exec events](../engines/codex-exec-events.md).
+- Claude is `true`: SDK `getContextUsage()` can return exact `totalTokens`/`maxTokens`/`percentage` (best-effort even immediately after init; failures leave “loading”). Codex app-server is `true`: it publishes a qualified native response snapshot and omits `ext.context` while the reading is unknown. Older Codex exec wrappers report `false`: its input-only completion usage is not a context snapshot. See [app-server events](../engines/codex-app-server-events.md) and [exec events](../engines/codex-exec-events.md).
 
 - **Stamp timing**: **from the first state_change** directly after spawn (do not
-  wait for a session_init-equivalent event). Codex delays `thread.started` until
-  the first turn because it spawns a new `codex exec` process every turn; waiting
-  for session_init would make a newly started Codex agent display falsely as
+  wait for a session_init-equivalent event). Codex stamps static capabilities
+  before lazy app-server thread setup. Older exec wrappers delayed `thread.started`
+  until the first turn. Waiting for thread setup would make a newly started Codex agent display falsely as
   “no capability” under the fail-closed default
   ([codex-sdk-events](../engines/codex-exec-events.md)). Claude also stamps from its first
   state_change for symmetry.
