@@ -1,7 +1,7 @@
 ---
 title: Session capabilities contract
 status: accepted
-last_updated: 2026-10-17
+last_updated: 2026-11-07
 description: The ext.session_capabilities shape, stamp timing, and per-engine advertised values.
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server session and bridge"
 status: implemented
-last_updated: 2026-10-15
+last_updated: 2026-11-07
 ---
 
 # Codex app-server session and bridge
@@ -54,7 +54,7 @@ The probe opens no thread or bridge grandchild, so its pipes close with its
 child; the transport escalates an EOF-ignoring child to SIGKILL after five
 seconds, bounding the main session's startup wait to that shutdown interval.
 
-Both exec and app-server use `BRIDGE_MCP_POLICY`: `required = true`,
+App-server uses `BRIDGE_MCP_POLICY`: `required = true`,
 `startup_timeout_sec = 30`, `default_tools_approval_mode = "approve"`, and a
 310-second tool timeout. This changes normal launch behavior: a bridge startup
 failure now fails the turn through the existing operator-visible result/error

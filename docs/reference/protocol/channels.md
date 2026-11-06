@@ -1,7 +1,7 @@
 ---
 title: Channels and directional messages
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-07
 description: Wrapper/server/client/runner channel events by direction, and the client's Phoenix Channels transport contract.
 ---
 

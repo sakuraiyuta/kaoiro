@@ -1,14 +1,14 @@
 ---
 title: Personality-prompt injection by engine
-description: How the wrapper passes the server-delivered personality prompt into each engine (Claude Code / Codex SDK options, Antigravity rules file), unmodified.
+description: How the wrapper passes the server-delivered personality prompt into each engine (Claude Code SDK options / Codex app-server thread parameters, Antigravity rules file), unmodified.
 status: accepted
-last_updated: 2026-09-21
+last_updated: 2026-11-07
 related: [protocol]
 ---
 
 # Personality-prompt injection by engine
 
-### Injection into the SDK
+### Injection into the engine
 
 Injection points differ by engine. Claude Code and Codex share that **the
 wrapper only passes the received string through** and has no composition
@@ -31,10 +31,9 @@ systemPrompt: {
 instructions equivalent to Claude Code. The personality description is an
 appendage at its end and does not replace the preset.
 
-**Codex**: Put the same string into a developer-role message as
-`developer_instructions` in per-run configuration
-([ADR-0032](../../adr/0032-codex-adapter.md) F3, confirmed by live observation on
-2026-07-10). Codex has no concept equivalent to a preset.
+**Codex**: Pass the same string as `developerInstructions` in app-server
+thread start/resume parameters. Codex has no concept equivalent to a preset.
+See the [app-server session contract](codex-app-server-session.md).
 
 **Antigravity**: there is no SDK; the `agy` CLI reads always-on rules from
 customization roots passed with `--add-dir`. `rulesText()` in
@@ -54,7 +53,7 @@ stays engine-independent; the preamble is the only Antigravity-specific text.
 - MUST: Injection into Claude uses `append` in
   `systemPrompt: { type: 'preset', preset: 'claude_code', append: ... }`. Do
   not discard `preset` and replace it with a hand-built string. Codex uses
-  `developer_instructions`.
+  `developerInstructions`.
 - MUST: Injection into Antigravity goes through `rulesText()` in
   `customization.ts` only — the preamble precedes the prompt, the prompt is
   written unmodified, and no other file in the customization directory

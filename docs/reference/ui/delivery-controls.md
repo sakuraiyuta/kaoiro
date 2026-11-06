@@ -2,7 +2,7 @@
 title: Dashboard delivery controls
 description: Launch preferences and current-owner delivery controls, including pending acknowledgements and compatibility behavior.
 status: accepted
-last_updated: 2026-10-09
+last_updated: 2026-11-07
 related: [responsive-reachability, channels, runner-control]
 ---
 
