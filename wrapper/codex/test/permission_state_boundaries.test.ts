@@ -133,7 +133,7 @@ async function createHarness(options: {
     host.close();
     releaseCleanupWait();
     try {
-      await running;
+      await f.running;
     } finally {
       await rm(root, { recursive: true, force: true });
     }

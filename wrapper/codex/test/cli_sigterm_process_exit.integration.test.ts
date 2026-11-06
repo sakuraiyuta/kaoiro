@@ -1,25 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-// issue #391 M2: cli_sigterm_exec_real_process.integration.test.ts fires
-// `process.emit("SIGTERM")` inside the SAME vitest process and only asserts
-// that `runCodexCli()`'s returned promise settles -- that proves close()
-// tears down the real codex exec child, but NOT that the wrapper process
-// itself ever exits. Node's event loop only empties when every timer/handle
-// is gone; a promise resolving is not evidence of that.
-//
-// This test spawns the REAL wrapper CLI as its own OS process (the built
-// `dist/cli.js`, via plain node -- no TypeScript loader needed), backed by
-// a real Phoenix-loopback ServerLink (no fake createServerLink) and the
-// real `codex exec` binary against an offline Responses loopback provider
-// (same shape as the in-process pin), sends that process a real OS
-// SIGTERM, and asserts on the child_process `exit` event: `signal === null`
-// (Node's own SIGTERM default action never fired) and `code === 0` (the
-// process ended by its event loop emptying, not by an explicit
-// `process.exit()` call), within the runner's reset grace. It also
-// confirms the real codex exec child and its sandboxed grandchild both
-// terminate, mirroring the in-process pin's assertions.
-//
-// Requires `pnpm -C wrapper build` to have run first (dist/cli.js must
-// exist) -- consistent with this package's existing bridge_startup tests.
+// Promise settlement alone does not establish wrapper process exit; this
+// suite observes the separate process exit and its owned native descendants.
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -335,7 +316,7 @@ enabled=false
         2_000,
         () =>
           survivorDiagnostics(
-            [{ label: "codex exec child", pid: execChildPid }, { label: "sleep 77", pid: sleepPid }],
+            [{ label: `codex ${backend} child`, pid: execChildPid }, { label: "sleep 77", pid: sleepPid }],
             ownerTag,
           ) + timeoutDiagnostics(stderr, home),
       );

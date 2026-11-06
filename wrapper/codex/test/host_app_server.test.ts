@@ -585,3 +585,45 @@ it("settles permission sync expiry without opening app-server or losing pending 
   expect(f.host.statusExtSnapshot()).toMatchObject({pending_model:"gpt-6-sol"});expect(f.states.at(-1)?.state).toBe("waiting_input");
   blocked=false;await f.host.send("recovered");await f.until(1);f.terminal();await vi.waitFor(()=>expect(f.ends).toHaveBeenCalledTimes(2));
 });
+
+it("renames the display once per revision while preserving the persona through a turn", async () => {
+  const f = fixture({}, { ...config });
+  f.host.renameDisplayName("Renamed", 2);
+  const before = f.states.length;
+  f.host.renameDisplayName("Duplicate", 2);f.host.renameDisplayName("Stale", 1);
+  expect(f.states).toHaveLength(before);
+  await f.host.send("first");await f.until(1);f.terminal();
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+  expect(f.states.at(-1)).toMatchObject({ display_name: "Renamed", persona: config.persona });
+});
+
+it("keeps effective settings and whoami unchanged until the successful next dispatch", async () => {
+  const f = fixture({ modelSource: "config", effortSource: "config" });
+  await f.host.send("first");await f.until(1);
+  const before = f.host.statusSnapshot();
+  await f.host.setModel("gpt-6-astra");await f.host.setEffort("low");
+  expect(f.host.statusSnapshot().model).toBe(before.model);
+  expect(f.turns()[0]?.params).toMatchObject({ model: "gpt-5.6-sol", effort: "high" });
+  f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+  await f.host.send("second");await f.until(2);
+  expect(f.turns()[1]?.params).toMatchObject({ model: "gpt-6-astra", effort: "low" });
+  f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(2));
+  expect(f.host.statusSnapshot()).toMatchObject({ model: "gpt-6-astra", effort: "low", session_id: "thread" });
+  expect(f.host.statusExtSnapshot()).toMatchObject({ model: "gpt-6-astra", effort: "low" });
+});
+
+it("rolls a rejected model switch back on the same session and keeps the error for one stamp", async () => {
+  const f = fixture({ modelSource: "config", effortSource: "config" });
+  await f.host.send("first");await f.until(1);f.terminal();
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+  await f.host.setModel("gpt-6-astra");f.startReply = "error";
+  await f.host.send("rejected");await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(2));
+  expect(f.host.statusSnapshot().model).toBe("gpt-5.6-sol");
+  const errors = f.states.filter(e => e.ext?.switch_error);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]?.ext.switch_error).toMatchObject({ kind: "model", requested: "gpt-6-astra", rolled_back_to: "gpt-5.6-sol" });
+  f.startReply = "immediate";await f.host.send("retry");await f.until(3);
+  expect(f.turns()[2]?.params).toMatchObject({ model: "gpt-5.6-sol" });
+  f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(3));
+  expect(f.createSession).toHaveBeenCalledTimes(1);
+});
