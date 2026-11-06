@@ -440,24 +440,46 @@ test("restore guard deadline", async t => {
   assert.equal(f.calls.host, 6); assert.equal(f.calls.restore, 1); assert.equal(f.calls.close, 1);
 });
 
+function retiredArgs(operation) {
+  let argv;
+  if (operation === "prepare") argv = ["--phase", "prepare", "--host", host, "--runner-sha", revision,
+    "--compose-file", "fixture.yml", "--runner-config", "fixture.json", "--runner-unit", "fixture.service", "--origin-evidence", "origin.json"];
+  else if (operation === "pin-exec-fresh") argv = args("pin-exec-fresh");
+  else if (operation === "restore-exec") { argv = args("restore-fresh");argv[argv.indexOf("--backend") + 1] = "exec"; }
+  else {
+    argv = args("observe");argv[argv.indexOf("--phase-target") + 1] = operation === "observe-pin" ? "pin-exec-fresh" : "restore-fresh";
+    if (operation === "observe-restore-exec") argv.push("--agent", agent, "--backend", "exec");
+  }
+  return argv;
+}
+
 for (const operation of ["prepare", "pin-exec-fresh", "restore-exec", "observe-pin", "observe-restore-exec"]) {
   for (const selection of [undefined, "exec", { malformed: true }]) test(`retired ${operation} refuses before adapters (${JSON.stringify(selection)})`, async () => {
     const f = fixture(), output = io();
     f.state.r.configuredBackend = selection;
-    let argv;
-    if (operation === "prepare") argv = ["--phase", "prepare", "--host", host, "--runner-sha", revision,
-      "--compose-file", "fixture.yml", "--runner-config", "fixture.json", "--runner-unit", "fixture.service", "--origin-evidence", "origin.json"];
-    else if (operation === "pin-exec-fresh") argv = args("pin-exec-fresh");
-    else if (operation === "restore-exec") { argv = args("restore-fresh");argv[argv.indexOf("--backend") + 1] = "exec"; }
-    else {
-      argv = args("observe");argv[argv.indexOf("--phase-target") + 1] = operation === "observe-pin" ? "pin-exec-fresh" : "restore-fresh";
-      if (operation === "observe-restore-exec") argv.push("--agent", agent, "--backend", "exec");
-    }
+    const argv = retiredArgs(operation);
     assert.equal(await main(argv, f.adapters, output), 1);
     assert.match(output.stderr.text, /exec backend is retired/);
     assert.match(output.stderr.text, /last pre-retirement release/);
     assert.equal(output.stdout.text, "");
     assert.equal(f.calls.write, 0);assert.equal(f.calls.restore, 0);
     assert.ok(Object.values(f.calls).every(n => n === 0));
+  });
+  test(`retired ${operation} does not load its adapter module`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "retired-codex-adapter-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const marker = join(root, "loaded"), module = join(root, "adapter.mjs"), config = join(root, "runner.json");
+    const bytes = "{ malformed runner config";
+    await writeFile(config, bytes);
+    await writeFile(module, `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(marker)}, "loaded");
+export function createAdapters() { throw new Error("unexpected adapter construction"); }
+`);
+    const argv = retiredArgs(operation), output = io();
+    argv[argv.indexOf("--runner-config") + 1] = config;
+    assert.equal(await main([...argv, "--adapter-module", module], undefined, output), 1);
+    assert.match(output.stderr.text, /exec backend is retired/);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+    assert.equal(await readFile(config, "utf8"), bytes);
   });
 }
