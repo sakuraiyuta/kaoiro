@@ -10,9 +10,9 @@ import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { AgentHost } from "../src/host.js";
 import { runClaudeCli } from "../src/cli.js";
 
-describe.skipIf(process.env.KAOIRO_LIVE_CLAUDE !== "1")("native Claude context error", () => {
+describe("native Claude context error", () => {
   it.each(["blocked", "rate429"] as const)("classifies SDK-observed %s", async scenario => {
-    const root = mkdtempSync(join(tmpdir(), "momo-522-native-"));
+    const root = mkdtempSync(join(tmpdir(), "claude-context-native-"));
     const events: Array<Record<string, unknown>> = [];
     const sent: Envelope[] = [];
     const ends: Array<{ reason?: string; detail?: string }> = [];

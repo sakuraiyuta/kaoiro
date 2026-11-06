@@ -73,7 +73,6 @@ import {
   TASKLIST_TASK_ID,
 } from "@kaoiro/agent-common";
 import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
-
 import type {
   ModelFallbackNotice,
   TaskEvent,
@@ -132,12 +131,21 @@ import {
   validateOpen,
 } from "./upload.js";
 
-/** Cap on queued user turns; send() throws beyond this (fail fast). */
-const FAILURE_REASONS = new Set(["blocking_limit", "prompt_too_long", "rapid_refill_breaker", "api_error"]);
-const FAILURE_CLASSES = new Set(["invalid_request", "rate_limit", "authentication_failed", "oauth_org_not_allowed", "account_on_hold", "billing_error", "overloaded", "model_not_found", "server_error", "max_output_tokens", "unknown"]);
+const FAILURE_REASONS = new Set([
+  "blocking_limit", "rapid_refill_breaker", "prompt_too_long", "image_error", "model_error", "api_error",
+  "malformed_tool_use_exhausted", "aborted_streaming", "aborted_tools", "stop_hook_prevented", "hook_stopped",
+  "tool_deferred", "max_turns", "background_requested", "completed", "budget_exhausted",
+  "structured_output_retry_exhausted", "tool_deferred_unavailable", "turn_setup_failed",
+]);
+const FAILURE_CLASSES = new Set([
+  "authentication_failed", "oauth_org_not_allowed", "account_on_hold", "verification_required", "billing_error",
+  "rate_limit", "overloaded", "invalid_request", "model_not_found", "server_error", "unknown", "max_output_tokens",
+  "cloud_credential_error",
+]);
 const boundedFailureField = (value: string | undefined, allowed: ReadonlySet<string>): string =>
   value === undefined ? "absent" : allowed.has(value) ? value : "unknown";
 
+/** Cap on queued user turns; send() throws beyond this (fail fast). */
 const MAX_QUEUED_TURNS = 1000;
 
 /** Settles a canUseTool wait whose own turn was torn down before the

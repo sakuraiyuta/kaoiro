@@ -313,7 +313,7 @@ export function sdkMessageToLogs(message: SDKMessage): LogEntry[] {
  *  because a `success`-subtype error result names no error class of its
  *  own. When present on an error result, it becomes `error_code` plus a
  *  bounded `error_summary`/`recovery_hint` from the wrapper's own closed
- *  table (assistantErrorSummary) — never a copy of SDK text. */
+ *  code/reason mapping — never a copy of SDK text. */
 export function sdkMessageToResult(
   message: SDKMessage,
   assistantErrorCode?: string,

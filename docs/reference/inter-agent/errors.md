@@ -102,7 +102,11 @@ Engine differences are absorbed in the shared classifier (engine-agnostic,
 to `api_error`. Claude normalizes its observed `blocking_limit` context reason
 before classification; Antigravity retains its quota meaning. Claude also
 classifies the observed `api_error`/assistant `rate_limit` success-subtype
-failure as `rate_limit` without inventing a reset time. Engine reason/detail strings are used **only for internal classification**. Always use a fixed code-specific template for
+failure as `rate_limit` without inventing a reset time. A different cause with
+the same fields is indistinguishable; `rapid_refill_breaker` and SDK 0.3.284
+remain unmeasured, and the reset-bearing control applies to Antigravity, not
+Claude. Engine reason/detail strings are used **only for internal
+classification**. Always use a fixed code-specific template for
 `error.message` and `body`, never exposing raw exception text to a peer LLM;
 the template also guarantees the required secret masking.
 

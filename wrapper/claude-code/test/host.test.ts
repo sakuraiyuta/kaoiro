@@ -2416,6 +2416,27 @@ describe("AgentHost — query injection", () => {
     expect(JSON.stringify(warnings)).not.toContain("private content");
   });
 
+  it("retains known SDK failure reasons and assistant classes in diagnostics", async () => {
+    const reasons = ["blocking_limit", "rapid_refill_breaker", "prompt_too_long", "image_error", "model_error", "api_error",
+      "malformed_tool_use_exhausted", "aborted_streaming", "aborted_tools", "stop_hook_prevented", "hook_stopped",
+      "tool_deferred", "max_turns", "background_requested", "completed", "budget_exhausted",
+      "structured_output_retry_exhausted", "tool_deferred_unavailable", "turn_setup_failed"];
+    const classes = ["authentication_failed", "oauth_org_not_allowed", "account_on_hold", "verification_required", "billing_error",
+      "rate_limit", "overloaded", "invalid_request", "model_not_found", "server_error", "unknown", "max_output_tokens",
+      "cloud_credential_error"];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, { onState: () => {}, warn: line => warnings.push(line),
+      queryFn: scriptedQuery(reasons.flatMap((reason, i) => [
+        assistant([{ type: "text" }], classes[i % classes.length]),
+        result("success", { is_error: true, terminal_reason: reason }),
+      ])),
+    });
+    await host.run();
+    for (const [i, reason] of reasons.entries()) {
+      expect(warnings).toContain(`[kaoiro] claude turn failure: ${JSON.stringify({ terminal_reason: reason, assistant_error_class: classes[i % classes.length] })}`);
+    }
+  });
+
   it("does not expose unrecognized failure fields in diagnostic logs", async () => {
     const warnings: string[] = [];
     const host = new AgentHost(config, {
@@ -2440,12 +2461,17 @@ describe("AgentHost — query injection", () => {
         result("success", { is_error: true, result: "rate limit exceeded", terminal_reason: "api_error" }),
         result("success", { is_error: true, result: "other error", terminal_reason: "api_error" }),
         assistant([{ type: "text" }], "rate_limit"),
+        result("success", { is_error: true, result: "context", terminal_reason: "blocking_limit" }),
+        assistant([{ type: "text" }], "rate_limit"),
+        result("success", { is_error: true, result: "model failure", terminal_reason: "model_error" }),
+        assistant([{ type: "text" }], "rate_limit"),
         result("error_during_execution", { is_error: true, errors: ["other failure"], terminal_reason: "api_error" }),
       ]),
     });
     await host.run();
     expect(ends.map(end => end.error)).toEqual([
-      { detail: "rate limit" }, { reason: "api_error" }, { reason: "api_error", detail: "other failure" },
+      { detail: "rate limit" }, { reason: "api_error" }, { reason: "prompt_too_long" },
+      { reason: "model_error" }, { reason: "api_error", detail: "other failure" },
     ]);
   });
 
