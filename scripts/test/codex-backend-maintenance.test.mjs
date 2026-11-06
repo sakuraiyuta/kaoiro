@@ -267,29 +267,54 @@ test("restore rejects a non-fresh target before opening credentials", async () =
   }
 });
 
-test("default local observe and remove-pin use real evidence and config bytes", async t => {
+for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup", "changed-rpc"]) test(`default local observe and remove-pin use real evidence and config bytes (${format})`, async t => {
   const root = await mkdtemp(join(tmpdir(), "kogane564-maintenance-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configPath = join(root, "runner.json"), evidencePath = join(root, "maintenance.json");
-  await writeFile(configPath, JSON.stringify({ host_id: host, codex: { backend: "exec", model: "preserved" }, capabilities: ["codex"] }));
-  const f = fixture(); let cursorCalls = 0;
+  const golden = JSON.parse(await readFile(new URL("./fixtures/codex-backend/server-observation.json", import.meta.url), "utf8"));
+  const selectedHost = format === "golden" ? golden.host : host;
+  await writeFile(configPath, JSON.stringify({ host_id: selectedHost, codex: { backend: "exec", model: "preserved" }, capabilities: ["codex"] }));
+  const f = fixture(); let cursorCalls = 0, supervisorCalls = 0;
+  if (format === "golden") { f.state.h = golden;f.state.s.host = selectedHost; }
+  const beforeBytes = await readFile(configPath);
   // Synchronous command boundary; the RPC payload matches the producer contract.
   const { readFileSync, statSync } = await import("node:fs");
   const runCommand = (command, argv) => {
     const bytes = readFileSync(configPath), config = JSON.parse(bytes), backend = config.codex.backend ?? "app-server";
     if (command === "systemctl") return argv.includes("MainPID") ? "100" : invocation;
-    if (command === "docker") return JSON.stringify(argv.at(-1).includes("observe_host") ? f.state.h : { ...f.state.s, applied_backend: backend });
+    if (command === "docker") {
+      const isHost = argv.at(-1).includes("observe_host");
+      if (isHost && format === "missing") return "no observation frame";
+      const value = isHost ? f.state.h : { ...f.state.s, applied_backend: backend,
+        request_id: String(++supervisorCalls).padStart(32, "0"),
+        pid: format === "changed-rpc" && supervisorCalls === 2 ? 101 : 100 };
+      return (format === "prefixed" ? '{"notice":"compose heading"}\n' : "") + JSON.stringify(value);
+    }
     if (argv.includes("--show-cursor")) { cursorCalls++; return "-- cursor: test-cursor"; }
     if (argv.some(a => a.startsWith("--after-cursor="))) return `runner: codex backend=${backend} for subsequent wrappers`;
-    if (argv.includes("--output=cat")) return `runner: host=${host} rev=${revision} connecting to ws://example.invalid/runner`;
+    if (argv.includes("--output=cat")) return format === "missing-startup" ? "later log without a startup record" : `runner: host=${selectedHost} rev=${revision} connecting to ws://example.invalid/runner`;
     return JSON.stringify({ MESSAGE: `runner: codex backend=${backend} for subsequent wrappers`, __REALTIME_TIMESTAMP: Math.floor(statSync(configPath).mtimeMs * 1000) + 1000 });
   };
   const localArgs = phase => {
-    const a = args(phase); a[a.indexOf("--runner-config") + 1] = configPath;
+    const a = args(phase); a[a.indexOf("--host") + 1] = selectedHost;a[a.indexOf("--runner-config") + 1] = configPath;
     if (phase !== "observe") a[a.indexOf("--maintenance-evidence") + 1] = evidencePath;
     return a;
   };
-  const observed = io(); assert.equal(await main(localArgs("observe"), undefined, observed, { runCommand }), 0, observed.stderr.text);
+  const observed = io(), result = await main(localArgs("observe"), undefined, observed, { runCommand });
+  assert.deepEqual(await readFile(configPath), beforeBytes);assert.equal(cursorCalls, 0);
+  if (["missing", "missing-startup", "changed-rpc"].includes(format)) {
+    assert.equal(result, 1);
+    assert.match(observed.stderr.text, format === "missing" ? /server-observation-unavailable/
+      : format === "missing-startup" ? /runner-start-record-unavailable/ : /supervisor-identity-mismatch/);
+    return;
+  }
+  assert.equal(result, 0, observed.stderr.text);assert.equal(supervisorCalls, 2);
+  if (format === "golden") {
+    const template = JSON.parse(observed.stdout.text).maintenance_template;
+    assert.deepEqual(template.agents.map(row => row.id), golden.rows.map(row => row.id).sort());
+    assert.equal(template.maintenance_owner_accepted, false);
+    return;
+  }
   assert.equal(cursorCalls, 0);
   const e = JSON.parse(observed.stdout.text).maintenance_template;
   assert.equal(e.binding.config_sha256, hash(await readFile(configPath)));
