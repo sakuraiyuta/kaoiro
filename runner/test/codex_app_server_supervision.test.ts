@@ -34,13 +34,12 @@ process.on('message', command=>{
  if(command==='break')child?.kill('SIGKILL');
  if(command==='next')callbacks.onInstruction('EXPLICIT_NEXT');
 });
-await runCodexCli({backend:'app-server',
+await runCodexCli({
  createServerLink:(_url,_id,options)=>{callbacks=options;queueMicrotask(()=>options.onPersonaPrompt('Fixture'));return {
   send:e=>process.send?.({kind:'envelope',envelope:e}),close(){},currentSessionId:()=>null,setSessionId(){},
   reportDisconnectIntent:async()=>{},
  };},
  createHost:(config,options)=>new CodexHost(config,{...options,
-  codexFactory:()=>{process.send?.({kind:'fallback'});throw Error('Unexpected exec fallback');},
   onTurnStart:info=>{options.onTurnStart?.(info);process.send?.({kind:'start'});},
   appServerSessionFactory:options=>AppServerSession.create({...options,transport:{spawnChild:()=>{
    child=spawn(process.execPath,[${JSON.stringify(rpc)}],{stdio:['pipe','pipe','pipe']});
@@ -76,7 +75,6 @@ await runCodexCli({backend:'app-server',
     supervisor.handleSpawn(spawnMessage);await started(0);
     for (let index = 0; index <= MAX_RESTARTS; index++) {
       expect(messages[index]!.filter(m => m.kind === "child")).toHaveLength(1);
-      expect(messages[index]!.filter(m => m.kind === "fallback")).toHaveLength(0);
       children[index]!.send("break");await exits[index];
       expect(messages[index]!.filter(m => m.kind === "child")).toHaveLength(1);
       if (index < MAX_RESTARTS) {
