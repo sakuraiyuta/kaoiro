@@ -109,7 +109,7 @@ function findDescendantByExactArgs(rootPid: number, command: string): number | n
 }
 
 function findCodexExecPidOnce(parentPid: number, backend: "exec" | "app-server"): number | null {
-  const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.includes(`codex ${backend}`));
+  const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.split(/\s+/)[0]?.endsWith("/codex") && p.args.split(/\s+/).includes(backend));
   return direct[0]?.pid ?? null;
 }
 

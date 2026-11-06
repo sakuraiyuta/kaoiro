@@ -61,7 +61,7 @@ async function inTurn(): Promise<{
   await host.send("hi");
   await f.until(1);
   f.send({ method: "item/started", params: { threadId: "thread", turnId: "turn-1", item: {
-    id: "call-1", type: "mcpToolCall", server: "kaoiro", tool: "request_session_reset", arguments: {},
+    id: "call-1", type: "mcpToolCall", status: "inProgress", server: "kaoiro", tool: "request_session_reset", arguments: {},
   } } });
   await vi.waitFor(() => expect(states.at(-1)?.state).toBe("tool_running"));
   return { host, states, release: () => f.terminal(), done: f.running };
