@@ -2,7 +2,7 @@
 title: High-risk change release
 description: How to tell whether a change can stop the agents that would fix it, what to prepare first, the production-shape start gate for the runner, bulk restoration, and recovery when every agent has stopped.
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-07
 related: [deployment]
 ---
 
