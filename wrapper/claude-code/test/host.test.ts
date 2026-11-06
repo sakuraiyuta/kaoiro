@@ -2432,6 +2432,23 @@ describe("AgentHost — query injection", () => {
     expect(JSON.stringify(warnings)).not.toMatch(/private_/);
   });
 
+  it("maps only the measured 429 result shape and does not carry its class to later failures", async () => {
+    const ends: Array<{ error?: { reason?: string; detail?: string } }> = [];
+    const host = new AgentHost(config, { onState: () => {}, onTurnEnd: info => ends.push(info),
+      queryFn: scriptedQuery([
+        assistant([{ type: "text" }], "rate_limit"),
+        result("success", { is_error: true, result: "rate limit exceeded", terminal_reason: "api_error" }),
+        result("success", { is_error: true, result: "other error", terminal_reason: "api_error" }),
+        assistant([{ type: "text" }], "rate_limit"),
+        result("error_during_execution", { errors: ["other failure"], terminal_reason: "api_error" }),
+      ]),
+    });
+    await host.run();
+    expect(ends.map(end => end.error)).toEqual([
+      { detail: "rate limit" }, { reason: "api_error" }, { reason: "api_error", detail: "other failure" },
+    ]);
+  });
+
   it("error result は onTurnEnd に conversationIds=[](未タグ) + terminal_reason/error_detail を渡す (issue #131)", async () => {
     const turnEnds: {
       turnToken?: string;
