@@ -21,7 +21,6 @@ let registration: Promise<ServiceWorkerRegistration | null> = Promise.resolve(nu
 let warned = false;
 
 export function registerNotificationWorker(): void {
-  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
   try {
     registration = navigator.serviceWorker
       .register("/notification-worker/sw.js")
@@ -51,7 +50,6 @@ function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
       if (finished) return;
       current = result;
       if (!result) return finish(null);
-      if (result.active?.state === "activated") return finish(result);
       worker = result.active ?? result.installing ?? result.waiting ?? undefined;
       if (!worker) return finish(null);
       worker.addEventListener("statechange", changed);
