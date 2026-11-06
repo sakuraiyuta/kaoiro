@@ -3,8 +3,7 @@ import type { AppServerHistory } from "./app_server_history.js";
 import { MAX_HISTORY } from "./history.js";
 
 export type AppServerHistoryJob = (read: () => Promise<AppServerHistory>) => Promise<void>;
-interface Options extends HistoryReplayerOptions {
-  backend: () => "exec" | "app-server";
+interface Options extends Omit<HistoryReplayerOptions, "readTranscript"> {
   schedule: (job: AppServerHistoryJob) => void;
   captureFence: () => () => boolean;
 }
@@ -13,7 +12,6 @@ type Request = { verdict: HydrationVerdict | null; current: () => boolean };
 /** Asynchronous preparation stays outside the shared, synchronous replay cycle. */
 export class CodexHistoryReplay {
   readonly #options: Options;
-  readonly #exec: HistoryReplayer;
   #ready = false;
   #closed = false;
   #latest: Request | undefined;
@@ -25,21 +23,18 @@ export class CodexHistoryReplay {
 
   constructor(options: Options) {
     this.#options = options;
-    this.#exec = new HistoryReplayer(options);
   }
 
   onVerdict(verdict: HydrationVerdict | null): void {
     if (this.#closed) return;
-    if (!this.#ready || this.#options.backend() === "exec") this.#exec.onVerdict(verdict);
     this.#latest = { verdict, current: this.#options.captureFence() };
-    if (this.#ready && this.#options.backend() === "app-server") this.#schedule(this.#latest);
+    if (this.#ready) this.#schedule(this.#latest);
   }
 
   markReady(): void {
     if (this.#closed || this.#ready) return;
     this.#ready = true;
-    if (this.#options.backend() === "exec") this.#exec.markReady();
-    else if (this.#latest) this.#schedule(this.#latest);
+    if (this.#latest) this.#schedule(this.#latest);
   }
 
   sendLiveLog(envelope: Envelope): void {

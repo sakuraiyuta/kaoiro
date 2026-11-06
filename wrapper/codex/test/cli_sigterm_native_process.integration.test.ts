@@ -3,7 +3,7 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // signal listener; a resolved host promise alone cannot establish cleanup.
 import { createServer } from "node:http";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { release, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";

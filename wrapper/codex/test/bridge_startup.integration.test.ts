@@ -3,8 +3,7 @@ import { createServer } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Codex } from "@openai/codex-sdk";
-import type { Envelope, ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
+import type { ToolDescriptor } from "@kaoiro/agent-common";
 import { expect, it, vi } from "vitest";
 import { AppServerSession } from "../src/app_server_session.js";
 import { AppServerTransport, type AppServerThreadOptions } from "../src/app_server_transport.js";
@@ -79,7 +78,7 @@ await import(pathToFileURL(process.argv[1]).href);
     };
     const tool: ToolDescriptor = { name: "probe", description: "Probe", inputSchema: { type: "object", properties: {} },
       handler: async () => { toolCalls += 1; return { content: [{ type: "text", text: "BRIDGE_READY" }] }; } };
-    if (engine === "app-server") {
+    {
       const start = AppServerTransport.prototype.startThread;
       const resume = AppServerTransport.prototype.resumeThread;
       vi.spyOn(AppServerTransport.prototype, "startThread").mockImplementation(function (this: AppServerTransport, options: AppServerThreadOptions = {}) {
@@ -109,40 +108,6 @@ await import(pathToFileURL(process.argv[1]).href);
           expect(JSON.stringify(requests.at(-1))).toContain("BRIDGE_READY");
         }
         await session.close();
-      }
-    } else {
-      const states: Envelope[] = [];
-      let ended = 0, sdkStarts = 0;
-      const config: WrapperConfig = { agent_id: "test.bridge-startup", server_url: "ws://localhost:4000/wrapper",
-        display_name: "Bridge startup", persona: { id: "test", name: "Test", sprite_set: "test" },
-        codex_auth_mode: "chatgpt", codex_chatgpt_plan: "plus", sandbox: "read-only", network_access: false };
-      host = new CodexHost(config, {
-        appendSystemPrompt: "Call probe", onState: e => states.push(e), onLog: e => states.push(e), onTurnEnd: () => { ended += 1; },
-        toolDescriptors: [tool], turnTraceDir: join(home, "traces"),
-        backend: "exec", codexFactory: options => {
-          delayBridge(options.config);
-          const sdk = new Codex(options);
-          return {
-            startThread: options => { sdkStarts += 1; return sdk.startThread(options); },
-            resumeThread: (id, options) => { sdkStarts += 1; return sdk.resumeThread(id, options); },
-          };
-        },
-      });
-      running = host.run("Call probe");
-      await vi.waitFor(() => expect(ended).toBe(1), { timeout: 45_000 });
-      host.close(); await running;
-      const results = states.filter(e => e.type === "result");
-      expect(results).toHaveLength(1);
-      expect(sdkStarts).toBe(1);
-      if (timeout) {
-        expect(requests).toHaveLength(0); expect(toolCalls).toBe(0);
-        expect(results[0]!.payload).toMatchObject({ is_error: true,
-          error_detail: expect.stringContaining("required MCP servers failed to initialize") });
-        expect(states.some(e => e.state === "error")).toBe(true);
-      } else {
-        expect(toolCalls, JSON.stringify({ results, toolOutputs: requests.at(-1)?.input.filter(item => item.type === "custom_tool_call_output" || item.type === "function_call_output") })).toBe(1);
-        expect(results[0]!.payload).toEqual({ text: "DONE" });
-        expect(JSON.stringify(requests.at(-1))).toContain("BRIDGE_READY");
       }
     }
   } finally {

@@ -40,7 +40,6 @@ async function removeToolHostDirectory(host: ToolHost | null): Promise<void> {
   await rm(dirname(host.socketPath), { recursive: true, force: true });
 }
 
-/** Internal composition only; normal launch still selects exec. */
 export class AppServerSession {
   readonly #transport: AppServerTransport;
   readonly #toolHost: ToolHost | null;

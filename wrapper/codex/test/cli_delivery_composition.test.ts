@@ -6,7 +6,7 @@ import { runCodexCli } from "../src/cli.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const config: WrapperConfig = {
-  codex_backend: "exec",
+  codex_backend: "app-server",
   agent_id: "self.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
   display_name: "P",
@@ -883,10 +883,7 @@ describe("permission gate cancellation notice composition", () => {
         host = new CodexHost(cfg, { ...options, permissionGateTimeoutMs: 50,
           turnTraceDir: root, permissionRolloutRoot: root,
           rateLimitResolver: async () => new Map(),
-          codexFactory: () => {
-            const unexpected = () => { sdkCalls++; throw new Error("SDK must not start"); };
-            return { startThread: unexpected, resumeThread: unexpected };
-          },
+          appServerSessionFactory: async () => { sdkCalls++;throw new Error("Session must not start"); },
         });
         const next = { revision: 4, requested: { sandbox: "read-only" as const, network_access: false } };
         host.applyPermissionSync({ version: "0", next, control: { ...next,

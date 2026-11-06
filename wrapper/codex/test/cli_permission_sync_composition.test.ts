@@ -1,14 +1,26 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThreadEvent } from "@openai/codex-sdk";
 import type { WrapperConfig } from "@kaoiro/agent-common";
 import { ServerLink, PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { CodexHost } from "../src/host.js";
-import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import type { CodexHostOptions } from "../src/host.js";
+import { appServerHostFixture } from "./fixtures/host_app_server.js";
+import { writeFileSync } from "node:fs";
 import { runCodexCli } from "../src/cli.js";
+
+
+function appHost(config: WrapperConfig, options: CodexHostOptions, onTurn: () => void, threadId = "thread", beforeSession?: () => Promise<void>): CodexHost {
+  const f = appServerHostFixture({ ...options, startupRateLimitResolver: async () => new Map() }, config, true, { autoRun: false, threadId,
+    onTurnStart: () => { onTurn();queueMicrotask(() => f.terminal()); } });
+  if (beforeSession) {
+    const create = f.createSession.getMockImplementation()!;
+    f.createSession.mockImplementation(async options => { await beforeSession();return create(options); });
+  }
+  return f.host;
+}
 
 type Receiver = (payload: unknown) => void;
 
@@ -82,7 +94,7 @@ class TestSocket {
 vi.stubGlobal("WebSocket", class {});
 
 const config: WrapperConfig = {
-  codex_backend: "exec",
+  codex_backend: "app-server",
   agent_id: "self.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
   display_name: "P",
@@ -93,19 +105,6 @@ const config: WrapperConfig = {
 
 function emit(event: string, payload: unknown): void {
   for (const receiver of transport.handlers.get(event) ?? []) receiver(payload);
-}
-
-function completed(): ThreadEvent {
-  return {
-    type: "turn.completed",
-    usage: {
-      input_tokens: 1,
-      cached_input_tokens: 0,
-      output_tokens: 1,
-      reasoning_output_tokens: 0,
-      cache_write_input_tokens: 0,
-    },
-  };
 }
 
 function permissionContext(turnId: string): string {
@@ -144,24 +143,10 @@ beforeEach(() => {
 });
 
 describe("Codex CLI permission-sync composition", () => {
-  it("real ServerLink and CodexHost keep the first exec closed until a valid negotiated sync", async () => {
+  it("real ServerLink and CodexHost keep the first dispatch closed until a valid negotiated sync", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-cli-permission-"));
     let host: CodexHost | undefined;
     let spawns = 0;
-    const client: CodexClientLike = {
-      startThread: () => thread,
-      resumeThread: () => thread,
-    };
-    const thread: CodexThreadLike = {
-      async runStreamed() {
-        spawns += 1;
-        async function* events(): AsyncGenerator<ThreadEvent> {
-          yield { type: "thread.started", thread_id: "cli-gated-session" };
-          yield completed();
-        }
-        return { events: events() };
-      },
-    };
     const running = runCodexCli({
       parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
       loadConfig: () => ({ ...config }),
@@ -173,11 +158,11 @@ describe("Codex CLI permission-sync composition", () => {
       }),
       createServerLink,
       createHost: (hostConfig, options) => {
-        host = new CodexHost(hostConfig, {
+        host = appHost(hostConfig, {
           ...options,
-          codexFactory: () => client,
+
           permissionRolloutRoot: root,
-        });
+        }, () => { spawns++; });
         return host;
       },
     });
@@ -204,26 +189,12 @@ describe("Codex CLI permission-sync composition", () => {
   it("legacy join keeps the selector disabled but does not gate dispatch", async () => {
     let host: CodexHost | undefined;
     let spawns = 0;
-    const thread: CodexThreadLike = {
-      async runStreamed() {
-        spawns += 1;
-        async function* events(): AsyncGenerator<ThreadEvent> {
-          yield { type: "thread.started", thread_id: "cli-legacy-session" };
-          yield completed();
-        }
-        return { events: events() };
-      },
-    };
-    const client: CodexClientLike = {
-      startThread: () => thread,
-      resumeThread: () => thread,
-    };
     const running = runCodexCli({
       parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
       loadConfig: () => ({ ...config }),
       createServerLink,
       createHost: (hostConfig, options) => {
-        host = new CodexHost(hostConfig, { ...options, codexFactory: () => client });
+        host = appHost(hostConfig, { ...options }, () => { spawns++; });
         return host;
       },
     });
@@ -247,33 +218,16 @@ describe("Codex CLI permission-sync composition", () => {
     let host: CodexHost | undefined;
     let spawns = 0;
     const contexts: string[] = [];
-    const thread: CodexThreadLike = {
-      async runStreamed() {
-        spawns += 1;
-        const turn = spawns;
-        async function* events(): AsyncGenerator<ThreadEvent> {
-          yield { type: "thread.started", thread_id: sessionId };
-          contexts.push(permissionContext(`cli-rejoin-turn-${turn}`));
-          await writeFile(rollout, `${contexts.join("\n")}\n`);
-          yield completed();
-        }
-        return { events: events() };
-      },
-    };
-    const client: CodexClientLike = {
-      startThread: () => thread,
-      resumeThread: () => thread,
-    };
     const running = runCodexCli({
       parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
       loadConfig: () => ({ ...config }),
       createServerLink,
       createHost: (hostConfig, options) => {
-        host = new CodexHost(hostConfig, {
+        host = appHost(hostConfig, {
           ...options,
-          codexFactory: () => client,
+
           permissionRolloutRoot: root,
-        });
+        }, () => { spawns++;contexts.push(permissionContext(`turn-${spawns}`));writeFileSync(rollout, `${contexts.join("\n")}\n`); }, sessionId);
         return host;
       },
     });
@@ -303,40 +257,25 @@ describe("Codex CLI permission-sync composition", () => {
     }
   });
 
-  it("rechecks the current join after diagnostics preparation before opening an SDK exec", async () => {
+  it("rechecks the current join after session preparation before dispatch", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-cli-permission-"));
     const diagnosticsStarted = deferred<void>();
     const releaseDiagnostics = deferred<void>();
     let host: CodexHost | undefined;
     let spawns = 0;
-    const thread: CodexThreadLike = {
-      async runStreamed() {
-        spawns += 1;
-        async function* events(): AsyncGenerator<ThreadEvent> {
-          yield { type: "thread.started", thread_id: "cli-diagnostics-rejoin" };
-          yield completed();
-        }
-        return { events: events() };
-      },
-    };
-    const client: CodexClientLike = {
-      startThread: () => thread,
-      resumeThread: () => thread,
-    };
     const running = runCodexCli({
       parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
       loadConfig: () => ({ ...config }),
       createServerLink,
       createHost: (hostConfig, options) => {
-        host = new CodexHost(hostConfig, {
+        host = appHost(hostConfig, {
           ...options,
-          codexFactory: () => client,
+
           permissionRolloutRoot: root,
           turnTraceDir: root,
-          afterDiagnosticsBegin: async () => {
+        }, () => { spawns++; }, "thread", async () => {
             diagnosticsStarted.resolve();
             await releaseDiagnostics.promise;
-          },
         });
         return host;
       },
@@ -366,14 +305,13 @@ describe("Codex CLI permission-sync composition", () => {
 it("retires a pre-start sync failure through the real CLI and allows delivery two to advance its ACK",async()=>{
   let host:CodexHost|undefined, dispatches=0;
   transport.pushes=[];
-  const thread:CodexThreadLike={async runStreamed(){dispatches++;async function* events():AsyncGenerator<ThreadEvent>{yield {type:"thread.started",thread_id:"cli-sync-timeout"};yield completed();}return {events:events()};}};
   const running=runCodexCli({parseCliArgs:()=>({configPath:"test"}),loadConfig:()=>({...config}),
     createServerLink:(url,id,options)=>{const link=createServerLink(url,id,options);vi.spyOn(link,"waitForPermissionSync").mockRejectedValueOnce(new PermissionSyncTimeoutError());return link;},
-    createHost:(cfg,options)=>host=new CodexHost(cfg,{
-      ...options,codexFactory:()=>({startThread:()=>thread,resumeThread:()=>thread}),
+    createHost:(cfg,options)=>host=appHost(cfg,{
+      ...options,
       // The dispatch deadline covers permission recovery, not native account-probe shutdown.
       startupRateLimitResolver:async()=>new Map(),
-    })});
+    },()=>{dispatches++;})});
   const item=(seq:number)=>({version:"0",agent_id:"peer",persona:config.persona,display_name:"Peer",ts:"2026-11-06T00:00:00Z",type:"inter_agent_message",state:"thinking",ext:{},delivery_seq:seq,payload:{to:config.agent_id,conversation_id:`sync-${seq}`,turn_number:1,kind:"request",body:"input",meta:{done:false,propose_next:""},owner:{kind:"user",id:"operator"}}});
   try{
     await vi.waitFor(()=>expect(transport.joinReceivers.get("ok")).toBeTypeOf("function"));

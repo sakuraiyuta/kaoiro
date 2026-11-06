@@ -57,7 +57,7 @@ function fixture(options: { approvals?: boolean; overrides?: Partial<CodexHostOp
     return AppServerSession.create({ ...opts, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } });
   });
   host = new CodexHost(config, {
-    backend: "app-server", appServerSessionFactory: createSession, appendSystemPrompt: "PERSONA",
+    appServerSessionFactory: createSession, appendSystemPrompt: "PERSONA",
     onState: e => states.push(e), onTurnStart: vi.fn(),
     ...(options.approvals === false ? {} : {
       appServerApprovals: {
