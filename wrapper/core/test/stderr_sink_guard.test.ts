@@ -81,12 +81,40 @@ interface Violation {
   message: string;
 }
 
+interface GuardDiagnostic {
+  code: number;
+  file: string;
+  line: number;
+  message: string;
+}
+
 interface ScanResult {
   approvedSinkHits: number;
-  diagnostics: readonly ts.Diagnostic[];
+  diagnostics: readonly GuardDiagnostic[];
   filesVisited: ReadonlyMap<string, number>;
   unresolvedMemberAccesses: number;
   violations: readonly Violation[];
+}
+
+function formatDiagnostic(diagnostic: ts.Diagnostic): GuardDiagnostic {
+  let file = "<unknown>";
+  let line = 0;
+  if (diagnostic.file !== undefined) {
+    file = relative(REPOSITORY_ROOT, diagnostic.file.fileName);
+    if (diagnostic.start !== undefined) {
+      line = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line + 1;
+    }
+  }
+  return {
+    code: diagnostic.code,
+    file,
+    line,
+    message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+  };
+}
+
+function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]): GuardDiagnostic[] {
+  return diagnostics.map(formatDiagnostic);
 }
 
 function under(path: string, parent: string): boolean {
@@ -253,7 +281,7 @@ function scanSources(
   if (sources.length === 0) {
     return {
       approvedSinkHits: 0,
-      diagnostics: ts.getPreEmitDiagnostics(program),
+      diagnostics: formatDiagnostics(ts.getPreEmitDiagnostics(program)),
       filesVisited,
       unresolvedMemberAccesses: 0,
       violations: [{ file: visitedName, message: "source root contains no TypeScript files" }],
@@ -402,7 +430,7 @@ function scanSources(
 
   return {
     approvedSinkHits,
-    diagnostics: ts.getPreEmitDiagnostics(program),
+    diagnostics: formatDiagnostics(ts.getPreEmitDiagnostics(program)),
     filesVisited,
     unresolvedMemberAccesses,
     violations,
