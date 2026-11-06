@@ -3,7 +3,6 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // (issue #347): the permission twin of setPendingQuestion, plus the guards
 // that keep a late settle from mis-stating a resting agent.
 import { describe, expect, it, vi } from "vitest";
-import type { ThreadEvent } from "@openai/codex-sdk";
 import type {
   Envelope,
   PendingPermissionExt,
@@ -11,7 +10,7 @@ import type {
   WrapperConfig,
 } from "@kaoiro/agent-common";
 import { CodexHost } from "../src/host.js";
-import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import { appServerHostFixture } from "./fixtures/host_app_server.js";
 
 const CONFIG: WrapperConfig = {
   agent_id: "host-1.codex-perm",
@@ -43,48 +42,6 @@ const QUESTION: PendingQuestionExt = {
   ts: "T",
 };
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((complete) => {
-    resolve = complete;
-  });
-  return { promise, resolve };
-}
-
-/** One turn that reports a tool call, parks until released, then completes. */
-function parkedClient(release: Promise<void>): CodexClientLike {
-  const thread: CodexThreadLike = {
-    async runStreamed() {
-      async function* gen(): AsyncGenerator<ThreadEvent> {
-        yield {
-          type: "item.started",
-          item: {
-            id: "call-1",
-            type: "mcp_tool_call",
-            server: "kaoiro",
-            tool: "request_session_reset",
-            arguments: {},
-            status: "in_progress",
-          },
-        };
-        await release;
-        yield {
-          type: "turn.completed",
-          usage: {
-            input_tokens: 1,
-            cached_input_tokens: 0,
-            output_tokens: 1,
-            reasoning_output_tokens: 0,
-            cache_write_input_tokens: 0,
-          },
-        };
-      }
-      return { events: gen() };
-    },
-  };
-  return { startThread: () => thread, resumeThread: () => thread };
-}
-
 function pendingOf(envelope: Envelope): Record<string, unknown> {
   const ext = (envelope.ext ?? {}) as Record<string, unknown>;
   return {
@@ -99,22 +56,15 @@ async function inTurn(): Promise<{
   release: () => void;
   done: Promise<void>;
 }> {
-  const states: Envelope[] = [];
-  const gate = deferred();
-  let started = false;
-  const host = new CodexHost(CONFIG, {
-    onState: (envelope) => states.push(envelope),
-    onTurnStart: () => {
-      started = true;
-    },
-    appendSystemPrompt: "p",
-    backend: "exec", codexFactory: () => parkedClient(gate.promise),
-    now: () => "T",
-  });
-  const done = host.run("hi");
-  await vi.waitFor(() => expect(started).toBe(true));
+  const f = appServerHostFixture({ now: () => "T" }, CONFIG);
+  const { host, states } = f;
+  await host.send("hi");
+  await f.until(1);
+  f.send({ method: "item/started", params: { threadId: "thread", turnId: "turn-1", item: {
+    id: "call-1", type: "mcpToolCall", server: "kaoiro", tool: "request_session_reset", arguments: {},
+  } } });
   await vi.waitFor(() => expect(states.at(-1)?.state).toBe("tool_running"));
-  return { host, states, release: gate.resolve, done };
+  return { host, states, release: () => f.terminal(), done: f.running };
 }
 
 describe("CodexHost#setPendingPermission (issue #347)", () => {

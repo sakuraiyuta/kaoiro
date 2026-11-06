@@ -1,10 +1,9 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThreadEvent } from "@openai/codex-sdk";
 import type { WrapperConfig } from "@kaoiro/agent-common";
 import { CodexHost } from "../src/host.js";
-import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import { appServerHostFixture } from "./fixtures/host_app_server.js";
 
 const cleanup = vi.hoisted(() => ({
   dirs: [] as string[],
@@ -44,49 +43,21 @@ function holdCleanup(): () => void {
   return gate.resolve;
 }
 
-/** `holds[n]` keeps the n-th SDK turn in flight until it resolves. */
 function build(holds: ReadonlyArray<Promise<void>> = []) {
   const ran: string[] = [];
-  const signals: Array<AbortSignal | undefined> = [];
-  const thread: CodexThreadLike = {
-    async runStreamed(input, turnOptions) {
-      signals.push(turnOptions?.signal);
-      const index = ran.push(
-        typeof input === "string" ? input : (input[0] as { text: string }).text,
-      ) - 1;
-      async function* events(): AsyncGenerator<ThreadEvent> {
-        await holds[index];
-        yield {
-          type: "turn.completed",
-          usage: {
-            input_tokens: 1,
-            cached_input_tokens: 0,
-            output_tokens: 1,
-            reasoning_output_tokens: 0,
-            cache_write_input_tokens: 0,
-          },
-        };
-      }
-      return { events: events() };
-    },
-  };
-  const client: CodexClientLike = {
-    startThread: () => thread,
-    resumeThread: () => thread,
-  };
-  const host = new CodexHost(CONFIG, {
-    backend: "exec",
+  const f = appServerHostFixture({
     appendSystemPrompt: "p",
-    onState: () => {},
-    codexFactory: () => client,
     sweepImages: async () => {},
     materializeImages: async (_agentId, uploads, lifecycle) => {
       const dir = dirOf(uploads[0]!.meta.upload_id);
       lifecycle.onDirectoryCreated(dir);
       return { dir, paths: [`${dir}/image.png`] };
     },
-  });
-  return { host, ran, signals };
+  }, CONFIG, false, { autoRun: false, onTurnStart: (request, number) => {
+    ran.push((request.params as { input: Array<{ text: string }> }).input[0]!.text);
+    void Promise.resolve(holds[number - 1]).then(() => f.terminal());
+  } });
+  return { host: f.host, ran, sent: f.sent };
 }
 
 /** Sends a text + one-image turn whose temp dir is dirOf(id). */
@@ -187,7 +158,7 @@ describe("CodexHost.interrupt while a queued image turn's cleanup is pending", (
   it("does not abort a turn the run loop started during the cleanup", async () => {
     const first = deferred();
     const second = deferred();
-    const { host, ran, signals } = build([first.promise, second.promise]);
+    const { host, ran, sent } = build([first.promise, second.promise]);
     const running = host.run("first");
     let release = () => {};
     try {
@@ -204,7 +175,7 @@ describe("CodexHost.interrupt while a queued image turn's cleanup is pending", (
       );
       release();
       await interrupting;
-      expect(signals[1]?.aborted).toBe(false);
+      expect(sent.filter(r => r.method === "turn/interrupt").map(r => (r.params as { turnId: string }).turnId)).not.toContain("turn-2");
     } finally {
       release();
       first.resolve();
