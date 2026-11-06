@@ -176,7 +176,7 @@ interface EpochRuntime {
   deathPromise: Promise<void> | null;
   resolveDeath: (() => void) | null;
   stdinErrored: boolean;
-  pendingDeliverySettle: ((delivered: boolean) => void) | null;
+  pendingDeliverySettle: ((result: TurnDelivery) => void) | null;
 }
 
 /** The turn currently owning the epoch's shared stdout stream. The epoch-
@@ -218,6 +218,15 @@ export interface SpawnedAgy {
   once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   once(event: "error", listener: (error: Error) => void): this;
   kill(signal?: NodeJS.Signals): boolean;
+}
+
+type TurnDelivery = "ok" | "not_attempted" | "attempted";
+
+/** A missing exit field stays alive. Treating `undefined` as exited would
+ *  mark every fake that never records an exit as dead. */
+function childHasExited(child: SpawnedAgy): boolean {
+  return (child.exitCode ?? null) !== null
+    || (child.signalCode ?? null) !== null;
 }
 
 export interface GateProbe {
@@ -1679,6 +1688,32 @@ export class AntigravityHost implements EngineAdapter {
         addDirs: [this.#options.cwd, customization.path],
       };
 
+      const adopted = await this.#replaceExitedEpoch(
+        spec,
+        generation,
+        customization,
+        executable,
+      );
+      if (adopted === "stale") return { kind: "stale" };
+      if (adopted === "undelivered") {
+        const detail = "epoch_exit_before_turn";
+        if (recoveryCandidate) {
+          this.#restoreRecoveryFault();
+          this.#emitRecoveryOutcome("failed", detail);
+          return {
+            kind: "recovery_rejected",
+            detail,
+            probeResult: "failed",
+          };
+        }
+        return {
+          kind: "error",
+          detail,
+          classify: { detail },
+          attemptedModel,
+        };
+      }
+
       // issue #377 Stage 2: a live epoch whose spec no longer matches this
       // turn's requirements (model/effort rollback or switch, a different
       // conversation) is ended first -- respawning below picks up the new
@@ -1780,7 +1815,7 @@ export class AntigravityHost implements EngineAdapter {
       // kernel buffer on a dying process -- so a race where the epoch dies
       // before or during this write never reports a turn as started.
       const delivered = await this.#deliverTurnInput(epoch, text);
-      if (delivered) {
+      if (delivered === "ok") {
         this.#turnStartReached = true;
         this.#recoveryFaultDuringDelivery = null;
         this.#options.onTurnStart?.({ turnToken, conversationIds });
@@ -1831,14 +1866,18 @@ export class AntigravityHost implements EngineAdapter {
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (!this.#isCurrent(generation)) {
         return { kind: "stale" };
-      } else if (!delivered) {
+      } else if (delivered !== "ok") {
         const detail = "epoch_exit_before_turn";
         if (recoveryCandidate) {
           this.#restoreRecoveryFault();
           this.#emitRecoveryOutcome("failed", detail);
           return { kind: "recovery_rejected", detail, probeResult: "failed" };
         }
-        return { kind: "error", detail, classify: { detail }, attemptedModel };
+        const classify: InterAgentErrorClassifyInput =
+          delivered === "attempted"
+            ? { detail, reason: "receipt_unknown" }
+            : { detail };
+        return { kind: "error", detail, classify, attemptedModel };
       } else if (inFlight.correlationFailure !== null) {
         const detail = `antigravity_gate_unobserved_tool:${inFlight.correlationFailure}`;
         return { kind: "error", detail, classify: { detail }, attemptedModel };
@@ -1940,43 +1979,132 @@ export class AntigravityHost implements EngineAdapter {
     }
   }
 
+  #ensureDeathPromise(epoch: EpochRuntime): Promise<void> {
+    epoch.deathPromise ??= new Promise<void>((resolve) => {
+      epoch.resolveDeath = resolve;
+    });
+    return epoch.deathPromise;
+  }
+
+  #destroyChildStdio(child: SpawnedAgy): void {
+    const streams: unknown[] = [child.stdin, child.stdout, child.stderr];
+    for (const stream of streams) {
+      if (typeof stream !== "object" || stream === null) continue;
+      const destroy = (stream as { destroy?: unknown }).destroy;
+      if (typeof destroy !== "function") continue;
+      destroy.call(stream);
+    }
+  }
+
+  #awaitDeath(epoch: EpochRuntime, graceMs: number): Promise<boolean> {
+    const death = this.#ensureDeathPromise(epoch);
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      }, graceMs);
+      void death.then(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
+
+  async #awaitExitedClose(epoch: EpochRuntime): Promise<boolean> {
+    if (await this.#awaitDeath(epoch, this.#closeGraceMs)) return true;
+    this.#destroyChildStdio(epoch.child);
+    return this.#awaitDeath(epoch, this.#closeGraceMs);
+  }
+
+  /** One replacement spawn per turn. A child that is already dead is
+   *  closed, then replaced. A second dead child is not written and is
+   *  not replaced again. */
+  async #replaceExitedEpoch(
+    spec: EpochSpec,
+    generation: number,
+    customization: CustomizationDir,
+    executable: string,
+  ): Promise<"ok" | "stale" | "undelivered"> {
+    const maxReplacementSpawns = 1;
+    let spawned = 0;
+    for (;;) {
+      if (!this.#isCurrent(generation)) return "stale";
+      const epoch = this.#epoch;
+      if (epoch !== null && childHasExited(epoch.child)) {
+        if (spawned >= maxReplacementSpawns) return "undelivered";
+        const closed = await this.#awaitExitedClose(epoch);
+        if (!this.#isCurrent(generation)) return "stale";
+        if (!closed || this.#epoch === epoch) return "undelivered";
+        continue;
+      }
+      if (this.#epoch === null) {
+        const spawnedEpoch = await this.#spawnEpoch(
+          spec,
+          generation,
+          customization,
+          executable,
+        );
+        if (!spawnedEpoch.ok) return "stale";
+        spawned += 1;
+        continue;
+      }
+      return "ok";
+    }
+  }
+
   /** issue #377 Stage 1 M4, adapted for Stage 2: writes the turn's prompt as
    *  exactly one NDJSON line (`--input-format stream-json`'s accepted
    *  shape, measured in docs/evidence/antigravity/print-mode-background-tasks.md).
    *  Unlike Stage 1 this does NOT close stdin -- an epoch's stdin stays open
-   *  for every turn it serves. Resolves `true` only once the write callback
+   *  for every turn it serves. Resolves `"ok"` only once the write callback
    *  has resolved without error AND the epoch has not already ended in the
-   *  meantime; resolves `false` on a write error or that race, in which
-   *  case the caller reports `epoch_exit_before_turn` and does not re-send
+   *  meantime; resolves `"attempted"` when the write was started and then
+   *  failed, or `"not_attempted"` when it was not started. The caller
+   *  reports `epoch_exit_before_turn` and does not re-send
    *  the line on its own -- the model may already have read it, and a
    *  duplicate turn is worse than a visible failure. Checks `this.#epoch !==
    *  epoch` (rather than each call installing its own `close` listener) so
    *  an epoch serving many turns accumulates no listeners on its child. */
-  #deliverTurnInput(epoch: EpochRuntime, text: string): Promise<boolean> {
+  #deliverTurnInput(epoch: EpochRuntime, text: string): Promise<TurnDelivery> {
     return new Promise((resolveDelivery) => {
       let settled = false;
-      const settle = (delivered: boolean): void => {
+      let writeStarted = false;
+      const settle = (result: TurnDelivery): void => {
         if (settled) return;
         settled = true;
-        if (epoch.pendingDeliverySettle === settle) epoch.pendingDeliverySettle = null;
-        resolveDelivery(delivered);
+        if (epoch.pendingDeliverySettle === fromListener) {
+          epoch.pendingDeliverySettle = null;
+        }
+        resolveDelivery(result);
       };
-      epoch.pendingDeliverySettle = settle;
+      const fromListener = (hint: TurnDelivery): void => {
+        if (hint === "ok") {
+          settle("ok");
+          return;
+        }
+        settle(writeStarted ? "attempted" : "not_attempted");
+      };
+      epoch.pendingDeliverySettle = fromListener;
       if (epoch.stdinErrored || this.#epoch !== epoch) {
-        settle(false);
+        settle("not_attempted");
         return;
       }
       const line = `${JSON.stringify({ event: "user", message: { role: "user", content: text } })}\n`;
+      writeStarted = true;
       epoch.child.stdin.write(line, (error) => {
         if (error !== undefined && error !== null) {
-          settle(false);
+          settle("attempted");
           return;
         }
         if (this.#epoch !== epoch) {
-          settle(false);
+          settle("attempted");
           return;
         }
-        settle(true);
+        settle("ok");
       });
     });
   }
@@ -1991,7 +2119,7 @@ export class AntigravityHost implements EngineAdapter {
   #attachEpochWatcher(epoch: EpochRuntime): void {
     epoch.child.stdin.on("error", () => {
       epoch.stdinErrored = true;
-      epoch.pendingDeliverySettle?.(false);
+      epoch.pendingDeliverySettle?.("attempted");
     });
     // issue #379: cancel any pending SIGKILL escalation for THIS child as
     // soon as it is known to have exited. `exit` fires before `close` (no
@@ -1999,6 +2127,7 @@ export class AntigravityHost implements EngineAdapter {
     // a defensive second call (`cancel()` is idempotent) for the rare case
     // `exit` was not observed.
     epoch.child.once("exit", () => {
+      this.#ensureDeathPromise(epoch);
       this.#activeTermination?.cancel();
       this.#activeTermination = null;
     });
@@ -2006,7 +2135,7 @@ export class AntigravityHost implements EngineAdapter {
       this.#activeTermination?.cancel();
       this.#activeTermination = null;
       this.#lastChildExit = { code, signal };
-      epoch.pendingDeliverySettle?.(false);
+      epoch.pendingDeliverySettle?.("attempted");
       if (this.#epoch !== epoch) return;
       this.#epoch = null;
       const epochFaultPrefix = `${epoch.serial}:`;
@@ -2281,9 +2410,7 @@ export class AntigravityHost implements EngineAdapter {
       epoch.endingReason = reason;
       this.#clearIdleTtlTimer(epoch);
     }
-    epoch.deathPromise ??= new Promise<void>((resolve) => {
-      epoch.resolveDeath = resolve;
-    });
+    this.#ensureDeathPromise(epoch);
     return epoch;
   }
 

@@ -3406,6 +3406,7 @@ if (args[0] === "models") {
       readonly stdout = new PassThrough();
       readonly stderr = new PassThrough();
       writeCalls: string[] = [];
+      emitStdinErrorOnListen = false;
       readonly stdin = {
         write: (chunk: string, callback: (error?: Error | null) => void): boolean => {
           this.writeCalls.push(chunk);
@@ -3413,7 +3414,9 @@ if (args[0] === "models") {
           return true;
         },
         end: (): void => { this.stdinEnded = true; },
-        on: (): void => {},
+        on: (event: string, listener: () => void): void => {
+          if (this.emitStdinErrorOnListen && event === "error") listener();
+        },
         once: (): void => {},
       } as unknown as NodeJS.WritableStream;
       stdinEnded = false;
@@ -3476,7 +3479,10 @@ if (args[0] === "models") {
       await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
       expect(starts).toEqual([]);
       const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
-      expect(end.error).toEqual({ detail: "epoch_exit_before_turn" });
+      expect(end.error).toEqual({
+        detail: "epoch_exit_before_turn",
+        reason: "receipt_unknown",
+      });
       expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
         is_error: true, error_detail: "epoch_exit_before_turn",
       });
@@ -3525,7 +3531,10 @@ if (args[0] === "models") {
       await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
       expect(starts).toEqual([]);
       const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
-      expect(end.error).toEqual({ detail: "epoch_exit_before_turn" });
+      expect(end.error).toEqual({
+        detail: "epoch_exit_before_turn",
+        reason: "receipt_unknown",
+      });
       expect(rawCalls).toHaveLength(1);
       expect(rawCalls[0]!.writeCalls).toHaveLength(1);
       racyHost.close();
@@ -3666,7 +3675,10 @@ if (args[0] === "models") {
       rawChild.terminate(null, null);
       await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
       const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
-      expect(end.error).toEqual({ detail: "epoch_exit_before_turn" });
+      expect(end.error).toEqual({
+        detail: "epoch_exit_before_turn",
+        reason: "receipt_unknown",
+      });
       h.close();
     });
 
@@ -3703,6 +3715,126 @@ if (args[0] === "models") {
       expect(states.length).toBe(statesBefore);
       h.close();
     });
+
+    type TurnEnd = Parameters<
+      NonNullable<AntigravityHostOptions["onTurnEnd"]>
+    >[0];
+
+    function hostFor(
+      closeGraceMs: number,
+      spawnChild: () => RacyStdinAgy,
+    ): {
+      host: AntigravityHost;
+      starts: string[];
+      ends: TurnEnd[];
+      calls: RacyStdinAgy[];
+    } {
+      const starts: string[] = [];
+      const ends: TurnEnd[] = [];
+      const calls: RacyStdinAgy[] = [];
+      const cfg = config();
+      const host = createHarnessHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({
+          config: cfg,
+          send: () => {},
+        }),
+        onState: () => {},
+        onLog: () => {},
+        runtimeAssetsAvailable: () => true,
+        verifyGate: async () => true,
+        agyPath: "/test/agy",
+        closeGraceMs,
+        onTurnStart: ({ turnToken }) => starts.push(turnToken),
+        onTurnEnd: (info) => ends.push(info),
+        spawn: () => {
+          const child = spawnChild();
+          calls.push(child);
+          return child as unknown as SpawnedAgy;
+        },
+      });
+      return { host, starts, ends, calls };
+    }
+
+    async function until(
+      limitMs: number,
+      predicate: () => boolean,
+    ): Promise<void> {
+      const started = performance.now();
+      while (performance.now() - started < limitMs) {
+        if (predicate()) return;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error(`exceeded ${limitMs}ms`);
+    }
+
+    it("does not write when the only child is already dead", async () => {
+      const { host, starts, ends, calls } = hostFor(30, () => {
+        const child = new RacyStdinAgy();
+        child.exitCode = 1;
+        setTimeout(() => {
+          child.emit("exit", 1, null);
+          child.emit("close", 1, null);
+        }, 0);
+        return child;
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => ends.some((end) => end.turnToken === "turn-1"));
+      expect(starts).toEqual([]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.writeCalls).toHaveLength(0);
+      expect(ends[0]!.error).toEqual({ detail: "epoch_exit_before_turn" });
+      await host.close();
+    });
+
+    it("a stdin error before write is not receipt_unknown", async () => {
+      const { host, starts, ends, calls } = hostFor(30, () => {
+        const child = new RacyStdinAgy();
+        child.emitStdinErrorOnListen = true;
+        queueMicrotask(() => child.terminate(1, null));
+        return child;
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => ends.some((end) => end.turnToken === "turn-1"));
+      expect(starts).toEqual([]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.writeCalls).toHaveLength(0);
+      expect(ends[0]!.error).toEqual({ detail: "epoch_exit_before_turn" });
+      await host.close();
+    });
+
+    it("fails later turns inside two graces when close never arrives",
+      async () => {
+        const { host, starts, ends, calls } = hostFor(
+          40,
+          () => new RacyStdinAgy(),
+        );
+        await host.send("first", undefined, [], "turn-1");
+        await waitFor(() => calls.length === 1
+          && calls[0]!.writeCalls.length === 1);
+        calls[0]!.stdout.write(
+          "{\"event\":\"result\",\"result\":"
+          + "{\"status\":\"SUCCESS\",\"response\":\"first\"}}\n",
+        );
+        await waitFor(() => ends.some((end) => end.turnToken === "turn-1"));
+        calls[0]!.exitCode = 1;
+        await host.send("second", undefined, [], "turn-2");
+        await until(400, () => ends.some((end) => end.turnToken === "turn-2"));
+        await host.send("third", undefined, [], "turn-3");
+        await until(400, () => ends.some((end) => end.turnToken === "turn-3"));
+        expect(starts).toEqual(["turn-1"]);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]!.writeCalls).toHaveLength(1);
+        for (const token of ["turn-2", "turn-3"]) {
+          expect(ends.find((end) => end.turnToken === token)?.error).toEqual({
+            detail: "epoch_exit_before_turn",
+          });
+        }
+        calls[0]!.emit("exit", 1, null);
+        calls[0]!.emit("close", 1, null);
+        await host.close();
+      });
   });
 
   describe("issue #377 Stage 2 (epoch lifetime)", () => {
