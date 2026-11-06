@@ -234,6 +234,7 @@ const ERROR_CODE_GUIDANCE: Readonly<Record<string, string>> = {
   context_overflow:
     "retrying is pointless — summarize the context or escalate to the operator",
   api_error: "retry at most once",
+  receipt_unknown: "do not resend this input",
   timeout: "the peer may still be mid-turn — wait before retrying",
   interrupted: "confirm the peer's state before retrying",
   reconnecting:
@@ -329,6 +330,8 @@ const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
   rate_limit: "the peer hit a rate limit",
   context_overflow: "the peer's context window overflowed",
   api_error: "the peer reported an unspecified error",
+  receipt_unknown:
+    "the input may already have been read; do not send it again",
   timeout: "the peer's turn timed out",
   interrupted: "the peer's turn was interrupted",
   reconnecting: "the peer is temporarily unavailable for a planned restart",
@@ -395,7 +398,10 @@ export function classifyInterAgentError(
   input: InterAgentErrorClassifyInput,
 ): InterAgentErrorPayload {
   const reason = input.reason;
-  if (reason === "permission_gate_blocked") {
+  if (
+    reason === "permission_gate_blocked" ||
+    reason === "receipt_unknown"
+  ) {
     return { code: reason, message: messageForCode(reason) };
   }
   if (reason !== undefined) {

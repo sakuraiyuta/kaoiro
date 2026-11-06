@@ -54,12 +54,18 @@ added later. Treat an unknown code as `api_error`.
 | `rate_limit` | usage or quota exceeded | Immediate retry is futile; wait or escalate. |
 | `context_overflow` | context length exceeded | Retry with the same content is futile; summarize/split or escalate. |
 | `api_error` | engine/API error or classification fallback | One retry is allowed; escalate if it repeats. |
+| `receipt_unknown` | the input was written and the peer may already have read it | Do not send this input again. |
 | `timeout` | peer processing timed out (Antigravity: a tool step past the absolute `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` deadline ended the turn with `error_detail: tool_timeout`, [antigravity tools and permissions](../engines/antigravity-tools-permissions.md#tool-children-prompts-disabled-absolute-tool-deadline-issue-350)) | Wait, then retry. |
 | `permission_gate_blocked` | peer reached the permission dispatch deadline before an execution started | Ask the operator to reapply the same sandbox/network values (allocating a new revision), then resend. Never retry automatically. |
 | `interrupted` | peer turn was interrupted or a queued message was retired before dispatch | It may be operator-driven; check state before retrying. For an Antigravity gate-recovery notice, the queued message was not dispatched; after confirming the peer/conversation state, the sender may retry it. |
 | `reconnecting` | server announced a wrapper restart | Do not escalate; wait for `reconnected`, then retry the same `conversation_id`. |
 | `disconnected` | peer wrapper disconnected; optional `origin` / `reason` identifies the terminal cause | Retry is futile until it returns; escalate. |
 | `stale_turn` | receiver discarded a message whose turn_number was at or below its known maximum (AC9) | Send using a new conversation_id. |
+
+`receipt_unknown` is not a sub-code of issue 600. Issue 600 remains a
+separate proposal. `ERROR_CODE_GUIDANCE_SUMMARY` is interpolated into
+`TOOL_DESCRIPTION`, so every engine's `send_to_agent` description gains
+the guidance line.
 
 ### Sources (four paths)
 
