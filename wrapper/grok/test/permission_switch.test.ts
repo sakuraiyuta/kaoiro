@@ -573,3 +573,66 @@ it("settles permission sync expiry once before a prompt and accepts a later expl
   expect(envelopes.filter(e=>e.type==="result")).toEqual([expect.objectContaining({payload:expect.objectContaining({is_error:true,error_detail:expect.stringContaining("No execution was started")})})]);
   expect(host.state).toBe("waiting_input");blocked=false;await host.send("recovered");expect(starts).toHaveBeenCalledTimes(1);
 });
+
+it("keeps the effective sandbox empty after a revision-zero history sync", async () => {
+  const { host, lifecycle } = await started();
+  expect(host.activeInterAgentTurnToken()).toBeNull();
+  expect(host.statusExtSnapshot()).toHaveProperty("permission_policy");
+  expect(host.statusExtSnapshot()).toHaveProperty("permission");
+  const baseline = { revision: 0, requested: { sandbox: "workspace-write" as const, network_access: true } };
+  const history = {
+    ...baseline, execution_id: "prior-exec", session_id: "prior-session", turn_id: "prior-turn",
+    permission: { sandbox: "read-only" as const, approval: "on-request" as const, enforcement: "os" as const },
+    network_access: false, requested: { sandbox: "read-only" as const, network_access: false },
+  };
+  const control = {
+    ...baseline, status: "pending" as const,
+    constraints: { approval: "on-request" as const, enforcement: "os" as const },
+    last_effective: history,
+  };
+  host.applyPermissionSync({ version: "0", next: baseline, control });
+  const empty = (snapshot: Record<string, unknown>) => {
+    const effective = snapshot.effective as { sandbox?: unknown; network_access?: unknown } | undefined;
+    return { permission: snapshot.permission, sandbox: effective?.sandbox, network: effective?.network_access };
+  };
+  expect(empty(host.statusExtSnapshot())).toEqual({
+    permission: undefined, sandbox: undefined, network: undefined,
+  });
+  expect(host.statusExtSnapshot().permission_control).toMatchObject({
+    revision: 0, status: "pending", last_effective: history,
+  });
+  expect(host.statusExtSnapshot().permission_control).not.toHaveProperty("submitted");
+  expect(host.statusExtSnapshot().permission_control).not.toHaveProperty("effective");
+  expect(lifecycle).not.toContainEqual(expect.objectContaining({ kind: "permission_applied" }));
+  const turn = host.send("sleep"); void turn.catch(() => {});
+  await vi.waitFor(() => expect(host.state).toBe("tool_running"), { timeout: 5000 });
+  const newer = { ...history, revision: 4, turn_id: "newer",
+    permission: { sandbox: "danger-full-access" as const, approval: "on-request" as const, enforcement: "os" as const },
+    requested: { sandbox: "danger-full-access" as const, network_access: false } };
+  host.applyPermissionSync({ version: "0", next: baseline, control: { ...control, last_effective: newer } });
+  expect(host.statusExtSnapshot().permission_control).toMatchObject({
+    status: "applying", last_effective: history,
+  });
+  expect(empty(host.statusExtSnapshot())).toEqual({
+    permission: undefined, sandbox: undefined, network: undefined,
+  });
+  await host.interrupt(); await turn;
+  // Fixture cancel includes a prompt id, so this exec is observed.
+  expect(host.statusExtSnapshot()).toMatchObject({
+    effective: { sandbox: "workspace-write", network_access: true },
+  });
+  await host.send("no-prompt-id");
+  expect(host.statusExtSnapshot().permission_control).toMatchObject({ status: "unknown" });
+  expect(host.statusExtSnapshot().permission_gate).toMatchObject({ reason: "observation_unavailable" });
+  const kept = host.statusExtSnapshot().permission_control as { last_effective?: unknown };
+  const newest = { ...history, revision: 5, turn_id: "newest" };
+  host.applyPermissionSync({ version: "0", next: baseline, control: { ...control, last_effective: newest } });
+  expect(host.statusExtSnapshot().permission_control).toMatchObject({
+    status: "unknown", last_effective: kept.last_effective,
+  });
+  expect(host.statusExtSnapshot().permission_gate).toMatchObject({ reason: "observation_unavailable" });
+  expect(empty(host.statusExtSnapshot())).toEqual({
+    permission: undefined, sandbox: undefined, network: undefined,
+  });
+  expect(lifecycle).not.toContainEqual(expect.objectContaining({ kind: "permission_applied" }));
+});

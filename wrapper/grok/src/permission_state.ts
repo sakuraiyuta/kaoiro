@@ -87,9 +87,19 @@ export function applyPermissionSyncState(state: PermissionState, message: Permis
   const historical = incoming.status === "applied" ? incoming.effective : incoming.last_effective;
   const applied = new Set(state.appliedRevisions);
   if (accepts && historical && historical.revision > 0) applied.add(historical.revision);
-  return { ...state, latest: accepts ? { ...incoming, constraints: CONSTRAINTS } : state.latest,
+  // Not an observation: appliedRevisions stays unchanged, so the first real
+  // exec of this revision can still emit an audit.
+  const sameRevision = state.latest !== null && incoming.revision === state.latest.revision;
+  const newerHistory = historical !== undefined && (state.lastEffective === null ||
+    historical.revision > state.lastEffective.revision);
+  const backfill = !accepts && state.current === null && sameRevision && newerHistory;
+  const copied = backfill && historical ? historical : undefined;
+  return { ...state,
+    latest: accepts ? { ...incoming, constraints: CONSTRAINTS }
+      : copied !== undefined && state.latest ? { ...state.latest, last_effective: copied } : state.latest,
     next: withinCeiling(candidate, ceiling) ? candidate : null, gate,
-    lastEffective: accepts && historical && !state.current ? historical : state.lastEffective,
+    lastEffective: accepts && historical && !state.current ? historical
+      : copied !== undefined ? copied : state.lastEffective,
     appliedRevisions: applied };
 }
 export function capturePermission(state: PermissionState, executionId: string): PermissionSubmission | null {
