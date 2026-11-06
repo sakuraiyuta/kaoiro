@@ -2440,7 +2440,7 @@ describe("AgentHost — query injection", () => {
         result("success", { is_error: true, result: "rate limit exceeded", terminal_reason: "api_error" }),
         result("success", { is_error: true, result: "other error", terminal_reason: "api_error" }),
         assistant([{ type: "text" }], "rate_limit"),
-        result("error_during_execution", { errors: ["other failure"], terminal_reason: "api_error" }),
+        result("error_during_execution", { is_error: true, errors: ["other failure"], terminal_reason: "api_error" }),
       ]),
     });
     await host.run();
