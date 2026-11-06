@@ -603,7 +603,8 @@ it("keeps effective settings and whoami unchanged until the successful next disp
   const before = f.host.statusSnapshot();
   await f.host.setModel("gpt-6-astra");await f.host.setEffort("low");
   expect(f.host.statusSnapshot().model).toBe(before.model);
-  expect(f.turns()[0]?.params).toMatchObject({ model: "gpt-5.6-sol", effort: "high" });
+  expect(f.sent.find(r => r.method === "thread/start")?.params).toMatchObject({ model: "gpt-5.6-sol" });
+  expect(f.turns()[0]?.params).toMatchObject({ effort: "high" });
   f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
   await f.host.send("second");await f.until(2);
   expect(f.turns()[1]?.params).toMatchObject({ model: "gpt-6-astra", effort: "low" });
