@@ -267,7 +267,7 @@ test("restore rejects a non-fresh target before opening credentials", async () =
   }
 });
 
-for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host"]) test(`default local observe and remove-pin use real evidence and config bytes (${format})`, async t => {
+for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host", "unknown-engine"]) test(`default local observe and remove-pin use real evidence and config bytes (${format})`, async t => {
   const root = await mkdtemp(join(tmpdir(), "kogane564-maintenance-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configPath = join(root, "runner.json"), evidencePath = join(root, "maintenance.json");
@@ -276,6 +276,7 @@ for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup
   await writeFile(configPath, JSON.stringify({ host_id: selectedHost, codex: { backend: "exec", model: "preserved" }, capabilities: ["codex"] }));
   const f = fixture(); let cursorCalls = 0, supervisorCalls = 0;
   if (format === "golden") { f.state.h = golden;f.state.s.host = selectedHost; }
+  if (format === "unknown-engine") f.state.h.rows[0].engine = "unrecognized-engine";
   const beforeBytes = await readFile(configPath);
   // Synchronous command boundary; the RPC payload matches the producer contract.
   const { readFileSync, statSync } = await import("node:fs");
@@ -302,12 +303,13 @@ for (const format of ["plain", "prefixed", "golden", "missing", "missing-startup
   };
   const observed = io(), result = await main(localArgs("observe"), undefined, observed, { runCommand });
   assert.deepEqual(await readFile(configPath), beforeBytes);assert.equal(cursorCalls, 0);
-  if (["missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host"].includes(format)) {
+  if (["missing", "missing-startup", "changed-rpc", "dirty-startup", "wrong-startup-host", "unknown-engine"].includes(format)) {
     assert.equal(result, 1);
     assert.match(observed.stderr.text, format === "missing" ? /server-observation-unavailable/
       : format === "missing-startup" ? /runner-start-record-unavailable/
       : format === "dirty-startup" ? /runner-identity-dirty/
-      : format === "wrong-startup-host" ? /runner-observation-unavailable/ : /supervisor-identity-mismatch/);
+      : format === "wrong-startup-host" ? /runner-observation-unavailable/
+      : format === "unknown-engine" ? /observation-invalid/ : /supervisor-identity-mismatch/);
     return;
   }
   assert.equal(result, 0, observed.stderr.text);assert.equal(supervisorCalls, 2);
