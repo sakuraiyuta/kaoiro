@@ -36,7 +36,6 @@ function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
     let finished = false;
     let worker: ServiceWorker | undefined;
     const finish = (result: ServiceWorkerRegistration | null) => {
-      if (finished) return;
       finished = true;
       clearTimeout(timer);
       worker?.removeEventListener("statechange", changed);

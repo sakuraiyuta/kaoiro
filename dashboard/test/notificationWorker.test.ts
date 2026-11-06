@@ -88,6 +88,20 @@ describe("hand-wait notification worker", () => {
     expect(s.show).toHaveBeenCalledOnce();
   });
 
+  it("does not attach a worker listener when registration resolves after expiry", async () => {
+    let resolveRegistration!: (value: unknown) => void;
+    const deferred = new Promise((resolve) => { resolveRegistration = resolve; });
+    const s = await setup({ register: () => deferred });
+    const listen = vi.spyOn(s.worker, "addEventListener");
+    s.mod.notifyWait(envelope);
+    await vi.advanceTimersByTimeAsync(5000);
+    resolveRegistration(s.reg);
+    await flush();
+    expect(listen).not.toHaveBeenCalled();
+    expect(s.show).not.toHaveBeenCalled();
+    expect(s.warn).toHaveBeenCalledOnce();
+  });
+
   it("shows two pending alerts independently when activation arrives before their deadlines", async () => {
     const s = await setup();
     s.mod.notifyWait(envelope);
@@ -118,6 +132,21 @@ describe("hand-wait notification worker", () => {
     await flush();
     expect(s.warn).toHaveBeenCalledOnce();
     expect(s.show).not.toHaveBeenCalled();
+  });
+
+  it("warns when registration has no worker", async () => {
+    const s = await setup({ register: () => Promise.resolve({ active: null, installing: null, waiting: null }) });
+    s.mod.notifyWait(envelope);
+    await flush();
+    expect(s.warn).toHaveBeenCalledOnce();
+  });
+
+  it("fails softly when registration throws synchronously", async () => {
+    const s = await setup({ register: () => { throw new Error("unavailable"); } });
+    s.mod.notifyWait(envelope);
+    await flush();
+    expect(s.warn).toHaveBeenCalledOnce();
+    expect(s.play).toHaveBeenCalledOnce();
   });
 
   it("warns if the installing worker becomes redundant", async () => {
