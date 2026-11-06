@@ -16,7 +16,7 @@ test.describe("LaunchDialog a11y (issue #277)", () => {
     await page.locator("#dialog-trigger").click();
 
     await expect(page.locator("dialog select").first().locator("option")).toHaveText(
-      "e2e-host — kaoiro dev runner v2026.9.0 / unknown / 0123456",
+      "e2e-host — v2026.9.0 / unknown / 0123456",
     );
   });
 
