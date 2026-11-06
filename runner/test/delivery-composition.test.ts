@@ -123,19 +123,13 @@ describe("built runner and wrapper delivery composition", () => {
       expect(codex.inter_agent_early).toBe("steer");
     } finally { await h.stop(); }
   }, 40_000);
-  it("declares Codex operator steering by default on app-server and none on exec, with no opt-in", async () => {
+  it("declares Codex operator steering by default on app-server, with no opt-in", async () => {
     const on = await start({});
     try {
       const actual = declaration(await on.wrapper("codex", "codex"));
       expect(actual).toEqual({ operator_early: "steer", inter_agent_early: "steer", inter_agent_yield: "none" });
       expect(metadata(on.registers[0]!, "codex").mechanisms).toEqual(actual);
     } finally { await on.stop(); }
-    const exec = await start({ codex: { backend: "exec", auth_mode: "chatgpt", chatgpt_plan: "plus" } });
-    try {
-      const actual = declaration(await exec.wrapper("codex", "codex"));
-      expect(actual).toEqual({ operator_early: "none", inter_agent_early: "none", inter_agent_yield: "none" });
-      expect(metadata(exec.registers[0]!, "codex").mechanisms).toEqual(actual);
-    } finally { await exec.stop(); }
   }, 60_000);
   it("ignores old Codex variables at the runner and managed wrapper", async () => {
     const h = await start({}, { KAOIRO_CODEX_OPERATOR_STEER: "0", KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: "secret-persona-id" });

@@ -55,14 +55,14 @@ describe("host delivery settings", () => {
     expect(claude.mechanisms).toEqual(fold);
     expect(claude).not.toHaveProperty("persona_overrides");
   });
-  it("projects the Codex mechanisms from the ceiling and the backend alone", () => {
+  it("projects app-server mechanisms from the ceiling and rejects retired selection", () => {
     const steer = { ...none, operator_early: "steer", inter_agent_early: "steer" };
     const metadata = (codex: Record<string, unknown>) => buildLaunchDeliveryMetadata(
       createDeliverySnapshot(parseRunnerConfig({ ...raw, codex: { ...raw.codex, ...codex } })), "codex");
     expect(metadata({}).mechanisms).toEqual(steer);
     expect(metadata({ operator_steer: false }).mechanisms).toEqual(steer);
-    expect(metadata({ backend: "exec" })).toMatchObject({ ceiling: true, mechanisms: none });
-    expect(metadata({ backend: "exec", operator_steer: true }).mechanisms).toEqual(none);
+    expect(() => metadata({ backend: "exec" })).toThrow("exec is retired");
+    expect(() => metadata({ backend: "exec", operator_steer: true })).toThrow("exec is retired");
     const closed = buildLaunchDeliveryMetadata(createDeliverySnapshot(
       parseRunnerConfig({ ...raw, in_flight_delivery: { codex: { enabled: false } } })), "codex");
     expect(closed).toMatchObject({ ceiling: false, mechanisms: none });
