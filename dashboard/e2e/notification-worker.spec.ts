@@ -45,6 +45,8 @@ for (const expiry of [false, true]) {
           const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
           if (url.includes("/session/ticket")) return Response.json({ ticket: "e2e" });
           if (url.includes("/session/auth-methods")) return Response.json({ token: true, oauth: [] });
+          if (url.includes("/session/refresh")) return Response.json({});
+          if (url.includes("/api/personas")) return Response.json({ version: "0", personas: {} });
           return originalFetch(input, init);
         };
         class FakeSocket {
