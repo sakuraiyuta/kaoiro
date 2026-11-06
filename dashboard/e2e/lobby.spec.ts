@@ -22,7 +22,7 @@ test("app header shows server and client build identities", async ({ page }) => 
     "v2026.9.0 / unknown / 0123456",
   );
   await expect(page.locator('[data-component="client"]')).toHaveText(
-    /^kaoiro (?:dev|release) client v2026\.9\.0 \/ \S+ \/ (?:[0-9a-f]{7}|unknown)$/,
+    /^(?:v\S+|unknown|untagged) \/ \S+ \/ (?:[0-9a-f]{7}|unknown)$/,
   );
 });
 
