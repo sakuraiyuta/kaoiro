@@ -110,6 +110,22 @@ function observedControl(revision: number): Record<string, unknown> {
   });
 }
 
+function historicalObservation(): Record<string, unknown> {
+  return {
+    revision: 2,
+    requested: { sandbox: "read-only", network_access: true },
+    execution_id: "exec-2",
+    session_id: "session-a",
+    turn_id: "turn-2",
+    permission: {
+      sandbox: "read-only",
+      approval: "never",
+      enforcement: "os",
+    },
+    network_access: true,
+  };
+}
+
 /** A record that satisfies the `PermissionControlExt` arm for `status`.
  *  Each arm requires different fields, so `control({ status })` is a valid
  *  positive fixture for `pending` alone — using it everywhere is what let
@@ -140,6 +156,20 @@ function rowByLabel(target: HTMLElement, label: string): HTMLElement | null {
     }
   }
   return null;
+}
+
+function rowElementByLabel(
+  target: HTMLElement,
+  label: string,
+): HTMLElement | null {
+  for (const row of target.querySelectorAll<HTMLElement>(".cc-row")) {
+    if (row.querySelector("dt")?.textContent?.trim() === label) return row;
+  }
+  return null;
+}
+
+function normalizedText(element: Element): string {
+  return (element.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
 async function render(
@@ -402,6 +432,70 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     });
     expect(rowByLabel(target, "network_access")?.textContent?.trim()).toBe(
       "未確認",
+    );
+  });
+
+  it("shows last_effective as history only while the observation is unknown", async () => {
+    const unknown = conformingControl("unknown");
+    const { target, props } = await render(reviewExt(unknown));
+    const before = normalizedText(target);
+    expect(rowElementByLabel(target, "過去の観測")).toBeNull();
+    expect(rowByLabel(target, "実効書込範囲")?.textContent).toContain(
+      "書込: 未確認",
+    );
+    expect(rowByLabel(target, "network_access")?.textContent?.trim()).toBe(
+      "未確認",
+    );
+
+    props.envelope = envelope(
+      reviewExt({ ...unknown, last_effective: historicalObservation() }),
+    );
+    await tick();
+
+    expect(rowByLabel(target, "過去の観測")?.textContent).toBe(
+      "rev 2 — 現在の許可ではありません: 書込: read-only / 承認: never / network_access: true",
+    );
+    const withoutHistory = target.cloneNode(true) as HTMLElement;
+    rowElementByLabel(withoutHistory, "過去の観測")?.remove();
+    expect(normalizedText(withoutHistory)).toBe(before);
+  });
+
+  it("does not show last_effective as current or historical while applying", async () => {
+    const applying = {
+      ...conformingControl("applying"),
+      last_effective: historicalObservation(),
+    };
+    const { target } = await render(reviewExt(applying));
+
+    expect(rowElementByLabel(target, "過去の観測")).toBeNull();
+    expect(rowByLabel(target, "実効書込範囲")?.textContent).toContain(
+      "書込: 未確認",
+    );
+    expect(rowByLabel(target, "network_access")?.textContent?.trim()).toBe(
+      "未確認",
+    );
+  });
+
+  it("omits malformed last_effective without dropping the unknown control", async () => {
+    const unknown = {
+      ...conformingControl("unknown"),
+      last_effective: {
+        ...historicalObservation(),
+        permission: {
+          sandbox: "not-a-policy",
+          approval: "never",
+          enforcement: "os",
+        },
+      },
+    };
+    const parsed = permissionControlFrom(envelope(reviewExt(unknown)));
+    expect(parsed?.status).toBe("unknown");
+    expect(parsed?.last_effective).toBeUndefined();
+
+    const { target } = await render(reviewExt(unknown));
+    expect(rowElementByLabel(target, "過去の観測")).toBeNull();
+    expect(rowByLabel(target, "実効書込範囲")?.textContent).toContain(
+      "書込: 未確認",
     );
   });
 

@@ -3401,6 +3401,17 @@
                 </span>
               </dd>
             </div>
+            {#if permControl.status === "unknown" && permControl.last_effective}
+              <div class="cc-row">
+                <dt>過去の観測</dt>
+                <dd>
+                  rev {permControl.last_effective.revision} — 現在の許可ではありません:
+                  書込: {permControl.last_effective.permission.sandbox} /
+                  承認: {permControl.last_effective.permission.approval} /
+                  network_access: {permControl.last_effective.network_access}
+                </dd>
+              </div>
+            {/if}
           {/if}
           {#if networkRowVisible}
             <!-- The Codex / Antigravity network axis (ADR-0033 F3,
