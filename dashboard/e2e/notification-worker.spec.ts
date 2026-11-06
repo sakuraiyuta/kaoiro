@@ -94,12 +94,12 @@ for (const expiry of [false, true]) {
         await expect.poll(() => page.evaluate(async () => (await (await navigator.serviceWorker.getRegistration("/notification-worker/"))!.getNotifications()).length)).toBe(0);
       } else {
         await expect.poll(() => page.evaluate(async () => (await (await navigator.serviceWorker.getRegistration("/notification-worker/"))!.getNotifications()).map(n => ({ title: n.title, body: n.body, tag: n.tag })))).toEqual([{ title: "Test agent", body: "your turn", tag: "kaoiro:test-agent" }]);
-        const workerResponse = await page.request.get(`${origin}/notification-worker/sw.js`);
-        expect(await workerResponse.text()).toBe("");
         await page.goto(`${origin}/notification-worker/missing-document`);
         const document = await page.reload();
-        expect(document?.status()).toBe(404);
         expect(await page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+        expect(document?.status()).toBe(404);
+        const workerResponse = await page.request.get(`${origin}/notification-worker/sw.js`);
+        expect(await workerResponse.text()).toBe("");
       }
     } finally {
       held?.response.destroy();
