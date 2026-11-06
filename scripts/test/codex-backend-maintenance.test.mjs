@@ -19,13 +19,13 @@ const args = (phase, ...extra) => ["--phase", phase, "--host", host, "--runner-s
   ...(phase === "restore-fresh" ? ["--agent", agent, "--backend", "app-server", "--operator-config", "operator.json"] : []), ...extra];
 const io = () => ({ stdout: { text: "", write(s) { this.text += s; } }, stderr: { text: "", write(s) { this.text += s; } } });
 
-function fixture() {
+function fixture(backend = "exec") {
   const state = {
     h: { schema: 1, host, rows: [row(agent), { ...row(other, "claude-code"), pointer: "non_nil", connected: true, live: true }] },
     r: { host, runnerSha: revision, invocationId: invocation, configHash: "c".repeat(64), configMtimeMs: 1000,
-      configuredBackend: "exec", appliedBackend: "exec", appliedReceipt: { backend: "exec", source: "reload", timestampUs: 2_000_000 } },
+      configuredBackend: backend, appliedBackend: backend, appliedReceipt: { backend, source: "reload", timestampUs: 2_000_000 } },
     s: { version: "0", schema: 1, host, build_revision: revision, pid: 100, owner: "#PID<1.2.3>", instance_id: instance,
-      request_id: "r".repeat(32), applied_backend: "exec", children: [], pending_spawns: [], pending_switches: [],
+      request_id: "r".repeat(32), applied_backend: backend, children: [], pending_spawns: [], pending_switches: [],
       invocationId: invocation, configHash: "c".repeat(64), configMtimeMs: 1000 },
     evidence: null, hook: () => {},
   };
@@ -60,7 +60,6 @@ async function accept(f, phase = "remove-pin") {
   argv[argv.indexOf("--phase-target") + 1] = phase;
   if (phase === "restore-fresh") {
     argv.push("--agent", agent, "--backend", "app-server");
-    f.state.r.configuredBackend = f.state.r.appliedBackend = f.state.r.appliedReceipt.backend = f.state.s.applied_backend = "app-server";
   }
   assert.equal(await main(argv, f.adapters, output), 0, output.stderr.text);
   const evidence = JSON.parse(output.stdout.text).maintenance_template;
@@ -171,7 +170,7 @@ test("failure after the write does not restore a pin or send restore", async () 
 });
 
 test("restore-fresh permits a connected same-backend sibling and checks actual target connection", async () => {
-  const f = fixture(), sibling = host + ".sibling";
+  const f = fixture("app-server"), sibling = host + ".sibling";
   f.state.h.rows.push({ ...row(sibling), connected: true, pointer: "non_nil" }); f.state.s.children.push(child(sibling));
   await accept(f, "restore-fresh"); const output = io();
   assert.equal(await main(args("restore-fresh"), f.adapters, output), 0, output.stderr.text);
@@ -180,7 +179,7 @@ test("restore-fresh permits a connected same-backend sibling and checks actual t
 });
 
 test("restore transport failure is uncertain and never retried", async () => {
-  const f = fixture(); await accept(f, "restore-fresh");
+  const f = fixture("app-server"); await accept(f, "restore-fresh");
   f.adapters.openOperator = async () => ({ restore() { f.calls.restore++; throw new Error("private detail"); }, close() { f.calls.close++; } });
   const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
   assert.match(output.stderr.text, /restore-outcome-unknown/); assert.doesNotMatch(output.stderr.text, /private detail/);
@@ -252,7 +251,7 @@ for (const [name, change] of Object.entries({
 });
 
 test("restore reply alone is insufficient without the observed connection", async t => {
-  const f = fixture(); await accept(f, "restore-fresh");
+  const f = fixture("app-server"); await accept(f, "restore-fresh");
   f.adapters.openOperator = async () => ({ restore() { f.calls.restore++; f.state.s.children.push(child(agent)); }, close() {} });
   let now = 0; t.mock.method(Date, "now", () => now);
   f.state.hook = (key, n) => { if (key === "host" && n === 7) now = 31_000; };
@@ -262,7 +261,7 @@ test("restore reply alone is insufficient without the observed connection", asyn
 
 test("restore rejects a non-fresh target before opening credentials", async () => {
   for (const change of [f => { f.state.h.rows[0].pointer = "non_nil"; }, f => { f.state.h.rows[0].connected = true; }, f => { f.state.s.pending_spawns.push(agent); }]) {
-    const f = fixture(); change(f); await accept(f, "restore-fresh"); const output = io();
+    const f = fixture("app-server"); change(f); await accept(f, "restore-fresh"); const output = io();
     assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
     assert.match(output.stderr.text, /target-not-fresh/); assert.equal(f.calls.open, 0);
   }
@@ -306,14 +305,14 @@ test("default local observe and remove-pin use real evidence and config bytes", 
 for (const [name, change] of Object.entries({
   "missing roster target": f => { f.state.h.rows.shift(); },
   "non-Codex target": f => { f.state.h.rows[0].engine = "grok"; },
-  "wrong applied backend": f => { f.state.r.appliedBackend = f.state.s.applied_backend = "app-server"; f.state.r.configuredBackend = "app-server"; },
+  "wrong applied backend": f => { f.state.r.appliedBackend = f.state.s.applied_backend = "exec"; f.state.r.configuredBackend = "exec"; },
   "stopping sibling": f => { f.state.s.children.push({ ...child(host + ".sibling"), stopping: true }); },
   "restarting sibling": f => { f.state.s.children.push({ ...child(host + ".sibling"), restarting: true }); },
   "resetting sibling": f => { f.state.s.children.push({ ...child(host + ".sibling"), reset_pending: true }); },
   "pending sibling spawn": f => { f.state.s.pending_spawns.push(host + ".sibling"); },
   "pending sibling switch": f => { f.state.s.pending_switches.push(host + ".sibling"); },
 })) test("restore admission rejects " + name + " before credentials", async () => {
-  const f = fixture(); f.state.h.rows.push({ ...row(host + ".sibling"), connected: true, pointer: "non_nil" });
+  const f = fixture("app-server"); f.state.h.rows.push({ ...row(host + ".sibling"), connected: true, pointer: "non_nil" });
   change(f); const e = await accept(f, "restore-fresh");
   for (const entry of e.agents) entry.current_backend = entry.classification === "codex" ? f.state.r.appliedBackend : "not-applicable";
   f.state.evidence = JSON.stringify(e); const output = io();
@@ -329,7 +328,7 @@ for (const [name, change] of Object.entries({
   "missing target pointer": f => { f.state.h.rows[0].pointer = "missing"; },
   "restarting target": f => { f.state.s.children[0].restarting = true; },
 })) test("restore completion rejects changed " + name + " without a second restore", async () => {
-  const f = fixture(); await accept(f, "restore-fresh");
+  const f = fixture("app-server"); await accept(f, "restore-fresh");
   f.state.hook = (key, n) => { if (key === "host" && n === 5) change(f); };
   const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
   assert.match(output.stderr.text, /observation-changed|observation-invalid|supervisor-work-pending/);
@@ -359,13 +358,13 @@ for (const flag of ["stopping", "restarting", "reset_pending"]) progressFaults["
 for (const [key, value] of Object.entries({ owner: "#PID<1.2.9>", instance_id: "87654321-1234-1234-1234-123456789abc", pid: 101, build_revision: "e".repeat(40) })) {
   progressFaults["supervisor-" + key] = f => { f.state.s[key] = value; };
 }
-for (const [key, value] of Object.entries({ invocationId: "e".repeat(32), configHash: "e".repeat(64), configMtimeMs: 1001, configuredBackend: "app-server", appliedBackend: "app-server" })) {
+for (const [key, value] of Object.entries({ invocationId: "e".repeat(32), configHash: "e".repeat(64), configMtimeMs: 1001, configuredBackend: "exec", appliedBackend: "exec" })) {
   progressFaults["runner-" + key] = f => { f.state.r[key] = value; };
 }
 for (const [name, change] of Object.entries(progressFaults)) test("restore guard " + name, async () => {
   const supervisor = name.startsWith("supervisor-") || ["sibling-child", "foreign-spawn", "foreign-switch", "target-stopping", "target-restarting", "target-reset-pending"].includes(name);
   for (const half of supervisor ? [5] : [5, 6]) {
-    const f = fixture(); await accept(f, "restore-fresh");
+    const f = fixture("app-server"); await accept(f, "restore-fresh");
     f.state.hook = (key, n) => {
       if (key === (supervisor ? "supervisor" : "host") && n === (supervisor ? 3 : half)) change(f);
       if (key === "supervisor" && n === 4) { f.state.s.pending_spawns = []; f.state.s.pending_switches = []; }
@@ -381,7 +380,7 @@ for (const [name, change] of Object.entries(progressFaults)) test("restore guard
 for (const [name, key, high, low] of [["connected", "connected", true, false], ["pointer", "pointer", "non_nil", "nil"], ["live", "live", true, false]]) {
   test("restore guard " + name + "-regression", async () => {
     for (const dropAt of [6, 7]) {
-      const f = fixture(); await accept(f, "restore-fresh");
+      const f = fixture("app-server"); await accept(f, "restore-fresh");
       f.state.hook = (kind, n) => {
         if (kind !== "host" || n < 5) return;
         f.state.h.rows[0][key] = n === dropAt ? low : high;
@@ -394,7 +393,7 @@ for (const [name, key, high, low] of [["connected", "connected", true, false], [
   });
 }
 for (const position of ["first", "last", "both"]) test("restore guard sibling-" + position, async () => {
-  const f = fixture(); await accept(f, "restore-fresh");
+  const f = fixture("app-server"); await accept(f, "restore-fresh");
   f.state.hook = (key, n) => { if (key === "host" && n >= 5) f.state.h.rows[1].pointer =
     (position !== "last" && n === 5) || (position !== "first" && n === 6) ? "nil" : "non_nil"; };
   const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
@@ -409,23 +408,23 @@ const admissionFaults = {
   "cross-invocation": [f => { f.state.s.invocationId = "e".repeat(32); }, "supervisor-identity-mismatch"],
   "cross-hash": [f => { f.state.s.configHash = "e".repeat(64); }, "supervisor-identity-mismatch"],
   "cross-mtime": [f => { f.state.s.configMtimeMs = 1001; }, "supervisor-identity-mismatch"],
-  "cross-backend": [f => { f.state.s.applied_backend = "app-server"; }, "supervisor-identity-mismatch"],
-  "configured-consistency": [f => { f.state.r.configuredBackend = "app-server"; }, "supervisor-identity-mismatch"],
+  "cross-backend": [f => { f.state.s.applied_backend = "exec"; }, "supervisor-identity-mismatch"],
+  "configured-consistency": [f => { f.state.r.configuredBackend = "exec"; }, "supervisor-identity-mismatch"],
 };
 for (const [name, [change, reason]] of Object.entries(admissionFaults)) test("restore guard " + name, async () => {
-  const f = fixture(); await accept(f, "restore-fresh"); change(f);
+  const f = fixture("app-server"); await accept(f, "restore-fresh"); change(f);
   const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
   assert.equal(JSON.parse(output.stderr.text).reason, reason); assert.equal(f.calls.restore, 0); assert.equal(f.calls.open, 0);
 });
 for (const [name, first, last] of [["strict-initial", 1, 2], ["strict-before-restore", 3, 4]]) test("restore guard " + name, async () => {
-  const f = fixture(); await accept(f, "restore-fresh");
+  const f = fixture("app-server"); await accept(f, "restore-fresh");
   f.state.hook = (key, n) => { if (key === "host") f.state.h.rows[0].transition_pending = n === (first === 1 ? last : first); };
   const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
   assert.equal(JSON.parse(output.stderr.text).reason, "observation-changed"); assert.equal(f.calls.restore, 0);
 });
 test("restore guard stable-result", async () => {
   for (const liveBefore of [false, true]) {
-    const f = fixture(); f.state.h.rows[0].live = liveBefore; await accept(f, "restore-fresh");
+    const f = fixture("app-server"); f.state.h.rows[0].live = liveBefore; await accept(f, "restore-fresh");
     f.state.hook = (key, n) => { if (key === "host" && n >= 5) Object.assign(f.state.h.rows[0],
       { connected: n > 5, transition_pending: n === 5, live: n > 5 ? true : liveBefore, pointer: n > 5 ? "non_nil" : "nil" }); };
     const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 0, output.stderr.text);
@@ -433,7 +432,7 @@ test("restore guard stable-result", async () => {
   }
 });
 test("restore guard deadline", async t => {
-  const f = fixture(); await accept(f, "restore-fresh"); let now = 0;
+  const f = fixture("app-server"); await accept(f, "restore-fresh"); let now = 0;
   t.mock.method(Date, "now", () => now);
   f.state.hook = (key, n) => { if (key === "host" && n === 6) now = 30_001; };
   const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
