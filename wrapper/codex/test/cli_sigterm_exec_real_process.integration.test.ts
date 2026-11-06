@@ -1,24 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-// issue #391 M1/M2: without a handler, Node's default SIGTERM behavior kills
-// this process immediately (no close(), no exec child cleanup). This test
-// proves the registered handler's FULL effect end to end through the REAL
-// `@openai/codex-sdk`/`codex exec` binary (not a fake client): SIGTERM ->
-// host.close() -> #abort.abort() -> the real `codex exec` child (and its
-// real sandboxed grandchild running a shell command) actually terminate,
-// and `runCodexCli()`'s own async lifecycle winds down cleanly afterward
-// (no explicit process.exit()).
-//
-// `process.emit("SIGTERM")` (synthetic, in-process) stands in for a real OS
-// signal, mirroring the Claude Code and antigravity SIGTERM pins: it invokes
-// the registered listener directly, so it does not re-prove "registering a
-// listener suppresses Node's default kill" (settled Node behavior) but DOES
-// prove everything this repo's code owns: the handler exists, calls
-// close(), and close()'s existing abort() wiring actually kills the real
-// exec subprocess tree -- measured at ~50ms in issue #391's offline
-// measurement 2, well inside this test's bound.
-//
-// Loopback Responses provider (offline, no real account usage), same shape
-// as `backend_rollback.integration.test.ts` / `cli_app_server_lifecycle.integration.test.ts`.
+// Exercise native child and sandboxed descendant teardown through the CLI
+// signal listener; a resolved host promise alone cannot establish cleanup.
 import { createServer } from "node:http";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -506,7 +488,7 @@ enabled=false
         10_000,
         () =>
           survivorDiagnostics(
-            [{ label: "codex exec child", pid: execChildPid }, { label: "sleep 77", pid: sleepPid }],
+            [{ label: `codex ${backend} child`, pid: execChildPid }, { label: "sleep 77", pid: sleepPid }],
             ownerTag,
           ) + timeoutDiagnostics(home, stderrCapture?.tail() ?? "<capture unavailable>"),
       );
