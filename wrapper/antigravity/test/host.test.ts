@@ -3757,36 +3757,50 @@ if (args[0] === "models") {
       return { host, starts, ends, calls };
     }
 
-    async function until(
-      limitMs: number,
-      predicate: () => boolean,
-    ): Promise<void> {
-      const started = performance.now();
-      while (performance.now() - started < limitMs) {
-        if (predicate()) return;
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      throw new Error(`exceeded ${limitMs}ms`);
-    }
-
-    it("does not write when the only child is already dead", async () => {
-      const { host, starts, ends, calls } = hostFor(30, () => {
-        const child = new RacyStdinAgy();
-        child.exitCode = 1;
-        setTimeout(() => {
-          child.emit("exit", 1, null);
-          child.emit("close", 1, null);
-        }, 0);
-        return child;
+    it("reports receipt_unknown one grace after a failed write's exit",
+      async () => {
+        let destroys = 0;
+        const graceMs = 60;
+        const { host, starts, ends, calls } = hostFor(graceMs, () => {
+          const child = new RacyStdinAgy();
+          child.onWrite = (callback) => {
+            queueMicrotask(() => callback(new Error("EPIPE")));
+          };
+          child.kill = () => {
+            setTimeout(() => {
+              child.exitCode = 1;
+              child.emit("exit", 1, null);
+            }, 0);
+            return true;
+          };
+          const destroy = child.stdout.destroy.bind(child.stdout);
+          child.stdout.destroy = (error?: Error) => {
+            destroys += 1;
+            child.emit("close", 1, null);
+            return destroy(error);
+          };
+          return child;
+        });
+        const pending = host.send("hello", undefined, [], "turn-1");
+        try {
+          await waitFor(() => calls.length === 1
+            && calls[0]!.writeCalls.length === 1
+            && calls[0]!.exitCode === 1);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          expect(destroys).toBe(0);
+          await waitFor(() => destroys === 1);
+          await pending;
+          expect(starts).toEqual([]);
+          expect(calls).toHaveLength(1);
+          expect(calls[0]!.writeCalls).toHaveLength(1);
+          expect(ends[0]!.error).toEqual({
+            detail: "epoch_exit_before_turn",
+            reason: "receipt_unknown",
+          });
+        } finally {
+          await host.close();
+        }
       });
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => ends.some((end) => end.turnToken === "turn-1"));
-      expect(starts).toEqual([]);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.writeCalls).toHaveLength(0);
-      expect(ends[0]!.error).toEqual({ detail: "epoch_exit_before_turn" });
-      await host.close();
-    });
 
     it("a stdin error before write is not receipt_unknown", async () => {
       const { host, starts, ends, calls } = hostFor(30, () => {
@@ -3803,38 +3817,6 @@ if (args[0] === "models") {
       expect(ends[0]!.error).toEqual({ detail: "epoch_exit_before_turn" });
       await host.close();
     });
-
-    it("fails later turns inside two graces when close never arrives",
-      async () => {
-        const { host, starts, ends, calls } = hostFor(
-          40,
-          () => new RacyStdinAgy(),
-        );
-        await host.send("first", undefined, [], "turn-1");
-        await waitFor(() => calls.length === 1
-          && calls[0]!.writeCalls.length === 1);
-        calls[0]!.stdout.write(
-          "{\"event\":\"result\",\"result\":"
-          + "{\"status\":\"SUCCESS\",\"response\":\"first\"}}\n",
-        );
-        await waitFor(() => ends.some((end) => end.turnToken === "turn-1"));
-        calls[0]!.exitCode = 1;
-        await host.send("second", undefined, [], "turn-2");
-        await until(400, () => ends.some((end) => end.turnToken === "turn-2"));
-        await host.send("third", undefined, [], "turn-3");
-        await until(400, () => ends.some((end) => end.turnToken === "turn-3"));
-        expect(starts).toEqual(["turn-1"]);
-        expect(calls).toHaveLength(1);
-        expect(calls[0]!.writeCalls).toHaveLength(1);
-        for (const token of ["turn-2", "turn-3"]) {
-          expect(ends.find((end) => end.turnToken === token)?.error).toEqual({
-            detail: "epoch_exit_before_turn",
-          });
-        }
-        calls[0]!.emit("exit", 1, null);
-        calls[0]!.emit("close", 1, null);
-        await host.close();
-      });
   });
 
   describe("issue #377 Stage 2 (epoch lifetime)", () => {

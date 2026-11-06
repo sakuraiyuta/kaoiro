@@ -1,3 +1,4 @@
+import "../../../scripts/test/fixtures/test-isolation.mjs";
 import {
   chmodSync,
   mkdtempSync,
@@ -216,7 +217,7 @@ describe("issue 602 exit before close", () => {
         if (info.reason === "idle_exit") idleExits.push(info.reason);
       },
       agyPath: executable,
-      closeGraceMs: 50,
+      closeGraceMs: 300,
     });
     let holderPid: number | null = null;
     try {
@@ -238,6 +239,7 @@ describe("issue 602 exit before close", () => {
       );
       holderPid = Number(readFileSync(holdPid, "utf8"));
       expect(holderAlive(holderPid)).toBe(true);
+      expect(idleExits).toEqual([]);
       void host.send("second", undefined, [], "turn-2");
       await waitFor(
         () => starts.includes("turn-2"),

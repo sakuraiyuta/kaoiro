@@ -177,6 +177,7 @@ interface EpochRuntime {
   resolveDeath: (() => void) | null;
   stdinErrored: boolean;
   pendingDeliverySettle: ((result: TurnDelivery) => void) | null;
+  closeAfterExitTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /** The turn currently owning the epoch's shared stdout stream. The epoch-
@@ -1695,24 +1696,6 @@ export class AntigravityHost implements EngineAdapter {
         executable,
       );
       if (adopted === "stale") return { kind: "stale" };
-      if (adopted === "undelivered") {
-        const detail = "epoch_exit_before_turn";
-        if (recoveryCandidate) {
-          this.#restoreRecoveryFault();
-          this.#emitRecoveryOutcome("failed", detail);
-          return {
-            kind: "recovery_rejected",
-            detail,
-            probeResult: "failed",
-          };
-        }
-        return {
-          kind: "error",
-          detail,
-          classify: { detail },
-          attemptedModel,
-        };
-      }
 
       // issue #377 Stage 2: a live epoch whose spec no longer matches this
       // turn's requirements (model/effort rollback or switch, a different
@@ -1845,7 +1828,7 @@ export class AntigravityHost implements EngineAdapter {
       // (an operator interrupt is projected as `interrupted` only when
       // nothing else outranks it); customization tampering outranks a
       // stale generation, since a broken gate is a heavier fact than the
-      // interrupt. issue #377 Stage 1 M1: `!delivered`
+      // interrupt. issue #377 Stage 1 M1: `delivered !== "ok"`
       // (epoch_exit_before_turn) ranks below tampering and a stale
       // generation for the same reason.
       if (this.#closed || this.#watchdogFailStopped) return { kind: "stale" };
@@ -1996,64 +1979,41 @@ export class AntigravityHost implements EngineAdapter {
     }
   }
 
-  #awaitDeath(epoch: EpochRuntime, graceMs: number): Promise<boolean> {
-    const death = this.#ensureDeathPromise(epoch);
-    return new Promise((resolve) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve(false);
-      }, graceMs);
-      void death.then(() => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(true);
-      });
-    });
+  #armCloseAfterExit(epoch: EpochRuntime): void {
+    // `#closeGraceMs` is already injectable, so this timer has no
+    // separate seam.
+    const timer = setTimeout(() => {
+      epoch.closeAfterExitTimer = null;
+      this.#destroyChildStdio(epoch.child);
+    }, this.#closeGraceMs);
+    timer.unref();
+    epoch.closeAfterExitTimer = timer;
   }
 
-  async #awaitExitedClose(epoch: EpochRuntime): Promise<boolean> {
-    if (await this.#awaitDeath(epoch, this.#closeGraceMs)) return true;
-    this.#destroyChildStdio(epoch.child);
-    return this.#awaitDeath(epoch, this.#closeGraceMs);
-  }
-
-  /** One replacement spawn per turn. A child that is already dead is
-   *  closed, then replaced. A second dead child is not written and is
-   *  not replaced again. */
+  /** Waits out an exited epoch, then spawns once when none is current.
+   *  A live epoch is left for the caller. */
   async #replaceExitedEpoch(
     spec: EpochSpec,
     generation: number,
     customization: CustomizationDir,
     executable: string,
-  ): Promise<"ok" | "stale" | "undelivered"> {
-    const maxReplacementSpawns = 1;
-    let spawned = 0;
-    for (;;) {
+  ): Promise<"ok" | "stale"> {
+    if (!this.#isCurrent(generation)) return "stale";
+    const exited = this.#epoch;
+    if (exited !== null && childHasExited(exited.child)) {
+      await exited.deathPromise;
       if (!this.#isCurrent(generation)) return "stale";
-      const epoch = this.#epoch;
-      if (epoch !== null && childHasExited(epoch.child)) {
-        if (spawned >= maxReplacementSpawns) return "undelivered";
-        const closed = await this.#awaitExitedClose(epoch);
-        if (!this.#isCurrent(generation)) return "stale";
-        if (!closed || this.#epoch === epoch) return "undelivered";
-        continue;
-      }
-      if (this.#epoch === null) {
-        const spawnedEpoch = await this.#spawnEpoch(
-          spec,
-          generation,
-          customization,
-          executable,
-        );
-        if (!spawnedEpoch.ok) return "stale";
-        spawned += 1;
-        continue;
-      }
-      return "ok";
     }
+    if (this.#epoch === null) {
+      const spawnedEpoch = await this.#spawnEpoch(
+        spec,
+        generation,
+        customization,
+        executable,
+      );
+      if (!spawnedEpoch.ok) return "stale";
+    }
+    return "ok";
   }
 
   /** issue #377 Stage 1 M4, adapted for Stage 2: writes the turn's prompt as
@@ -2072,29 +2032,20 @@ export class AntigravityHost implements EngineAdapter {
   #deliverTurnInput(epoch: EpochRuntime, text: string): Promise<TurnDelivery> {
     return new Promise((resolveDelivery) => {
       let settled = false;
-      let writeStarted = false;
       const settle = (result: TurnDelivery): void => {
         if (settled) return;
         settled = true;
-        if (epoch.pendingDeliverySettle === fromListener) {
+        if (epoch.pendingDeliverySettle === settle) {
           epoch.pendingDeliverySettle = null;
         }
         resolveDelivery(result);
       };
-      const fromListener = (hint: TurnDelivery): void => {
-        if (hint === "ok") {
-          settle("ok");
-          return;
-        }
-        settle(writeStarted ? "attempted" : "not_attempted");
-      };
-      epoch.pendingDeliverySettle = fromListener;
+      epoch.pendingDeliverySettle = settle;
       if (epoch.stdinErrored || this.#epoch !== epoch) {
         settle("not_attempted");
         return;
       }
       const line = `${JSON.stringify({ event: "user", message: { role: "user", content: text } })}\n`;
-      writeStarted = true;
       epoch.child.stdin.write(line, (error) => {
         if (error !== undefined && error !== null) {
           settle("attempted");
@@ -2130,8 +2081,13 @@ export class AntigravityHost implements EngineAdapter {
       this.#ensureDeathPromise(epoch);
       this.#activeTermination?.cancel();
       this.#activeTermination = null;
+      this.#armCloseAfterExit(epoch);
     });
     epoch.child.once("close", (code, signal) => {
+      if (epoch.closeAfterExitTimer !== null) {
+        clearTimeout(epoch.closeAfterExitTimer);
+        epoch.closeAfterExitTimer = null;
+      }
       this.#activeTermination?.cancel();
       this.#activeTermination = null;
       this.#lastChildExit = { code, signal };
@@ -2378,6 +2334,7 @@ export class AntigravityHost implements EngineAdapter {
         resolveDeath: null,
         stdinErrored: false,
         pendingDeliverySettle: null,
+        closeAfterExitTimer: null,
       };
       this.#epoch = epoch;
       this.#running = child;
