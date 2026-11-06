@@ -27,9 +27,9 @@ run separately with `env -u CODEX_HOME pnpm -C wrapper/codex test`.
 
 ## Pinned SDK compatibility
 
-The CLI and SDK are pinned together at 0.164.0. The SDK retains the LF-only
-stream-reader patch; Node 24 splits literal U+2028/U+2029 with the upstream
-readline reader. Native checks use isolated homes and a loopback provider,
+The CLI and SDK are pinned together at 0.164.0. The SDK package supplies the
+native binary and shared event types; execution uses app-server JSON-RPC.
+Native checks use isolated homes and a loopback provider,
 including `runCodexCli` with its production app-server factories. Historical exec checks belong to pre-retirement releases.
 See [the 0.164.0 evidence](../../docs/evidence/codex-app-server/pin-0.164.0-adoption-gates-2026-10-27.md)
 for fixture provenance, negative controls and remaining limits. The

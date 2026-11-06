@@ -7,11 +7,6 @@ settings:
 overrides:
   '@xmldom/xmldom': 0.9.12
 
-patchedDependencies:
-  '@openai/codex-sdk@0.164.0':
-    hash: faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c
-    path: patches/@openai__codex-sdk@0.164.0.patch
-
 importers:
 
   .: {}
@@ -177,7 +172,7 @@ importers:
         version: 0.164.0
       '@openai/codex-sdk':
         specifier: 0.164.0
-        version: 0.164.0(patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c)
+        version: 0.164.0
     devDependencies:
       '@kaoiro/protocol':
         specifier: workspace:*
@@ -2171,7 +2166,7 @@ snapshots:
       '@napi-rs/canvas-win32-x64-msvc': 0.1.100
     optional: true
 
-  '@openai/codex-sdk@0.164.0(patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c)':
+  '@openai/codex-sdk@0.164.0':
     dependencies:
       '@openai/codex': 0.164.0
 

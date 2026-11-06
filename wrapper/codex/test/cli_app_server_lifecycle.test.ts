@@ -237,7 +237,6 @@ it("reports public app-server startup failure without exec fallback or another S
   const { CodexHost } = await import("../src/host.js");
   const { phoenixLoopback } = await import("./fixtures/phoenix_loopback.js");
   const wire = await phoenixLoopback(() => ({})), signals = process.listeners("SIGINT");
-  const exec = vi.fn(() => { throw new Error("Unexpected exec fallback"); });
   const session = vi.fn(async () => { throw new Error("Required bridge startup failed"); });
   let host: InstanceType<typeof CodexHost> | undefined;
   const running = runCodexCli({
@@ -252,7 +251,7 @@ it("reports public app-server startup failure without exec fallback or another S
     expect(envelopes.some(e => e.type === "state_change" && e.state === "error")).toBe(true);
     expect(envelopes.filter(e => e.type === "result")).toHaveLength(1);
     expect(envelopes.find(e => e.type === "result")?.payload).toMatchObject({ is_error: true, error_detail: "Error: Required bridge startup failed" });
-    await host!.send("AFTER_FAILURE");expect(session).toHaveBeenCalledTimes(1);expect(exec).not.toHaveBeenCalled();
+    await host!.send("AFTER_FAILURE");expect(session).toHaveBeenCalledTimes(1);
   } finally {
     host?.close();await running;await wire.close();
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
