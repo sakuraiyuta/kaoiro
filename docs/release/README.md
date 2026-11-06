@@ -66,6 +66,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.06.2](v2026.11.06.2.md) | 2026-11-06 | v2026.11.06.1 | An Antigravity input written after agy exits on its own is delivered on one new epoch, and an unconfirmed write is reported as `receipt_unknown`. |
 | [v2026.11.06.1](v2026.11.06.1.md) | 2026-11-06 | v2026.11.05.1 | Codex launches default to app-server, the Claude delivery opt-in is retired, compaction no longer fail-stops a busy Claude peer, a deadline on the permission-sync wait |
 | [v2026.11.05.1](v2026.11.05.1.md) | 2026-11-05 | v2026.11.04.1 | Work items reduced to five operations, release canary and Codex recovery table retired |
 | [v2026.11.04.1](v2026.11.04.1.md) | 2026-11-04 | v2026.11.01.1 | Dashboard controls follow the design by default; no server, runner or wrapper product change |
