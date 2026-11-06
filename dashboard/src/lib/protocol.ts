@@ -324,9 +324,9 @@ export type PermissionControlStatus =
   | "unknown";
 
 /** ext.permission_control — the latest permission request and its progress
- *  (issue #305). Only the fields this client renders are kept; observed
- *  values are read from ext.permission / ext.effective as before, so a
- *  second copy of them cannot drift from the badge. */
+ *  (issue #305). Current observed values still come from ext.permission /
+ *  ext.effective. A validated last_effective copy is retained only for the
+ *  historical row; it never derives current axes, picker state, or network. */
 export interface PermissionControl {
   revision: number;
   requested: PermissionConfiguration;
@@ -334,6 +334,11 @@ export interface PermissionControl {
   status: PermissionControlStatus;
   reason?: string;
   rolled_back_to?: PermissionConfiguration;
+  last_effective?: {
+    revision: number;
+    permission: PermissionAxes;
+    network_access: boolean;
+  };
 }
 
 const PERMISSION_CONTROL_STATUSES: ReadonlySet<string> = new Set([
@@ -628,6 +633,11 @@ interface PermissionSubmission {
   execution_id: string;
 }
 
+interface ValidatedPermissionObservation extends PermissionSubmission {
+  permission: PermissionAxes;
+  network_access: boolean;
+}
+
 function permissionSubmissionOf(value: unknown): PermissionSubmission | null {
   if (typeof value !== "object" || value === null) return null;
   const r = value as Record<string, unknown>;
@@ -645,7 +655,9 @@ function permissionSubmissionOf(value: unknown): PermissionSubmission | null {
  *  on it would have no observation behind it. `turn_id` is optional: an
  *  advisory engine with no per-turn identity (Antigravity) omits it (issue
  *  #359 M1); when present it must be a non-empty string. */
-function permissionObservationOf(value: unknown): PermissionSubmission | null {
+function permissionObservationOf(
+  value: unknown,
+): ValidatedPermissionObservation | null {
   const submission = permissionSubmissionOf(value);
   if (submission === null) return null;
   const r = value as Record<string, unknown>;
@@ -654,8 +666,9 @@ function permissionObservationOf(value: unknown): PermissionSubmission | null {
     return null;
   }
   if (typeof r.network_access !== "boolean") return null;
-  if (permissionPolicyOf(r.permission) === null) return null;
-  return submission;
+  const permission = permissionPolicyOf(r.permission);
+  if (permission === null) return null;
+  return { ...submission, permission, network_access: r.network_access };
 }
 
 /** Reads ext.permission_control off an envelope, or null when absent or
@@ -671,6 +684,10 @@ function permissionObservationOf(value: unknown): PermissionSubmission | null {
  *  forbids (`@kaoiro/protocol` index.ts). {@link PERMISSION_CONTROL_FIELDS}
  *  is that table; a record that does not satisfy its own arm is malformed
  *  whether the field is missing or is one the arm marks `never`.
+ *
+ *  `last_effective` is independent history: an invalid copy is omitted
+ *  without discarding the current control. It is never bound to this
+ *  control's revision or requested pair.
  *
  *  On top of the table, `applied` binds its evidence: submitted and
  *  effective must agree with each other AND with this record on revision,
@@ -712,6 +729,9 @@ export function permissionControlFrom(
     ? permissionObservationOf(r.effective)
     : null;
   if (present(r.effective) && effective === null) return null;
+  const lastEffective = present(r.last_effective)
+    ? permissionObservationOf(r.last_effective)
+    : null;
   if (present(r.reason) && (typeof r.reason !== "string" || r.reason === "")) {
     return null;
   }
@@ -745,6 +765,15 @@ export function permissionControlFrom(
     status,
     ...(typeof r.reason === "string" ? { reason: r.reason } : {}),
     ...(rolledBackTo === null ? {} : { rolled_back_to: rolledBackTo }),
+    ...(lastEffective === null
+      ? {}
+      : {
+          last_effective: {
+            revision: lastEffective.revision,
+            permission: lastEffective.permission,
+            network_access: lastEffective.network_access,
+          },
+        }),
   };
 }
 
