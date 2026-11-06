@@ -115,7 +115,7 @@ describe("operator steer without an opt-in", () => {
   });
 });
 
-describe("retirement warnings of a directly launched wrapper", () => {
+describe("removed inputs of a directly launched wrapper", () => {
   const secret = "secret-persona-id";
   it.each([
     ["the flag variable", { flag: "0" }, [flag]],
@@ -123,13 +123,10 @@ describe("retirement warnings of a directly launched wrapper", () => {
     ["a true file key", { fileKey: true }, ["operator_steer"]],
     ["a false file key", { fileKey: false }, ["operator_steer"]],
     ["all three", { flag: "1", list: secret, fileKey: true }, [flag, list, "operator_steer"]],
-  ] as const)("prints one line per present input: %s", async (_name, legacy, names) => {
+  ] as const)("ignores obsolete inputs without warning: %s", async (_name, legacy, _names) => {
     const on = await compose("app-server", legacy, { version: "v1", early: "steer" });
-    expect(on.warnings).toHaveLength(names.length);
-    names.forEach((name, index) => {
-      expect(on.warnings[index]).toContain(name === "operator_steer" ? "operator_steer in the wrapper config" : `${name} is retired`);
-      expect(on.warnings[index]).toContain("in_flight_delivery.codex.enabled");
-    });
+    expect(on.warnings).toEqual([]);
+    expect(on.hostOptions.operatorSteer.available()).toBe(true);
     expect(on.stderr).not.toContain(secret);
   });
 
@@ -138,7 +135,7 @@ describe("retirement warnings of a directly launched wrapper", () => {
     expect((await compose("app-server", { flag: "", list: "" })).warnings).toEqual([]);
   });
 
-  it("warns on exec too, where the inputs never mattered", async () => {
-    expect((await compose("exec", { flag: "1" })).warnings).toHaveLength(1);
+  it("ignores obsolete inputs on exec too", async () => {
+    expect((await compose("exec", { flag: "1" })).warnings).toEqual([]);
   });
 });
