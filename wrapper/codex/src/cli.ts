@@ -1,3 +1,4 @@
+import { RecoveryReporter, recoveryExitCode, shutdownForRecovery } from "@kaoiro/wrapper-core";
 import { retirePermissionSyncInput } from "@kaoiro/agent-common";
 import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import { resolveDelivery } from "@kaoiro/agent-common";
@@ -302,6 +303,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   }
 
   let host: CodexHost;
+  const recovery = new RecoveryReporter(config, resumeSessionId, failure => {
+    void shutdownForRecovery(failure, () => host?.close(),
+      () => link?.reportDisconnectIntent?.("crash"), () => { link?.close(); }).catch(() => {});
+  });
+  if (recovery.failure) throw recovery.failure;
+
   const pendingWorkNotices: string[] = [];
   let permissionBroker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
@@ -1063,6 +1070,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
     Omit<CodexHostOptions, "onTurnStart">
   >({
+    recovery,
     deliveryPolicy,
     ...(approvalAxis ? {
       appServerApprovals: {
@@ -1219,6 +1227,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       }
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
+      recovery.block("watchdog");
       watchdogFailStopped = true;
       const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
       writeRedactedStderr(
@@ -1428,9 +1437,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       permissionBroker?.close();
       questionBroker?.close();
       try {
-        await link?.reportDisconnectIntent?.(disconnectReason);
+        if (!recovery.failure) await link?.reportDisconnectIntent?.(disconnectReason);
       } finally {
         link?.close();
+        if (recovery.failure) throw recovery.failure;
       }
     }
   }
@@ -1442,6 +1452,6 @@ if (
 ) {
   runCodexCli().catch((error: unknown) => {
     writeRedactedStderr(`${String(error)}\n`);
-    process.exitCode = 1;
+    process.exitCode = recoveryExitCode(error);
   });
 }

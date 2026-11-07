@@ -1,3 +1,4 @@
+import { RecoveryReporter, recoveryExitCode, shutdownForRecovery } from "@kaoiro/wrapper-core";
 import { retirePermissionSyncInput } from "@kaoiro/agent-common";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -157,6 +158,12 @@ export async function runAntigravityCli(
   let pendingDisplayNameSync: { displayName: string; revision: number } | undefined;
   const pendingWorkNotices: string[] = [];
   let link: ServerLink | undefined;
+  const recovery = new RecoveryReporter(config, resumeSessionId, failure => {
+    void shutdownForRecovery(failure, () => host?.close(),
+      () => link?.reportDisconnectIntent?.("crash"), () => { link?.close(); }).catch(() => {});
+  });
+  if (recovery.failure) throw recovery.failure;
+
   // issue #359 M1: permission_sync negotiation state. onSync can fire before the
   // host is created (during the join / persona-prompt await), so hold the
   // message and apply it once the host exists (Codex parity).
@@ -500,6 +507,7 @@ export async function runAntigravityCli(
     }
   };
   host = createHost(config, deliveryAcknowledgementRuntime.withHostOptions({
+    recovery,
     cwd: process.cwd(),
     appendSystemPrompt,
     permissionBroker,
@@ -605,6 +613,7 @@ export async function runAntigravityCli(
       });
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
+      recovery.block("watchdog");
       watchdogFailStopped = true;
       const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
       writeRedactedStderr(
@@ -843,9 +852,10 @@ export async function runAntigravityCli(
       questionBroker.close();
       permissionBroker.close();
       try {
-        await link.reportDisconnectIntent?.(disconnectReason);
+        if (!recovery.failure) await link.reportDisconnectIntent?.(disconnectReason);
       } finally {
         link.close();
+        if (recovery.failure) throw recovery.failure;
       }
     }
   }
@@ -854,6 +864,6 @@ export async function runAntigravityCli(
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   runAntigravityCli().catch((error: unknown) => {
     writeRedactedStderr(`${String(error)}\n`);
-    process.exitCode = 1;
+    process.exitCode = recoveryExitCode(error);
   });
 }

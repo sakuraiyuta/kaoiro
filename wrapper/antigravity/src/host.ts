@@ -1,3 +1,4 @@
+import type { RecoveryReporter } from "@kaoiro/wrapper-core";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -239,6 +240,7 @@ export interface GateProbe {
 }
 
 export interface AntigravityHostOptions {
+  recovery?: RecoveryReporter;
   cwd: string;
   appendSystemPrompt: string;
   onState: (envelope: Envelope) => void;
@@ -2388,6 +2390,7 @@ export class AntigravityHost implements EngineAdapter {
       gate.inspectToolInventory(Array.isArray(event.init.tools) ? event.init.tools : []);
       const sessionId = agyEventToSessionId(event);
       if (sessionId !== null) {
+        if (this.#options.recovery?.accept(sessionId, this.#epoch?.spec.conversationId ?? undefined) === false) { this.close(); return; }
         if (this.#sessionId !== null && this.#sessionId !== sessionId) {
           this.#resetStaleTerminal429Count(this.#currentUsageFamily());
           this.#pendingTerminal429Confirmation = null;
@@ -2432,6 +2435,7 @@ export class AntigravityHost implements EngineAdapter {
     for (const adapterEvent of agyEventToEvents(event)) this.#apply(adapterEvent);
     const result = agyEventToResult(event);
     if (result === null) return;
+    if (!result.is_error && this.#sessionId !== null && this.#options.recovery?.confirm(this.#sessionId) === false) return;
     // The result payload has no truncated flag; clip silently so the
     // envelope stays under the server's size cap.
     if (result.text !== undefined) result.text = clipText(result.text).text;

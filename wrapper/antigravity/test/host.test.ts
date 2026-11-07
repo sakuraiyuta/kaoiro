@@ -1,3 +1,4 @@
+import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { createHash } from "node:crypto";
@@ -66,6 +67,7 @@ async function waitForDefaultChild(
 }
 
 function hostHarness(options: {
+  recovery?: RecoveryReporter;
   resumeSessionId?: string;
   dangerouslySkipPermissions?: boolean;
   verifyGate?: boolean | (() => Promise<boolean>);
@@ -103,6 +105,7 @@ function hostHarness(options: {
   const cfg = options.config ?? config();
   const broker = options.permissionBroker ?? new PermissionBroker({ config: cfg, send: () => {} });
   const host = createHarnessHost(cfg, {
+    ...(options.recovery === undefined ? {} : { recovery: options.recovery }),
     cwd: process.cwd(),
     appendSystemPrompt: "persona",
     permissionBroker: broker,
@@ -4246,4 +4249,19 @@ it("settles permission sync expiry without spawning or rolling back an unattempt
     expect(logs.filter(e=>e.type==="result")).toEqual([expect.objectContaining({payload:expect.objectContaining({is_error:true,error_detail:expect.stringContaining("No execution was started")})})]);
     expect(states.slice(-2).map(e=>e.state)).toEqual(["error","waiting_input"]);expect(turnEnds[0]).toMatchObject({error:{reason:"permission_sync_timeout"},terminal:false});
   }finally{host.close();}
+});
+
+it.each([false, true])("rejects native attach substitution before publication (candidate=%s)", async candidate => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-recovery-")); const path = join(root, "checkpoint");
+  const failures: number[] = []; const cfg = config({ recovery_checkpoint_path: path,
+    ...(candidate ? { recovery_resume_kind: "candidate" } : {}) });
+  const recovery = new RecoveryReporter(cfg, "requested", failure => failures.push(failure.exitCode));
+  const { host, calls, logs } = hostHarness({ config: cfg, resumeSessionId: "requested", recovery });
+  try {
+    await host.send("first turn"); await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write(JSON.stringify({ event: "init", conversation_id: "silent-fresh", init: { tools: [] } }) + "\n");
+    await waitFor(() => failures.length === 1);
+    expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: candidate ? "unbound" : "blocked" } });
+    expect(logs.some(e => e.type === "result" && !e.payload.is_error)).toBe(false);
+  } finally { host.close(); for (const call of calls) call.child.finish(); rmSync(root, { recursive: true, force: true }); }
 });
