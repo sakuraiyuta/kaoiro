@@ -11,6 +11,7 @@ function fixture(kind?: "candidate") {
   const root = mkdtempSync(join(tmpdir(), "kaoiro-recovery-test-")); roots.push(root);
   const path = join(root, "checkpoint");
   writeRecoveryCheckpoint(path, { version: 1, state: "initial" });
+  expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "initial" } });
   const failures: number[] = [];
   const config = { recovery_checkpoint_path: path, ...(kind ? { recovery_resume_kind: kind } : {}) } as WrapperConfig;
   const reporter = new RecoveryReporter(config, "requested", failure => failures.push(failure.exitCode));
@@ -67,7 +68,7 @@ describe("launch recovery checkpoint", () => {
     expect(reporter.confirm("live")).toBe(true);
     expect(reporter.failure).toBeUndefined();
   });
-  it.each(["{}", '{"version":2,"state":"initial"}', '{"version":1,"state":"other"}', '{"version":1,"state":"live","session_id":""}', "{"])("refuses invalid record %s", raw => {
+  it.each(["null", "[]", '{"version":1,"state":"unbound","candidate_id":0}', '{"version":1,"state":"unbound","candidate_id":""}', '{"version":1,"state":"blocked","reason":"other"}', '{"version":1,"state":"blocked","reason":"watchdog","session_id":0}', "{}", '{"version":2,"state":"initial"}', '{"version":1,"state":"other"}', '{"version":1,"state":"live","session_id":""}', "{"])("refuses invalid record %s", raw => {
     const { path } = fixture(); writeFileSync(path, raw);
     expect(readRecoveryCheckpoint(path)).toEqual({ ok: false, reason: "invalid" });
   });
@@ -75,4 +76,15 @@ describe("launch recovery checkpoint", () => {
     const { path } = fixture(); rmSync(path);
     expect(readRecoveryCheckpoint(path)).toEqual({ ok: false, reason: "unreadable" });
   });
+});
+
+it.each(["watchdog", "session_binding", "resume_rejected", "session_unusable", "checkpoint_unavailable"] as const)("reads the finite block reason %s", reason => {
+  const { path } = fixture(); writeRecoveryCheckpoint(path, { version: 1, state: "blocked", reason });
+  expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "blocked", reason } });
+});
+it("keeps standalone reporting inert without a checkpoint path", () => {
+  const failures: number[] = []; const reporter = new RecoveryReporter({} as WrapperConfig, "expected", f => failures.push(f.exitCode));
+  reporter.block("watchdog"); reporter.stop("session_binding"); reporter.refuseLaunch();
+  expect(reporter.accept("other", "expected")).toBe(true); expect(reporter.observe("other")).toBe(true);
+  expect(reporter.confirm("other")).toBe(true); expect(failures).toEqual([]);
 });

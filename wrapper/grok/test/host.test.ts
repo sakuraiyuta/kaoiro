@@ -923,3 +923,10 @@ it.each([false, true])("classifies Grok startup resume refusal only at its RPC r
   await expect(host.run()).rejects.toThrow("could not resume"); expect(failures).toEqual([1]);
   expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: candidate ? "unbound" : "blocked" } });
 });
+
+it("confirms a successful Grok resume response without inventing a returned id", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-grok-recovery-")); scratch.push(root); const path = join(root, "checkpoint");
+  const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path, recovery_resume_kind: "candidate" }, "fixture-session", () => {});
+  await started({ recovery, resumeSessionId: "fixture-session" });
+  expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "live", session_id: "fixture-session" } });
+});

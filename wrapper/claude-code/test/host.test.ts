@@ -10981,6 +10981,7 @@ describe("native recovery observation", () => {
       const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, () => {});
       const host = new AgentHost(config, { onState: () => {}, recovery,
         onSessionId: id => expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound", candidate_id: id } }),
+        onLog: e => { if (e.type === "result" && !e.payload.is_error) expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "live" } }); },
         queryFn: scriptedQuery([msg({ type: "system", subtype: "init", session_id: "fresh" }),
           result("success", { session_id: "fresh", is_error: false }),
           msg({ type: "system", subtype: "init", session_id: "rebind" })]) });
