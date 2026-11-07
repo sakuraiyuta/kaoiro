@@ -10988,3 +10988,14 @@ describe("native recovery observation", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+it("does not downgrade explicit resume to a candidate from a raw success-subtype API error", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-recovery-")); const path = join(root, "checkpoint");
+  try {
+    const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, "requested", () => {});
+    const host = new AgentHost(config, { onState: () => {}, recovery, queryOptions: { resume: "requested" },
+      queryFn: scriptedQuery([result("success", { is_error: true, session_id: "requested" })]) });
+    await host.run(); expect(recovery.failure).toBeUndefined();
+    expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound" } });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

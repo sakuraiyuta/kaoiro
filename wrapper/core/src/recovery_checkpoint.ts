@@ -94,7 +94,7 @@ export class RecoveryReporter {
     } catch { this.#fail(79, "checkpoint_unavailable"); return false; }
   }
   #fail(code: number, reason: string): void {
-    if (this.#failure?.exitCode === 79) return;
+    if (this.#failure !== undefined) return;
     this.#failure = new RecoveryFailure(code, reason);
     this.onFailure(this.#failure);
   }
@@ -115,7 +115,7 @@ export class RecoveryReporter {
     if (expected !== undefined && id !== expected) {
       const candidate = this.#record.state === "unbound" && this.#record.candidate_id === expected;
       if (candidate) this.#fallback();
-      else { this.block("session_binding"); this.#fail(this.#failure?.exitCode ?? 1, "session_binding"); }
+      else this.stop("session_binding");
       return false;
     }
     return expected === undefined ? this.observe(id) : this.confirm(id);
@@ -123,7 +123,12 @@ export class RecoveryReporter {
   refuseLaunch(): void {
     if (!this.active) return;
     if (this.launchKind === "candidate") this.#fallback();
-    else { this.block("resume_rejected"); this.#fail(this.#failure?.exitCode ?? 1, "resume_rejected"); }
+    else this.stop("resume_rejected");
+  }
+  stop(reason: RecoveryBlockReason): void {
+    if (!this.active) return;
+    this.block(reason);
+    this.#fail(this.#failure?.exitCode ?? 1, reason);
   }
   #fallback(): void {
     if (this.#write({ version: 1, state: "unbound" })) this.#fail(1, "candidate_attach_unavailable");
