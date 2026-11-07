@@ -691,15 +691,38 @@ their previous shape:
 |---|---|---|
 | `compact_resume_native.test.ts:26` | SDK and CLI version | 13 |
 | `monitor_notification_advice_native.test.ts:33` | SDK and CLI version | 6 |
+| `monitor_notification_advice_native.test.ts:166` | CLI version, on each notification row | 6 |
 | `native_peer_opener.test.ts:34` | SDK version | 1 |
 | `native_peer_opener.test.ts:41` | native executable sha256 | 1 |
 
-Each guard was mutated once, on its own, and each turned its file red: a
-one-digit change to the version pin failed 13, 6 and 1 cases respectively, and
-a one-character change to the pinned hash failed its case while the other three
-in that file still passed. The unmutated file passes 4 of 4.
+The guard at `:166` was missed on the first pass and only appeared once `:33`
+passed and the case bodies ran: the first guard shadows the second. Finding a
+second instance of the same class is what prompted a scan of the whole tree
+rather than another single fix. Searching every TypeScript, JavaScript, JSON
+and Elixir file for the outgoing SDK version, the outgoing CLI version and the
+outgoing binary hash returns no further assertion bound to the installed
+artifact. The other matches are recorded captures and hashes of committed
+fixture bytes, which stay on the version they were captured at:
+`test/fixtures/monitor_notifications.{ts,json}`,
+`test/fixtures/native_peer_opener.ts` with
+`test/fixtures/native-peer-opener-2.1.306.json`,
+`test/fixtures/claude-agent-sdk-0.3.306.models.json` with its two consumers,
+`host.test.ts:9238` and `:9268`, `haiku55_catalog.test.ts:35`, and the
+0.3.306 evidence directory.
 
-The Node and Elixir suites run through the pre-landing CI on the candidate
+Each guard was mutated once, on its own, and each turned its file red: a
+one-digit change to the version pin failed 13, 6, 6 and 1 cases respectively,
+and a one-character change to the pinned hash failed its case while the other
+three in that file still passed. The `:166` mutation was run with `:33` left
+intact, so it is pinned on its own rather than through the guard above it.
+
+The whole `@kaoiro/claude-code` suite was also run on the candidate commit in
+the project's remote heavy-test slot, with the wrapper and the runner built:
+**55 files passed and 1 skipped; 1328 tests passed and 4 skipped**, in 111 s.
+All twelve `*native*` files ran, `cli_delivery_policy_native.test.ts` among
+them, so kaoiro's own push path is exercised against the new pin.
+
+The Node and Elixir suites also run through the pre-landing CI on the candidate
 commit; the two checks CI does not cover were run directly, because both need
 the installed native executable:
 
