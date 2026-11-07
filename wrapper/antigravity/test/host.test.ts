@@ -4298,3 +4298,34 @@ it.each([false,true])("preserves Antigravity completion for blocked recovery but
  expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:fatal?"unbound":"blocked"}});
  } finally {const closing=host.close();for(const c of calls)c.child.finish();await closing;rmSync(root,{recursive:true,force:true});}
 });
+
+it.each(["ERROR", "CANCELED"])("keeps a fresh Antigravity candidate unbound after %s", async status => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-terminal-"));
+  const path = join(root, "checkpoint");
+  const cfg = config({ recovery_checkpoint_path: path });
+  const recovery = new RecoveryReporter(cfg, undefined, () => {});
+  const { host, calls, turnEnds } = hostHarness({ config: cfg, recovery });
+  try {
+    await host.send("first turn");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write(JSON.stringify({ event: "init", conversation_id: "fresh", init: { tools: [] } }) + "\n");
+    const candidate = { ok: true, record: { version: 1, state: "unbound", candidate_id: "fresh" } };
+    await waitFor(() => {
+      const snapshot = readRecoveryCheckpoint(path);
+      return snapshot.ok && snapshot.record.state === "unbound" && snapshot.record.candidate_id === "fresh";
+    });
+    expect(readRecoveryCheckpoint(path)).toEqual(candidate);
+    if (status === "CANCELED") await host.interrupt();
+    calls[0]!.child.stdout.write(JSON.stringify({ event: "result", result: { status, error: "fixture failure" } }) + "\n");
+    calls[0]!.child.finish();
+    await waitFor(() => turnEnds.length === 1);
+    expect(turnEnds[0]!.error).toBeDefined();
+    expect(readRecoveryCheckpoint(path)).toEqual(candidate);
+    expect(recovery.failure).toBeUndefined();
+  } finally {
+    const closing = host.close();
+    for (const call of calls) call.child.finish();
+    await closing;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

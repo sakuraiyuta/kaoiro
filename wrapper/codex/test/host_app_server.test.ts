@@ -634,3 +634,20 @@ it.each([false,true])("preserves Codex completion for blocked recovery but stops
  expect(f.logs.filter(e=>e.type==="result"&&!e.payload.is_error)).toHaveLength(fatal?0:1);
  expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:fatal?"unbound":"blocked"}});
 });
+
+it.each(["failed", "interrupted"])("keeps a fresh Codex candidate unbound after a %s terminal", async status => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-terminal-"));
+  const path = join(root, "checkpoint");
+  const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, () => {});
+  const f = fixture({ recovery });
+  cleanup.push(async () => { rmSync(root, { recursive: true, force: true }); });
+  await f.host.send("first turn");
+  await f.until(1);
+  const candidate = { ok: true, record: { version: 1, state: "unbound", candidate_id: "thread" } };
+  expect(readRecoveryCheckpoint(path)).toEqual(candidate);
+  f.terminal(status);
+  await vi.waitFor(() => expect(f.ends).toHaveBeenCalledOnce());
+  expect(f.ends.mock.calls[0]?.[0].error).toBeDefined();
+  expect(readRecoveryCheckpoint(path)).toEqual(candidate);
+  expect(recovery.failure).toBeUndefined();
+});
