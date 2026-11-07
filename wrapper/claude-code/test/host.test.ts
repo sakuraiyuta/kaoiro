@@ -11023,3 +11023,17 @@ it("does not classify fresh-query startup error as requested-attach refusal", as
     expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound" } });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+it("accepts an engine rebind after the requested Claude attach has matched", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-recovery-")); const path = join(root, "checkpoint"); const ids: string[] = [];
+  try {
+    const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, "requested", () => {});
+    const host = new AgentHost(config, { onState: () => {}, recovery, queryOptions: { resume: "requested" },
+      onSessionId: id => { ids.push(id); expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true,
+        record: id === "requested" ? { state: "live", session_id: id } : { state: "unbound", candidate_id: id } }); },
+      queryFn: scriptedQuery([msg({ type: "system", subtype: "init", session_id: "requested" }),
+        msg({ type: "system", subtype: "init", session_id: "rebound" })]) });
+    await host.run(); expect(ids).toEqual(["requested", "rebound"]); expect(recovery.failure).toBeUndefined();
+    expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound", candidate_id: "rebound" } });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
