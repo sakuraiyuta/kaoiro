@@ -113,9 +113,9 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 ## Codex documentation
 
-- Adapter implementation: [exec event contract](reference/engines/codex-exec-events.md) and [catalog contract](reference/engines/codex-model-catalog.md).
+- Adapter implementation: [app-server events](reference/engines/codex-app-server-events.md), [app-server transport](reference/engines/codex-app-server.md), and [catalog contract](reference/engines/codex-model-catalog.md).
 - Operator model changes: [model settings](operations/codex-model-settings.md).
-- Permission recovery: [exec permission boundary](reference/engines/codex-exec-events.md#permission-no-approval-flow-exists) and the [permission requests contract](reference/protocol/permission-requests.md).
+- Permission recovery: [app-server approval requests](reference/engines/codex-app-server.md#approval-requests-adr-0064) and the [permission requests contract](reference/protocol/permission-requests.md).
 - Operational updates: [production runbook](operations/production.md).
 - Dated evidence: [exec verification](evidence/codex/exec-contract.md) and [catalog observations](evidence/codex/model-catalog.md).
 

@@ -1,7 +1,6 @@
 // Codex app-server engine adapter, with shared ThreadEvent display projection
 // and the bundled stdio MCP bridge.
 
-
 export {
   threadEventToEvents,
   threadEventToFinalText,
