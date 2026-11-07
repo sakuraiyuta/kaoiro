@@ -2,7 +2,7 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
 import { createHash } from "node:crypto";
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
@@ -11059,4 +11059,17 @@ it("stops requested Claude attach after an earlier frame reported the substitute
     expect(continued).toBe(false);
     expect(JSON.stringify(logs)).not.toContain("after rejected init");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each([false,true])("preserves Claude completion for blocked recovery but stops write failure (fatal=%s)", async fatal => {
+  const root=mkdtempSync(join(tmpdir(),"kaoiro-claude-confirm-")),path=join(root,"checkpoint");const logs:Envelope[]=[];
+  const recovery=new RecoveryReporter({...config,recovery_checkpoint_path:path},undefined,()=>{});
+  try {
+    const host=new AgentHost(config,{onState:()=>{},onLog:e=>logs.push(e),recovery,
+      onSessionId:()=>{if(fatal)mkdirSync(path+".tmp");else recovery.block("watchdog");},
+      queryFn:scriptedQuery([msg({type:"system",subtype:"init",session_id:"fresh"}),result("success",{session_id:"fresh",is_error:false,result:"done"})])});
+    await host.run();expect(logs.filter(e=>e.type==="result"&&!e.payload.is_error)).toHaveLength(fatal?0:1);
+    expect(recovery.failure?.exitCode).toBe(fatal?79:undefined);
+    expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:fatal?"unbound":"blocked"}});
+  } finally {rmSync(root,{recursive:true,force:true});}
 });
