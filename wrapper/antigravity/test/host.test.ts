@@ -1,5 +1,5 @@
-import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
