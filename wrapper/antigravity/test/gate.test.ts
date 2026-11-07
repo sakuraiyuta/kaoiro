@@ -81,6 +81,7 @@ describe("AntigravityGate", () => {
       const { gate, root, cwd } = makeGate({ sandbox, approval, network_access: true });
       try {
         expect(gate.evaluate({ name: "view_file", args: {} }).decision, `${cell}:read`).toBe(decisions.read);
+        expect(gate.evaluate({ name: "read_file", args: { Path: join(cwd, "README.md") } }).decision, `${cell}:read_file`).toBe(decisions.read);
         expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(cwd, "a.txt") } }).decision, `${cell}:write`).toBe(decisions.write);
         expect(gate.evaluate({ name: "run_command", args: { CommandLine: "pwd", Cwd: cwd } }).decision, `${cell}:shell`).toBe(decisions.shell);
         expect(gate.evaluate({ name: "invoke_subagent", args: {} }).decision, `${cell}:subagent`).toBe(decisions.subagent);
@@ -103,9 +104,68 @@ describe("AntigravityGate", () => {
       const { gate, root } = makeGate({ approval, network_access: true });
       try {
         expect(gate.evaluate({ name: "ask_question", args: {} }).decision, `${approval}:internal`).toBe("deny");
+        expect(gate.evaluate({ name: "list_plugin_accounts", args: {} }).decision, `${approval}:plugin accounts`).toBe("deny");
+        expect(gate.evaluate({ name: "run_workflow", args: {} }).decision, `${approval}:workflow`).toBe("deny");
         expect(gate.evaluate({ name: "future_vendor_tool", args: {} }).decision, `${approval}:unknown`).toBe(approval === "never" ? "deny" : "ask");
       } finally { rmSync(root, { recursive: true, force: true }); }
     }
+
+    const enabledNetwork = makeGate({ sandbox: "danger-full-access", approval: "never", network_access: true });
+    try {
+      expect(enabledNetwork.gate.evaluate({ name: "search_marketplace", args: {} })).toEqual({ decision: "allow" });
+    } finally { rmSync(enabledNetwork.root, { recursive: true, force: true }); }
+    const disabledNetwork = makeGate({ sandbox: "workspace-write", approval: "never", network_access: false });
+    try {
+      expect(disabledNetwork.gate.evaluate({ name: "search_marketplace", args: {} })).toEqual({
+        decision: "deny",
+        reason: "kaoiro: network access is disabled",
+      });
+    } finally { rmSync(disabledNetwork.root, { recursive: true, force: true }); }
+  });
+
+  it("validates read_file arguments before customization-directory protection", () => {
+    const { gate, root, cwd, customizationDir } = makeGate({ approval: "never", network_access: true });
+    try {
+      for (const args of [
+        {},
+        { Path: "" },
+        { Path: 42 },
+        { Path: join(cwd, "README.md"), StartLine: 1.5 },
+        { Path: join(cwd, "README.md"), EndLine: "2" },
+        { Path: join(cwd, "README.md"), ByteOffset: -1 },
+        { Path: join(cwd, "README.md"), ByteOffset: 1.25 },
+        { path: join(cwd, "README.md") },
+        { Path: join(cwd, "README.md"), Unexpected: true },
+        { Path: join(customizationDir, "settings.json"), StartLine: "invalid" },
+      ]) {
+        expect(gate.evaluate({ name: "read_file", args })).toEqual({
+          decision: "deny",
+          reason: "kaoiro: read_file argument is missing or malformed",
+        });
+      }
+      expect(gate.evaluate({ name: "read_file", args: null as never })).toEqual({
+        decision: "deny",
+        reason: "kaoiro: read_file argument is missing or malformed",
+      });
+      expect(gate.evaluate({ name: "read_file", args: [] as never })).toEqual({
+        decision: "deny",
+        reason: "kaoiro: read_file argument is missing or malformed",
+      });
+
+      for (const args of [
+        { Path: join(cwd, "README.md") },
+        { Path: join(cwd, "README.md"), StartLine: 1, EndLine: 8 },
+        { Path: join(cwd, "README.md"), ByteOffset: 0 },
+        { Path: join(cwd, "README.md"), ByteOffset: 4096 },
+      ]) {
+        expect(gate.evaluate({ name: "read_file", args })).toEqual({ decision: "allow" });
+      }
+
+      expect(gate.evaluate({ name: "read_file", args: { Path: join(customizationDir, "settings.json") } })).toEqual({
+        decision: "deny",
+        reason: "kaoiro: customization directory is protected",
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("defaults to on-request and does not silently enable local commands", () => {
