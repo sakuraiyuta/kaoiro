@@ -32,6 +32,63 @@ use the existing **Channels event** mechanism; no envelope `type` is added.
 | server → runner | `refresh_engine_catalog` | `{ engine, request_id, force? }`. **Operator-only** request to re-probe the LaunchDialog engine catalog ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md) Option E). It is keyed by `(host, engine)`, not agent; `force` bypasses TTL. Only Claude currently probes live; Codex advertises statically ([ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1). |
 | runner → server | `catalog_result` | `{ host_id, engine, request_id, ok, reason?, models_count? }`. Completion report for `refresh_engine_catalog`, forwarded to operators. Failure reasons are `auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`; `models_count` is only a toast signal and the catalog arrives in the runner's normal `hosts` broadcast ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md)). |
 
+### Wrapper-exit session recovery
+
+The direct dist launcher gives each child a private version-1 recovery
+checkpoint. It collects the final record and raw wrapper exit status before
+cleanup. The server's session pointer is not the recovery authority, because
+its last update may still be in transit when the wrapper exits
+([issue #524](https://github.com/sakuraiyuta/kaoiro/issues/524)).
+
+| Checkpoint | Unexpected-exit selection |
+| --- | --- |
+| `initial` | Retry the same launch target/kind, or fresh if none |
+| `unbound {candidate_id}` | Attempt that candidate before fresh, including a crash in its first turn |
+| `unbound` without candidate | Preserve a strict expected target; a candidate-marked launch that explicitly cleared its candidate falls back fresh |
+| `live {session_id}` | Resume that confirmed id strictly |
+| `blocked`, unreadable or invalid | Leave down with a diagnostic |
+
+An observed new native id is immediately a candidate. A successful native
+terminal or successful matching attach confirms live. A candidate launch's
+classified attach refusal or native id substitution clears the candidate,
+closes that epoch and permits fresh fallback. Confirmed live and explicit
+resume never silently fall back fresh. New/clear reset and explicit session
+switch own their selected fresh/target intent; reset rollback is strict.
+A checkpoint write failure exits the wrapper with code 79, which outranks a
+readable stale record. The original prompt and interrupted/queued instructions
+are never replayed. All automatic attempts/fallbacks share the existing five
+relaunches per 60-second window. A quiet interval can reset that window.
+
+Plain restart reads before kill and leaves the child running if recovery is
+already prohibited/unreadable. A refusal discovered after kill removes the
+entry and returns a matching request-id failure to close planned downtime.
+Use restore, including offline `resume_session` to select another session;
+offline reset/direct runner switch needs an existing entry and is unavailable.
+
+| Engine | Native recovery boundary |
+| --- | --- |
+| Claude | Native init/observed id records candidate; matching requested init or successful terminal confirms live. Candidate launch refusal is raw error result `is_error=true`, subtype `error_during_execution`, before any `system/init` in that query. Another pre-init failure of the same shape also falls back fresh; normalized error subtype and message text are not classifiers. |
+| Codex app-server | `startThread` records candidate; successful `resumeThread` checks identity/confirms live in shared runtime open, including startup history. RPC resume refusal selects candidate fallback or strict block. Successful native terminal confirms a fresh candidate. |
+| Grok | `newSession` records candidate before MCP readiness. Resume/load response success confirms attachment; those responses contain no id to compare. Only startup resume refusal classifies candidate fallback/strict block; same-wrapper lane load refusal preserves `restart_failed` retry and its checkpoint. |
+| Antigravity | Native init records candidate or checks each requested epoch id, including recreation after idle TTL. Mismatch closes the epoch before id/success publication; candidate may fall back, strict/live blocks. Successful native terminal confirms live. |
+
+Watchdog and contradictory session/native binding prohibit automatic recovery;
+recoverable wrapper-local attribution failures retain the latest candidate/live
+record for a new host. Rate/API/context-overflow turn results alone do not block.
+A new engine-originated id is a candidate without stopping otherwise permitted
+work. If live S rebinds to candidate T and T refuses, fallback is fresh rather
+than an implicit rollback to S.
+
+Candidate refusal does not prove absent/corrupt context. Fallback can lose
+unpersisted/rejected context; matching resume preserves only what the engine
+stored. Native effects preceding an observed mismatch cannot be undone. A crash
+before block rename or fatal-status delivery can still retry from the old
+record. Fatal teardown bounds wrapper exit to ten seconds (disconnect flush
+one second); an unresponsive native child can outlive it. Operator recovery
+must check for remaining owned work. Guarantees exclude `tsx watch`, host
+power loss and restoration after runner restart; the last belongs to
+[issue #530](https://github.com/sakuraiyuta/kaoiro/issues/530).
+
 ### Read-only Codex Supervisor observation
 
 The release RPC `CodexBackendCompatibility.observe_runner/1` alone initiates
