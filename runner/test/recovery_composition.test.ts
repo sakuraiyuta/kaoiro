@@ -50,6 +50,7 @@ it.each(cases)("composes real Supervisor and launcher: $name", async scenario =>
       expect(exited.has(children[0]!)).toBe(false);
     } else await wait(() => launches().length >= scenario.count);
     expect(launches()).toHaveLength(scenario.count);
+    expect(children).toHaveLength(scenario.count);
     expect(launches().every(row => row.hasPath)).toBe(true);
     if ("target" in scenario) {
       expect(launches().at(-1)?.resume).toBe(scenario.target);

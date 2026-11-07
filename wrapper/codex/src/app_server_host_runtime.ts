@@ -134,7 +134,7 @@ export class AppServerHostRuntime {
       } else {
         try { threadId = await this.#session.resumeThread(this.#options.resumeThreadId); }
         catch (error) {
-          if (error instanceof AppServerRpcError) this.#options.recovery?.refuseLaunch();
+          if (error instanceof AppServerRpcError && error.code === -32600) this.#options.recovery?.refuseLaunch();
           throw error;
         }
         if (this.#options.recovery?.accept(threadId, this.#options.resumeThreadId) === false) throw this.#options.recovery.failure;

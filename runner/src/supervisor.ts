@@ -1864,8 +1864,8 @@ export class Supervisor {
     entry.restarts = 0;
     entry.windowStart = this.#now();
     child.on("exit", () => this.#onExit(agentId, child));
-    // Release the F4 resume lock for the abandoned session_id (review
     delete entry.lockedSession;
+    // Release the F4 resume lock for the abandoned session_id (review
     // finding: without this, the id stays in #activeSessions forever
     // because #remove later reads entry.parsed.resumeSessionId which
     // was stripped in handleResetSession). handleSwitchSession uses
