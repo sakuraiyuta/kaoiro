@@ -203,7 +203,7 @@ The Codex catalog is static and does not distinguish canonical from alias, so it
 is unchanged. A row with absent `resolved_model` behaves as it did before the
 field was added.
 
-## The model list ships inside the bundled CLI, not kaoiro (issue #398; probe updated 2026-10-22)
+## The model list ships inside the bundled CLI, not kaoiro (issue #398; probe updated 2026-11-07)
 
 kaoiro declares no Claude model of its own: the bootstrap floor is the single
 `default` row, and both catalog paths read what the Claude Code CLI bundled with
@@ -211,11 +211,16 @@ kaoiro declares no Claude model of its own: the bootstrap floor is the single
 kaoiro through an SDK version bump, not a catalog edit — the same conclusion the
 Fable 5.1 rollout reached.
 
-The latest measurement used SDK **0.3.306 / CLI 2.1.306** on 2026-10-22
-(issue #700). The existing compiled production probe returned `ok: true`,
+The latest measurement used SDK **0.3.319 / CLI 2.1.319** on 2026-11-07
+(issue #1044). The existing compiled production probe returned `ok: true`,
 `source: "init"`, and 13 rows. Its value, resolved-model and effort projection
-matches the 0.3.293 table below. The complete projected rows and compatibility
-review are in the [0.3.306 measurement record](../../evidence/claude/issue-700/sdk-0.3.306-2026-10-22.md).
+is identical field by field to the 0.3.306 capture, and therefore still matches
+the 0.3.293 table below, so CLI 2.1.311's removal of the `[1m]` suffix from
+models where it has no effect did not move the projection. The complete
+projected rows, the fold re-measurement and the compatibility review are in the
+[0.3.319 measurement record](../../evidence/claude/issue-1044/sdk-0.3.319-2026-11-07.md);
+the previous pin's record is the
+[0.3.306 one](../../evidence/claude/issue-700/sdk-0.3.306-2026-10-22.md).
 No user prompt was yielded; this does not establish model generation or tool
 permission behavior.
 
