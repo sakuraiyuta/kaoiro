@@ -328,6 +328,22 @@ h3 {
   color: var(--muted);
 }
 
+.intro-film { margin: 1.5rem 0 2.5rem; }
+.intro-film video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.intro-film figcaption, .film-links {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .screens {
   display: grid;
   gap: 1.5rem;
