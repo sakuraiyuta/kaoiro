@@ -10980,6 +10980,7 @@ describe("native recovery observation", () => {
     try {
       const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, () => {});
       const host = new AgentHost(config, { onState: () => {}, recovery,
+        onSessionId: id => expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound", candidate_id: id } }),
         queryFn: scriptedQuery([msg({ type: "system", subtype: "init", session_id: "fresh" }),
           result("success", { session_id: "fresh", is_error: false }),
           msg({ type: "system", subtype: "init", session_id: "rebind" })]) });
@@ -10995,6 +10996,28 @@ it("does not downgrade explicit resume to a candidate from a raw success-subtype
     const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, "requested", () => {});
     const host = new AgentHost(config, { onState: () => {}, recovery, queryOptions: { resume: "requested" },
       queryFn: scriptedQuery([result("success", { is_error: true, session_id: "requested" })]) });
+    await host.run(); expect(recovery.failure).toBeUndefined();
+    expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound" } });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each([false, true])("checks a requested Claude attach before publishing its id (candidate=%s)", async candidate => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-recovery-")); const path = join(root, "checkpoint"); const ids: string[] = [];
+  try {
+    const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path,
+      ...(candidate ? { recovery_resume_kind: "candidate" as const } : {}) }, "requested", () => {});
+    const host = new AgentHost(config, { onState: () => {}, onSessionId: id => ids.push(id), recovery,
+      queryOptions: { resume: "requested" }, queryFn: scriptedQuery([msg({ type: "system", subtype: "init", session_id: "substituted" })]) });
+    await host.run(); expect(ids).toEqual([]); expect(recovery.failure?.exitCode).toBe(1);
+    expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: candidate ? "unbound" : "blocked" } });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+it("does not classify fresh-query startup error as requested-attach refusal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-recovery-")); const path = join(root, "checkpoint");
+  try {
+    const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, () => {});
+    const host = new AgentHost(config, { onState: () => {}, recovery,
+      queryFn: scriptedQuery([result("error_during_execution", { is_error: true })]) });
     await host.run(); expect(recovery.failure).toBeUndefined();
     expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound" } });
   } finally { rmSync(root, { recursive: true, force: true }); }

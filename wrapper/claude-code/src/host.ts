@@ -3186,9 +3186,10 @@ export class AgentHost implements EngineAdapter {
       // state so the envelopes this message produces already carry it. Forward
       // only on change — the id is stable within a conversation (ADR-0014).
       let sawSystemInit = false;
-      let requestedAttach = this.#options.queryOptions?.resume;
+      const resumeRequested = this.#options.queryOptions?.resume;
+      let requestedAttach = resumeRequested;
       for await (const message of this.#fenceTerminals(session)) {
-        if (!sawSystemInit && requestedAttach !== undefined && message.type === "result" &&
+        if (!sawSystemInit && resumeRequested !== undefined && message.type === "result" &&
             message.is_error === true && message.subtype === "error_during_execution") {
           this.#options.recovery?.refuseLaunch();
           if (this.#options.recovery?.failure) break;
