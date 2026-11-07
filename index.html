@@ -17,10 +17,22 @@
     <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">Release notes</a>
     <a href="ja/" hreflang="ja" lang="ja">日本語</a>
   </nav>
+  <nav class="toc" aria-label="Sections">
+    <ol>
+      <li><a href="#state"><span>State as a face</span></a></li>
+      <li><a href="#features"><span>Features</span></a></li>
+      <li><a href="#engines"><span>Four engines</span></a></li>
+      <li><a href="#uses"><span>Use cases</span></a></li>
+      <li><a href="#architecture"><span>Architecture</span></a></li>
+      <li><a href="#extend"><span>Extending</span></a></li>
+      <li><a href="#screens"><span>Screens</span></a></li>
+      <li><a href="#start"><span>Get started</span></a></li>
+    </ol>
+  </nav>
   <main>
     <header class="wrap hero">
       <h1><img src="assets/kaoiro-logo-on-dark.png" alt="kaoiro" width="1553" height="466"></h1>
-      <p class="lead">Run, watch and orchestrate your CLI AI agents, each with a face.</p>
+      <p class="lead">Run, watch and orchestrate your CLI AI agents, each with a face and a personality.</p>
       <ul class="actions">
         <li><a class="badge" href="https://github.com/sakuraiyuta/kaoiro"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span>sakuraiyuta/kaoiro</span></a></li>
         <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></li>
@@ -34,7 +46,7 @@
 
     <section class="wrap block" aria-labelledby="state">
       <h2 id="state">State as a face</h2>
-      <p class="intro">kaoiro runs, watches and orchestrates several CLI AI agents at once. Each one becomes a character whose expression follows what it is doing, so running a few agents feels closer to keeping a small virtual AI office than to cycling through terminals.</p>
+      <p class="intro">kaoiro runs, watches and orchestrates several CLI AI agents at once. Each one becomes a character whose expression follows what it is doing. Rather than cycling through terminals, it feels like watching over a small AI office.</p>
       <div class="scene">
         <figure class="stage">
           <div class="frame"><img src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission"></div>
@@ -59,7 +71,7 @@
           <div class="step" data-scene="all">
             <span class="label all">timeline</span>
             <h3>The whole office at a glance</h3>
-            <p>The timeline beside the grid merges what every agent said with the messages they send each other.</p>
+            <p>The timeline beside the grid lines up everyone&#39;s conversation in time order, so you can follow how the work flows.</p>
           </div>
         </div>
       </div>
@@ -73,7 +85,7 @@
         <li class="reveal"><h3>Approve in the UI</h3><p>A tool call waiting for approval is routed to the client. Multiple-choice questions arrive as dialogs on the same path.</p></li>
         <li class="reveal"><h3>Agents message each other</h3><p>A delegation, a review request or an approval between agents is a first-class message, grouped into conversations.</p></li>
         <li class="reveal"><h3>One merged timeline</h3><p>Replies and agent-to-agent messages sit in a single time-ordered pane, with unread marks and click-through to the transcript.</p></li>
-        <li class="reveal"><h3>Personas as zip packs</h3><p>Characters are versioned, hash-checked packs read from an ingest directory, with a bundled set as the default.</p></li>
+        <li class="reveal"><h3>Personas as zip packs</h3><p>A character is a zip file of images and a settings file, and you can make your own. Beyond the bundled set, add more by placing them in the ingest folder. A pack added to a running server is currently read only after a restart.</p></li>
         <li class="reveal"><h3>Notifications</h3><p>A desktop notification and a per-state sound tell you when an agent hands control back.</p></li>
       </ul>
     </section>
@@ -156,23 +168,24 @@
           <circle class="d-node" cx="164" cy="382" r="4"/>
           <path class="d-head" d="M50 382l9 -5v10z"/>
         </svg>
-        <figcaption>A made-up exchange. Each message goes through the server, and the two agents can run on different engines. Whether a message can reach a running turn differs by engine.</figcaption>
+        <figcaption>Each message goes through the server, and the two agents can run on different engines. Whether a message can reach a running turn differs by engine.</figcaption>
       </figure>
     </section>
     <p class="wrap note">Engines are not identical. Model and effort switching, permission modes and file uploads depend on what each engine declares, and whether a message can reach a running turn differs by engine. The dashboard follows those declared capabilities.</p>
 
     <section class="wrap block" aria-labelledby="uses">
       <h2 id="uses">How you might use it</h2>
-      <p class="intro">A few ways the features fit together. These describe the work kaoiro carries, not a promise about results.</p>
+      <p class="intro">A few ways the features fit together. kaoiro does not limit the role each agent plays.</p>
       <ul class="uses">
         <li class="reveal"><h3>Run agents side by side</h3><p>Give several agents their own tasks and working directories, then watch the grid instead of cycling through terminals.</p></li>
         <li class="reveal"><h3>Split implementation and review</h3><p>One agent implements and another reviews. The hand-off is a visible message, such as a request to review a diff, without opening anyone.</p></li>
+        <li class="reveal"><h3>Appoint a director</h3><p>Appoint one agent as the director and let it hand out work to the others. With instructions given in advance, it can also judge which model suits each task.</p></li>
         <li class="reveal"><h3>Answer from another device</h3><p>The dashboard has a layout that collapses down to a phone, so you can answer a waiting agent away from your desk, on a deployment you can reach from there.</p></li>
       </ul>
     </section>
 
     <section class="wrap block" aria-labelledby="architecture">
-      <h2 id="architecture">Separate parts, many hosts</h2>
+      <h2 id="architecture">Loosely coupled parts, flexible layouts</h2>
       <p class="intro">kaoiro is split into four parts with clear roles. One server can gather agents from several machines, each supervised by its own runner.</p>
       <ul class="cards four">
         <li class="reveal"><h3>Server</h3><p>Aggregates wrappers, keeps their state, delivers it to clients in real time and routes instructions to the right agent.</p></li>
@@ -181,18 +194,17 @@
         <li class="reveal"><h3>Client</h3><p>Shows each agent as a character. The bundled web dashboard is one client.</p></li>
       </ul>
       <figure class="diagram">
-        <svg class="wide" viewBox="0 0 960 462" role="img" aria-label="An example layout. A client connects to one server. Three hosts, a laptop, a workstation and a cloud VM, each have one runner and one or more wrappers. Wrappers connect directly to the server for data. Each runner connects to the server separately for host registration and control, starts and supervises its wrappers, and stays out of the data path.">
+        <svg class="wide" viewBox="0 0 960 498" role="img" aria-label="An example layout. A client connects to one server. Three hosts, a laptop, a workstation and a cloud VM, each have one runner and one or more wrappers. Wrappers connect directly to the server for data. Each runner connects to the server separately for host registration and control, starts and supervises its wrappers, and stays out of the data path.">
           <rect class="d-box" x="300" y="6" width="360" height="58" rx="8"/>
           <text class="d-t d-b" x="480" y="30" text-anchor="middle" font-size="17">Client</text>
           <text class="d-m" x="480" y="52" text-anchor="middle" font-size="15">web dashboard or your own client</text>
           <path class="d-line" d="M480 64L480 124"/>
-          <path class="d-head" d="M480 124l-5 -9h10z"/>
           <text class="d-k" x="494" y="100" text-anchor="start" font-size="14">WebSocket</text>
           <rect class="d-box" x="270" y="124" width="420" height="58" rx="8"/>
           <text class="d-t d-b" x="480" y="148" text-anchor="middle" font-size="17">Server</text>
           <text class="d-m" x="480" y="170" text-anchor="middle" font-size="15">keeps state and routes instructions and messages</text>
-          <rect class="d-host" x="20" y="270" width="280" height="152" rx="8"/>
-          <text class="d-t d-b" x="34" y="296" text-anchor="start" font-size="16">Laptop</text>
+          <rect class="d-host" x="20" y="270" width="280" height="184" rx="8"/>
+          <text class="d-t d-b" x="34" y="440" text-anchor="start" font-size="16">Laptop</text>
           <rect class="d-chip-d" x="32" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="74" y="357" text-anchor="middle" font-size="14">runner</text>
           <rect class="d-chip" x="146" y="312" width="136" height="44" rx="8"/>
@@ -202,12 +214,10 @@
           <path class="d-dash" d="M116 352L146 334"/>
           <path class="d-line" d="M292 334L292 258"/>
           <path class="d-line" d="M292 258L330 182"/>
-          <path class="d-head" d="M330 184l-5 9h10z"/>
           <path class="d-dash" d="M74 330L74 246"/>
-          <path class="d-dash" d="M74 246L300 184"/>
-          <path class="d-head" d="M300 184l-5 9h10z"/>
-          <rect class="d-host" x="340" y="270" width="280" height="152" rx="8"/>
-          <text class="d-t d-b" x="354" y="296" text-anchor="start" font-size="16">Workstation</text>
+          <path class="d-dash" d="M74 246L300 182"/>
+          <rect class="d-host" x="340" y="270" width="280" height="184" rx="8"/>
+          <text class="d-t d-b" x="354" y="440" text-anchor="start" font-size="16">Workstation</text>
           <rect class="d-chip-d" x="352" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="394" y="357" text-anchor="middle" font-size="14">runner</text>
           <rect class="d-chip" x="466" y="312" width="136" height="44" rx="8"/>
@@ -222,12 +232,10 @@
           <path class="d-dash" d="M436 352L466 386"/>
           <path class="d-line" d="M612 386L612 258"/>
           <path class="d-line" d="M612 258L480 182"/>
-          <path class="d-head" d="M480 184l-5 9h10z"/>
           <path class="d-dash" d="M394 330L394 246"/>
-          <path class="d-dash" d="M394 246L450 184"/>
-          <path class="d-head" d="M450 184l-5 9h10z"/>
-          <rect class="d-host" x="660" y="270" width="280" height="152" rx="8"/>
-          <text class="d-t d-b" x="674" y="296" text-anchor="start" font-size="16">Cloud VM</text>
+          <path class="d-dash" d="M394 246L450 182"/>
+          <rect class="d-host" x="660" y="270" width="280" height="184" rx="8"/>
+          <text class="d-t d-b" x="674" y="440" text-anchor="start" font-size="16">Cloud VM</text>
           <rect class="d-chip-d" x="672" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="714" y="357" text-anchor="middle" font-size="14">runner</text>
           <rect class="d-chip" x="786" y="312" width="136" height="44" rx="8"/>
@@ -237,21 +245,18 @@
           <path class="d-dash" d="M756 352L786 334"/>
           <path class="d-line" d="M932 334L932 258"/>
           <path class="d-line" d="M932 258L630 182"/>
-          <path class="d-head" d="M630 184l-5 9h10z"/>
           <path class="d-dash" d="M714 330L714 246"/>
-          <path class="d-dash" d="M714 246L600 184"/>
-          <path class="d-head" d="M600 184l-5 9h10z"/>
-          <path class="d-line" d="M150 448L190 448"/>
-          <text class="d-m" x="198" y="453" text-anchor="start" font-size="15">Data: state, messages, instructions</text>
-          <path class="d-dash" d="M520 448L560 448"/>
-          <text class="d-m" x="568" y="453" text-anchor="start" font-size="15">Control: host registration, spawning</text>
+          <path class="d-dash" d="M714 246L600 182"/>
+          <path class="d-line" d="M150 484L190 484"/>
+          <text class="d-m" x="198" y="489" text-anchor="start" font-size="15">Data: state, messages, instructions</text>
+          <path class="d-dash" d="M520 484L560 484"/>
+          <text class="d-m" x="568" y="489" text-anchor="start" font-size="15">Control: host registration, spawning</text>
         </svg>
         <svg class="narrow" viewBox="0 0 328 574" role="img" aria-label="An example layout. A client connects to one server. Three hosts, a laptop, a workstation and a cloud VM, each have one runner and one or more wrappers. Wrappers connect directly to the server for data. Each runner connects to the server separately for host registration and control, starts and supervises its wrappers, and stays out of the data path.">
           <rect class="d-box" x="0" y="2" width="328" height="52" rx="8"/>
           <text class="d-t d-b" x="164" y="23" text-anchor="middle" font-size="13">Client</text>
           <text class="d-m" x="164" y="43" text-anchor="middle" font-size="12">web dashboard or your own client</text>
           <path class="d-line" d="M164 54L164 100"/>
-          <path class="d-head" d="M164 100l-5 -9h10z"/>
           <text class="d-k" x="174" y="82" text-anchor="start" font-size="12">WebSocket</text>
           <rect class="d-box" x="0" y="100" width="328" height="52" rx="8"/>
           <text class="d-t d-b" x="164" y="121" text-anchor="middle" font-size="13">Server</text>
@@ -260,7 +265,7 @@
           <text class="d-t d-b" x="28" y="194" text-anchor="start" font-size="13">Laptop</text>
           <rect class="d-chip-d" x="26" y="208" width="70" height="38" rx="8"/>
           <text class="d-t" x="61" y="232" text-anchor="middle" font-size="12">runner</text>
-          <path class="d-dash" d="M16 227L6 227"/>
+          <path class="d-dash" d="M26 227L6 227"/>
           <rect class="d-chip" x="120" y="206" width="180" height="40" rx="8"/>
           <text class="d-m" x="130" y="222" text-anchor="start" font-size="11.5">wrapper</text>
           <text class="d-t" x="130" y="239" text-anchor="start" font-size="12.5">Claude Code</text>
@@ -270,7 +275,7 @@
           <text class="d-t d-b" x="28" y="298" text-anchor="start" font-size="13">Workstation</text>
           <rect class="d-chip-d" x="26" y="312" width="70" height="38" rx="8"/>
           <text class="d-t" x="61" y="336" text-anchor="middle" font-size="12">runner</text>
-          <path class="d-dash" d="M16 331L6 331"/>
+          <path class="d-dash" d="M26 331L6 331"/>
           <rect class="d-chip" x="120" y="310" width="180" height="40" rx="8"/>
           <text class="d-m" x="130" y="326" text-anchor="start" font-size="11.5">wrapper</text>
           <text class="d-t" x="130" y="343" text-anchor="start" font-size="12.5">Codex</text>
@@ -285,22 +290,20 @@
           <text class="d-t d-b" x="28" y="448" text-anchor="start" font-size="13">Cloud VM</text>
           <rect class="d-chip-d" x="26" y="462" width="70" height="38" rx="8"/>
           <text class="d-t" x="61" y="486" text-anchor="middle" font-size="12">runner</text>
-          <path class="d-dash" d="M16 481L6 481"/>
+          <path class="d-dash" d="M26 481L6 481"/>
           <rect class="d-chip" x="120" y="460" width="180" height="40" rx="8"/>
           <text class="d-m" x="130" y="476" text-anchor="start" font-size="11.5">wrapper</text>
           <text class="d-t" x="130" y="493" text-anchor="start" font-size="12.5">Antigravity</text>
           <path class="d-line" d="M300 480L322 480"/>
           <path class="d-dash" d="M96 481L120 480"/>
           <path class="d-line" d="M322 480L322 152"/>
-          <path class="d-head" d="M322 154l-5 9h10z"/>
-          <path class="d-dash" d="M6 481L6 154"/>
-          <path class="d-head" d="M6 154l-5 9h10z"/>
+          <path class="d-dash" d="M6 481L6 152"/>
           <path class="d-line" d="M4 540L34 540"/>
           <text class="d-m" x="42" y="544" text-anchor="start" font-size="12">Data: state, messages</text>
           <path class="d-dash" d="M4 562L34 562"/>
           <text class="d-m" x="42" y="566" text-anchor="start" font-size="12">Control: registration, spawning</text>
         </svg>
-        <figcaption>An example layout with made-up hosts. Solid lines carry data. Dashed lines are the runner&#39;s control path, which stays separate from the data path. Arrows show which side opens each connection; data flows both ways.</figcaption>
+        <figcaption>An example layout with made-up hosts. Solid lines carry data. Dashed lines are the runner&#39;s control path, which stays separate from the data path.</figcaption>
       </figure>
     </section>
     <section class="wrap block" aria-labelledby="extend">

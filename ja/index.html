@@ -17,10 +17,22 @@
     <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">リリースノート</a>
     <a href="../" hreflang="en" lang="en">English</a>
   </nav>
+  <nav class="toc" aria-label="目次">
+    <ol>
+      <li><a href="#state"><span>状態が、顔になる</span></a></li>
+      <li><a href="#features"><span>主な機能</span></a></li>
+      <li><a href="#engines"><span>4 つのエンジン</span></a></li>
+      <li><a href="#uses"><span>使い方の例</span></a></li>
+      <li><a href="#architecture"><span>構成</span></a></li>
+      <li><a href="#extend"><span>拡張</span></a></li>
+      <li><a href="#screens"><span>画面</span></a></li>
+      <li><a href="#start"><span>はじめる</span></a></li>
+    </ol>
+  </nav>
   <main>
     <header class="wrap hero">
       <h1><img src="../assets/kaoiro-logo-on-dark.png" alt="kaoiro" width="1553" height="466"></h1>
-      <p class="lead">CLI AI エージェントを動かし、見守り、連携させる。それぞれに顔を。</p>
+      <p class="lead">CLI AI エージェントを動かし、見守り、連携させる。それぞれに顔と人格を。</p>
       <ul class="actions">
         <li><a class="badge" href="https://github.com/sakuraiyuta/kaoiro"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span>sakuraiyuta/kaoiro</span></a></li>
         <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start (英語)</a></li>
@@ -34,7 +46,7 @@
 
     <section class="wrap block" aria-labelledby="state">
       <h2 id="state">状態が、顔になる</h2>
-      <p class="intro">kaoiro は複数の CLI AI エージェントを同時に動かし、見守り、連携させます。エージェントはそれぞれキャラクターになり、表情で今の様子を伝えます。ターミナルを巡回するより、小さな AI のオフィスを見守る感覚に近づきます。</p>
+      <p class="intro">kaoiro は複数の CLI AI エージェントを同時に動かし、見守り、連携させます。エージェントはそれぞれキャラクターになり、表情で今の様子を伝えます。ターミナルを巡回するより、小さな AI のオフィスを見守る感覚です。</p>
       <div class="scene">
         <figure class="stage">
           <div class="frame"><img src="../assets/agent-grid.png" width="1036" height="619" alt="kaoiro のダッシュボード: 4 体のエージェントのキャラクターカードと会話タイムライン。1 枚のカードに権限の確認待ちの印が付いている"></div>
@@ -59,7 +71,7 @@
           <div class="step" data-scene="all">
             <span class="label all">timeline</span>
             <h3>オフィス全体を一目で</h3>
-            <p>グリッドの隣のタイムラインに、全員の発言とエージェントどうしのメッセージがまとまります。</p>
+            <p>グリッドの隣のタイムラインに全員の会話が時系列で並ぶことで、作業の流れが把握できます。</p>
           </div>
         </div>
       </div>
@@ -73,7 +85,7 @@
         <li class="reveal"><h3>UI で承認</h3><p>承認待ちのツール呼び出しはクライアントに届きます。選択式の質問も同じ経路でダイアログになります。</p></li>
         <li class="reveal"><h3>エージェントどうしの連絡</h3><p>依頼、レビューの依頼、承認をメッセージとして扱い、会話ごとにまとめます。</p></li>
         <li class="reveal"><h3>1 本のタイムライン</h3><p>返信とエージェント間のメッセージを時刻順に並べます。未読の印が付き、クリックで全文を開けます。</p></li>
-        <li class="reveal"><h3>ペルソナは zip のパック</h3><p>キャラクターは版と hash を持つパックで、取り込み用のディレクトリから読みます。既定のセットも同梱しています。</p></li>
+        <li class="reveal"><h3>ペルソナは zip のパック</h3><p>キャラクターは自身でも作成可能な、画像と設定ファイルをまとめた zip ファイルです。標準のセットだけでなく、取り込み用フォルダに置くことで自由に追加できます。稼働中の server に足したパックは、今は再起動の後に読み込まれます。</p></li>
         <li class="reveal"><h3>通知</h3><p>エージェントから操作が戻ると、デスクトップ通知と状態ごとの音で知らせます。</p></li>
       </ul>
     </section>
@@ -156,23 +168,24 @@
           <circle class="d-node" cx="164" cy="382" r="4"/>
           <path class="d-head" d="M50 382l9 -5v10z"/>
         </svg>
-        <figcaption>架空のやり取りです。メッセージは全て server を通り、2 体は別のエンジンで動かせます。実行中の turn に届くかどうかはエンジンごとに違います。</figcaption>
+        <figcaption>メッセージは全て server を通り、2 体は別のエンジンで動かせます。実行中の turn に届くかどうかはエンジンごとに違います。</figcaption>
       </figure>
     </section>
     <p class="wrap note">エンジンの機能は同じではありません。model や effort の切り替え、権限のモード、ファイルの添付は各エンジンの宣言によります。実行中の turn にメッセージが届くかどうかもエンジンごとに違います。ダッシュボードは宣言された機能に従います。</p>
 
     <section class="wrap block" aria-labelledby="uses">
       <h2 id="uses">使い方の例</h2>
-      <p class="intro">機能の組み合わせ方の例です。kaoiro が運ぶ作業を説明するもので、成果を約束するものではありません。</p>
+      <p class="intro">機能の組み合わせ方の例です。kaoiro は各エージェントの役割を制限しません。</p>
       <ul class="uses">
         <li class="reveal"><h3>複数のエージェントを並べて動かす</h3><p>それぞれに別の作業とディレクトリを任せ、ターミナルを巡回する代わりにグリッドを見ます。</p></li>
         <li class="reveal"><h3>実装とレビューを分ける</h3><p>あるエージェントが実装し、別のエージェントがレビューします。引き継ぎはメッセージとして見えるので、誰かの画面を開かずに追えます。</p></li>
+        <li class="reveal"><h3>ディレクターに任せる</h3><p>1 体をディレクターに任命し、ほかのエージェントへ仕事を割り振らせます。事前に指示しておけば、各モデルの得意な仕事を判断させることもできます。</p></li>
         <li class="reveal"><h3>別の端末から答える</h3><p>ダッシュボードはスマートフォンの幅まで畳めます。手元の端末から届く環境なら、席を離れていても待っているエージェントに答えられます。</p></li>
       </ul>
     </section>
 
     <section class="wrap block" aria-labelledby="architecture">
-      <h2 id="architecture">分かれた部品、複数のホスト</h2>
+      <h2 id="architecture">疎結合の部品、柔軟な構成</h2>
       <p class="intro">kaoiro は役割の分かれた 4 つの部品でできています。1 つの server に複数のマシンのエージェントを集められ、マシンごとの runner がそれぞれを監督します。</p>
       <ul class="cards four">
         <li class="reveal"><h3>Server</h3><p>wrapper を束ねて状態を持ち、client へリアルタイムに届けて、指示を該当のエージェントへ運びます。</p></li>
@@ -181,18 +194,17 @@
         <li class="reveal"><h3>Client</h3><p>各エージェントをキャラクターとして見せます。同梱の Web ダッシュボードは client の 1 つです。</p></li>
       </ul>
       <figure class="diagram">
-        <svg class="wide" viewBox="0 0 960 462" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner は host の登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
+        <svg class="wide" viewBox="0 0 960 498" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner は host の登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
           <rect class="d-box" x="300" y="6" width="360" height="58" rx="8"/>
           <text class="d-t d-b" x="480" y="30" text-anchor="middle" font-size="17">Client</text>
           <text class="d-m" x="480" y="52" text-anchor="middle" font-size="15">Web ダッシュボードや自作の client</text>
           <path class="d-line" d="M480 64L480 124"/>
-          <path class="d-head" d="M480 124l-5 -9h10z"/>
           <text class="d-k" x="494" y="100" text-anchor="start" font-size="14">WebSocket</text>
           <rect class="d-box" x="270" y="124" width="420" height="58" rx="8"/>
           <text class="d-t d-b" x="480" y="148" text-anchor="middle" font-size="17">Server</text>
           <text class="d-m" x="480" y="170" text-anchor="middle" font-size="15">状態を持ち、指示とメッセージを運ぶ</text>
-          <rect class="d-host" x="20" y="270" width="280" height="152" rx="8"/>
-          <text class="d-t d-b" x="34" y="296" text-anchor="start" font-size="16">ノート PC</text>
+          <rect class="d-host" x="20" y="270" width="280" height="184" rx="8"/>
+          <text class="d-t d-b" x="34" y="440" text-anchor="start" font-size="16">ノート PC</text>
           <rect class="d-chip-d" x="32" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="74" y="357" text-anchor="middle" font-size="14">runner</text>
           <rect class="d-chip" x="146" y="312" width="136" height="44" rx="8"/>
@@ -202,12 +214,10 @@
           <path class="d-dash" d="M116 352L146 334"/>
           <path class="d-line" d="M292 334L292 258"/>
           <path class="d-line" d="M292 258L330 182"/>
-          <path class="d-head" d="M330 184l-5 9h10z"/>
           <path class="d-dash" d="M74 330L74 246"/>
-          <path class="d-dash" d="M74 246L300 184"/>
-          <path class="d-head" d="M300 184l-5 9h10z"/>
-          <rect class="d-host" x="340" y="270" width="280" height="152" rx="8"/>
-          <text class="d-t d-b" x="354" y="296" text-anchor="start" font-size="16">ワークステーション</text>
+          <path class="d-dash" d="M74 246L300 182"/>
+          <rect class="d-host" x="340" y="270" width="280" height="184" rx="8"/>
+          <text class="d-t d-b" x="354" y="440" text-anchor="start" font-size="16">ワークステーション</text>
           <rect class="d-chip-d" x="352" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="394" y="357" text-anchor="middle" font-size="14">runner</text>
           <rect class="d-chip" x="466" y="312" width="136" height="44" rx="8"/>
@@ -222,12 +232,10 @@
           <path class="d-dash" d="M436 352L466 386"/>
           <path class="d-line" d="M612 386L612 258"/>
           <path class="d-line" d="M612 258L480 182"/>
-          <path class="d-head" d="M480 184l-5 9h10z"/>
           <path class="d-dash" d="M394 330L394 246"/>
-          <path class="d-dash" d="M394 246L450 184"/>
-          <path class="d-head" d="M450 184l-5 9h10z"/>
-          <rect class="d-host" x="660" y="270" width="280" height="152" rx="8"/>
-          <text class="d-t d-b" x="674" y="296" text-anchor="start" font-size="16">クラウド VM</text>
+          <path class="d-dash" d="M394 246L450 182"/>
+          <rect class="d-host" x="660" y="270" width="280" height="184" rx="8"/>
+          <text class="d-t d-b" x="674" y="440" text-anchor="start" font-size="16">クラウド VM</text>
           <rect class="d-chip-d" x="672" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="714" y="357" text-anchor="middle" font-size="14">runner</text>
           <rect class="d-chip" x="786" y="312" width="136" height="44" rx="8"/>
@@ -237,21 +245,18 @@
           <path class="d-dash" d="M756 352L786 334"/>
           <path class="d-line" d="M932 334L932 258"/>
           <path class="d-line" d="M932 258L630 182"/>
-          <path class="d-head" d="M630 184l-5 9h10z"/>
           <path class="d-dash" d="M714 330L714 246"/>
-          <path class="d-dash" d="M714 246L600 184"/>
-          <path class="d-head" d="M600 184l-5 9h10z"/>
-          <path class="d-line" d="M150 448L190 448"/>
-          <text class="d-m" x="198" y="453" text-anchor="start" font-size="15">データ: 状態、メッセージ、指示</text>
-          <path class="d-dash" d="M520 448L560 448"/>
-          <text class="d-m" x="568" y="453" text-anchor="start" font-size="15">制御: ホストの登録、起動</text>
+          <path class="d-dash" d="M714 246L600 182"/>
+          <path class="d-line" d="M150 484L190 484"/>
+          <text class="d-m" x="198" y="489" text-anchor="start" font-size="15">データ: 状態、メッセージ、指示</text>
+          <path class="d-dash" d="M520 484L560 484"/>
+          <text class="d-m" x="568" y="489" text-anchor="start" font-size="15">制御: ホストの登録、起動</text>
         </svg>
         <svg class="narrow" viewBox="0 0 328 574" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner は host の登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
           <rect class="d-box" x="0" y="2" width="328" height="52" rx="8"/>
           <text class="d-t d-b" x="164" y="23" text-anchor="middle" font-size="13">Client</text>
           <text class="d-m" x="164" y="43" text-anchor="middle" font-size="12">Web ダッシュボードや自作の client</text>
           <path class="d-line" d="M164 54L164 100"/>
-          <path class="d-head" d="M164 100l-5 -9h10z"/>
           <text class="d-k" x="174" y="82" text-anchor="start" font-size="12">WebSocket</text>
           <rect class="d-box" x="0" y="100" width="328" height="52" rx="8"/>
           <text class="d-t d-b" x="164" y="121" text-anchor="middle" font-size="13">Server</text>
@@ -260,7 +265,7 @@
           <text class="d-t d-b" x="28" y="194" text-anchor="start" font-size="13">ノート PC</text>
           <rect class="d-chip-d" x="26" y="208" width="70" height="38" rx="8"/>
           <text class="d-t" x="61" y="232" text-anchor="middle" font-size="12">runner</text>
-          <path class="d-dash" d="M16 227L6 227"/>
+          <path class="d-dash" d="M26 227L6 227"/>
           <rect class="d-chip" x="120" y="206" width="180" height="40" rx="8"/>
           <text class="d-m" x="130" y="222" text-anchor="start" font-size="11.5">wrapper</text>
           <text class="d-t" x="130" y="239" text-anchor="start" font-size="12.5">Claude Code</text>
@@ -270,7 +275,7 @@
           <text class="d-t d-b" x="28" y="298" text-anchor="start" font-size="13">ワークステーション</text>
           <rect class="d-chip-d" x="26" y="312" width="70" height="38" rx="8"/>
           <text class="d-t" x="61" y="336" text-anchor="middle" font-size="12">runner</text>
-          <path class="d-dash" d="M16 331L6 331"/>
+          <path class="d-dash" d="M26 331L6 331"/>
           <rect class="d-chip" x="120" y="310" width="180" height="40" rx="8"/>
           <text class="d-m" x="130" y="326" text-anchor="start" font-size="11.5">wrapper</text>
           <text class="d-t" x="130" y="343" text-anchor="start" font-size="12.5">Codex</text>
@@ -285,22 +290,20 @@
           <text class="d-t d-b" x="28" y="448" text-anchor="start" font-size="13">クラウド VM</text>
           <rect class="d-chip-d" x="26" y="462" width="70" height="38" rx="8"/>
           <text class="d-t" x="61" y="486" text-anchor="middle" font-size="12">runner</text>
-          <path class="d-dash" d="M16 481L6 481"/>
+          <path class="d-dash" d="M26 481L6 481"/>
           <rect class="d-chip" x="120" y="460" width="180" height="40" rx="8"/>
           <text class="d-m" x="130" y="476" text-anchor="start" font-size="11.5">wrapper</text>
           <text class="d-t" x="130" y="493" text-anchor="start" font-size="12.5">Antigravity</text>
           <path class="d-line" d="M300 480L322 480"/>
           <path class="d-dash" d="M96 481L120 480"/>
           <path class="d-line" d="M322 480L322 152"/>
-          <path class="d-head" d="M322 154l-5 9h10z"/>
-          <path class="d-dash" d="M6 481L6 154"/>
-          <path class="d-head" d="M6 154l-5 9h10z"/>
+          <path class="d-dash" d="M6 481L6 152"/>
           <path class="d-line" d="M4 540L34 540"/>
           <text class="d-m" x="42" y="544" text-anchor="start" font-size="12">データ: 状態、メッセージ</text>
           <path class="d-dash" d="M4 562L34 562"/>
           <text class="d-m" x="42" y="566" text-anchor="start" font-size="12">制御: 登録、起動</text>
         </svg>
-        <figcaption>架空のホストによる構成の例です。実線はデータ、破線は runner の制御の経路で、データの経路とは別です。矢印は接続を開く向きで、データは双方向に流れます。</figcaption>
+        <figcaption>架空のホストによる構成の例です。実線はデータ、破線は runner の制御の経路で、データの経路とは別です。</figcaption>
       </figure>
     </section>
     <section class="wrap block" aria-labelledby="extend">

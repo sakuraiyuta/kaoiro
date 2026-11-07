@@ -3,8 +3,35 @@
 (() => {
   "use strict";
 
+  if (typeof IntersectionObserver !== "function") return;
+
+  // The section indicator works with reduced motion too; it only hides near
+  // the hero and the footer, and marks the current section.
+  const toc = document.querySelector(".toc");
+  const links = toc.querySelectorAll("a");
+  const edgesInView = new Set();
+  const edgeObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) edgesInView.add(entry.target);
+      else edgesInView.delete(entry.target);
+    }
+    toc.classList.toggle("off", edgesInView.size > 0);
+  });
+  const sectionObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const id = entry.target.getAttribute("aria-labelledby");
+      links.forEach((link) => {
+        if (link.hash === "#" + id) link.setAttribute("aria-current", "true");
+        else link.removeAttribute("aria-current");
+      });
+    }
+  }, { rootMargin: "-40% 0px -55% 0px" });
+  document.querySelectorAll(".hero, footer").forEach((edge) => edgeObserver.observe(edge));
+  document.querySelectorAll("main section").forEach((section) => sectionObserver.observe(section));
+
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-  if (reduced.matches || typeof IntersectionObserver !== "function") return;
+  if (reduced.matches) return;
 
   const stage = document.querySelector(".stage");
   const steps = document.querySelectorAll(".step");

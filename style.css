@@ -74,6 +74,7 @@ h3,
 }
 
 h2 {
+  scroll-margin-top: 1.5rem;
   margin: 0 0 1rem;
   font-size: clamp(1.9rem, 5vw, 3.25rem);
   letter-spacing: -0.02em;
@@ -362,6 +363,10 @@ h3 {
   display: none;
 }
 
+.diagram .narrow {
+  max-width: 26rem;
+}
+
 .diagram figcaption {
   margin-top: 0.75rem;
   color: var(--muted);
@@ -395,8 +400,82 @@ footer {
   font-size: 0.9rem;
 }
 
+/* Section indicator. Visible by default; site.js hides it near the hero and
+   footer only from an observer callback. */
+.toc {
+  display: none;
+  position: fixed;
+  top: 50%;
+  right: 0.75rem;
+  z-index: 2;
+  transform: translateY(-50%);
+  transition: opacity 0.4s ease, visibility 0.4s;
+}
+
+.toc ol {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.toc a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 2.25rem;
+  height: 1rem;
+  border-radius: 3px;
+}
+
+.toc a::after {
+  content: "";
+  width: 1.1rem;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--fg-dim);
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.toc a:hover::after,
+.toc a[aria-current="true"]::after {
+  width: 2rem;
+  background: var(--c-thinking);
+}
+
+.toc span {
+  position: absolute;
+  right: 2.75rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--fg);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.toc a:hover span,
+.toc a:focus-visible span {
+  opacity: 1;
+}
+
+.toc.off {
+  opacity: 0;
+  visibility: hidden;
+}
+
 /* Hiding exists only under .motion, which site.js sets after observers run. */
 @media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+
   .motion .reveal {
     transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.22, 0.8, 0.3, 1);
   }
@@ -423,6 +502,9 @@ footer {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .toc,
+  .toc a::after,
+  .toc span,
   .frame,
   .frame img,
   .reveal {
@@ -445,9 +527,22 @@ footer {
     grid-template-columns: 1fr 1fr;
   }
 
-  .cards,
-  .uses {
+  .cards {
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .uses {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .wrap {
+    width: min(100% - 5rem, 68rem);
+    margin-left: max(1rem, calc((100% - 68rem) / 2 - 1.5rem));
+    margin-right: auto;
+  }
+
+  .toc {
+    display: block;
   }
 
   .screens {
@@ -457,14 +552,6 @@ footer {
   .cards.four,
   .uses.two {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  .diagram .wide {
-    display: block;
-  }
-
-  .diagram .narrow {
-    display: none;
   }
 }
 
@@ -476,6 +563,14 @@ footer {
 
   .cards.four {
     grid-template-columns: repeat(4, 1fr);
+  }
+
+  .diagram .wide {
+    display: block;
+  }
+
+  .diagram .narrow {
+    display: none;
   }
 
   .stage {
