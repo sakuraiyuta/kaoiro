@@ -585,3 +585,10 @@ reset grace. Process-signal tests run in an isolated namespace.
 
 For permission synchronization deadlines and failed-input recovery, see
 [permission state](../protocol/permission-state.md#synchronization-failure-visibility).
+
+## Wrapper-exit recovery
+
+The runner's [launch-owned recovery checkpoint](../protocol/runner-control.md#wrapper-exit-session-recovery)
+records native candidates before first-turn completion and distinguishes confirmed
+live/explicit attach from candidate fallback. The engine boundary and refusal
+exceptions in that contract apply independently of display history replay.

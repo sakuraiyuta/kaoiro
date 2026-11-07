@@ -57,6 +57,14 @@ runner/src/supervisor.ts). This section documents the fields that instead
 come from `runner.config.json`'s per-engine blocks. Claude's delivery controls
 below resolve at launch, using the runner-relayed flags and captured environment.
 
+`recovery_checkpoint_path?: string` and `recovery_resume_kind?: "candidate"`
+are private launcher fields, not server spawn/dashboard settings. The launcher
+owns a distinct checkpoint path per child and overwrites any inbound path.
+Candidate kind is selected anew per launch, never inherited through reset or
+explicit rollback. Standalone wrappers without the path retain their existing
+behavior. See [wrapper-exit recovery](../protocol/runner-control.md#wrapper-exit-session-recovery)
+for states, fatal code 79 and native attach limits.
+
 `codex_tool_home?: string` is a local runner-to-Codex-wrapper field. The runner
 creates a private empty directory for each Codex wrapper and overwrites any
 inbound value before launch; it is not a server or dashboard setting. A directly

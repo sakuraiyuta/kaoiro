@@ -324,3 +324,10 @@ for candidate sources and notice timing.
 - No attachments in Stage A (`--print` takes text only).
 
 - No context-usage capability until a per-model window table exists.
+
+## Wrapper-exit recovery
+
+The runner's [launch-owned recovery checkpoint](../protocol/runner-control.md#wrapper-exit-session-recovery)
+records native candidates before first-turn completion and distinguishes confirmed
+live/explicit attach from candidate fallback. The engine boundary and refusal
+exceptions in that contract apply independently of display history replay.

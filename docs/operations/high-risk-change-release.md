@@ -65,7 +65,8 @@ git diff --name-only <base>..<head> -- \
   runner/src/spawn.ts runner/src/supervisor.ts runner/src/cli.ts \
   runner/src/runner-cli.ts runner/src/config.ts runner/src/config-watcher.ts \
   runner/src/transport.ts runner/src/args.ts runner/src/delivery-settings.ts \
-  runner/src/permission_ceiling.ts runner/src/resume_snapshot.ts
+  runner/src/permission_ceiling.ts runner/src/resume_snapshot.ts \
+  wrapper/core/src/recovery_checkpoint.ts
 
 # TL: a wrapper starts and completes a turn
 git diff --name-only <base>..<head> -- \
@@ -74,7 +75,7 @@ git diff --name-only <base>..<head> -- \
   'wrapper/*/src/inter_agent_turn_coordinator.ts' \
   wrapper/core/src/transport.ts wrapper/core/src/phoenix_socket.ts \
   wrapper/core/src/claude_scheduler.ts wrapper/core/src/delivery_recovery.ts \
-  wrapper/core/src/args.ts \
+  wrapper/core/src/args.ts wrapper/core/src/recovery_checkpoint.ts \
   wrapper/agent-common/src/state.ts wrapper/agent-common/src/inter_agent.ts \
   wrapper/agent-common/src/pending.ts wrapper/agent-common/src/approval_gate.ts \
   wrapper/agent-common/src/delivery_modes.ts \
