@@ -2201,9 +2201,8 @@ export class CodexHost implements EngineAdapter {
     // cut a secret's "sk-"/"api_key=" anchor away, leaving the surviving
     // fragment unmasked forever) -- makeResult's masking, downstream of
     // that clip, cannot recover an anchor already lost, so it is a
-    // backstop for producers that bypass the relay (e.g. the
-    // rollout-corrupted branch), not a replacement for the relay's own
-    // pre-clip masking.
+    // backstop for producers that bypass the relay, not a replacement for
+    // the relay's own pre-clip masking.
     //
     // This means the relay's own path DOES run redactCredentials twice on
     // the same text. That double application is safe NOT because it is

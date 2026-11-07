@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codexHome, codexHomeProblem } from "../src/codex_home.js";
-import { codexRolloutsRoot, verifyRolloutCorruption } from "../src/rollout.js";
+import { codexRolloutsRoot, codexSidecarPath } from "../src/rollout.js";
 
 const scratch: string[] = [];
 function tempDir(): string {
@@ -61,16 +61,14 @@ describe("rollout readers follow CODEX_HOME", () => {
     const id = "0195aaaa-0000-7000-8000-000000000454";
     const day = join(home, "sessions", "2026", "09", "30");
     mkdirSync(day, { recursive: true });
-    const corrupt = Buffer.concat([
-      Buffer.from(`${JSON.stringify({ type: "turn_context", payload: {} })}\n`, "utf8"),
-      Buffer.from('{"type":"event_msg","payload":{"message":"', "utf8"),
-      Buffer.from([0xe3, 0x81]),
-    ]);
-    writeFileSync(join(day, `rollout-2026-09-30T00-00-00-${id}.jsonl`), corrupt);
+    writeFileSync(
+      join(day, `rollout-2026-09-30T00-00-00-${id}.jsonl`),
+      `${JSON.stringify({ type: "session_meta", payload: {} })}\n`,
+    );
 
     vi.stubEnv("CODEX_HOME", home);
-    expect(verifyRolloutCorruption(id)).toBe("corrupted");
+    expect(codexSidecarPath(id)).toBe(join(day, `${id}.ia.jsonl`));
     vi.stubEnv("CODEX_HOME", undefined);
-    expect(verifyRolloutCorruption(id)).toBe("unknown");
+    expect(codexSidecarPath(id)).toBeNull();
   });
 });

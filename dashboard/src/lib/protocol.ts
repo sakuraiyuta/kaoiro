@@ -1428,12 +1428,12 @@ export interface ResultPayload {
    *  Present on error results only, absent on success. The Claude Code
    *  adapter's values mirror its ResultSubtype (`error_max_turns` /
    *  `error_during_execution` / `error_max_budget_usd` /
-   *  `error_max_structured_output_retries`). The Codex adapter has no
-   *  SDK-native subtype of its own but sets one independent value,
-   *  `error_rollout_corrupted` (issue #253), when a resume failure is
-   *  confirmed as permanent rollout corruption (candidate stderr pattern
-   *  AND the rollout file itself verified corrupted — a text match alone
-   *  never sets it). The UI treats any other unknown string as fallback
+   *  `error_max_structured_output_retries`). The Codex app-server
+   *  projection sets `interrupted` or `error_during_execution` on a
+   *  failed or interrupted turn. `error_rollout_corrupted` is a value
+   *  the retired exec runtime set (issues #253 and #262). No current
+   *  path assigns it. The label below stays so stored results still
+   *  render. The UI treats any other unknown string as fallback
    *  wording. */
   error_subtype?: string;
   /** SDK error termination detail text (issue #123) — the wrapper forwards
@@ -1471,10 +1471,10 @@ const ERROR_SUBTYPE_LABELS: Record<string, string> = {
   error_during_execution: "実行中エラー",
   error_max_budget_usd: "予算上限到達",
   error_max_structured_output_retries: "構造化出力リトライ上限",
-  // issue #253: Codex アダプタが resume 失敗の detail から rollout 破損
-  // (行途中の UTF-8 切断 / JSON 途切れ) を検知したときだけ独自に載せる
-  // 値。他の4値と違い SDK 由来の subtype ではない — wrapper 側の判定
-  // (isRolloutCorruptionDetail) が付与する。
+  // Historical label for results the retired exec runtime stored
+  // (issues #253 and #262). No current path assigns this value.
+  // The app-server projection sets interrupted or
+  // error_during_execution instead.
   error_rollout_corrupted: "セッション破損 (再開不可)",
 };
 

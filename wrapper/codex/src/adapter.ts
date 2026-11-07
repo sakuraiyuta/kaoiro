@@ -205,19 +205,17 @@ export function threadEventToLogs(event: ThreadEvent): LogEntry[] {
 // throws `Error("Codex Exec exited with ${detail}: ${stderr}")` -- stderr is
 // already captured by the SDK, just embedded in the thrown message rather
 // than exposed as a separate field. Before this, the host computed `detail`
-// but never passed it to #emitResult in the ordinary (non-rollout-corrupted)
-// failure branch, so the operator saw a bare `is_error: true` with no detail
+// but never passed it to #emitResult, so the operator saw a bare
+// `is_error: true` with no detail
 // at all. This section extracts a bounded, masked stderr tail for
 // error_detail, and -- when the tail's last line is a single-line JSON
 // error object -- error_code/error_summary/recovery_hint (issue #287
 // fields) from a closed, wrapper-owned table.
 
 /** Bounded stderr tail relayed to the operator on an exec-exit-nonzero
- *  failure. Independent of turn_diagnostics.ts's MAX_STDERR_BYTES=8192
- *  (that one bounds a host-private trace file); this one rides the wire
- *  inside error_detail, which itself gets clipText's 16384-byte clip
- *  downstream, so a smaller bound here leaves headroom for the exit-detail
- *  prefix kaoiro adds. */
+ *  failure. This rides the wire inside error_detail, which itself gets
+ *  clipText's 16384-byte clip downstream, so a smaller bound here leaves
+ *  headroom for the exit-detail prefix kaoiro adds. */
 export const MAX_RELAYED_STDERR_TAIL_BYTES = 4096;
 
 /** Splits codex-sdk's own exec-failure Error message into the exit detail
