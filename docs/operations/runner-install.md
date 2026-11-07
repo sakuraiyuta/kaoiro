@@ -35,8 +35,8 @@ disconnects every agent on that host.
 
 Service definitions for host residency are in [`deploy/`](../../runner/deploy) (issue #136).
 
-**Initial installation is completed entirely with `kaoiro-runner-bootstrap.sh <tarball>`** (issue
-#314): wizard (the only interactive step) → install → switch → unit/plist placement →
+**Initial installation is completed entirely with `kaoiro-runner-bootstrap.sh <tarball>`**
+(issue #314): wizard (the only interactive step) → install → switch → unit/plist placement →
 enable/start in order. The OS is automatically detected via `uname -s` (systemd user
 unit for Linux, launchd LaunchAgent for macOS). It is idempotent — if config already exists, it
 skips the wizard (forced with `--reconfigure`, backing up existing config before overwriting),
@@ -234,8 +234,8 @@ the runner probes `agy --version` (`runner/src/antigravity-version.ts:1-5`,
 `runner/src/runner-cli.ts:185-209, 350-362`). If resolved, it writes
 `runner: antigravity agy version <version>` to stderr and advertises the version
 in the `RunnerRegister` payload under `antigravity_cli_version`
-(`runner/src/config.ts:704-706`) for server and dashboard visibility (issue
-#410). This startup version probe is for operator reporting and observability
+(`runner/src/config.ts:704-706`) for server and dashboard visibility
+(issue #410). This startup version probe is for operator reporting and observability
 only; failure to resolve a version does not gate runner startup. A version
 change detected during configuration reload emits a stderr warning
 (`runner: warn — antigravity agy version changed`).
@@ -326,6 +326,9 @@ Because wrappers, engine CLIs (Claude Code / codex are bundled as actual
 platform-specific npm packages), and native modules are all included, **neither
 `pnpm install` nor building is required on the target host**.
 
+The host that builds the tarball needs the full toolchain (Node and pnpm):
+workspace resolution happens at build time, not on the target host.
+
 **Run at the repository root** (the script resolves the root from its own
 location and `cd`s there).
 
@@ -367,6 +370,12 @@ CLI packages account for most of the size. The linux version includes musl
 variants as well, supporting both glibc and musl.
 
 ### Installation on the target host
+
+The target host needs Node.js 22 or later and nothing else. When the setup
+wizard asks for `host_id` and `server_url`, pair `server_url` with the
+`<host_id>:<token>` entry that the server's `.env` wizard issued: `wss://...`
+through nginx, or `ws://<PHX_HOST>:<PORT>/runner` for a direct-VPN deployment
+([network and login runbook](network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)).
 
 ```sh
 tar xzf kaoiro-runner-<rev>-linux-x64.tar.gz

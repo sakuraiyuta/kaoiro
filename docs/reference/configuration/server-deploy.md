@@ -23,6 +23,10 @@ shown, so a file only needs to state what it overrides):
 | `health_url` | `null` (derived via `docker compose port <service> 4000`) | Override only if the derived URL is wrong for this host |
 | `expected_clean_stop_exit_code` / `expected_clean_stop_oom_killed` | `null` / `null` | **Must be set from a measurement on this host** (step 5) — until then every stop is treated as abnormal, the safe direction to fail in |
 
+One more key, `allow_docker_override`, exists only so the test suite can fake
+the docker binary. It has no legitimate production use and is deliberately
+left out of the table above.
+
 ## Transaction states and status
 
 **Checking status and reading a transaction's records**

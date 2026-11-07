@@ -158,6 +158,16 @@ and retain the established backend until the failure is resolved.
   recorded a non-ASCII entry name in unescaped UTF-8, as listings made before
   issue #552 under a UTF-8 locale did. Such a transaction is not restored
   automatically.
+- **A host that predates the deploy CLI is a normal, safe starting point.** It
+  has a live container and no transaction history. Before trusting the CLI
+  with a real update, run `node server/deploy/kaoiro-server-deploy.mjs status`
+  and expect `container.running: true` and `doneTransactions: []`. The running
+  image must have been built with valid build arguments containing a commit
+  `revision` (4.3 reads the old SHA from the image's own
+  `/app/build-info.json`). Preview the first update with `--dry-run`; nothing
+  else needs migrating, because the CLI works from whatever is running. Such a
+  host has nothing to roll back to until it has gone through one `update`:
+  rollback is possible only for a transaction the CLI itself created.
 - **Use exactly one `backup_root` per deployment host.** The single-writer
   lock every mutating command (`start`/`update`/`rollback`) takes lives under
   `backup_root`, keyed by the checkout's own path — two DIFFERENT
@@ -203,8 +213,12 @@ node server/deploy/kaoiro-server-deploy.mjs <command> [flags...]
 ```
 
 Deploy CLI `--config` keys are documented in [Server deploy configuration](../reference/configuration/server-deploy.md).
+The config file is optional but required for anything other than the built-in
+defaults: a `0600` JSON file owned by the user that runs the CLI, passed as
+`--config <path>` to every subcommand.
 
-**`update --dry-run --target <target-sha>` performs only reads.** It never
+**`update --dry-run --target <target-sha>` performs only reads.** Run it first
+on every update, not only the first time the CLI touches a host. It never
 fetches from `origin` (issue #322 S1) — an EARLIER version did, which mutated
 the checkout's remote-tracking refs and object store despite `--dry-run`'s
 own read-only contract. It instead checks whether `target` is already a known
@@ -278,7 +292,11 @@ opt-outs on an old server.
 **Separate prepare (no downtime) from commit (the stop window)** — steps
 (1)/(2) below now run automatically, inside one `update` invocation, ending
 right before the stop window; steps (5)/(6) run automatically inside a second
-`update` invocation once `--maintenance-approved` is given.
+`update` invocation once `--maintenance-approved` is given. The split exists
+because the human-judgment points in this deploy (an abnormal stop, a lost
+ledger, an ambiguous recovery) get no `--skip` / `--force` flag by design;
+requiring an explicit second invocation is that same policy applied to the
+routine case, not an oversight.
 
 **Do not count server-image build time as server downtime.** The old container
 keeps running with its old image ID throughout (1)/(2).
@@ -511,6 +529,15 @@ there is no automatic retry loop. Recovery is manual (4.4 (1)): `docker start
 past this point**; once the stop failure is understood, a fresh `update`
 starts a new transaction.
 
+Because the expectation has no usable default, measure it once on this host
+before relying on unattended updates: stop the server manually, read what a
+normal `docker compose stop` produced, and put both values in the `--config`
+file.
+
+```sh
+docker inspect <container> --format 'exit={{.State.ExitCode}} oom={{.State.OOMKilled}}'
+```
+
 **If the persistence-path check refuses an existing or uncertain store, stop**
 and follow (5-b); do not proceed to the stop command above.
 
@@ -726,7 +753,8 @@ node server/deploy/kaoiro-server-deploy.mjs rollback \
   --transaction <transaction-id> --confirm-restore
 ```
 
-(`--dry-run` first to preview without confirming.) `rollback` re-reads and
+(`--dry-run` first to preview without confirming; the preview shows whether
+the restore is destructive.) `rollback` re-reads and
 re-validates the transaction's journal before trusting anything in it, and
 closes a transaction that stopped at `preflight` by record alone, and refuses
 one already mid-rollback (see (3a)) or fully rolled back — **do not leave “did

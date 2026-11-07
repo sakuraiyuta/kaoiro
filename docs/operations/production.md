@@ -1,162 +1,56 @@
 ---
 title: Production deployment manual
 status: accepted
-last_updated: 2026-11-05
-description: Step-by-step manual for operators bringing up or updating a production deployment
+last_updated: 2026-11-07
+description: Command cheat-sheet for bringing up, updating and rolling back a production deployment; each step links to its canonical runbook.
 ---
 
 # Production deployment manual
 
-## Purpose
+A command cheat-sheet: the commands in the order an operator runs them, and a
+link to the page that is canonical for each step. It holds no explanations.
+When something here does not match what you observe, the linked page wins.
 
-A step-by-step manual for an operator bringing up (or updating) a production
-kaoiro deployment, without first reading the
-[deployment documentation](../README.md#deployment-documentation) end to end.
-**Those pages are the normative reference**: the
-[deployment architecture](../architecture/deployment.md) explains *why* each
-step is shaped the way it is, and the runbooks cover cases this manual
-deliberately does not ([nginx/VPN/OAuth configuration](network-and-login.md),
-the full [failure-handling decision tree and verification
-tables](server-update-and-rollback.md), [migrating a host to the release
-profile](runner-update-and-rollback.md)). This manual only says *what to
-run*. When something here does not match what you observe, those pages win.
-
-Each stage is: **edit** (file + key) → **run** (copy-paste command,
-placeholders as `<...>`) → a one-line pointer to the runbook for when
-something goes wrong.
-
-## 0. Prerequisites
-
-Confirm all of these before starting.
-
-- **SSH access** to the server host and every runner host, with each host's
-  key already in `known_hosts`.
-- **Docker Engine + Docker Compose plugin** installed on the server host;
-  **GNU tar** on the server host (the deploy CLI's own archive-listing parser
-  assumes GNU `tar tv*` output — bsdtar/busybox hosts fail loudly, but only
-  after an archive has already been written).
-- **Elixir `~> 1.15` with Phoenix** on the server host, with dependencies
-  fetched once (`cd server && mix deps.get`) before running the `.env`
-  wizard in step 1.
-- **Node.js ≥ 22** on the server host (`server/deploy/kaoiro-server-deploy.mjs`
-  requires it) and on every runner host (the tarball is self-contained — a
-  runner host needs nothing but a Node runtime). Whichever host BUILDS the
-  runner tarball needs the full toolchain instead (Node + pnpm; workspace
-  resolution happens at build time, not on the deploy target).
-- **A decision on how the server is reached**: the default is `127.0.0.1`
-  behind nginx ([network-and-login.md](network-and-login.md#14-nginx-reverse-proxy) 1.4);
-  a direct VPN address is the alternative
-  (1.5, ships its own boot-order fix — see Troubleshooting below). Pick one
-  before writing `.env`.
-
-**The deploy CLI's own config file** (optional, but required for anything
-other than its built-in defaults): a `0600` JSON file, owned by the user that
-runs the CLI, passed as `--config <path>` to every subcommand. The table
-below is the operator-facing subset — every key in it defaults to the value
-shown, so a config file only needs to state what it overrides. (One more
-key, `allow_docker_override`, exists only so the test suite can fake the
-docker binary; it has no legitimate production use and is deliberately
-omitted here.) See
-[Server deploy configuration](../reference/configuration/server-deploy.md#config-keys)
-for the complete schema and key descriptions.
-
-| Key | Default |
-|---|---|
-| `backup_root` | `~/kaoiro-deploy` (absolute path required if overridden); also selects the filesystem the capacity preflight measures |
-| `keep_generations` / `retention_days` | `5` / `30` |
-| `capacity_multiplier` | `10` (refuse an update when free space on `backup_root`'s filesystem < 10× the volume size) |
-| `health_poll_interval_ms` / `health_poll_timeout_ms` | `2000` / `60000` |
-| `stability_window_ms` | `30000` |
-| `health_url` | `null` (derived from `docker compose port`; override only if wrong for this host) |
-| `expected_clean_stop_exit_code` / `expected_clean_stop_oom_killed` | `null` / `null` — see below |
-
-`expected_clean_stop_exit_code`/`expected_clean_stop_oom_killed` have no
-usable default: until you measure what a normal `docker compose stop`
-produces on THIS host ([server-update-and-rollback.md](server-update-and-rollback.md#43-update-procedure)
-4.3 step 5), every stop is treated as
-abnormal, which is the safe direction to fail in but means `update` will
-refuse to proceed past the stop window on its own. Measure it once (stop the
-server manually, `docker inspect <container> --format 'exit={{.State.ExitCode}}
-oom={{.State.OOMKilled}}'`) and put both values in the config file before
-relying on unattended updates.
+Before you start: tools, versions and the choice of how the server is reached
+are in [Server install runbook § Prerequisites](server-install.md#prerequisites).
+The deploy CLI's optional `--config <file>` is described in
+[Server update and rollback § 4.3](server-update-and-rollback.md#43-update-procedure)
+and [Server deploy configuration](../reference/configuration/server-deploy.md#config-keys).
 
 ## 1. Server install (first time)
-
-**Edit**: nothing yet — clone the repo at the exact commit you intend to run.
 
 ```sh
 git clone <repo-url> <repo-path>
 cd <repo-path>
 git checkout <target-sha>
-```
-
-**Edit**: `server/.env` — generate it interactively rather than hand-editing
-`.env.example` (the wizard also issues every required token):
-
-```sh
 cd server
 mix kaoiro.env
 cd ..
-```
-
-Answer its prompts: `SECRET_KEY_BASE` (let it generate one), `PHX_HOST`
-(public hostname), the client/runner tokens (let it generate them — record
-what it prints, you will need the runner token for step 2). Optional:
-nginx ([network-and-login.md](network-and-login.md) 1.4), a direct VPN address
-instead (1.5), OAuth login (1.6) — none of these are covered further here;
-follow the linked sections.
-
-**Run**: bootstrap the server. `start --initialize` builds the image
-(`docker compose up -d --build`, with build identity passed directly — no
-manual `set -a && eval "$(node scripts/build-identity.mjs)"`) and starts it
-in one command, refusing outright if any prior state is detected (never
-overwrites an existing deployment):
-
-```sh
 node server/deploy/kaoiro-server-deploy.mjs start --initialize
 ```
 
-Stuck? → [Server install runbook](server-install.md) and
-[Network and login runbook](network-and-login.md) for
-token/`.env`/nginx/VPN/OAuth detail this manual skips.
+Detail: [Server install runbook](server-install.md) (`.env`, `start --initialize`)
+and [Network and login runbook](network-and-login.md) (nginx, VPN, OAuth).
+What the wizard asks: [Setup wizards](../reference/configuration/setup-wizards.md).
 
 ## 2. Runner install (first time, per host)
-
-**Edit**: nothing yet — build (or obtain) a tarball for the target OS/arch.
 
 ```sh
 ./scripts/build-runner-tarball.sh --target linux-x64   # or darwin-arm64
 ```
 
-Transfer the resulting `dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz`
-to the runner host, then run the bootstrap script — it detects the OS
-(systemd on Linux, launchd on macOS), and stops only for the setup wizard's
-own prompts (`host_id`, `server_url` — pair `server_url` with the
-`<host_id>:<token>` the server wizard issued in step 1; `wss://...` through
-nginx, or `ws://<PHX_HOST>:<PORT>/runner` for the direct-VPN deployment,
-1.5):
+Transfer `dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz` to the runner
+host, then:
 
 ```sh
 tar xzf kaoiro-runner-<rev>-<os>-<arch>.tar.gz
 cd kaoiro-runner-<rev>-<os>-<arch>
 ./deploy/kaoiro-runner-bootstrap.sh ../kaoiro-runner-<rev>-<os>-<arch>.tar.gz
+sudo loginctl enable-linger "$USER"   # Linux only
 ```
 
-**Linux only** — required so the user service starts at boot, before anyone
-logs in (macOS has no equivalent step; skip this on Darwin):
-
-```sh
-sudo loginctl enable-linger "$USER"
-```
-
-Safe to re-run (skips the wizard if already configured; `--reconfigure`
-forces it; `--dry-run` previews). Automatic update on macOS is out of scope
-([issue #242](https://github.com/sakuraiyuta/kaoiro/issues/242)).
-
-Stuck? → the per-script manual path (install/switch + systemd/launchd by
-hand), exit codes, and log locations are in [runner install
-runbook](runner-install.md#running-as-a-service-systemd--launchd) "Running as a service (systemd / launchd)", which also covers the
-multi-host specifics.
+Detail: [Runner install and distribution](runner-install.md#installation-on-the-target-host)
+and [Running as a service](runner-install.md#running-as-a-service-systemd--launchd).
 
 ## 3. Verify
 
@@ -164,61 +58,25 @@ multi-host specifics.
 node server/deploy/kaoiro-server-deploy.mjs status
 ```
 
-Confirm `container.running` is `true` and `health` reports the target's
-`build_revision`/`build_dirty`. Then, mandatorily (`status` does not replace
-this — [server-update-and-rollback.md](server-update-and-rollback.md#45-verification-and-its-limits)
-4.5):
-
-1. Open the dashboard at `https://<host>/?token=<a client token>`.
-2. Confirm the runner's own log shows a sustained connection (no repeated
-   `unauthorized` disconnects).
-3. Confirm the runner's `host_id` appears in the dashboard's host list.
+`status` does not replace the connectivity checks:
+[Server update and rollback § 3](server-update-and-rollback.md#3-connectivity-checks)
+and [§ 4.5](server-update-and-rollback.md#45-verification-and-its-limits).
 
 ## 4. Update
 
-If the change can stop the runner from starting or every agent's turns from
-completing, read [High-risk change release](high-risk-change-release.md) first;
-it specifies the production-shape start check and fleet restoration for this update.
-
-When preparing a release, write its release note under
-[docs/release/](../release/README.md) and land it before creating the release
-tag, so the tag includes it.
-
-**Server-side, this is a `--dry-run` preview plus two real invocations —
-prepare, then commit — not one call.** `update` deliberately splits the real
-work into a no-downtime *prepare* and an explicitly-approved *commit*,
-because human-judgment points in this deploy (an abnormal stop, a lost
-ledger, an ambiguous recovery) get no `--skip`/`--force` flag by design;
-requiring an explicit second invocation is that same policy applied to the
-routine case, not an oversight.
-
-**Run `--dry-run` first, every time** (not only the first time this CLI ever
-touches this host) — it performs only reads and prints the plan:
+Read [High-risk change release](high-risk-change-release.md) first if the change
+can stop the runner from starting or every agent's turns from completing. Write
+the release note and land it before creating the release tag
+([Release notes](../release/README.md)).
 
 ```sh
 node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> --dry-run
-```
-
-If the plan looks right, prepare for real. This builds the target image and
-runs the issue #220 persistence-path check; nothing is stopped yet:
-
-```sh
 node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha>
-```
-
-It exits non-zero, naming a `<transaction-id>` and asking for approval. Once
-you (or whoever signs off maintenance windows) approve the stop window,
-commit — this stops the server, archives, restarts, and health-polls in one
-call:
-
-```sh
 node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> \
   --transaction <transaction-id> --maintenance-approved
 ```
 
-Then update the runner (one command; builds, installs, switches, and
-restarts). Set `install_root` for your OS (if `KAOIRO_RUNNER_INSTALL_DIR` is
-set, it takes precedence):
+Runner:
 
 ```sh
 # Linux:
@@ -227,33 +85,27 @@ install_root="${KAOIRO_RUNNER_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/
 # install_root="${KAOIRO_RUNNER_INSTALL_DIR:-$HOME/Library/Application Support/kaoiro}"
 
 "$install_root/current/deploy/kaoiro-runner-update.sh" --from-repo <repo-path> --target <os-arch>
+# or, from a pre-built tarball:
+"$install_root/current/deploy/kaoiro-runner-update.sh" --tarball <path>
 ```
 
-or, from a pre-built tarball: `"$install_root/current/deploy/kaoiro-runner-update.sh" --tarball <path>`.
-
-Stuck? → [Server update and rollback § 4.4](server-update-and-rollback.md#44-failure-handling).
+Detail: [Server update and rollback § 4.3](server-update-and-rollback.md#43-update-procedure)
+(the order of the steps, including stopping the runner) and
+[Runner update and rollback](runner-update-and-rollback.md#462-subsequent-updates).
+If it fails: [§ 4.4](server-update-and-rollback.md#44-failure-handling).
 
 ## 5. Rollback
 
-Only possible for a transaction the CLI itself created — a host whose
-current deployment has never gone through `update` has nothing to roll back
-to yet (see "First run" below).
+Server (only for a transaction the CLI created):
 
 ```sh
 node server/deploy/kaoiro-server-deploy.mjs rollback \
   --transaction <transaction-id> --dry-run
-```
-
-Preview first (shows whether the restore is destructive), then:
-
-```sh
 node server/deploy/kaoiro-server-deploy.mjs rollback \
   --transaction <transaction-id> --confirm-restore
 ```
 
-For an ordinary same-native runner rollback, use the fixed physical path of a
-verified release containing the guarded switch. Keep stop, switch and start
-in one success chain; a refused switch must leave the runner stopped:
+Runner, same native pin:
 
 ```sh
 systemctl --user stop kaoiro-runner &&
@@ -262,14 +114,7 @@ systemctl --user stop kaoiro-runner &&
   systemctl --user start kaoiro-runner
 ```
 
-The guard refuses differing native hashes, retained state references or an
-incomplete transaction. Use snapshot recovery below in those cases; never
-retry with an older script through `previous`.
-
-Runner rollback across a Codex native pin change must restore the recorded
-state snapshot before starting the old binary. Use the fixed physical path of
-the verified backup-capable tool release; never invoke an older script through
-`previous`. Set these paths from the private update transaction record:
+Runner, Codex native pin changed (restore the recorded state snapshot):
 
 ```sh
 "$tool_release/deploy/kaoiro-runner-update.sh" \
@@ -277,71 +122,42 @@ the verified backup-capable tool release; never invoke an older script through
   --restore-codex-backup "$snapshot_dir" --codex-home "$codex_home" --detach
 ```
 
-If snapshot recovery fails, keep the runner stopped and use the operator-led
+Detail: [Runner update and rollback § 4.6.3](runner-update-and-rollback.md#463-rollback),
+[Codex state backup](runner-update-and-rollback.md#codex-state-backup) and
 [fresh setup](runner-update-and-rollback.md#second-level-recovery-fresh-setup).
-This loses Codex history/login/cache and requires configuration, hooks and a
-new operator login; never run the old binary on the migrated failed home.
-
-This initial state-aware workflow requires Linux/systemd. New generic switch
-scripts also compare the actual native payloads on macOS; they refuse a pin
-change rather than skipping the check. See [runner update and rollback](runner-update-and-rollback.md#codex-state-backup)
-for maintenance, acceptance and recovery requirements.
-
-Stuck? → [Server update and rollback § 4.4 (3)](server-update-and-rollback.md#44-failure-handling).
+If the server rollback fails: [Server update and rollback § 4.4 (3)](server-update-and-rollback.md#44-failure-handling).
 
 ## First run on an existing (pre-CLI) deployment
-
-A host running from before this CLI existed has a live container but no
-transaction history at all — that is a normal, safe state, not an error.
-Confirm it reads that way before trusting the CLI with a real update:
 
 ```sh
 node server/deploy/kaoiro-server-deploy.mjs status
 ```
 
-Expect `container.running: true` and `doneTransactions: []`. The CLI
-derives `old_sha` directly from `/app/build-info.json` inside the running
-container image (`server/deploy/kaoiro-server-deploy.mjs:112-133`), so a checkout
-that has since moved does not corrupt rollback metadata. However, the running
-image must have been built with valid build arguments containing a commit
-`revision`. Then preview an update as in step 4 (`--dry-run`) before running
-one for real. There is nothing else to migrate — the CLI works from whatever is
-currently running, the same way a first-ever `update` on a brand-new host would.
+Expect `container.running: true` and `doneTransactions: []`, then preview the
+update with `--dry-run`. Detail: [Server update and rollback § 4.2](server-update-and-rollback.md#42-preconditions).
 
 ## 6. Troubleshooting
 
-**Container does not start after a reboot** (docker started before the VPN
-address existed): confirm the boot-order drop-in is installed
-(`systemctl show docker -p After` should list the VPN unit) — see
-[Network and login runbook](network-and-login.md#boot-order-for-a-vpn-publish-address)
-"Boot order for a VPN publish address" and
-[Deployment troubleshooting](deployment-troubleshooting.md#container-does-not-start-after-a-reboot) for the full
-recovery sequence. Only applies to a direct-VPN publish address; the default
-`127.0.0.1`-behind-nginx setup is unaffected.
-
-**Runner does not start, exit code 78 (`EX_CONFIG`)**: a configuration
-error — restarting will not fix it. Check
-`systemctl --user status kaoiro-runner` / `journalctl --user -u kaoiro-runner`;
-common causes are a missing `dist` (release not built/installed) or the
-setup wizard never having run. See
-[Runner artifacts](../reference/deployment/runner-artifacts.md#restart-policy-and-exit-codes)
-"Restart policy and exit codes".
-
-**Port bind failure** (`cannot assign requested address`): the publish
-address is not yet present on any interface when docker starts — the same
-class as the reboot issue above; the fix is the same boot-order drop-in.
+| Symptom | First command | Canonical page |
+|---|---|---|
+| Container does not start after a reboot, or port bind fails (`cannot assign requested address`) | `systemctl show docker -p After`; `docker inspect --format '{{.State.Error}}' <container>` | [Deployment troubleshooting](deployment-troubleshooting.md#container-does-not-start-after-a-reboot) |
+| Runner does not start, exit code 78 (`EX_CONFIG`) | `systemctl --user status kaoiro-runner`; `journalctl --user -u kaoiro-runner` | [Runner artifacts](../reference/deployment/runner-artifacts.md#restart-policy-and-exit-codes) |
 
 ## See Also
 
 - [Deployment documentation](../README.md#deployment-documentation) — the
-  architecture page, runbooks and reference pages this manual summarizes
-- [setup-wizards.md](../reference/configuration/setup-wizards.md) — what `mix kaoiro.env` and
-  `kaoiro-runner-setup.sh` ask and why
+  architecture page, runbooks and reference pages this manual points to
+- [Setup wizards](../reference/configuration/setup-wizards.md) — what
+  `mix kaoiro.env` and `kaoiro-runner-setup.sh` ask and why
 - [Runner install and distribution](runner-install.md) — full runner install /
   service / troubleshooting reference
-- [Codex backend switching and rollback](codex-backend-switch.md) — backend selection, verification, and rollback (release note in [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118))
+- [Codex backend switching and rollback](codex-backend-switch.md) — backend
+  selection, verification, and rollback (release note in
+  [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118))
 - [Codex home for production](codex-home.md) — the dedicated `CODEX_HOME`,
   its operator login, cutover and rollback
 - [High-risk change release](high-risk-change-release.md) — start check, fleet
   restoration and all-agents-stopped recovery for changes that can stop the fleet
-- Issue #303 (this manual's own tracking issue), #306 (the server deploy CLI)
+- [issue #303](https://github.com/sakuraiyuta/kaoiro/issues/303) (this manual's
+  own tracking issue), [issue #306](https://github.com/sakuraiyuta/kaoiro/issues/306)
+  (the server deploy CLI)

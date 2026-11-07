@@ -286,8 +286,24 @@ Same-native code-only switching remains possible when no operation is
 unfinished, including when a v2 snapshot is retained. A retained v2 snapshot
 forbids activating a pre-N2 tool even with the same native hash. First install
 an N2-capable release with the same native; source and target must both carry
-N2 capability before a state-aware forward. See
-[the same-native command](production.md#5-rollback).
+N2 capability before a state-aware forward.
+
+For an ordinary same-native rollback, use the fixed physical path of a
+verified release containing the guarded switch. Keep stop, switch and start in
+one success chain; a refused switch must leave the runner stopped:
+
+```sh
+systemctl --user stop kaoiro-runner &&
+  "$tool_release/deploy/kaoiro-runner-switch.sh" --rollback \
+    --install-dir "$install_root" &&
+  systemctl --user start kaoiro-runner
+```
+
+The guard refuses differing native hashes, retained state references or an
+incomplete transaction. Use the snapshot recovery above in those cases; never
+retry with an older script through `previous`. The production manual keeps the
+same command as a cheat-sheet entry
+([rollback](production.md#5-rollback)).
 
 Before durable `start-intent`, recovery returns only to the recorded source
 without replacing its home. Once that intent exists, recovery restores the
