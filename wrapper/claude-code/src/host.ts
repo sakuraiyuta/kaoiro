@@ -2813,8 +2813,11 @@ export class AgentHost implements EngineAdapter {
    *  continuations close and ordinary input continues (issue #426). */
   #nativeEvidenceFailed(reason: NativeUnavailableReason, detail: string): void {
     if (this.#nativeLeaseHeld()) {
-      if (["terminal_origin_conflict", "tool_session_mismatch", "session_or_path_changed"].includes(reason)) this.#options.recovery?.block("session_binding");
-      this.#failStopLive(detail); return;
+      const bindingFailure = ["terminal_origin_conflict", "tool_session_mismatch", "session_or_path_changed"].includes(reason);
+      if (bindingFailure) this.#options.recovery?.block("session_binding");
+      this.#failStopLive(detail);
+      if (bindingFailure) this.#options.recovery?.stop("session_binding");
+      return;
     }
     this.#degradeNative(reason);
   }
@@ -3190,11 +3193,8 @@ export class AgentHost implements EngineAdapter {
           this.#options.recovery?.refuseLaunch();
           if (this.#options.recovery?.failure) break;
         }
-        if (message.type === "system" && message.subtype === "init") {
-          if (this.#options.recovery?.accept(message.session_id, requestedAttach) === false) break;
-          sawSystemInit = true;
-          requestedAttach = undefined;
-        }
+        const nativeInit = message.type === "system" && message.subtype === "init";
+        if (nativeInit) sawSystemInit = true;
         if (message.type === "assistant") {
           for (const block of message.message.content) if (block.type === "tool_use" && block.name !== INTER_AGENT_TOOL_FQN) this.toolOrigins.observe(block.id);
         }
@@ -3220,15 +3220,22 @@ export class AgentHost implements EngineAdapter {
         if (this.#foreignOccupancy !== null && id !== null && this.#intervalSession !== null && id !== this.#intervalSession) {
           this.#options.recovery?.block("session_binding");
           this.#failStopLive("session changed under a foreign root interval; host admission stopped until this wrapper is relaunched");
+            this.#options.recovery?.stop("session_binding");
         } else if (message.type === "result" && (this.#foreignOccupancy !== null || this.#activeTurn !== null)) {
           if (id === null) {
             this.#options.recovery?.block("session_binding");
             this.#failStopLive("terminal under a live interval lacks its session; host admission stopped until this wrapper is relaunched");
+            this.#options.recovery?.stop("session_binding");
           }
         }
         this.#noteIntervalSession(id);
+        if (nativeInit && id !== null && requestedAttach !== undefined) {
+          if (this.#options.recovery?.accept(id, requestedAttach) === false) break;
+          requestedAttach = undefined;
+        }
         if (id !== null && id !== this.#sessionId) {
-          if (this.#options.recovery?.observe(id) === false) break;
+          const errorIdentity = message.type === "result" && (message.subtype !== "success" || message.is_error === true);
+          if (!errorIdentity && this.#options.recovery?.observe(id) === false) break;
           const hadPriorSession = this.#sessionId !== null;
           if (this.#nativeRegistry && this.#nativeRegistry.sessionId !== id) this.#invalidateNative();
           if (hadPriorSession) {
