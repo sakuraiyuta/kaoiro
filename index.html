@@ -87,6 +87,77 @@
         <li class="reveal"><h3>Antigravity</h3><p>Hosted through the Antigravity CLI.</p></li>
         <li class="reveal"><h3>Grok Build</h3><p>Hosted as one resident ACP session.</p></li>
       </ul>
+      <figure class="diagram">
+        <svg class="wide" viewBox="0 0 960 400" role="img" aria-label="A made-up exchange through the server. Agent A on Claude Code sends a review request to Agent B on Codex. Agent B replies with one finding, Agent A asks for a second look, and Agent B closes the review.">
+          <rect class="d-box" x="40" y="8" width="220" height="60" rx="8"/>
+          <text class="d-t d-b" x="150" y="33" text-anchor="middle" font-size="17">Agent A</text>
+          <text class="d-m" x="150" y="56" text-anchor="middle" font-size="15">Claude Code</text>
+          <path class="d-dash" d="M150 68L150 392"/>
+          <rect class="d-box" x="370" y="8" width="220" height="60" rx="8"/>
+          <text class="d-t d-b" x="480" y="33" text-anchor="middle" font-size="17">Server</text>
+          <text class="d-m" x="480" y="56" text-anchor="middle" font-size="15">relays every message</text>
+          <path class="d-dash" d="M480 68L480 392"/>
+          <rect class="d-box" x="700" y="8" width="220" height="60" rx="8"/>
+          <text class="d-t d-b" x="810" y="33" text-anchor="middle" font-size="17">Agent B</text>
+          <text class="d-m" x="810" y="56" text-anchor="middle" font-size="15">Codex</text>
+          <path class="d-dash" d="M810 68L810 392"/>
+          <text class="d-k" x="164" y="90" text-anchor="start" font-size="14">request</text>
+          <text class="d-t" x="164" y="110" text-anchor="start" font-size="16">Please review this diff.</text>
+          <path class="d-line" d="M150 118L810 118"/>
+          <circle class="d-node" cx="480" cy="118" r="5"/>
+          <path class="d-head" d="M810 118l-9 -5v10z"/>
+          <text class="d-k" x="796" y="176" text-anchor="end" font-size="14">response</text>
+          <text class="d-t" x="796" y="196" text-anchor="end" font-size="16">One finding: check the deadline boundary.</text>
+          <path class="d-line" d="M150 204L810 204"/>
+          <circle class="d-node" cx="480" cy="204" r="5"/>
+          <path class="d-head" d="M150 204l9 -5v10z"/>
+          <text class="d-k" x="164" y="262" text-anchor="start" font-size="14">request</text>
+          <text class="d-t" x="164" y="282" text-anchor="start" font-size="16">Fixed. Please check again.</text>
+          <path class="d-line" d="M150 290L810 290"/>
+          <circle class="d-node" cx="480" cy="290" r="5"/>
+          <path class="d-head" d="M810 290l-9 -5v10z"/>
+          <text class="d-k" x="796" y="348" text-anchor="end" font-size="14">done</text>
+          <text class="d-t" x="796" y="368" text-anchor="end" font-size="16">Looks good. Closing this review.</text>
+          <path class="d-line" d="M150 376L810 376"/>
+          <circle class="d-node" cx="480" cy="376" r="5"/>
+          <path class="d-head" d="M150 376l9 -5v10z"/>
+        </svg>
+        <svg class="narrow" viewBox="0 0 328 396" role="img" aria-label="A made-up exchange through the server. Agent A on Claude Code sends a review request to Agent B on Codex. Agent B replies with one finding, Agent A asks for a second look, and Agent B closes the review.">
+          <rect class="d-box" x="0" y="2" width="100" height="50" rx="8"/>
+          <text class="d-t d-b" x="50" y="22" text-anchor="middle" font-size="13">Agent A</text>
+          <text class="d-m" x="50" y="41" text-anchor="middle" font-size="12">Claude Code</text>
+          <path class="d-dash" d="M50 52L50 392"/>
+          <rect class="d-box" x="114" y="2" width="100" height="50" rx="8"/>
+          <text class="d-t d-b" x="164" y="22" text-anchor="middle" font-size="13">Server</text>
+          <text class="d-m" x="164" y="41" text-anchor="middle" font-size="12">relays</text>
+          <path class="d-dash" d="M164 52L164 392"/>
+          <rect class="d-box" x="228" y="2" width="100" height="50" rx="8"/>
+          <text class="d-t d-b" x="278" y="22" text-anchor="middle" font-size="13">Agent B</text>
+          <text class="d-m" x="278" y="41" text-anchor="middle" font-size="12">Codex</text>
+          <path class="d-dash" d="M278 52L278 392"/>
+          <text class="d-k" x="4" y="92" text-anchor="start" font-size="12">request</text>
+          <text class="d-t" x="4" y="109" text-anchor="start" font-size="13">Please review this diff.</text>
+          <path class="d-line" d="M50 118L278 118"/>
+          <circle class="d-node" cx="164" cy="118" r="4"/>
+          <path class="d-head" d="M278 118l-9 -5v10z"/>
+          <text class="d-k" x="324" y="180" text-anchor="end" font-size="12">response</text>
+          <text class="d-t" x="324" y="197" text-anchor="end" font-size="13">One finding: check the deadline boundary.</text>
+          <path class="d-line" d="M50 206L278 206"/>
+          <circle class="d-node" cx="164" cy="206" r="4"/>
+          <path class="d-head" d="M50 206l9 -5v10z"/>
+          <text class="d-k" x="4" y="268" text-anchor="start" font-size="12">request</text>
+          <text class="d-t" x="4" y="285" text-anchor="start" font-size="13">Fixed. Please check again.</text>
+          <path class="d-line" d="M50 294L278 294"/>
+          <circle class="d-node" cx="164" cy="294" r="4"/>
+          <path class="d-head" d="M278 294l-9 -5v10z"/>
+          <text class="d-k" x="324" y="356" text-anchor="end" font-size="12">done</text>
+          <text class="d-t" x="324" y="373" text-anchor="end" font-size="13">Looks good. Closing this review.</text>
+          <path class="d-line" d="M50 382L278 382"/>
+          <circle class="d-node" cx="164" cy="382" r="4"/>
+          <path class="d-head" d="M50 382l9 -5v10z"/>
+        </svg>
+        <figcaption>A made-up exchange. Each message goes through the server, and the two agents can run on different engines. Whether a message can reach a running turn differs by engine.</figcaption>
+      </figure>
     </section>
     <p class="wrap note">Engines are not identical. Model and effort switching, permission modes and file uploads depend on what each engine declares, and whether a message can reach a running turn differs by engine. The dashboard follows those declared capabilities.</p>
 
@@ -109,6 +180,124 @@
         <li class="reveal"><h3>Wrapper</h3><p>Launches an agent and translates engine-specific events into a common format. Wrappers connect directly to the server.</p></li>
         <li class="reveal"><h3>Client</h3><p>Shows each agent as a character. The bundled web dashboard is one client.</p></li>
       </ul>
+      <figure class="diagram">
+        <svg class="wide" viewBox="0 0 960 486" role="img" aria-label="An example layout. A client connects to one server. Three hosts, a laptop, a workstation and a cloud VM, each have one runner and one or more wrappers. Wrappers connect directly to the server for data. Each runner connects to the server separately for host registration and control, starts and supervises its wrappers, and stays out of the data path.">
+          <rect class="d-box" x="300" y="6" width="360" height="58" rx="8"/>
+          <text class="d-t d-b" x="480" y="30" text-anchor="middle" font-size="17">Client</text>
+          <text class="d-m" x="480" y="52" text-anchor="middle" font-size="15">web dashboard or your own client</text>
+          <path class="d-line" d="M480 64L480 124"/>
+          <path class="d-head" d="M480 124l-5 -9h10z"/>
+          <text class="d-k" x="494" y="100" text-anchor="start" font-size="14">WebSocket</text>
+          <rect class="d-box" x="270" y="124" width="420" height="58" rx="8"/>
+          <text class="d-t d-b" x="480" y="148" text-anchor="middle" font-size="17">Server</text>
+          <text class="d-m" x="480" y="170" text-anchor="middle" font-size="15">keeps state and routes instructions and messages</text>
+          <rect class="d-host" x="20" y="270" width="280" height="170" rx="8"/>
+          <text class="d-t d-b" x="34" y="296" text-anchor="start" font-size="16">Laptop</text>
+          <rect class="d-chip-d" x="32" y="330" width="84" height="44" rx="8"/>
+          <text class="d-t" x="74" y="357" text-anchor="middle" font-size="14">runner</text>
+          <rect class="d-chip" x="146" y="312" width="136" height="44" rx="8"/>
+          <text class="d-m" x="214" y="330" text-anchor="middle" font-size="13">wrapper</text>
+          <text class="d-t" x="214" y="348" text-anchor="middle" font-size="14">Claude Code</text>
+          <path class="d-line" d="M282 334L292 334"/>
+          <path class="d-dash" d="M116 352L146 334"/>
+          <path class="d-line" d="M292 334L292 258"/>
+          <path class="d-line" d="M292 258L330 182"/>
+          <path class="d-head" d="M330 184l-5 9h10z"/>
+          <path class="d-dash" d="M74 330L74 246"/>
+          <path class="d-dash" d="M74 246L300 182"/>
+          <rect class="d-host" x="340" y="270" width="280" height="170" rx="8"/>
+          <text class="d-t d-b" x="354" y="296" text-anchor="start" font-size="16">Workstation</text>
+          <rect class="d-chip-d" x="352" y="330" width="84" height="44" rx="8"/>
+          <text class="d-t" x="394" y="357" text-anchor="middle" font-size="14">runner</text>
+          <rect class="d-chip" x="466" y="312" width="136" height="44" rx="8"/>
+          <text class="d-m" x="534" y="330" text-anchor="middle" font-size="13">wrapper</text>
+          <text class="d-t" x="534" y="348" text-anchor="middle" font-size="14">Codex</text>
+          <path class="d-line" d="M602 334L612 334"/>
+          <path class="d-dash" d="M436 352L466 334"/>
+          <rect class="d-chip" x="466" y="364" width="136" height="44" rx="8"/>
+          <text class="d-m" x="534" y="382" text-anchor="middle" font-size="13">wrapper</text>
+          <text class="d-t" x="534" y="400" text-anchor="middle" font-size="14">Grok Build</text>
+          <path class="d-line" d="M602 386L612 386"/>
+          <path class="d-dash" d="M436 352L466 386"/>
+          <path class="d-line" d="M612 386L612 258"/>
+          <path class="d-line" d="M612 258L480 182"/>
+          <path class="d-head" d="M480 184l-5 9h10z"/>
+          <path class="d-dash" d="M394 330L394 246"/>
+          <path class="d-dash" d="M394 246L450 182"/>
+          <rect class="d-host" x="660" y="270" width="280" height="170" rx="8"/>
+          <text class="d-t d-b" x="674" y="296" text-anchor="start" font-size="16">Cloud VM</text>
+          <rect class="d-chip-d" x="672" y="330" width="84" height="44" rx="8"/>
+          <text class="d-t" x="714" y="357" text-anchor="middle" font-size="14">runner</text>
+          <rect class="d-chip" x="786" y="312" width="136" height="44" rx="8"/>
+          <text class="d-m" x="854" y="330" text-anchor="middle" font-size="13">wrapper</text>
+          <text class="d-t" x="854" y="348" text-anchor="middle" font-size="14">Antigravity</text>
+          <path class="d-line" d="M922 334L932 334"/>
+          <path class="d-dash" d="M756 352L786 334"/>
+          <path class="d-line" d="M932 334L932 258"/>
+          <path class="d-line" d="M932 258L630 182"/>
+          <path class="d-head" d="M630 184l-5 9h10z"/>
+          <path class="d-dash" d="M714 330L714 246"/>
+          <path class="d-dash" d="M714 246L600 182"/>
+          <path class="d-line" d="M150 470L190 470"/>
+          <text class="d-m" x="198" y="475" text-anchor="start" font-size="15">Data: state, messages, instructions</text>
+          <path class="d-dash" d="M520 470L560 470"/>
+          <text class="d-m" x="568" y="475" text-anchor="start" font-size="15">Control: host registration, spawning</text>
+        </svg>
+        <svg class="narrow" viewBox="0 0 328 574" role="img" aria-label="An example layout. A client connects to one server. Three hosts, a laptop, a workstation and a cloud VM, each have one runner and one or more wrappers. Wrappers connect directly to the server for data. Each runner connects to the server separately for host registration and control, starts and supervises its wrappers, and stays out of the data path.">
+          <rect class="d-box" x="0" y="2" width="328" height="52" rx="8"/>
+          <text class="d-t d-b" x="164" y="23" text-anchor="middle" font-size="13">Client</text>
+          <text class="d-m" x="164" y="43" text-anchor="middle" font-size="12">web dashboard or your own client</text>
+          <path class="d-line" d="M164 54L164 100"/>
+          <path class="d-head" d="M164 100l-5 -9h10z"/>
+          <text class="d-k" x="174" y="82" text-anchor="start" font-size="12">WebSocket</text>
+          <rect class="d-box" x="0" y="100" width="328" height="52" rx="8"/>
+          <text class="d-t d-b" x="164" y="121" text-anchor="middle" font-size="13">Server</text>
+          <text class="d-m" x="164" y="141" text-anchor="middle" font-size="12">keeps state and routes instructions and messages</text>
+          <rect class="d-host" x="16" y="172" width="296" height="92" rx="8"/>
+          <text class="d-t d-b" x="28" y="194" text-anchor="start" font-size="13">Laptop</text>
+          <rect class="d-chip-d" x="26" y="208" width="70" height="38" rx="8"/>
+          <text class="d-t" x="61" y="232" text-anchor="middle" font-size="12">runner</text>
+          <path class="d-dash" d="M16 227L6 227"/>
+          <rect class="d-chip" x="120" y="206" width="180" height="40" rx="8"/>
+          <text class="d-m" x="130" y="222" text-anchor="start" font-size="11.5">wrapper</text>
+          <text class="d-t" x="130" y="239" text-anchor="start" font-size="12.5">Claude Code</text>
+          <path class="d-line" d="M300 226L322 226"/>
+          <path class="d-dash" d="M96 227L120 226"/>
+          <rect class="d-host" x="16" y="276" width="296" height="138" rx="8"/>
+          <text class="d-t d-b" x="28" y="298" text-anchor="start" font-size="13">Workstation</text>
+          <rect class="d-chip-d" x="26" y="312" width="70" height="38" rx="8"/>
+          <text class="d-t" x="61" y="336" text-anchor="middle" font-size="12">runner</text>
+          <path class="d-dash" d="M16 331L6 331"/>
+          <rect class="d-chip" x="120" y="310" width="180" height="40" rx="8"/>
+          <text class="d-m" x="130" y="326" text-anchor="start" font-size="11.5">wrapper</text>
+          <text class="d-t" x="130" y="343" text-anchor="start" font-size="12.5">Codex</text>
+          <path class="d-line" d="M300 330L322 330"/>
+          <path class="d-dash" d="M96 331L120 330"/>
+          <rect class="d-chip" x="120" y="356" width="180" height="40" rx="8"/>
+          <text class="d-m" x="130" y="372" text-anchor="start" font-size="11.5">wrapper</text>
+          <text class="d-t" x="130" y="389" text-anchor="start" font-size="12.5">Grok Build</text>
+          <path class="d-line" d="M300 376L322 376"/>
+          <path class="d-dash" d="M96 331L120 376"/>
+          <rect class="d-host" x="16" y="426" width="296" height="92" rx="8"/>
+          <text class="d-t d-b" x="28" y="448" text-anchor="start" font-size="13">Cloud VM</text>
+          <rect class="d-chip-d" x="26" y="462" width="70" height="38" rx="8"/>
+          <text class="d-t" x="61" y="486" text-anchor="middle" font-size="12">runner</text>
+          <path class="d-dash" d="M16 481L6 481"/>
+          <rect class="d-chip" x="120" y="460" width="180" height="40" rx="8"/>
+          <text class="d-m" x="130" y="476" text-anchor="start" font-size="11.5">wrapper</text>
+          <text class="d-t" x="130" y="493" text-anchor="start" font-size="12.5">Antigravity</text>
+          <path class="d-line" d="M300 480L322 480"/>
+          <path class="d-dash" d="M96 481L120 480"/>
+          <path class="d-line" d="M322 480L322 152"/>
+          <path class="d-head" d="M322 154l-5 9h10z"/>
+          <path class="d-dash" d="M6 481L6 152"/>
+          <path class="d-line" d="M4 540L34 540"/>
+          <text class="d-m" x="42" y="544" text-anchor="start" font-size="12">Data: state, messages</text>
+          <path class="d-dash" d="M4 562L34 562"/>
+          <text class="d-m" x="42" y="566" text-anchor="start" font-size="12">Control: registration, spawning</text>
+        </svg>
+        <figcaption>An example layout with made-up hosts. Solid lines carry data. Dashed lines are the runner&#39;s control path, which stays separate from the data path.</figcaption>
+      </figure>
     </section>
     <section class="wrap block" aria-labelledby="extend">
       <h2 id="extend">Room to extend</h2>
