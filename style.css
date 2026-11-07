@@ -614,6 +614,7 @@ h2 { scroll-margin-top: 5rem; }
 .notice { background: none; padding-left: 0.8rem; }
 .hero-preview {
   grid-area: preview;
+  align-self: center;
   min-width: 0;
   margin: 0;
   border: 1px solid var(--line);
@@ -678,4 +679,10 @@ h2 { scroll-margin-top: 5rem; }
   .hero h1 img { width: 15rem; }
   .lead { font-size: 1.5rem; line-height: 1.3; margin-block: 1rem; }
   .hero .actions { margin-bottom: 0; }
+}
+
+/* In a single column a pinned screenshot would cover the explanation. */
+@media (max-width: 59.99rem) {
+  .stage { position: static; }
+  .step { min-height: 0; padding-block: 2rem; border-bottom: 1px solid var(--line); }
 }
