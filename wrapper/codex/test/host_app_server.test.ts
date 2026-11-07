@@ -1,6 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
@@ -622,4 +622,15 @@ it("keeps an in-progress native thread candidate and confirms its actual termina
   expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "unbound", candidate_id: "thread" } });
   f.terminal(); await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
   expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "live", session_id: "thread" } });
+});
+
+it.each([false,true])("preserves Codex completion for blocked recovery but stops write failure (fatal=%s)",async fatal=>{
+ const root=mkdtempSync(join(tmpdir(),"kaoiro-codex-confirm-")),path=join(root,"checkpoint");
+ const recovery=new RecoveryReporter({...config,recovery_checkpoint_path:path},undefined,()=>{});
+ const f=fixture({recovery});cleanup.push(async()=>{rmSync(root,{recursive:true,force:true});});
+ await f.host.send("first");await f.until(1);if(fatal)mkdirSync(path+".tmp");else recovery.block("watchdog");f.terminal();
+ if(fatal)await vi.waitFor(()=>expect(recovery.failure?.exitCode).toBe(79));else await vi.waitFor(()=>expect(f.finals).toHaveBeenCalledOnce());
+ await new Promise<void>(resolve=>setImmediate(resolve));
+ expect(f.logs.filter(e=>e.type==="result"&&!e.payload.is_error)).toHaveLength(fatal?0:1);
+ expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:fatal?"unbound":"blocked"}});
 });

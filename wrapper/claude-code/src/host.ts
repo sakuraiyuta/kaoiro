@@ -3500,7 +3500,10 @@ export class AgentHost implements EngineAdapter {
               true,
             );
           } else {
-            if (this.#sessionId !== null && this.#options.recovery?.confirm(this.#sessionId) === false) break;
+            if (this.#sessionId !== null) {
+              this.#options.recovery?.confirm(this.#sessionId);
+              if (this.#options.recovery?.failure) break;
+            }
             this.#emitResult(result, sdkMessageToCost(message));
             this.#completeActiveTurn(undefined, true);
           }

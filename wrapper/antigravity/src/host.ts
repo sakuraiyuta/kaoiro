@@ -2435,7 +2435,10 @@ export class AntigravityHost implements EngineAdapter {
     for (const adapterEvent of agyEventToEvents(event)) this.#apply(adapterEvent);
     const result = agyEventToResult(event);
     if (result === null) return;
-    if (!result.is_error && this.#sessionId !== null && this.#options.recovery?.confirm(this.#sessionId) === false) return;
+    if (!result.is_error && this.#sessionId !== null) {
+      this.#options.recovery?.confirm(this.#sessionId);
+      if (this.#options.recovery?.failure) return;
+    }
     // The result payload has no truncated flag; clip silently so the
     // envelope stays under the server's size cap.
     if (result.text !== undefined) result.text = clipText(result.text).text;
