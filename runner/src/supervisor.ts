@@ -1,3 +1,4 @@
+import type { RecoverySnapshot } from "@kaoiro/wrapper-core";
 import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 // Process supervisor (ADR-0023, phases 4-4b/4-5). Owns the host's wrapper child
 // processes: spawns a wrapper per `spawn`, restarts a crashed one (isolated
@@ -72,6 +73,11 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /** The minimal child handle the supervisor needs; ChildProcess satisfies it. */
 export interface ManagedChild {
+  readRecovery?: () => RecoverySnapshot;
+  recoveryTarget?: { expected: boolean; kind: "candidate" | "strict" };
+  recovery?: RecoverySnapshot;
+  exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
   on(event: "exit", listener: () => void): void;
   /** Mirrors ChildProcess.kill: false means there was no live child to
    *  signal. The supervisor uses that outcome instead of waiting forever for
@@ -612,6 +618,9 @@ interface ChildEntry {
   windowStart: number;
   stopping: boolean;
   restarting: boolean;
+  cycle?: "restart" | "switch";
+  recoveryKind?: "candidate";
+  lockedSession?: string;
   /** Session-reset in flight (phase-17 17-5). When set, `#onExit` routes
    *  into `#relaunchForReset` instead of the ordinary restart path. */
   pendingReset?: PendingReset;
@@ -899,6 +908,12 @@ export class Supervisor {
     const requestId = isObject(payload)
       ? nonEmptyString(payload.request_id)
       : undefined;
+    const preflight = entry.child.readRecovery?.();
+    if (preflight !== undefined && (!preflight.ok || preflight.record.state === "blocked")) {
+      process.stderr.write(`runner: restart recovery refused for ${agentId}; ${!preflight.ok ? preflight.reason : preflight.record.state}; expected=${entry.parsed.resumeSessionId !== undefined}; child retained; use applicable switch/reset/restore or stop\n`);
+      this.#fail(agentId, "error", requestId);
+      return;
+    }
     if (!this.#launchable(agentId, entry.parsed)) {
       // The server opened a planned-downtime window for this restart id; a
       // failed result with the same id closes it and keeps the running child.
@@ -914,6 +929,7 @@ export class Supervisor {
       entry.parsed = { ...entry.parsed, requestId };
     }
     this.#cancelPendingSwitch(agentId);
+    entry.cycle = "restart";
     entry.restarting = true;
     entry.restarts = 0;
     entry.windowStart = this.#now();
@@ -1052,7 +1068,7 @@ export class Supervisor {
         return;
       }
     }
-    const old = entry.parsed.resumeSessionId;
+    const old = entry.lockedSession;
     // F4: another agent already resuming the target session blocks the swap.
     // Self (same session already bound) is a no-op we could early-return, but
     // proceeding to cycle the wrapper matches the intent of an explicit swap
@@ -1064,6 +1080,9 @@ export class Supervisor {
     }
     if (old !== undefined && old !== resume) this.#activeSessions.delete(old);
     this.#activeSessions.add(resume);
+    entry.lockedSession = resume;
+    entry.cycle = "switch";
+    delete entry.recoveryKind;
     // Apply the snapshot's engine-relevant privilege axes to entry.parsed
     // BEFORE the relaunch (D1/D2): snapshot is SSOT on a resume operation,
     // so the fresh wrapper enforces the last-effective sandbox / network /
@@ -1582,10 +1601,11 @@ export class Supervisor {
       windowStart: this.#now(),
       stopping: false,
       restarting: false,
+      ...(parsed.resumeSessionId === undefined ? {} : { lockedSession: parsed.resumeSessionId }),
       ...(ceiling === undefined ? {} : { permissionCeiling: ceiling }),
     };
     this.#children.set(agentId, entry);
-    child.on("exit", () => this.#onExit(agentId));
+    child.on("exit", () => this.#onExit(agentId, child));
     return true;
   }
 
@@ -1669,9 +1689,9 @@ export class Supervisor {
     });
   }
 
-  #onExit(agentId: string): void {
+  #onExit(agentId: string, exitedChild?: ManagedChild): void {
     const entry = this.#children.get(agentId);
-    if (entry === undefined) return;
+    if (entry === undefined || (exitedChild !== undefined && exitedChild !== entry.child)) return;
 
     this.#clearResetTerminationTimer(entry);
 
@@ -1692,7 +1712,18 @@ export class Supervisor {
     }
     if (entry.restarting) {
       entry.restarting = false;
-      this.#relaunch(agentId, entry);
+      const cycle = entry.cycle;
+      delete entry.cycle;
+      if (cycle !== "switch" && !this.#selectRecovery(agentId, entry)) {
+        this.#fail(agentId, "error", entry.parsed.requestId);
+        this.#remove(agentId, entry);
+        return;
+      }
+      this.#relaunch(agentId, entry, entry.parsed.requestId);
+      return;
+    }
+    if (!this.#selectRecovery(agentId, entry)) {
+      this.#remove(agentId, entry);
       return;
     }
     // Unexpected exit = crash: relaunch (isolated from siblings) until the cap.
@@ -1705,7 +1736,7 @@ export class Supervisor {
     }
     if (entry.restarts >= MAX_RESTARTS) {
       process.stderr.write(
-        `runner: agent ${agentId} exceeded restart cap; leaving down\n`,
+        `runner: agent ${agentId} exceeded restart cap; ${this.#recoveryDiagnostic(entry)}; leaving down\n`,
       );
       this.#remove(agentId, entry);
       return;
@@ -1720,12 +1751,48 @@ export class Supervisor {
     this.#clearResetTerminationTimer(entry);
     this.#cancelPendingSwitch(agentId);
     this.#children.delete(agentId);
-    const resume = entry.parsed.resumeSessionId;
+    const resume = entry.lockedSession;
     if (resume !== undefined) this.#activeSessions.delete(resume);
   }
 
-  #relaunch(agentId: string, entry: ChildEntry): void {
+  #recoveryDiagnostic(entry: ChildEntry): string {
+    const snapshot = entry.child.recovery;
+    const state = snapshot === undefined ? "legacy" : !snapshot.ok ? snapshot.reason : snapshot.record.state;
+    const candidate = snapshot?.ok && snapshot.record.state === "unbound" && snapshot.record.candidate_id !== undefined;
+    return `checkpoint=${state} expected=${entry.child.recoveryTarget?.expected ?? (entry.parsed.resumeSessionId !== undefined)} candidate=${!!candidate} kind=${entry.child.recoveryTarget?.kind ?? entry.recoveryKind ?? "strict"}`;
+  }
+
+  #selectRecovery(agentId: string, entry: ChildEntry): boolean {
+    const snapshot = entry.child.recovery;
+    if (entry.child.exitCode === 79 || (snapshot !== undefined && (!snapshot.ok || snapshot.record.state === "blocked"))) {
+      process.stderr.write(`runner: recovery refused for ${agentId}: ${entry.child.exitCode === 79 ? "checkpoint_unavailable" : this.#recoveryDiagnostic(entry)}; use restore or offline resume_session\n`);
+      return false;
+    }
+    if (snapshot === undefined || !snapshot.ok) return true;
+    const record = snapshot.record;
+    let target = entry.parsed.resumeSessionId;
+    let kind = entry.recoveryKind;
+    if (record.state === "live") { target = record.session_id; kind = undefined; }
+    if (record.state === "unbound") {
+      if (record.candidate_id !== undefined) { target = record.candidate_id; kind = "candidate"; }
+      else if (kind === "candidate") { target = undefined; kind = undefined; }
+    }
+    if (target !== entry.lockedSession && target !== undefined && this.#activeSessions.has(target)) {
+      process.stderr.write(`runner: recovery session already owned for ${agentId}\n`);
+      return false;
+    }
+    if (entry.lockedSession !== undefined && entry.lockedSession !== target) this.#activeSessions.delete(entry.lockedSession);
+    if (target !== undefined) this.#activeSessions.add(target);
+    const { resumeSessionId: _old, ...parsed } = entry.parsed;
+    entry.parsed = { ...parsed, ...(target === undefined ? {} : { resumeSessionId: target }) };
+    if (target === undefined) delete entry.lockedSession; else entry.lockedSession = target;
+    if (kind === undefined) delete entry.recoveryKind; else entry.recoveryKind = kind;
+    return true;
+  }
+
+  #relaunch(agentId: string, entry: ChildEntry, requestId?: string): void {
     if (!this.#launchable(agentId, entry.parsed)) {
+      if (requestId !== undefined) this.#fail(agentId, "error", requestId);
       this.#remove(agentId, entry);
       return;
     }
@@ -1736,7 +1803,8 @@ export class Supervisor {
       // agent comes back idle and awaits the next instruction.
       child = this.#launch(
         agentId,
-        this.#wrapperConfig(agentId, entry.parsed, entry.permissionCeiling),
+        { ...this.#wrapperConfig(agentId, entry.parsed, entry.permissionCeiling),
+          ...(entry.recoveryKind === undefined ? {} : { recovery_resume_kind: entry.recoveryKind }) },
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
         undefined,
@@ -1749,11 +1817,12 @@ export class Supervisor {
       process.stderr.write(
         `runner: relaunch failed for ${agentId}: ${String(error)}\n`,
       );
+      if (requestId !== undefined) this.#fail(agentId, "error", requestId);
       this.#remove(agentId, entry);
       return;
     }
     entry.child = child;
-    child.on("exit", () => this.#onExit(agentId));
+    child.on("exit", () => this.#onExit(agentId, child));
   }
 
   /** phase-17 17-5: fresh-relaunch branch of a session reset (ADR-0036 F2).
@@ -1792,10 +1861,12 @@ export class Supervisor {
       return;
     }
     entry.child = child;
+    delete entry.recoveryKind;
     entry.restarts = 0;
     entry.windowStart = this.#now();
-    child.on("exit", () => this.#onExit(agentId));
+    child.on("exit", () => this.#onExit(agentId, child));
     // Release the F4 resume lock for the abandoned session_id (review
+    delete entry.lockedSession;
     // finding: without this, the id stays in #activeSessions forever
     // because #remove later reads entry.parsed.resumeSessionId which
     // was stripped in handleResetSession). handleSwitchSession uses
@@ -1823,6 +1894,7 @@ export class Supervisor {
     // followed by an immediate wrapper death gets loud via the server's
     // 60 s awaiting_connect timeout (session_reset_failed { timeout }).
     delete entry.pendingReset;
+    delete entry.lockedSession;
   }
 
   /** phase-17 17-5: rollback branch of a session reset (ADR-0036 F2). The
@@ -1904,9 +1976,10 @@ export class Supervisor {
       return;
     }
     entry.child = child;
+    delete entry.recoveryKind;
     entry.restarts = 0;
     entry.windowStart = this.#now();
-    child.on("exit", () => this.#onExit(agentId));
+    child.on("exit", () => this.#onExit(agentId, child));
     // Transfer the F4 lock from oldResumeSessionId to rollbackSid when
     // they differ — mirrors handleSwitchSession's atomic delete + add.
     // If they match, the lock is already held from the original spawn
@@ -1917,6 +1990,7 @@ export class Supervisor {
       }
       this.#activeSessions.add(rollbackSid);
     }
+    entry.lockedSession = rollbackSid;
     // Rollback succeeded: report the ORIGINAL fresh-spawn failure so the
     // operator sees why the reset failed, not that rollback happened.
     this.#sendResetResult({

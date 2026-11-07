@@ -2,6 +2,8 @@
 // real wrapper child process. Factored out from the supervisor so the
 // supervision logic can be tested without spawning processes.
 
+import { readRecoveryCheckpoint, writeRecoveryCheckpoint } from "@kaoiro/wrapper-core";
+import type { RecoverySnapshot } from "@kaoiro/wrapper-core";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -12,7 +14,8 @@ import type { LaunchFn, ManagedChild } from "./supervisor.js";
 
 /** The child-process surface toManagedChild needs; ChildProcess satisfies it. */
 interface ExitErrorChild {
-  on(event: "exit" | "error", listener: () => void): void;
+  on(event: "exit", listener: (code?: number | null, signal?: NodeJS.Signals | null) => void): void;
+  on(event: "error", listener: () => void): void;
   kill(signal?: NodeJS.Signals): boolean;
 }
 
@@ -24,8 +27,8 @@ interface ExitErrorChild {
  * stranded in its map forever (never restarted, never freed). Exported for
  * unit tests.
  */
-export function toManagedChild(child: ExitErrorChild): ManagedChild {
-  return {
+export function toManagedChild(child: ExitErrorChild, readRecovery?: () => RecoverySnapshot, cleanup?: () => void): ManagedChild {
+  const managed: ManagedChild = {
     on: (_event: "exit", listener: () => void): void => {
       let fired = false;
       const fire = (): void => {
@@ -39,7 +42,22 @@ export function toManagedChild(child: ExitErrorChild): ManagedChild {
     kill: (signal?: NodeJS.Signals): boolean => {
       return child.kill(signal);
     },
+    ...(readRecovery === undefined ? {} : { readRecovery }),
   };
+  let collected = false;
+  const collect = (): void => {
+    if (collected) return;
+    collected = true;
+    if (readRecovery !== undefined) managed.recovery = readRecovery();
+    cleanup?.();
+  };
+  child.on("exit", (code, signal) => {
+    managed.exitCode = code ?? null;
+    managed.signal = signal ?? null;
+    collect();
+  });
+  child.on("error", collect);
+  return managed;
 }
 
 /** Engine kind -> wrapper package (ADR-0032 F4a, ADR-0057 F1). */
@@ -121,11 +139,12 @@ export function makeLauncher(): LaunchFn {
     engine: EngineKind = "claude-code",
   ): ManagedChild => {
     const configPath = join(dir, `${agentId}-${counter}.json`);
+    const checkpointPath = `${configPath}.recovery`;
     counter += 1;
     const prefix = launchPrefixFor(engine);
     const toolHome = engine === "codex"
       ? mkdtempSync(join(dir, "codex-tool-")) : undefined;
-    const childConfig = { ...config };
+    const childConfig = { ...config, recovery_checkpoint_path: checkpointPath };
     if (toolHome === undefined) delete childConfig.codex_tool_home;
     else childConfig.codex_tool_home = toolHome;
     const childEnv = { ...process.env };
@@ -134,7 +153,11 @@ export function makeLauncher(): LaunchFn {
     const cleanup = (): void => {
       if (cleaned) return;
       cleaned = true;
-      try { rmSync(configPath, { force: true }); }
+      try {
+        rmSync(configPath, { force: true });
+        rmSync(checkpointPath, { force: true });
+        rmSync(`${checkpointPath}.tmp`, { force: true });
+      }
       finally {
         if (toolHome !== undefined) rmSync(toolHome, { recursive: true, force: true });
       }
@@ -149,15 +172,15 @@ export function makeLauncher(): LaunchFn {
     if (resumeSessionId !== undefined) args.push("--resume", resumeSessionId);
     let child: ReturnType<typeof spawn>;
     try {
+      writeRecoveryCheckpoint(checkpointPath, { version: 1, state: "initial" });
       writeFileSync(configPath, JSON.stringify(childConfig), { mode: 0o600 });
       child = spawn(process.execPath, args, { cwd, stdio: "inherit", env: childEnv });
     } catch (error) {
       cleanup();
       throw error;
     }
-    child.on("exit", cleanup);
-    child.on("error", cleanup);
-
-    return toManagedChild(child);
+    const managed = toManagedChild(child, () => readRecoveryCheckpoint(checkpointPath), cleanup);
+    managed.recoveryTarget = { expected: resumeSessionId !== undefined, kind: config.recovery_resume_kind ?? "strict" };
+    return managed;
   };
 }

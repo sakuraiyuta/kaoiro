@@ -3380,3 +3380,62 @@ describe("Codex launch gate on an unusable CODEX_HOME", () => {
     expect(ok.children).toHaveLength(1);
   });
 });
+
+describe("Supervisor launch-owned recovery", () => {
+  const live = (session_id: string) => ({ ok: true as const, record: { version: 1 as const, state: "live" as const, session_id } });
+  const unbound = (candidate_id?: string) => ({ ok: true as const, record: { version: 1 as const, state: "unbound" as const, ...(candidate_id ? { candidate_id } : {}) } });
+  it("resumes a first-turn candidate, then permits fresh only after candidate clear", () => {
+    const h = harness(); h.sup.handleSpawn({ ...spawnMsg, initial_prompt: "once" });
+    Object.assign(h.children[0]!, { recovery: unbound("first-turn") }); h.children[0]!.exit();
+    expect(h.resumes).toEqual([undefined, "first-turn"]);
+    expect(h.configs[1]!.recovery_resume_kind).toBe("candidate");
+    expect(h.prompts).toEqual(["once", undefined]);
+    Object.assign(h.children[1]!, { recovery: unbound() }); h.children[1]!.exit();
+    expect(h.resumes).toEqual([undefined, "first-turn", undefined]);
+    expect(h.configs[2]!.recovery_resume_kind).toBeUndefined();
+    expect(h.prompts[2]).toBeUndefined();
+  });
+  it("resumes confirmed live strictly and ignores the previous child's late exit", () => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { recovery: live("current") }); h.children[0]!.exit();
+    expect(h.resumes).toEqual([undefined, "current"]);
+    expect(h.configs[1]!.recovery_resume_kind).toBeUndefined();
+    h.children[0]!.exit(); expect(h.resumes).toHaveLength(2);
+  });
+  it.each(["initial", "unbound", "live"])("prioritizes wrapper exit 79 over stale %s", state => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { exitCode: 79, recovery: { ok: true, record: { version: 1, state, session_id: "stale" } } });
+    h.children[0]!.exit(); expect(h.resumes).toHaveLength(1);
+    h.sup.handleRestart({ agent_id: spawnMsg.agent_id }); expect(h.children[0]!.kills).toBe(0);
+  });
+  it.each([{ ok: false, reason: "unreadable" }, { ok: false, reason: "invalid" }, { ok: true, record: { version: 1, state: "blocked", reason: "watchdog" } }])("keeps a restart-refused child for preflight %j", snapshot => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { readRecovery: () => snapshot });
+    h.sup.handleRestart({ agent_id: spawnMsg.agent_id, request_id: "restart-refused" });
+    expect(h.children[0]!.kills).toBe(0); expect(h.resumes).toHaveLength(1);
+    expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error", request_id: "restart-refused" });
+    h.sup.handleStop({ agent_id: spawnMsg.agent_id }); expect(h.children[0]!.kills).toBe(1);
+  });
+  it("reports a post-kill restart refusal with its request id and removes entry", () => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { readRecovery: () => live("current") });
+    h.sup.handleRestart({ agent_id: spawnMsg.agent_id, request_id: "restart-after-kill" });
+    expect(h.children[0]!.kills).toBe(1);
+    Object.assign(h.children[0]!, { exitCode: 79, recovery: live("current") }); h.children[0]!.exit();
+    expect(h.results.at(-1)).toMatchObject({ ok: false, request_id: "restart-after-kill" });
+    expect(h.resumes).toHaveLength(1);
+    h.sup.handleStop({ agent_id: spawnMsg.agent_id }); expect(h.children[0]!.kills).toBe(1);
+  });
+  it("preserves candidate target/kind through a replacement's initial crash", () => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { recovery: unbound("candidate") }); h.children[0]!.exit();
+    Object.assign(h.children[1]!, { recovery: { ok: true, record: { version: 1, state: "initial" } } }); h.children[1]!.exit();
+    expect(h.resumes[2]).toBe("candidate"); expect(h.configs[2]!.recovery_resume_kind).toBe("candidate");
+  });
+  it("never lets another agent's candidate take a held resume lock", () => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg); h.sup.handleSpawn({ ...spawnMsg, agent_id: "lab-pc-1.other" });
+    Object.assign(h.children[0]!, { recovery: unbound("shared") }); h.children[0]!.exit();
+    Object.assign(h.children[1]!, { recovery: unbound("shared") }); h.children[1]!.exit();
+    expect(h.resumes).toHaveLength(3);
+  });
+});
