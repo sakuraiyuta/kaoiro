@@ -68,6 +68,7 @@ async function waitForDefaultChild(
 
 function hostHarness(options: {
   recovery?: RecoveryReporter;
+  onSessionId?: AntigravityHostOptions["onSessionId"];
   resumeSessionId?: string;
   dangerouslySkipPermissions?: boolean;
   verifyGate?: boolean | (() => Promise<boolean>);
@@ -106,6 +107,7 @@ function hostHarness(options: {
   const broker = options.permissionBroker ?? new PermissionBroker({ config: cfg, send: () => {} });
   const host = createHarnessHost(cfg, {
     ...(options.recovery === undefined ? {} : { recovery: options.recovery }),
+    ...(options.onSessionId === undefined ? {} : { onSessionId: options.onSessionId }),
     cwd: process.cwd(),
     appendSystemPrompt: "persona",
     permissionBroker: broker,
@@ -4256,11 +4258,15 @@ it.each([false, true])("rejects native attach substitution before publication (c
   const failures: number[] = []; const cfg = config({ recovery_checkpoint_path: path,
     ...(candidate ? { recovery_resume_kind: "candidate" } : {}) });
   const recovery = new RecoveryReporter(cfg, "requested", failure => failures.push(failure.exitCode));
-  const { host, calls, logs } = hostHarness({ config: cfg, resumeSessionId: "requested", recovery });
+  const ids: string[] = [];
+  const { host, calls, logs } = hostHarness({ config: cfg, resumeSessionId: "requested", recovery, onSessionId: id => ids.push(id) });
   try {
     await host.send("first turn"); await waitFor(() => calls.length === 1);
     calls[0]!.child.stdout.write(JSON.stringify({ event: "init", conversation_id: "silent-fresh", init: { tools: [] } }) + "\n");
     await waitFor(() => failures.length === 1);
+    await waitFor(() => calls[0]!.child.killed !== undefined);
+    calls[0]!.child.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "after rejected init" } }) + "\n");
+    expect(ids).toEqual([]);
     expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: candidate ? "unbound" : "blocked" } });
     expect(logs.some(e => e.type === "result" && !e.payload.is_error)).toBe(false);
   } finally { host.close(); for (const call of calls) call.child.finish(); rmSync(root, { recursive: true, force: true }); }
