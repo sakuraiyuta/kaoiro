@@ -1,7 +1,7 @@
+import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import { RequestError } from "@agentclientprotocol/sdk";
 import { AcpSession } from "../src/acp/session.js";
-import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";

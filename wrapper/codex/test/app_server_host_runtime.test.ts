@@ -1,6 +1,6 @@
+import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import type { WrapperConfig } from "@kaoiro/protocol";
-import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
