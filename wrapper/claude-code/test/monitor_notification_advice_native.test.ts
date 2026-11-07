@@ -163,7 +163,9 @@ it.each(["completion-response", "event-inform", "setting-absent", "gate-absent",
         for (const { row } of notifications) expect(rootPromptIds.has(row.promptId)).toBe(false);
       }
       for (const { row, block } of notifications) {
-        expect(row.version).toBe("2.1.306");
+        // Second pin on the installed CLI in this file; the one above gates the
+        // body, so a bump that only updates that one never reaches this line.
+        expect(row.version).toBe("2.1.319");
         if (mode !== "bash-idle") {
           assertMonitorAdvicePosition(block, advice, mode !== "setting-absent" && mode !== "gate-absent");
           expect(block.includes("<status>")).toBe(!persistent);
