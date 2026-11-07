@@ -3438,4 +3438,51 @@ describe("Supervisor launch-owned recovery", () => {
     Object.assign(h.children[1]!, { recovery: unbound("shared") }); h.children[1]!.exit();
     expect(h.resumes).toHaveLength(3);
   });
+  const abandoned = [live("abandoned-live"), unbound("abandoned-candidate"),
+    { ok: true, record: { version: 1, state: "blocked", reason: "watchdog" } },
+    { ok: false, reason: "unreadable" }, undefined];
+  it.each(abandoned)("explicit switch overrides the abandoned checkpoint %j", snapshot => {
+    const h = harness({ exists: true }); h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { recovery: snapshot, exitCode: 79 });
+    h.sup.handleSwitchSession({ agent_id: spawnMsg.agent_id, resume_session_id: "operator-target" });
+    expect(h.children[0]!.kills).toBe(1); h.children[0]!.exit();
+    expect(h.resumes).toEqual([undefined, "operator-target"]);
+    expect(h.configs[1]!.recovery_resume_kind).toBeUndefined();
+  });
+  it.each(abandoned)("explicit reset stays fresh despite the abandoned checkpoint %j", snapshot => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { recovery: snapshot, exitCode: 79 });
+    h.sup.handleResetSession({ agent_id: spawnMsg.agent_id, request_id: "operator-reset", mode: "new" });
+    expect(h.children[0]!.kills).toBe(1); h.children[0]!.exit();
+    expect(h.resumes).toEqual([undefined, undefined]);
+    expect(h.configs[1]!.recovery_resume_kind).toBeUndefined();
+    Object.assign(h.children[1]!, { recovery: unbound("reset-current") }); h.children[1]!.exit();
+    expect(h.resumes[2]).toBe("reset-current");
+  });
+  it("plain restart uses the final live checkpoint instead of its preflight id", () => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { readRecovery: () => live("preflight"), recovery: live("last-live") });
+    h.sup.handleRestart({ agent_id: spawnMsg.agent_id, request_id: "plain-restart" }); h.children[0]!.exit();
+    expect(h.resumes).toEqual([undefined, "last-live"]);
+    expect(h.configs[1]!.recovery_resume_kind).toBeUndefined();
+  });
+  it.each(["initial", "unbound"])("retains a strict expected target through %s", state => {
+    const h = harness({ exists: true }); h.sup.handleSpawn({ ...spawnMsg, resume_session_id: "expected" });
+    Object.assign(h.children[0]!, { recovery: { ok: true, record: { version: 1, state } } }); h.children[0]!.exit();
+    expect(h.resumes).toEqual(["expected", "expected"]);
+    expect(h.configs[1]!.recovery_resume_kind).toBeUndefined();
+  });
+  it("caps candidate retries and diagnoses the last launch target", () => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      for (let i = 0; i <= MAX_RESTARTS; i++) {
+        Object.assign(h.children[i]!, { recovery: unbound("candidate"), recoveryTarget: { expected: i > 0, kind: i > 0 ? "candidate" : "strict" } });
+        h.children[i]!.exit();
+      }
+      expect(h.resumes).toHaveLength(MAX_RESTARTS + 1);
+      expect(diagnostic.mock.calls.map(c => c[0]).join("")).toContain("checkpoint=unbound expected=true candidate=true kind=candidate; leaving down");
+    } finally { diagnostic.mockRestore(); }
+  });
+
 });
