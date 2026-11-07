@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeLauncher, resolveWrapperLaunch, toManagedChild } from "../src/spawn.js";
-import { phoenixLoopback } from "../../wrapper/codex/test/fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 describe("resolveWrapperLaunch", () => {
   afterEach(() => {
