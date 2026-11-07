@@ -11037,3 +11037,26 @@ it("accepts an engine rebind after the requested Claude attach has matched", asy
     expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound", candidate_id: "rebound" } });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+it("stops requested Claude attach after an earlier frame reported the substituted id", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-recovery-")); const path = join(root, "checkpoint");
+  const logs: Envelope[] = []; let continued = false;
+  try {
+    const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, "requested", () => {});
+    const host = new AgentHost(config, { onState: () => {}, onLog: e => logs.push(e), recovery,
+      queryOptions: { resume: "requested" }, queryFn: makeQueryFn(() => {
+        async function* frames(): AsyncGenerator<SDKMessage, void> {
+          yield msg({ ...assistant([{ type: "text", text: "before init" }]), session_id: "substituted" });
+          yield msg({ type: "system", subtype: "init", session_id: "substituted" });
+          continued = true;
+          yield assistant([{ type: "text", text: "after rejected init" }]);
+        }
+        return asQuery(frames());
+      }) });
+    await host.run();
+    expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "blocked", reason: "session_binding" } });
+    expect(continued).toBe(false);
+    expect(JSON.stringify(logs)).not.toContain("after rejected init");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
