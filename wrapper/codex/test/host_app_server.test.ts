@@ -1,3 +1,7 @@
+import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { afterEach, expect, it, vi } from "vitest";
@@ -608,4 +612,14 @@ it("completes an app-server turn when diagnostic capture storage is unavailable"
   f.terminal();
   await vi.waitFor(() => expect(f.ends).toHaveBeenCalledOnce());
   expect(f.ends.mock.calls[0]?.[0]).not.toHaveProperty("error");
+});
+
+it("keeps an in-progress native thread candidate and confirms its actual terminal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-recovery-")); const path = join(root, "checkpoint");
+  const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, () => {});
+  const f = fixture({ recovery }); cleanup.push(async () => { rmSync(root, { recursive: true, force: true }); });
+  await f.host.send("first turn"); await f.until(1);
+  expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "unbound", candidate_id: "thread" } });
+  f.terminal(); await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+  expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "live", session_id: "thread" } });
 });

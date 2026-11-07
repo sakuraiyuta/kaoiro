@@ -912,3 +912,14 @@ it("records a native newSession candidate before first prompt and confirms succe
   await host.send("hello");
   expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "live" } });
 });
+
+it.each([false, true])("classifies Grok startup resume refusal only at its RPC response (candidate=%s)", async candidate => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-grok-recovery-")); scratch.push(root); const path = join(root, "checkpoint");
+  const failures: number[] = [];
+  const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path,
+    ...(candidate ? { recovery_resume_kind: "candidate" as const } : {}) }, "unknown", f => failures.push(f.exitCode));
+  const host = new GrokHost({ config, cwd: process.cwd(), personaPrompt: "fixture", executable,
+    send: () => {}, decidePermission: async () => ({ allow: false }), resumeSessionId: "unknown", recovery }); hosts.push(host);
+  await expect(host.run()).rejects.toThrow("could not resume"); expect(failures).toEqual([1]);
+  expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: candidate ? "unbound" : "blocked" } });
+});
