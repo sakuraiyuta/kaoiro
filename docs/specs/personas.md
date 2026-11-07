@@ -203,6 +203,68 @@ images are generated in issue #163
    requires a separate commercial license. Also check distribution conditions
    specific to derivative models.
 
+### Background removal (rembg recipe for sprites)
+
+Diffusion output has no alpha channel. Generate on a plain white background
+and remove it with `rembg` (AI matting). Do not fill the white with ImageMagick:
+inner whites (highlights, white clothing, white props) are cut out with it.
+
+Use `birefnet-portrait` as the default model for character art. In the
+comparison on the `fuji` persona (2026-07-05), it produced no white halo, and
+its hair outline was the cleanest of the models compared. `isnet-anime` is kept
+only as a fallback for anime objects that are not characters.
+
+#### Sprites shown on the dark dashboard
+
+```sh
+rembg i -m birefnet-portrait -a -af 240 -ab 10 -ae 10 input.png output.png
+```
+
+A plain `birefnet-portrait` keeps each edge pixel's original colour, and that
+colour is blended with the white generation background. On a dark UI, a
+subject with dark edges then shows a 1–2 px light rim. The alpha-matting
+options (`-a -af 240 -ab 10 -ae 10`) re-estimate the foreground colour of those
+edge pixels, so the rim disappears. The rim was observed on the `hisui`
+sprites (2026-09-24), and all 24 sprites of that batch were produced with
+these options.
+Matting takes about 20 seconds per 1024 px image on CPU. `-af 235 -ab 30 -ae 15`
+left dashed artifacts along the hair edge and is not used.
+
+#### White clothing on a white background
+
+With or without `-a`, `birefnet-portrait` can erode white or cream clothing
+that touches the white background. In the batch above, 5 of 24 sprites lost
+sleeves or hems fully or partly. Apply the following only to images where the
+garment was eroded:
+
+1. Base alpha: the `birefnet-portrait -a` result.
+2. Add the `isnet-anime` alpha eroded by 3 px (PIL `MinFilter(7)`). This fills
+   the interior without reaching the edges. Skip the floor-shadow band at the
+   feet of full-body chibi sprites.
+3. Pixels added by this fill keep their original RGB. Their matting colour
+   estimate is dark noise.
+4. Set pixels with alpha >= 200 that are 4 px or more away from the transparent
+   background (alpha < 30) to 255.
+
+A rule that rejects fills connected to the outside white background failed in
+both directions: it left sleeves connected to the background through contour
+gaps, and it left white dots where anti-aliased edges broke the connection.
+Select the images by eye.
+
+#### Floor shadows on full-body sprites
+
+Full-body chibi generations often draw an elliptical floor shadow. `birefnet`
+removes it, and `isnet-anime` keeps it. The existing kaoiro chibi sprites have
+no shadow.
+
+#### Visual check
+
+- Inspect each cut on the real dark dashboard background **and** on a
+  checkerboard. A light rim is invisible on white, and holes are easiest to
+  see on a checkerboard.
+- Measure the generated "white" background: it is about (254, 254, 254), not
+  255.
+
 ### Generation record (2026-06-11, provenance for reproduction)
 
 | Persona | Model | Fixed seed | Added |
