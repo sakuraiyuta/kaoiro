@@ -1,7 +1,7 @@
 ---
 title: Security boundaries
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-07
 ---
 
 # Security boundaries
@@ -47,6 +47,15 @@ options. A parser exception before the router is rendered with the connection
 from before `Plug.SSL`, without the controller's headers, which is why the two
 native endpoints do not use it
 ([ADR-0070](../adr/0070-device-authorization-grant.md) decision 7).
+
+Every other request whose body the parsers reject gets the same treatment:
+its 400 carries neither the `SecurityHeaders` output nor `x-request-id`, and
+no HSTS. This is a known limitation, not a defect. The response holds no
+client-controlled content, HSTS reaches the browser through every other
+response, and `Plug.RequestId` runs before the parsers, so the request id
+stays in the log metadata. [Issue #940](https://github.com/sakuraiyuta/kaoiro/issues/940)
+records the measured candidate fix, which wraps the parser boundary with
+`Plug.Conn.WrapperError.reraise`.
 
 ## Permission control (two-axis model)
 
