@@ -36,7 +36,7 @@ What the wizard asks: [Setup wizards](../reference/configuration/setup-wizards.m
 ## 2. Runner install (first time, per host)
 
 ```sh
-./scripts/build-runner-tarball.sh --target linux-x64   # or darwin-arm64
+./scripts/build-runner-tarball.sh --require-tagged --target linux-x64   # or darwin-arm64
 ```
 
 Transfer `dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz` to the runner
@@ -69,6 +69,16 @@ can stop the runner from starting or every agent's turns from completing. Write
 the release note and land it before creating the release tag
 ([Release notes](../release/README.md)).
 
+The server and runner commands below are grouped by host. **They are not in the
+order to run them.** When the runner is stopped, built and started relative to
+the server commit depends on the host's installation shape and on whether the
+release changes server and wrapper together. Take that order from
+[Server update and rollback § 4.3](server-update-and-rollback.md#43-update-procedure)
+steps (3) to (7) and, for a paired release, from
+[Coordinated server and wrapper updates](runner-update-and-rollback.md#coordinated-server-and-wrapper-updates).
+
+Server:
+
 ```sh
 node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> --dry-run
 node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha>
@@ -89,9 +99,7 @@ install_root="${KAOIRO_RUNNER_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/
 "$install_root/current/deploy/kaoiro-runner-update.sh" --tarball <path>
 ```
 
-Detail: [Server update and rollback § 4.3](server-update-and-rollback.md#43-update-procedure)
-(the order of the steps, including stopping the runner) and
-[Runner update and rollback](runner-update-and-rollback.md#462-subsequent-updates).
+Detail: [Runner update and rollback § 4.6.2](runner-update-and-rollback.md#462-subsequent-updates).
 If it fails: [§ 4.4](server-update-and-rollback.md#44-failure-handling).
 
 ## 5. Rollback

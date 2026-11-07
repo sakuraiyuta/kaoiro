@@ -90,6 +90,7 @@ normally from `server/`. For a manual `docker build`, run
 ```sh
 cd server
 docker compose up -d --build
+cd ..
 ```
 
 By default it binds only to `127.0.0.1:4000` (the compose `ports` mapping). nginx
