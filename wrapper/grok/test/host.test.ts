@@ -940,3 +940,31 @@ it.each([false,true])("preserves Grok completion for blocked recovery but stops 
  expect(envelopes.filter(e=>e.type==="result"&&!e.payload.is_error)).toHaveLength(fatal?0:1);
  expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:fatal?"unbound":"blocked"}});
 });
+
+it.each(["failure", "interrupt"])("keeps a fresh Grok candidate unbound after %s", async outcome => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-grok-terminal-"));
+  scratch.push(root);
+  const path = join(root, "checkpoint");
+  const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, () => {});
+  const { host, envelopes } = await started({ recovery });
+  const candidate = readRecoveryCheckpoint(path);
+  expect(candidate).toMatchObject({ ok: true, record: { state: "unbound", candidate_id: expect.any(String) } });
+  if (outcome === "failure") {
+    await expect(host.send("fail-chunks")).rejects.toThrow("fixture turn failure");
+    expect(envelopes.filter(e => e.type === "result")).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ is_error: true }) }),
+    ]);
+  } else {
+    const received = vi.spyOn(events, "updateEvents");
+    const turn = host.send("hold-chunks");
+    void turn.catch(() => {});
+    await waitForHeldChunks(received);
+    await host.interrupt();
+    await turn;
+    expect(envelopes.filter(e => e.type === "result")).toEqual([
+      expect.objectContaining({ ext: expect.objectContaining({ interrupted: true }) }),
+    ]);
+  }
+  expect(readRecoveryCheckpoint(path)).toEqual(candidate);
+  expect(recovery.failure).toBeUndefined();
+});
