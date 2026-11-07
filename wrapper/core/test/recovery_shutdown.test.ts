@@ -1,3 +1,4 @@
+import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { spawn } from "node:child_process";
 import { expect, it } from "vitest";
 import { RecoveryFailure, recoveryExitCode } from "../src/recovery_checkpoint.js";
