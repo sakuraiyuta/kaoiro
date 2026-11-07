@@ -728,3 +728,10 @@ it("does not infer a backend from unknown config fields", () => {
 it("refuses the retired exec selector with migration guidance", () => {
   expect(() => parseConfig({ ...valid, codex_backend: "exec" })).toThrow("exec is retired");
 });
+
+it.each([null, "", "strict", true, {}])("rejects malformed recovery resume kind %#", recovery_resume_kind => {
+  expect(() => parseConfig({ ...valid, recovery_resume_kind })).toThrow("invalid recovery_resume_kind");
+});
+it.each([null, "", 1])("rejects malformed recovery checkpoint path %#", recovery_checkpoint_path => {
+  expect(() => parseConfig({ ...valid, recovery_checkpoint_path })).toThrow("recovery_checkpoint_path");
+});
