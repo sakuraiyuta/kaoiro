@@ -79,3 +79,10 @@ covered by the CLI tests below.
 ## Input-bound inter-agent replies
 
 See [the reply-basis contract](../inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.
+
+## Wrapper-exit recovery
+
+The runner's [launch-owned recovery checkpoint](../protocol/runner-control.md#wrapper-exit-session-recovery)
+records native candidates before first-turn completion and distinguishes confirmed
+live/explicit attach from candidate fallback. The engine boundary and refusal
+exceptions in that contract apply independently of display history replay.

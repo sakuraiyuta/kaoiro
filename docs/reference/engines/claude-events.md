@@ -336,24 +336,17 @@ restart or reset in progress) as a crash, whatever the exit code, and
 `#relaunch` starts the wrapper again: up to `MAX_RESTARTS` (5) relaunches per
 `RESTART_WINDOW_MS` (60 s) window. Any launch other than an automatic relaunch
 (spawn or restore, restart, session switch, session reset, or reset rollback),
-or an exit more than 60 s into the window, starts a new window. This applies
-to the notification, foreign-interval, result-index, session-binding and
-`root_hook_timeout` fail-stops alike. The `root_hook_timeout` fail-stop does
-not exchange the `Query` inside the failed wrapper either: the old `Query`
-never receives the cancelled root.
+or an exit more than 60 s into the window, starts a new window. Recoverable notification/result ownership and root-hook failures may use a
+new host with the last candidate/live checkpoint. Watchdog and contradictory
+session/native binding block automatic resume; the failed host never reopens.
 
-**Session after an automatic relaunch.** `#relaunch` passes the resume session
-the runner recorded when it last launched the agent (spawn, session switch,
-restore, or reset rollback). If that launch used `--resume`, the relaunch
-resumes the same session. If it was a fresh launch (a new agent, or a session
-reset in either mode, `new` or `clear`), the runner does not know the session
-the wrapper started afterwards, and the relaunch starts another fresh session:
-the conversation context is not carried over. The new wrapper's session report
-then replaces the server's session pointer, so a later
-**復帰** resumes the new session as well. The earlier session stays on disk;
-reattach it with a session switch (`resume_session`, relayed to the runner as
-[`switch_session`](../protocol/runner-control.md)). Resuming the live session
-on relaunch is issue #524.
+**Session after relaunch.** The runner selects the latest launch-owned
+candidate/live checkpoint rather than its original spawn argument. A fresh id
+is recorded before its first turn completes. Candidate resume is attempted
+before fresh; classified pre-init refusal may fall back fresh, whereas confirmed
+live or explicit resume refuses silent replacement. See
+[wrapper-exit recovery](../protocol/runner-control.md#wrapper-exit-session-recovery)
+for the structural Claude error predicate, restart refusal, cap and limits.
 
 **When the operator must act.**
 
