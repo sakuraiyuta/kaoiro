@@ -439,7 +439,7 @@ them; the pin and the lockfile are the whole source diff.
 | System message mapping | `adapter.ts:182-184` | the new system messages are dropped |
 | Refusal fallback | `adapter.ts:642-648` | the automatic model switch entries |
 | Continuation classification | `continuation_registry.ts:13-15`, `:88-129` | Monitor, Agent and SendMessage entries |
-| Fold text | `fold_text.ts` | E1 and E2 measure the bytes this builds |
+| Fold text | `fold_text.ts` | the surface E1 and E2 are about. The harness pushes its own payload (`probe.mjs:22`) and does not call this builder, so the premises are measured on a payload shaped like a fold, not on this function's output |
 | Turn watchdog | `turn_watchdog.ts:15-17` | the start-up wait and the retry entries |
 
 ## Step 4: re-measurement of the input-folding premises E1 to E4
@@ -482,9 +482,12 @@ same model string `claude-sonnet-4-6`:
 | F2 | F1 repeated unchanged | 2 / 1 | 3923 ms |
 
 Requests and results are counted from `<run>.requests.jsonl` and the `result`
-frames in `<run>.events.jsonl`; each duration is that run's
-`finished.duration_ms`, the probe's own monotonic clock from its first event to
-its last.
+frames in `<run>.events.jsonl`. Each duration is that run's
+`finished.duration_ms`: the difference between the `Date.now()` the probe takes
+at start-up (`probe.mjs:17`) and the `Date.now()` it reads when it writes the
+`finished` record (`probe.mjs:69`). `Date.now()` reads the wall clock, so these
+are not monotonic-clock measurements, and `started` is taken before the first
+recorded event rather than at it.
 
 B0 doubles as the environment pre-flight. Ten scripted model requests in total;
 zero real ones.
@@ -539,7 +542,13 @@ stub does not implement `deliveryModes()`, a method the current wrapper calls
 (`cli.ts` guards it with `link?.deliveryModes()`, which protects against a null
 link but not against a stub missing the method). The host's input generator
 rejected with `TypeError: link?.deliveryModes is not a function`, so no root
-prompt was ever yielded and the native CLI exited 0 on end-of-input.
+prompt was ever yielded. What was then observed is that the wrapper recorded
+`SDK stream ended before terminal result` with `cancellation.kind`
+`stream_eof`, and that the child exited with code 0 and no signal after about
+400 ms having written nothing. That the SDK closed the child's standard input
+in response is an inference, consistent with the separate observation that the
+same executable left with an open, never-written standard input does not exit
+at all.
 
 Attribution, measured rather than assumed:
 
@@ -582,8 +591,10 @@ so a failed native result would not reach it — which is why `J27` exists.
 
 ### Negative controls
 
-Raw files were frozen; each mutation goes into the expectation or into the
-judging predicate, never into the recorded data.
+The recorded raw files were frozen and none was edited. Each mutation goes
+into the expectation file (N1 to N6, N9), into the judge's own predicate (N7),
+or into the extractor (N8). N10 is not a mutation: it feeds the judge a
+truncated copy of one run, leaving that run's recorded files untouched.
 
 | Control | Mutation | Judgements it broke |
 |---|---|---|
@@ -619,8 +630,9 @@ in B0, which never pushed) and `J8` (the same expression counts one
 Three conditions have no falsifying control and no positive control: `J20`
 (absence of `run_error`), `J21` (`owned_children` is 0) and `J17` (a second
 terminal exists). `J17`'s content is covered by `J18`, which N6 does falsify.
-For `J20` and `J21` the measured values are printed in the judgement lines, but
-this record does not claim they are pinned.
+`J21` prints its measured value (`owned_children`) in its own judgement line.
+`J20` prints only its claim; the value it rests on appears as `run_error=false`
+in `J0`'s line for the same run. This record does not claim either is pinned.
 
 ### Observations kept out of the verdicts
 
@@ -657,10 +669,10 @@ claims them:
 The lockfile is committed in `c0288185`, and the scope judgement above was
 re-run against that committed lockfile rather than against a temporary one.
 
-Three suites assert the installed SDK and CLI version so that a pin change
-cannot land unreviewed; one also asserts the native executable's sha256. All
-four expectations were moved to the measured values in `c96efe5b`, keeping
-their previous shape:
+Three suites hold five guards on the installed artifact so that a pin change
+cannot land unreviewed: four on the SDK and CLI version and one on the native
+executable's sha256. Four were moved to the measured values in `c96efe5b` and
+the fifth in `549d29be`, all keeping their previous shape:
 
 | Test | Guard | Cases |
 |---|---|---|
