@@ -4,6 +4,9 @@ import type { WrapperConfig } from "@kaoiro/protocol";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   AppServerAdmissionError, AppServerHostRuntime, type AppServerHostSession, type AppServerRuntimeHooks,
@@ -419,7 +422,7 @@ it.each([undefined, "candidate"] as const)("records native open and launch refus
   const f = fixture(); const path = `${f.path}.recovery`; const failures: number[] = [];
   const recovery = new RecoveryReporter({ recovery_checkpoint_path: path,
     ...(kind ? { recovery_resume_kind: kind } : {}) } as WrapperConfig, "thread", failure => failures.push(failure.exitCode));
-  vi.mocked(f.session.resumeThread).mockRejectedValueOnce(new AppServerRpcError(-32600, "fixture refusal"));
+  vi.mocked(f.session.resumeThread).mockRejectedValueOnce(new AppServerRpcError(-32600, "fixture refusal", undefined, "thread/resume"));
   const runtime = new AppServerHostRuntime({ session: { turnSignal: () => null }, effortIntent: "default",
     resumeThreadId: "thread", createSession: async () => f.session, recovery }); runtimes.push(runtime);
   await expect(runtime.readHistory({} as WrapperConfig, () => "T")).rejects.toThrow("fixture refusal");
@@ -456,4 +459,22 @@ it.each([undefined, "candidate"] as const)("retains the resume target on unrelat
   const runtime = new AppServerHostRuntime({ session: { turnSignal: () => null }, effortIntent: "default", resumeThreadId: "thread", createSession: async () => f.session, recovery }); runtimes.push(runtime);
   await expect(runtime.open()).rejects.toThrow("transient internal error");
   expect(readRecoveryCheckpoint(path)).toEqual(before); expect(failures).toEqual([]);
+});
+
+it.each((["initialize","thread/resume"] as const).flatMap(phase=>[-32600,-32603].flatMap(code=>[undefined,"candidate" as const].map(kind=>({phase,code,kind})))))
+ ("classifies only actual resume responses through the real RPC stack ($phase/$code/$kind)",async({phase,code,kind})=>{
+ const root=mkdtempSync(join(tmpdir(),"kaoiro-codex-attach-phase-")),path=join(root,"checkpoint");const sent:string[]=[],failures:number[]=[];
+ const child=new EventEmitter() as ChildProcessWithoutNullStreams;const stdout=new PassThrough(),stderr=new PassThrough();let ended=false;
+ const finish=()=>{if(ended)return;ended=true;child.exitCode=0;stdout.end();stderr.end();child.emit("exit",0,null);queueMicrotask(()=>child.emit("close",0,null));};
+ const stdin=new Writable({write(chunk,_encoding,callback){const request=JSON.parse(String(chunk));sent.push(request.method);
+ if(request.id!==undefined)stdout.write(JSON.stringify(request.method===phase?{id:request.id,error:{code,message:"fixture "+phase+" refusal"}}:{id:request.id,result:request.method==="initialize"?{userAgent:"fixture/1"}:{thread:{id:"candidate"}}})+"\n");callback();}});
+ Object.assign(child,{stdin,stdout,stderr,exitCode:null,signalCode:null,kill:()=>{finish();return true;}});stdin.on("finish",finish);
+ const recovery=new RecoveryReporter({recovery_checkpoint_path:path,...(kind?{recovery_resume_kind:kind}:{})} as WrapperConfig,"candidate",failure=>failures.push(failure.exitCode));const before=readRecoveryCheckpoint(path);
+ const runtime=new AppServerHostRuntime({resumeThreadId:"candidate",recovery,effortIntent:"default",session:{turnSignal:()=>null,transport:{spawnChild:()=>child}}});
+ try {await expect(runtime.open()).rejects.toThrow("fixture "+phase+" refusal");
+ expect(sent.includes("thread/resume")).toBe(phase==="thread/resume");
+ if(phase==="thread/resume"&&code===-32600){expect(failures).toEqual([1]);expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:kind?"unbound":"blocked"}});
+ if(kind){const record=readRecoveryCheckpoint(path);expect(record.ok&&record.record.state==="unbound"&&record.record.candidate_id).toBeUndefined();}}
+ else {expect(readRecoveryCheckpoint(path)).toEqual(before);expect(failures).toEqual([]);}
+ }finally{await runtime.close();finish();rmSync(root,{recursive:true,force:true});}
 });

@@ -15,7 +15,7 @@ export interface RpcTicket { id: number; result: Promise<unknown>; writeState: (
 export class AppServerRpcError extends Error {
   /** `error.data` when it is an object; the caller reads named fields only. */
   readonly data: RpcObject | undefined;
-  constructor(readonly code: number, message: string, data?: unknown) {
+  constructor(readonly code: number, message: string, data?: unknown, readonly method?: string) {
     super(message);
     this.name = "AppServerRpcError";
     this.data = rpcObject(data) ? data : undefined;
@@ -94,6 +94,7 @@ export interface AppServerRpcOptions {
 }
 
 interface Waiter {
+  method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -168,7 +169,7 @@ export class AppServerRpc {
         // Once submitted, a timeout cannot establish that the operation was rejected.
         this.#fail(new AppServerConnectionError(`App-server response timeout: ${method}`, "timeout"));
       }, this.#options.requestTimeoutMs ?? defaultTimeoutMs);
-      this.#pending.set(id, { resolve, reject, timer });
+      this.#pending.set(id, { method, resolve, reject, timer });
       this.#write({ id, method, params }, write);
     });
     return { id, result, writeState: () => write.state };
@@ -261,7 +262,7 @@ export class AppServerRpc {
       if (!rpcObject(message.error) || typeof message.error.code !== "number" || typeof message.error.message !== "string") {
         throw new Error("Invalid RPC error");
       }
-      waiter.reject(new AppServerRpcError(message.error.code, message.error.message, message.error.data));
+      waiter.reject(new AppServerRpcError(message.error.code, message.error.message, message.error.data, waiter.method));
     } else {
       waiter.resolve(message.result);
     }
