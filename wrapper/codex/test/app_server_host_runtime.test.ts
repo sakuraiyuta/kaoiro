@@ -435,3 +435,14 @@ it("reports a fresh thread candidate directly from open before any turn dispatch
   expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound", candidate_id: "thread" } });
   expect(f.session.startProjectedTurn).not.toHaveBeenCalled();
 });
+
+it.each([undefined, "candidate"] as const)("rejects resume identity substitution at runtime open (kind=%s)", async kind => {
+  const f = fixture(); const path = `${f.path}.recovery`;
+  const recovery = new RecoveryReporter({ recovery_checkpoint_path: path,
+    ...(kind ? { recovery_resume_kind: kind } : {}) } as WrapperConfig, "thread", () => {});
+  vi.mocked(f.session.resumeThread).mockResolvedValueOnce("replacement");
+  const runtime = new AppServerHostRuntime({ session: { turnSignal: () => null }, effortIntent: "default",
+    resumeThreadId: "thread", createSession: async () => f.session, recovery }); runtimes.push(runtime);
+  await expect(runtime.open()).rejects.toThrow("wrapper recovery stopped");
+  expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: kind ? "unbound" : "blocked" } });
+});

@@ -4265,3 +4265,16 @@ it.each([false, true])("rejects native attach substitution before publication (c
     expect(logs.some(e => e.type === "result" && !e.payload.is_error)).toBe(false);
   } finally { host.close(); for (const call of calls) call.child.finish(); rmSync(root, { recursive: true, force: true }); }
 });
+
+it("records Antigravity first-turn candidate at init and confirms terminal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-recovery-")); const path = join(root, "checkpoint");
+  const cfg = config({ recovery_checkpoint_path: path }); const recovery = new RecoveryReporter(cfg, undefined, () => {});
+  const { host, calls } = hostHarness({ config: cfg, recovery });
+  try {
+    await host.send("first turn"); await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write(JSON.stringify({ event: "init", conversation_id: "fresh", init: { tools: [] } }) + "\n");
+    await waitFor(() => { const r = readRecoveryCheckpoint(path); return r.ok && r.record.state === "unbound" && r.record.candidate_id === "fresh"; });
+    calls[0]!.child.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "done" } }) + "\n");
+    await waitFor(() => { const r = readRecoveryCheckpoint(path); return r.ok && r.record.state === "live"; });
+  } finally { host.close(); for (const call of calls) call.child.finish(); rmSync(root, { recursive: true, force: true }); }
+});
