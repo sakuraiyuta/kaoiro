@@ -647,7 +647,7 @@ it.each([false, true])("retains checkpoint on same-wrapper lane load refusal (co
   if (confirmed) await host.send("first-success");
   const before = readRecoveryCheckpoint(path);
   vi.spyOn(AcpSession.prototype, "load").mockRejectedValueOnce(RequestError.internalError());
-  await host.setPermission(choose(1)); const pending = host.send("queued"); void pending.catch(() => {});
+  await host.setPermission(choose(2)); const pending = host.send("queued"); void pending.catch(() => {});
   await vi.waitFor(() => expect(lifecycle.some(e => JSON.stringify(e).includes("restart_failed"))).toBe(true), { timeout: 5000 });
   expect(readRecoveryCheckpoint(path)).toEqual(before); expect(failures).toEqual([]);
 });

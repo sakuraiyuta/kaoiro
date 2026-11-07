@@ -173,7 +173,7 @@ process.exit(0);`);
   }
 });
 
-it("collects stale initial before cleanup when the actual dist wrapper cannot initialize its checkpoint", async () => {
+it.each([false, true])("collects stale initial from actual dist checkpoint failure (stalled=%s)", async stalled => {
   const root = mkdtempSync(join(tmpdir(), "kaoiro-recovery-launch-"));
   const preload = join(root, "fail-checkpoint.cjs");
   const previous = process.env.NODE_OPTIONS;
@@ -183,19 +183,22 @@ fs.writeFileSync = function(path, data, ...args) {
   if (String(path).endsWith('.recovery.tmp') && JSON.parse(String(data)).state === 'unbound') throw new Error('owned checkpoint write fault');
   return original.call(this, path, data, ...args);
 };
-require('node:module').syncBuiltinESMExports();`);
+require('node:module').syncBuiltinESMExports();
+${stalled ? 'setInterval(() => {}, 1000);' : ''}`);
   let child: ReturnType<ReturnType<typeof makeLauncher>> | undefined;
   let exited = false;
   try {
     process.env.NODE_OPTIONS = `--require=${preload}`;
+    const started = performance.now();
     child = makeLauncher()("recovery-launch", {
       agent_id: "recovery-launch", persona: { id: "p", name: "P", sprite_set: "p" },
       display_name: "P", server_url: "ws://127.0.0.1:1/wrapper",
     }, root);
     await new Promise<void>((resolve, reject) => {
       child!.on("exit", () => { exited = true; resolve(); });
-      setTimeout(() => reject(new Error("recovery dist wrapper did not exit")), 10_000).unref();
+      setTimeout(() => reject(new Error("recovery dist wrapper did not exit")), 15_000).unref();
     });
+    if (!stalled) expect(performance.now() - started).toBeLessThan(8_000);
     expect(child.exitCode).toBe(79);
     expect(child.recovery).toEqual({ ok: true, record: { version: 1, state: "initial" } });
     expect(child.readRecovery?.()).toEqual({ ok: false, reason: "unreadable" });
@@ -204,4 +207,4 @@ require('node:module').syncBuiltinESMExports();`);
     if (previous === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous;
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, 20_000);
