@@ -1,3 +1,4 @@
+import type { RecoveryReporter } from "@kaoiro/wrapper-core";
 import { permissionSyncFailure } from "@kaoiro/agent-common";
 import { AppServerContextMeter } from "./app_server_context.js";
 // CodexHost owns the persistent app-server session, state machine, tool bridge
@@ -238,6 +239,7 @@ export interface CodexInterAgentSteerHooks {
 }
 
 export interface CodexHostOptions {
+  recovery?: RecoveryReporter;
   deliveryPolicy?: DeliveryPolicyController;
   appServerSessionFactory?: AppServerHostRuntimeOptions["createSession"];
   /** Invoked on every state transition with the common envelope. */
@@ -1319,6 +1321,7 @@ export class CodexHost implements EngineAdapter {
 
   #createAppServerRuntime(toolHome: string): AppServerHostRuntime {
     return new AppServerHostRuntime({
+      ...(this.#options.recovery === undefined ? {} : { recovery: this.#options.recovery }),
       session: {
         toolHome,
         thread: { cwd: this.#cwd, sandbox: this.#sandbox, developerInstructions: this.#options.appendSystemPrompt,
@@ -1455,6 +1458,7 @@ export class CodexHost implements EngineAdapter {
         this.#effortSource = this.#effortLastGoodSource = baseline.effortIntent === "default" ? "default" : (this.#effortSource ?? "config");
       }
       this.#contextMeter.finish(completion.identity, settingsCommitted, this.#model);
+      if (terminal.status === "completed" && this.#sessionId !== null && this.#options.recovery?.confirm(this.#sessionId) === false) return;
       const terminalType = terminal.status === "interrupted" ? undefined : terminal.status === "completed" ? "turn.completed" : "turn.failed";
       if (terminalType) this.#options.onLifecycle?.({ kind: "terminal", turnToken, type: terminalType, authoritative: true });
       settle(terminal.payload, { turnToken, conversationIds,

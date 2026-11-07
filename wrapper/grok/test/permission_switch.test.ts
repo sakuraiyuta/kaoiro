@@ -1,3 +1,6 @@
+import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
+import { RequestError } from "@agentclientprotocol/sdk";
+import { AcpSession } from "../src/acp/session.js";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -635,4 +638,16 @@ it("keeps the effective sandbox empty after a revision-zero history sync", async
     permission: undefined, sandbox: undefined, network: undefined,
   });
   expect(lifecycle).not.toContainEqual(expect.objectContaining({ kind: "permission_applied" }));
+});
+
+it.each([false, true])("retains checkpoint on same-wrapper lane load refusal (confirmed=%s)", async confirmed => {
+  const root = mkdtempSync(join(homedir(), ".kaoiro-grok-recovery-")); scratch.push(root); const path = join(root, "checkpoint");
+  const failures: number[] = []; const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, f => failures.push(f.exitCode));
+  const { host, lifecycle } = await started({ recovery });
+  if (confirmed) await host.send("first-success");
+  const before = readRecoveryCheckpoint(path);
+  vi.spyOn(AcpSession.prototype, "load").mockRejectedValueOnce(RequestError.internalError());
+  await host.setPermission(choose(1)); const pending = host.send("queued"); void pending.catch(() => {});
+  await vi.waitFor(() => expect(lifecycle.some(e => JSON.stringify(e).includes("restart_failed"))).toBe(true), { timeout: 5000 });
+  expect(readRecoveryCheckpoint(path)).toEqual(before); expect(failures).toEqual([]);
 });

@@ -1,3 +1,4 @@
+import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -901,4 +902,13 @@ describe("kaoiro MCP over HTTP (issue #604)", () => {
       tokenInUrl: false,
     });
   });
+});
+
+it("records a native newSession candidate before first prompt and confirms successful turn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-grok-recovery-")); scratch.push(root); const path = join(root, "checkpoint");
+  const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, () => {});
+  const { host } = await started({ recovery });
+  expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "unbound", candidate_id: expect.any(String) } });
+  await host.send("hello");
+  expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: "live" } });
 });

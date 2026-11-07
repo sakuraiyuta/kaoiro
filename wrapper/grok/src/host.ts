@@ -1,3 +1,5 @@
+import { RequestError } from "@agentclientprotocol/sdk";
+import type { RecoveryReporter } from "@kaoiro/wrapper-core";
 import { randomUUID } from "node:crypto";
 import type { PermissionSelection as Selection, PermissionSubmission, PermissionSyncMessage,
   PermissionGateExt, SwitchErrorExt, WrapperPermissionLifecycleMessage } from "@kaoiro/protocol";
@@ -69,6 +71,7 @@ import {
 import { MCP_NOT_CONNECTED, ToolHost, type ToolHostStats } from "./toolhost.js";
 
 export interface GrokHostOptions {
+  recovery?: RecoveryReporter;
   config: WrapperConfig;
   cwd: string;
   personaPrompt: string;
@@ -599,13 +602,16 @@ export class GrokHost implements EngineAdapter {
       if (this.#sessionId) {
         if (initialized.agentCapabilities?.loadSession !== true) throw new Error("grok session load unsupported");
         await wait(generation.session.load(this.#sessionId, this.#options.cwd, [toolHost.mcpServer()]));
+        if (this.#options.recovery?.confirm(this.#sessionId) === false) throw this.#options.recovery.failure;
       } else if (resumeId !== undefined) {
         if (initialized.agentCapabilities?.sessionCapabilities?.resume == null)
           throw new GrokLaunchError("grok does not support session resume");
         try {
           await wait(generation.session.resume(resumeId, this.#options.cwd, [toolHost.mcpServer()]));
+          if (this.#options.recovery?.confirm(resumeId) === false) throw this.#options.recovery.failure;
         } catch (error) {
           check();
+          if (!generation.failure && error instanceof RequestError && error.code === -32603) this.#options.recovery?.refuseLaunch();
           // Grok answers -32603 for an unknown id and for a session bound to
           // another cwd; neither carries detail worth relaying.
           throw generation.failure ? error : new GrokLaunchError("grok could not resume the session");
@@ -613,6 +619,7 @@ export class GrokHost implements EngineAdapter {
       } else {
         await wait(generation.session.newSession(this.#options.cwd, [toolHost.mcpServer()],
           grokSessionMeta(this.#options.personaPrompt)));
+        if (generation.session.sessionId !== undefined && this.#options.recovery?.observe(generation.session.sessionId) === false) throw this.#options.recovery.failure;
       }
       await at("readiness");
       await wait(toolHost.listed(this.#options.mcpReadyTimeoutMs ?? MCP_READY_TIMEOUT_MS)
@@ -800,6 +807,7 @@ export class GrokHost implements EngineAdapter {
       if (rejected) throw new Error("grok permission rejected");
       const interrupted = response.stopReason === "cancelled" && !rejected;
       this.#flushAssistantLog();
+      if (!rejected && !interrupted && this.#sessionId !== undefined && this.#options.recovery?.confirm(this.#sessionId) === false) return;
       this.#event({
         kind: "result",
         subtype: rejected ? "error_during_execution" : "success",

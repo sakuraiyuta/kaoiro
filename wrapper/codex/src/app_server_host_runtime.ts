@@ -1,3 +1,4 @@
+import type { RecoveryReporter } from "@kaoiro/wrapper-core";
 import type { WrapperConfig } from "@kaoiro/agent-common";
 import type { AppServerHistory } from "./app_server_history.js";
 import type { AppServerContextEvent } from "./app_server_context.js";
@@ -27,6 +28,7 @@ export type AppServerHostSession = Pick<AppServerSession,
     rateLimits?: AppServerRateLimits;
   };
 export interface AppServerHostRuntimeOptions {
+  recovery?: RecoveryReporter;
   session: AppServerSessionOptions;
   resumeThreadId?: string;
   effortIntent: "explicit" | "default";
@@ -125,8 +127,18 @@ export class AppServerHostRuntime {
       });
       this.#session = await this.#creating;
       if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");
-      const threadId = this.#options.resumeThreadId === undefined
-        ? await this.#session.startThread() : await this.#session.resumeThread(this.#options.resumeThreadId);
+      let threadId: string;
+      if (this.#options.resumeThreadId === undefined) {
+        threadId = await this.#session.startThread();
+        if (this.#options.recovery?.observe(threadId) === false) throw this.#options.recovery.failure;
+      } else {
+        try { threadId = await this.#session.resumeThread(this.#options.resumeThreadId); }
+        catch (error) {
+          if (error instanceof AppServerRpcError) this.#options.recovery?.refuseLaunch();
+          throw error;
+        }
+        if (this.#options.recovery?.accept(threadId, this.#options.resumeThreadId) === false) throw this.#options.recovery.failure;
+      }
       if (this.#session.rateLimits !== undefined) this.#forwardRateLimits(this.#session.rateLimits);
       const initial = this.#session.initialSettings;
       this.#baseline = initial && { ...initial, effortIntent: this.#options.effortIntent };
