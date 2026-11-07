@@ -446,3 +446,14 @@ it.each([undefined, "candidate"] as const)("rejects resume identity substitution
   await expect(runtime.open()).rejects.toThrow("wrapper recovery stopped");
   expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: kind ? "unbound" : "blocked" } });
 });
+
+it.each([undefined, "candidate"] as const)("retains the resume target on unrelated Codex RPC failure for %s", async kind => {
+  const f = fixture(); const path = `${f.path}.recovery`; const failures: number[] = [];
+  const recovery = new RecoveryReporter({ recovery_checkpoint_path: path,
+    ...(kind ? { recovery_resume_kind: kind } : {}) } as WrapperConfig, "thread", failure => failures.push(failure.exitCode));
+  const before = readRecoveryCheckpoint(path);
+  vi.mocked(f.session.resumeThread).mockRejectedValueOnce(new AppServerRpcError(-32603, "transient internal error"));
+  const runtime = new AppServerHostRuntime({ session: { turnSignal: () => null }, effortIntent: "default", resumeThreadId: "thread", createSession: async () => f.session, recovery }); runtimes.push(runtime);
+  await expect(runtime.open()).rejects.toThrow("transient internal error");
+  expect(readRecoveryCheckpoint(path)).toEqual(before); expect(failures).toEqual([]);
+});

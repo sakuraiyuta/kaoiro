@@ -3221,7 +3221,7 @@ export class AgentHost implements EngineAdapter {
         if (this.#foreignOccupancy !== null && id !== null && this.#intervalSession !== null && id !== this.#intervalSession) {
           this.#options.recovery?.block("session_binding");
           this.#failStopLive("session changed under a foreign root interval; host admission stopped until this wrapper is relaunched");
-            this.#options.recovery?.stop("session_binding");
+          this.#options.recovery?.stop("session_binding");
         } else if (message.type === "result" && (this.#foreignOccupancy !== null || this.#activeTurn !== null)) {
           if (id === null) {
             this.#options.recovery?.block("session_binding");
