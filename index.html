@@ -35,6 +35,7 @@
       <div class="hero-copy">
       <h1><img src="assets/kaoiro-logo-on-dark.png" alt="kaoiro" width="1553" height="466"></h1>
       <p class="lead">Run, watch and orchestrate your CLI AI agents, each with a face and a personality.</p>
+      <p class="film-jump"><a href="#intro-film">Watch the 96-second film <span aria-hidden="true">↘</span></a></p>
       <ul class="actions">
         <li><a class="badge" href="https://github.com/sakuraiyuta/kaoiro"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span>sakuraiyuta/kaoiro</span></a></li>
         <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></li>
@@ -45,10 +46,14 @@
         <p class="notice"><strong>Research prototype.</strong> Developed mainly for daily use by the author and members of their laboratory, with no guarantees about maintenance or responses to issues.</p>
         <p class="notice warn"><strong>Security.</strong> An operator credential lets its holder run commands on every machine where agents run. Treat it like an SSH key to those hosts, and read <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> before deploying.</p>
       </div>
-      <figure class="hero-preview">
-        <div class="preview-bar" aria-hidden="true"><span></span><span></span><span></span><b>kaoiro / dashboard</b></div>
-        <img src="assets/agent-grid.png" width="1036" height="619" alt="Agent cards beside their shared conversation timeline">
-        <figcaption>Inside the dashboard · currently Japanese-only</figcaption>
+      <figure class="hero-preview intro-film" id="intro-film">
+        <video id="intro-video" controls preload="none" playsinline width="1280" height="720" poster="assets/kaoiro-intro-en-poster.png" aria-label="See kaoiro in action">
+          <source src="assets/kaoiro-intro-en.webm" type="video/webm">
+        </video>
+        <figcaption>
+          <a class="film-play" href="assets/kaoiro-intro-en.webm"><span class="play-icon" aria-hidden="true">▶</span><span><strong>See kaoiro in action</strong><small>A 96-second introduction · No audio</small></span></a>
+          <p class="film-note">Illustrative animation from October 18, 2026. Cannot play here? <a class="film-file" href="assets/kaoiro-intro-en.webm" download>Download WebM (5.8 MB)</a></p>
+        </figcaption>
       </figure>
     </header>
 
@@ -58,7 +63,7 @@
       <p class="intro">kaoiro runs, watches and orchestrates several CLI AI agents at once. Each one becomes a character whose expression follows what it is doing. Rather than cycling through terminals, it feels like watching over a small AI office.</p>
       <div class="scene">
         <figure class="stage">
-          <div class="frame"><img src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission"></div>
+          <div class="frame"><img loading="lazy" fetchpriority="low" src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission"></div>
           <figcaption>An example screen, not a public demo. The dashboard interface is currently Japanese-only.</figcaption>
         </figure>
         <div class="steps">
@@ -334,11 +339,11 @@
       <h2 id="screens">The screens</h2>
       <div class="screens">
         <figure class="rise">
-          <img src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission">
+          <img loading="lazy" fetchpriority="low" src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission">
           <figcaption>The grid and the timeline, with sample data.</figcaption>
         </figure>
         <figure class="rise">
-          <img src="assets/settings-drawer.png" width="320" height="520" alt="Settings drawer: notification sound, volume and card display options">
+          <img loading="lazy" fetchpriority="low" src="assets/settings-drawer.png" width="320" height="520" alt="Settings drawer: notification sound, volume and card display options">
           <figcaption>Settings: notification sound, volume and card display.</figcaption>
         </figure>
       </div>
