@@ -1,6 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -929,4 +929,14 @@ it("confirms a successful Grok resume response without inventing a returned id",
   const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path, recovery_resume_kind: "candidate" }, "fixture-session", () => {});
   await started({ recovery, resumeSessionId: "fixture-session" });
   expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "live", session_id: "fixture-session" } });
+});
+
+it.each([false,true])("preserves Grok completion for blocked recovery but stops write failure (fatal=%s)",async fatal=>{
+ const root=mkdtempSync(join(tmpdir(),"kaoiro-grok-confirm-"));scratch.push(root);const path=join(root,"checkpoint");
+ const recovery=new RecoveryReporter({...config,recovery_checkpoint_path:path},undefined,()=>{});const {host,envelopes}=await started({recovery});
+ if(fatal)mkdirSync(path+".tmp");else recovery.block("watchdog");const pending=host.send("hello");void pending.catch(()=>{});
+ if(fatal)await vi.waitFor(()=>expect(recovery.failure?.exitCode).toBe(79));else await pending;
+ await new Promise<void>(resolve=>setImmediate(resolve));
+ expect(envelopes.filter(e=>e.type==="result"&&!e.payload.is_error)).toHaveLength(fatal?0:1);
+ expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:fatal?"unbound":"blocked"}});
 });

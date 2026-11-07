@@ -3,7 +3,7 @@ import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -4283,4 +4283,18 @@ it("records Antigravity first-turn candidate at init and confirms terminal", asy
     calls[0]!.child.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "done" } }) + "\n");
     await waitFor(() => { const r = readRecoveryCheckpoint(path); return r.ok && r.record.state === "live"; });
   } finally { host.close(); for (const call of calls) call.child.finish(); rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each([false,true])("preserves Antigravity completion for blocked recovery but stops write failure (fatal=%s)",async fatal=>{
+ const root=mkdtempSync(join(tmpdir(),"kaoiro-agy-confirm-")),path=join(root,"checkpoint"),cfg=config({recovery_checkpoint_path:path});
+ const recovery=new RecoveryReporter(cfg,undefined,()=>{});const {host,calls,logs}=hostHarness({config:cfg,recovery});
+ try {await host.send("first");await waitFor(()=>calls.length===1);
+ calls[0]!.child.stdout.write(JSON.stringify({event:"init",conversation_id:"fresh",init:{tools:[]}})+"\n");
+ await waitFor(()=>{const r=readRecoveryCheckpoint(path);return r.ok&&r.record.state==="unbound"&&r.record.candidate_id==="fresh";});
+ if(fatal)mkdirSync(path+".tmp");else recovery.block("watchdog");
+ calls[0]!.child.stdout.write(JSON.stringify({event:"result",result:{status:"SUCCESS",response:"done"}})+"\n");
+ await waitFor(()=>fatal?recovery.failure?.exitCode===79:logs.some(e=>e.type==="result"));await new Promise<void>(resolve=>setImmediate(resolve));
+ expect(logs.filter(e=>e.type==="result"&&!e.payload.is_error)).toHaveLength(fatal?0:1);
+ expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:fatal?"unbound":"blocked"}});
+ } finally {const closing=host.close();for(const c of calls)c.child.finish();await closing;rmSync(root,{recursive:true,force:true});}
 });

@@ -807,7 +807,10 @@ export class GrokHost implements EngineAdapter {
       if (rejected) throw new Error("grok permission rejected");
       const interrupted = response.stopReason === "cancelled" && !rejected;
       this.#flushAssistantLog();
-      if (!rejected && !interrupted && this.#sessionId !== undefined && this.#options.recovery?.confirm(this.#sessionId) === false) return;
+      if (!rejected && !interrupted && this.#sessionId !== undefined) {
+        this.#options.recovery?.confirm(this.#sessionId);
+        if (this.#options.recovery?.failure) return;
+      }
       this.#event({
         kind: "result",
         subtype: rejected ? "error_during_execution" : "success",

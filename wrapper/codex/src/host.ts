@@ -1458,7 +1458,10 @@ export class CodexHost implements EngineAdapter {
         this.#effortSource = this.#effortLastGoodSource = baseline.effortIntent === "default" ? "default" : (this.#effortSource ?? "config");
       }
       this.#contextMeter.finish(completion.identity, settingsCommitted, this.#model);
-      if (terminal.status === "completed" && this.#sessionId !== null && this.#options.recovery?.confirm(this.#sessionId) === false) return;
+      if (terminal.status === "completed" && this.#sessionId !== null) {
+        this.#options.recovery?.confirm(this.#sessionId);
+        if (this.#options.recovery?.failure) return;
+      }
       const terminalType = terminal.status === "interrupted" ? undefined : terminal.status === "completed" ? "turn.completed" : "turn.failed";
       if (terminalType) this.#options.onLifecycle?.({ kind: "terminal", turnToken, type: terminalType, authoritative: true });
       settle(terminal.payload, { turnToken, conversationIds,
