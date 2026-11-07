@@ -173,9 +173,10 @@ process.exit(0);`);
   }
 });
 
-it.each([false, true])("collects stale initial from actual dist checkpoint failure (stalled=%s)", async stalled => {
+it.each((["claude-code", "codex", "grok", "antigravity"] as const).flatMap(engine => [false, true].map(stalled => ({ engine, stalled }))))("collects stale initial from actual dist checkpoint failure ($engine, stalled=$stalled)", async ({ engine, stalled }) => {
   const root = mkdtempSync(join(tmpdir(), "kaoiro-recovery-launch-"));
   const preload = join(root, "fail-checkpoint.cjs");
+  const nativeAttempts = join(root, "native-attempts");
   const previous = process.env.NODE_OPTIONS;
   writeFileSync(preload, `const fs = require('node:fs');
 const original = fs.writeFileSync;
@@ -183,23 +184,29 @@ fs.writeFileSync = function(path, data, ...args) {
   if (String(path).endsWith('.recovery.tmp') && JSON.parse(String(data)).state === 'unbound') throw new Error('owned checkpoint write fault');
   return original.call(this, path, data, ...args);
 };
+const cp = require('node:child_process');
+for (const name of ['spawn', 'execFile', 'exec', 'fork']) {
+  const originalCall = cp[name];
+  cp[name] = function(...args) { fs.appendFileSync(${JSON.stringify(nativeAttempts)}, name + '\\n'); return originalCall.apply(this, args); };
+}
 require('node:module').syncBuiltinESMExports();
 ${stalled ? 'setInterval(() => {}, 1000);' : ''}`);
   let child: ReturnType<ReturnType<typeof makeLauncher>> | undefined;
   let exited = false;
   try {
-    process.env.NODE_OPTIONS = `--require=${preload}`;
+    process.env.NODE_OPTIONS = `${previous ?? ""} --require=${preload}`;
     const started = performance.now();
     child = makeLauncher()("recovery-launch", {
       agent_id: "recovery-launch", persona: { id: "p", name: "P", sprite_set: "p" },
       display_name: "P", server_url: "ws://127.0.0.1:1/wrapper",
-    }, root);
+    }, root, undefined, undefined, engine);
     await new Promise<void>((resolve, reject) => {
       child!.on("exit", () => { exited = true; resolve(); });
       setTimeout(() => reject(new Error("recovery dist wrapper did not exit")), 15_000).unref();
     });
     if (!stalled) expect(performance.now() - started).toBeLessThan(8_000);
     expect(child.exitCode).toBe(79);
+    expect(existsSync(nativeAttempts)).toBe(false);
     expect(child.recovery).toEqual({ ok: true, record: { version: 1, state: "initial" } });
     expect(child.readRecovery?.()).toEqual({ ok: false, reason: "unreadable" });
   } finally {
