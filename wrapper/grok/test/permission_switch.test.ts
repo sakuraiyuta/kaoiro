@@ -644,7 +644,11 @@ it.each([false, true])("retains checkpoint on same-wrapper lane load refusal (co
   const root = mkdtempSync(join(homedir(), ".kaoiro-grok-recovery-")); scratch.push(root); const path = join(root, "checkpoint");
   const failures: number[] = []; const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, f => failures.push(f.exitCode));
   const { host, lifecycle } = await started({ recovery });
-  if (confirmed) await host.send("first-success");
+  if (confirmed) {
+    await host.send("first-success");
+    // The turn promise resolves before the existing queue drain releases its idle boundary.
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
   const before = readRecoveryCheckpoint(path);
   expect(before).toMatchObject({ record: { state: confirmed ? "live" : "unbound" } });
   const load = vi.spyOn(AcpSession.prototype, "load").mockRejectedValueOnce(RequestError.internalError());
