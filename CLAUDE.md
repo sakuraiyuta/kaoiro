@@ -68,11 +68,20 @@ block Git operations targeting `main`.
 | `main` | Release / stable branch; default branch | **Operator only** |
 | `develop` | Integration branch; CI runs here too | Agents allowed |
 | `issue-NNN-*` | feature branch | Agents allowed |
+| `gh-pages` | Published landing page (GitHub Pages branch deploy) | **Director only**, after review |
+| `issue-1035-site` | Candidate for `gh-pages` | Agents allowed |
 
 - Create feature branches from `develop` and merge them back into `develop`
   with a **fast-forward merge**. Agents may automate these steps.
 - The **operator manually** merges `develop` → `main` at each milestone.
 - Use `develop` as the worktree base.
+- `gh-pages` holds only the static site, and a push publishes it at once
+  ([issue #1035](https://github.com/sakuraiyuta/kaoiro/issues/1035)). Prepare
+  a change on `issue-1035-site`, which is an exception to `issue-NNN-*`: it
+  starts from the `gh-pages` tip and never lands on `develop`. Review binds
+  to the commit and tree SHA, and the director fast-forwards `gh-pages` only
+  when its tip is still the recorded base and the tree matches. Never force
+  push it.
 
 ### Remotes
 
@@ -91,7 +100,8 @@ and comments, specs / plans / ADRs under `docs/`, code comments, test names,
 and log messages. When editing an existing Japanese document, you may
 translate the sections you change into English; a full rewrite is not
 required. Exceptions are places where Japanese itself is the specification,
-such as `docs/specs/personas.md`. Conversations with the operator and
+such as `docs/specs/personas.md`, and the Japanese landing page
+(`ja/index.html` on `gh-pages`). Conversations with the operator and
 inter-agent messages follow the session's language setting (do not switch
 these to English).
 
