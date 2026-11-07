@@ -185,7 +185,7 @@ fs.writeFileSync = function(path, data, ...args) {
   return original.call(this, path, data, ...args);
 };
 const cp = require('node:child_process');
-for (const name of ['spawn', 'execFile', 'exec', 'fork']) {
+for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
   const originalCall = cp[name];
   cp[name] = function(...args) { fs.appendFileSync(${JSON.stringify(nativeAttempts)}, name + '\\n'); return originalCall.apply(this, args); };
 }
