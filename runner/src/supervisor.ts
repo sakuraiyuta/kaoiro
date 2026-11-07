@@ -910,7 +910,7 @@ export class Supervisor {
       : undefined;
     const preflight = entry.child.readRecovery?.();
     if (preflight !== undefined && (!preflight.ok || preflight.record.state === "blocked")) {
-      process.stderr.write(`runner: restart recovery refused for ${agentId}; ${!preflight.ok ? preflight.reason : preflight.record.state}; expected=${entry.parsed.resumeSessionId !== undefined}; child retained; use applicable switch/reset/restore or stop\n`);
+      process.stderr.write(`runner: restart recovery refused for ${agentId}; ${this.#recoveryDiagnostic(entry, preflight)}; child retained; use applicable switch/reset/restore or stop\n`);
       this.#fail(agentId, "error", requestId);
       return;
     }
@@ -1755,9 +1755,8 @@ export class Supervisor {
     if (resume !== undefined) this.#activeSessions.delete(resume);
   }
 
-  #recoveryDiagnostic(entry: ChildEntry): string {
-    const snapshot = entry.child.recovery;
-    const state = snapshot === undefined ? "legacy" : !snapshot.ok ? snapshot.reason : snapshot.record.state;
+  #recoveryDiagnostic(entry: ChildEntry, snapshot = entry.child.recovery): string {
+    const state = snapshot === undefined ? "legacy" : !snapshot.ok ? snapshot.reason : snapshot.record.state === "blocked" ? `blocked:${snapshot.record.reason}` : snapshot.record.state;
     const candidate = snapshot?.ok && snapshot.record.state === "unbound" && snapshot.record.candidate_id !== undefined;
     return `checkpoint=${state} expected=${entry.child.recoveryTarget?.expected ?? (entry.parsed.resumeSessionId !== undefined)} candidate=${!!candidate} kind=${entry.child.recoveryTarget?.kind ?? entry.recoveryKind ?? "strict"}`;
   }

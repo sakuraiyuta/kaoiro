@@ -3485,4 +3485,15 @@ describe("Supervisor launch-owned recovery", () => {
     } finally { diagnostic.mockRestore(); }
   });
 
+  it("diagnoses the finite block reason at restart preflight and final exit", () => {
+    const h = harness(); h.sup.handleSpawn(spawnMsg);
+    const blocked = { ok: true, record: { version: 1, state: "blocked", reason: "watchdog" } };
+    Object.assign(h.children[0]!, { readRecovery: () => blocked, recovery: blocked });
+    const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      h.sup.handleRestart({ agent_id: spawnMsg.agent_id, request_id: "blocked-reason" }); h.children[0]!.exit();
+      expect(diagnostic.mock.calls.map(c => String(c[0])).filter(line => line.includes("checkpoint=blocked:watchdog"))).toHaveLength(2);
+    } finally { diagnostic.mockRestore(); }
+  });
+
 });
