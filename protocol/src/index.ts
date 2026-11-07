@@ -195,6 +195,8 @@ export type Persona = WirePersona;
  *  fail-closed). Shared with the runner, which resolves it to spawn a
  *  wrapper (ADR-0023). */
 export interface WrapperConfig {
+  recovery_checkpoint_path?: string;
+  recovery_resume_kind?: "candidate";
   in_flight_delivery_enabled?: boolean;
   agent_id: string;
   persona: Persona;
