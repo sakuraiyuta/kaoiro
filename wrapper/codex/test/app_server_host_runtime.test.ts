@@ -465,7 +465,7 @@ it.each((["initialize","thread/resume"] as const).flatMap(phase=>[-32600,-32603]
  ("classifies only actual resume responses through the real RPC stack ($phase/$code/$kind)",async({phase,code,kind})=>{
  const root=mkdtempSync(join(tmpdir(),"kaoiro-codex-attach-phase-")),path=join(root,"checkpoint");const sent:string[]=[],failures:number[]=[];
  const child=new EventEmitter() as ChildProcessWithoutNullStreams;const stdout=new PassThrough(),stderr=new PassThrough();let ended=false;
- const finish=()=>{if(ended)return;ended=true;child.exitCode=0;stdout.end();stderr.end();child.emit("exit",0,null);queueMicrotask(()=>child.emit("close",0,null));};
+ const finish=()=>{if(ended)return;ended=true;Object.assign(child,{exitCode:0});stdout.end();stderr.end();child.emit("exit",0,null);queueMicrotask(()=>child.emit("close",0,null));};
  const stdin=new Writable({write(chunk,_encoding,callback){const request=JSON.parse(String(chunk));sent.push(request.method);
  if(request.id!==undefined)stdout.write(JSON.stringify(request.method===phase?{id:request.id,error:{code,message:"fixture "+phase+" refusal"}}:{id:request.id,result:request.method==="initialize"?{userAgent:"fixture/1"}:{thread:{id:"candidate"}}})+"\n");callback();}});
  Object.assign(child,{stdin,stdout,stderr,exitCode:null,signalCode:null,kill:()=>{finish();return true;}});stdin.on("finish",finish);
