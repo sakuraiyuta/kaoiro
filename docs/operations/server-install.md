@@ -90,7 +90,6 @@ normally from `server/`. For a manual `docker build`, run
 ```sh
 cd server
 docker compose up -d --build
-cd ..
 ```
 
 By default it binds only to `127.0.0.1:4000` (the compose `ports` mapping). nginx
@@ -102,9 +101,11 @@ build identity passed directly (no manual
 `set -a && eval "$(node scripts/build-identity.mjs)"`), and refuses outright if
 it detects any prior state, so it never overwrites an existing deployment (the
 state classes are in [Server deploy configuration](../reference/configuration/server-deploy.md#transaction-states-and-status)).
-Run it from the checkout root of 1.0, after the `.env` of 1.2 exists:
+Run it from the checkout root of 1.0, after the `.env` of 1.2 exists. Steps
+1.2 and 1.3 above leave you in `server/`, hence the `cd ..`:
 
 ```sh
+cd ..
 node server/deploy/kaoiro-server-deploy.mjs start --initialize
 ```
 
