@@ -2,6 +2,10 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatInboundMessage, handoffToolResult, INTER_AGENT_TOOL_FQN, MAX_COALESCED_BYTES, REPLY_AUTHORIZATION_USAGE_GUIDANCE } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-common";
+import { readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost, type AgentHostOptions } from "../src/host.js";
 import type { McpSdkServerConfigWithInstance, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -805,6 +809,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     } finally { finishHost(); await running; }
   });
   it("connects a real Host watchdog fail-stop to the CLI send decision", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-watchdog-recovery-"));
+    const checkpoint = join(root, "checkpoint");
     const outbound: Envelope[] = [];
     const states: string[] = [];
     let tool!: InterAgentTool;
@@ -812,7 +818,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     let linkOptions!: Record<string, any>;
     const running = runClaudeCli({
       parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      loadConfig: () => ({ ...config, recovery_checkpoint_path: checkpoint }),
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -841,6 +847,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       expect((await tool.invoke(args, { origin: { token: "valid-token" } })).isError).toBeUndefined();
       expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
       expect(host.state).toBe("error");
+      expect(readRecoveryCheckpoint(checkpoint)).toMatchObject({ ok: true, record: { state: "blocked", reason: "watchdog" } });
       const after = await tool.invoke({ ...args, body: "after stop" }, { origin: { token: "valid-token" } });
       expect(JSON.parse(after.content[0]!.text)).toMatchObject({ error: "admission_fail_stop", send_not_attempted: true });
       expect(outbound).toHaveLength(1);
@@ -848,6 +855,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     } finally {
       host?.close();
       await running;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

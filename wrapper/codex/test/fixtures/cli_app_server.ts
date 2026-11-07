@@ -38,6 +38,7 @@ export function watchdogClock() {
 // Host/Session, Unix ToolHost, ServerLink, brokers, IA and reset coordinator run.
 export async function cliAppFixture(permissionSync = false, backend: "app-server" = "app-server", replyBasis: "v1" | "legacy" = "legacy",
   fixtureOptions: {
+    recoveryCheckpoint?: boolean;
     approvalAxis?: boolean;
     resume?: string;
     beforeDispatch?: () => Promise<void>;
@@ -108,7 +109,7 @@ export async function cliAppFixture(permissionSync = false, backend: "app-server
   let callbacks!: CodexHostOptions;
   const running = runCodexCli({ watchdogClock: clock,
     parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: fixtureOptions.resume }),
-    loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, model: "gpt-5.6-sol", approval_axis: fixtureOptions.approvalAxis ?? false, ...(fixtureOptions.permissionTimeoutMs === undefined ? {} : { permission_timeout_ms: fixtureOptions.permissionTimeoutMs }) }),
+    loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, ...(fixtureOptions.recoveryCheckpoint ? { recovery_checkpoint_path: join(home, "recovery") } : {}), model: "gpt-5.6-sol", approval_axis: fixtureOptions.approvalAxis ?? false, ...(fixtureOptions.permissionTimeoutMs === undefined ? {} : { permission_timeout_ms: fixtureOptions.permissionTimeoutMs }) }),
     createServerLink: (url, id, options) => {
       permissionDecision = options.onPermissionDecision;
       return (link = new ServerLink(url, id, { ...options,
@@ -152,6 +153,7 @@ export async function cliAppFixture(permissionSync = false, backend: "app-server
   await vi.waitFor(() => expect(host).toBeDefined());
   const envelopes = (type: string) => wire.received.filter(e => e.event === "envelope" && e.payload.type === type).map(e => e.payload);
   return {
+    recoveryCheckpoint: join(home, "recovery"),
     permissionDecision: (id: string, allow: boolean) => permissionDecision?.({ request_id: id, allow }),
     rejectNextSend: (error: Record<string, unknown>) => { rejection = error; },
     clock, wire, host, callbacks, sent, send, terminal, exit, releaseChildClose: exit, running, envelopes,  finalized, queued,
