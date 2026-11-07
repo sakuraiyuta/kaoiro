@@ -1,6 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { expect, it, vi } from "vitest";
-import { CodexHost, initialStatusExt } from "../src/host.js";
+import { CodexHost } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
 
 const config = { agent_id: "default-test", persona: { id: "p", name: "P", sprite_set: "p" },
@@ -15,8 +15,6 @@ it.each([undefined, "app-server"] as const)("resolves raw Host options and stati
     else expect(options.backend).toBe(backend);
     expect(host.historyBackend).toBe(backend ?? "app-server");
     expect(host.approvalAxisSettings).toEqual({ deadlineMs: 123, inactivityLimitMs: 456 });
-    expect(initialStatusExt({ ...config, ...(backend === undefined ? {} : { codex_backend: backend }) }).session_capabilities)
-      .toMatchObject({ supports_context_usage: true });
     expect(host.statusExtSnapshot().session_capabilities).toMatchObject({ supports_context_usage: true });
   } finally { host.close(); }
 });

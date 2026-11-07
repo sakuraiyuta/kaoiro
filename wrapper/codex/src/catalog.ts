@@ -309,16 +309,6 @@ export function resolveCodexCatalog(
   );
 }
 
-export const CODEX_ENGINE = {
-  id: "codex" as const,
-  supportedModels(
-    authMode: CodexAuthMode = "unknown",
-    plan?: ChatGptPlan,
-  ): EngineModelInfo[] {
-    return resolveCodexCatalog(authMode, plan);
-  },
-};
-
 /** Effort levels available for a given model against the resolved catalog.
  *  Three-tier lookup (Phase-23 dogfood 再回帰対策 / 藤 修正版方針 5 + G1):
  *

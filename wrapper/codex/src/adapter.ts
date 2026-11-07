@@ -8,7 +8,6 @@ import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
 import type {
   AdapterEvent,
   LogEntry,
-  TasklistSourceItem,
 } from "@kaoiro/agent-common";
 import { redactCredentials } from "@kaoiro/agent-common";
 import { utf8HeadEnd } from "@kaoiro/wrapper-core";
@@ -68,30 +67,6 @@ export function threadEventToEvents(event: ThreadEvent): AdapterEvent[] {
     default:
       return [];
   }
-}
-
-/** Maps this CodexHost's parent-thread todo_list snapshot to ADR-0049's
- * common item shape. `Thread.runStreamed()` reads one bound SDK Thread's
- * `codex exec` stream; the installed ThreadEvent union has neither a child
- * thread event nor an origin field, so child-thread items have no route into
- * this stream. If that SDK contract gains one, add explicit provenance before
- * mapping it here. Codex has no in-progress state, so an incomplete item is
- * `pending`. Thread events carry the complete list, not an item-level delta. */
-export function threadEventToTasklist(
-  event: ThreadEvent,
-): TasklistSourceItem[] | null {
-  if (
-    event.type !== "item.started" &&
-    event.type !== "item.updated" &&
-    event.type !== "item.completed"
-  ) {
-    return null;
-  }
-  if (event.item.type !== "todo_list") return null;
-  return event.item.items.map((item) => ({
-    text: item.text,
-    status: item.completed ? "completed" : "pending",
-  }));
 }
 
 /** Human-readable tool name for the log stream (protocol.md log.kind).
@@ -222,29 +197,6 @@ export function threadEventToLogs(event: ThreadEvent): LogEntry[] {
     }
   }
   return [];
-}
-
-/** Final-reply text of a turn: the last completed agent_message. The host
- *  accumulates via this helper while streaming and emits type=result at
- *  turn.completed. */
-export function threadEventToFinalText(event: ThreadEvent): string | null {
-  if (event.type === "item.completed" && event.item.type === "agent_message") {
-    return event.item.text;
-  }
-  return null;
-}
-
-/** thread id from thread.started, or null. */
-export function threadEventToSessionId(event: ThreadEvent): string | null {
-  return event.type === "thread.started" ? event.thread_id : null;
-}
-
-/** Free-form failure detail from a turn.failed event (issue #127). Codex's
- *  ThreadError carries no structured reason like Claude's terminal_reason —
- *  just a message string; the shared inter-agent error classifier
- *  (@kaoiro/agent-common) keyword-sniffs it. */
-export function threadEventToErrorDetail(event: ThreadEvent): string | null {
-  return event.type === "turn.failed" ? event.error.message : null;
 }
 
 // --- Exec-failure stderr relay (issue #300) -------------------------------

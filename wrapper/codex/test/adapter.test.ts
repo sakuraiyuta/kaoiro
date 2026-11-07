@@ -11,12 +11,8 @@ import {
   MAX_ERROR_CODE_BYTES,
   MAX_RELAYED_STDERR_TAIL_BYTES,
   parseCodexExecErrorMessage,
-  threadEventToErrorDetail,
   threadEventToEvents,
-  threadEventToFinalText,
   threadEventToLogs,
-  threadEventToSessionId,
-  threadEventToTasklist,
 } from "../src/adapter.js";
 
 const THREAD_STARTED: ThreadEvent = {
@@ -129,32 +125,6 @@ describe("threadEventToEvents", () => {
   });
 });
 
-describe("threadEventToTasklist", () => {
-  it("todo_list の全項目を pending/completed に写す", () => {
-    expect(
-      threadEventToTasklist({
-        type: "item.updated",
-        item: {
-          id: "todos",
-          type: "todo_list",
-          items: [
-            { text: "調査", completed: false },
-            { text: "実装", completed: true },
-          ],
-        },
-      }),
-    ).toEqual([
-      { text: "調査", status: "pending" },
-      { text: "実装", status: "completed" },
-    ]);
-  });
-
-  it("todo_list 以外と item event 以外は対象にしない", () => {
-    expect(threadEventToTasklist(COMMAND_STARTED)).toBeNull();
-    expect(threadEventToTasklist({ type: "turn.started" })).toBeNull();
-  });
-});
-
 describe("threadEventToLogs", () => {
   it("command_execution は tool_use / tool_result のペアになる", () => {
     expect(threadEventToLogs(COMMAND_STARTED)).toEqual([
@@ -244,70 +214,8 @@ describe("threadEventToLogs", () => {
 });
 
 describe("helpers", () => {
-  it("threadEventToSessionId は thread.started の UUID を返す", () => {
-    expect(threadEventToSessionId(THREAD_STARTED)).toBe(
-      "019f4bdb-d821-7631-aee1-ec7982060311",
-    );
-    expect(threadEventToSessionId({ type: "turn.started" })).toBeNull();
-  });
-
-  it("threadEventToFinalText は最後の agent_message を返す", () => {
-    expect(threadEventToFinalText(agentMessage("m", "final"))).toBe("final");
-    expect(threadEventToFinalText(COMMAND_COMPLETED)).toBeNull();
-  });
-
-  it("threadEventToErrorDetail は turn.failed の error.message を返す (issue #131)", () => {
-    expect(
-      threadEventToErrorDetail({
-        type: "turn.failed",
-        error: { message: "rate limited" },
-      }),
-    ).toBe("rate limited");
-    expect(threadEventToErrorDetail(COMMAND_COMPLETED)).toBeNull();
-  });
-
-  // issue #300 (director-requested premise pin, turn 7): the assumption
-  // that a turn.failed event's error.message carries the CLI's own JSON
-  // error body VERBATIM, with no SDK-side reshaping, is what lets
-  // codexExecFailureRelay (called on this same value in host.ts) run its
-  // JSON extraction directly on it. Pinned against @openai/codex-sdk
-  // 0.153.4's actual source (fetched via `npm pack`), not assumed;
-  // reconfirmed unchanged at 0.156.1 (dist/index.js and index.d.ts SHA-256
-  // match 0.153.4's, re-fetched 2026-09-23 -- issue #399):
-  // - dist/index.d.ts: `type ThreadError = { message: string }` (no
-  //   code/type/structured fields at the SDK's own type level -- any
-  //   JSON structure must ride inside this one string), and
-  //   `TurnFailedEvent`/`ThreadErrorEvent` are documented as "Top-level
-  //   JSONL events emitted by codex exec" -- i.e. the raw CLI protocol,
-  //   not an SDK-synthesized shape.
-  // - dist/index.js's runStreamedInternal (~lines 78-90): every stdout
-  //   JSONL line is `JSON.parse`d and yielded as the ThreadEvent as-is;
-  //   the only special-casing is for `thread.started` (captures
-  //   thread_id) and `turn.completed` (defaults a usage field) --
-  //   `turn.failed` receives NONE, so `event.error.message` is exactly
-  //   what the CLI itself wrote, unmodified by the SDK.
-  // If a future SDK release starts reshaping this field (e.g. splitting
-  // it into structured code/type/message properties), this premise
-  // breaks silently for anyone reading only the wrapper's own tests --
-  // this test's own failure is the signal to re-derive the assumption,
-  // not just re-fix the fixture.
-  it("pins: turn.failed's event.error.message is the CLI's raw JSON body, unreshaped by the SDK (issue #300)", () => {
-    const cliJson =
-      '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"boom"}}';
-    const event: ThreadEvent = {
-      type: "turn.failed",
-      error: { message: cliJson },
-    };
-    expect(threadEventToErrorDetail(event)).toBe(cliJson);
-  });
-
-  // issue #300 review S2: the test above only pins the WRAPPER's own
-  // handling of a hand-built ThreadEvent, which stays green even if the
-  // installed SDK's actual source has moved -- it cannot detect the SDK
-  // silently reshaping event.error before this wrapper ever sees it. Read
-  // the installed @openai/codex-sdk source directly (not asserted from
-  // memory/comment) so a future SDK upgrade that changes either behavior
-  // fails HERE, not silently.
+  // Read the installed SDK source directly. A hand-built ThreadEvent cannot
+  // show whether the SDK reshapes turn.failed before this wrapper sees it.
   it("pins: the installed @openai/codex-sdk source has no turn.failed reshaping and the exec-exit message format is unchanged", () => {
     const distPath = fileURLToPath(
       new URL("../node_modules/@openai/codex-sdk/dist/index.js", import.meta.url),

@@ -34,12 +34,6 @@ export interface HookToolCall {
   args: Record<string, unknown>;
 }
 
-export interface HookRequest {
-  nonce: string;
-  stepIdx: number;
-  toolCall: HookToolCall;
-}
-
 const classes: Readonly<Record<AntigravityToolClass, readonly string[]>> = {
   read: [
     "view_file", "read_file", "list_dir", "grep_search", "find_by_name", "command_status",

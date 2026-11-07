@@ -253,8 +253,8 @@ function removeCorruptedRolloutLines(raw: Buffer): Buffer | null {
   return removed > 0 && validEntries > 0 ? Buffer.concat(kept) : null;
 }
 
-/** Finds one rollout by its validated opaque thread id. Shared by the tail
- * model resolver and full resume-history projection (#103). */
+/** Finds one rollout by its validated opaque thread id. Callers are the
+ * rate-limit reader, the sidecar path, and the permission-cursor helpers. */
 export function rolloutPathIn(root: string, sessionId: string): string | null {
   if (!SESSION_ID_PATTERN.test(sessionId)) return null;
   let names: string[];
@@ -496,23 +496,6 @@ function tailRollout(
   }
 }
 
-function codexModelFromPath(path: string): string | null {
-  let found: string | null = null;
-  tailRollout(path, (entry) => {
-    const payload = entry.payload as { model?: unknown } | undefined;
-    if (
-      entry.type === "turn_context" &&
-      typeof payload?.model === "string" &&
-      payload.model !== ""
-    ) {
-      found = payload.model;
-      return true;
-    }
-    return false;
-  });
-  return found;
-}
-
 /** Window keys aligned with Claude's SDKRateLimitInfo.rateLimitType, so
  *  downstream consumers can treat both engines uniformly. Codex only ever
  *  reports the two coarse windows; opus/sonnet/overage keys stay Claude-only. */
@@ -604,27 +587,15 @@ function codexRateLimitsFromPath(
   return out;
 }
 
-/** Reads only the end of a rollout and returns the latest resolved model. */
-export function codexModelFromRolloutIn(
-  root: string,
-  sessionId: string,
-): string | null {
-  const path = rolloutPathIn(root, sessionId);
-  return path === null ? null : codexModelFromPath(path);
-}
-
 /** Reads only the end of a rollout and returns the latest per-window
  *  rate-limit snapshots derived from `event_msg / token_count.rate_limits`.
  *  Returns an empty map when the rollout has no rate-limit data (unknown
  *  session id, no token_count yet, `rate_limits: null`).
  *
- *  Shares `rolloutPathCache` with `resolveCodexModel` so both accessors for
- *  the same session pay the recursive `readdirSync` scan of ~/.codex/sessions
- *  at most once, not once per turn. Without this cache, host.ts's
- *  #refreshRateLimits (fired unconditionally after every turn.completed /
- *  turn.failed) would re-scan the entire sessions tree — including all
- *  historical sessions — every turn, blocking the event loop and scaling
- *  poorly with session history. */
+ *  `rolloutPathCache` stores the resolved path so the per-turn rate-limit
+ *  read does not repeat the recursive sessions scan. Without this cache,
+ *  host.ts's #refreshRateLimits (fired unconditionally after every
+ *  turn.completed / turn.failed) would re-scan the sessions tree every turn. */
 export function codexRateLimitsFromRolloutIn(
   root: string,
   sessionId: string,
@@ -638,25 +609,4 @@ export function codexRateLimitsFromRolloutIn(
   return path === null
     ? new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>()
     : codexRateLimitsFromPath(path);
-}
-
-/** The SDK emits thread.started close to the rollout write, so tolerate that race. */
-export async function resolveCodexModel(
-  sessionId: string,
-  root = codexRolloutsRoot(),
-): Promise<string | null> {
-  const cacheKey = `${root}\0${sessionId}`;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const cachedPath = rolloutPathCache.get(cacheKey);
-    const path = cachedPath ?? rolloutPathIn(root, sessionId);
-    if (path !== null && cachedPath === undefined) {
-      rolloutPathCache.set(cacheKey, path);
-    }
-    const model = path === null ? null : codexModelFromPath(path);
-    if (model !== null) return model;
-    if (attempt < 4) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-  return null;
 }

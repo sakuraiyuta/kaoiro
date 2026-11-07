@@ -1,8 +1,7 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
-import { makeStateChange } from "@kaoiro/agent-common";
-import { CodexHost, initialStatusExt } from "../src/host.js";
+import { CodexHost } from "../src/host.js";
 
 const CONFIG: WrapperConfig = {
   codex_backend: "app-server",
@@ -14,52 +13,60 @@ const CONFIG: WrapperConfig = {
   codex_chatgpt_plan: "plus",
 };
 
-describe("initialStatusExt", () => {
+describe("CodexHost statusExtSnapshot", () => {
   it("initial idle に config-static capabilities を stamp する (#107)", () => {
     const config = { ...CONFIG, model: "gpt-5.6-sol" };
-    const initial = makeStateChange(
-      config,
-      "idle",
-      "T",
-      {},
-      initialStatusExt(config),
-    );
-    expect(initial.ext).toMatchObject({
-      engine: "codex",
-      session_capabilities: {
-        supports_attachments: true,
-        attachment_types: ["image"],
-        supports_user_input_dialog: true,
-        supports_model_switch: true,
-        supports_effort_switch: true,
-        supports_session_reset: true,
-        session_reset_modes: ["new", "clear"],
-        supports_context_usage: true,
-      },
+    const host = new CodexHost(config, {
+      onState: () => {},
+      appendSystemPrompt: "p",
     });
-    expect(
-      (initial.ext.models as { value: string }[]).map((m) => m.value),
-    ).toEqual([
-      "gpt-6.1-sol",
-      "gpt-6-astra",
-      "gpt-6.1-terra",
-      "gpt-6-sol",
-      "gpt-6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-    ]);
+    try {
+      const initial = host.statusExtSnapshot();
+      expect(initial).toMatchObject({
+        engine: "codex",
+        session_capabilities: {
+          supports_attachments: true,
+          attachment_types: ["image"],
+          supports_user_input_dialog: true,
+          supports_model_switch: true,
+          supports_effort_switch: true,
+          supports_session_reset: true,
+          session_reset_modes: ["new", "clear"],
+          supports_context_usage: true,
+        },
+      });
+      expect(
+        (initial.models as { value: string }[]).map((m) => m.value),
+      ).toEqual([
+        "gpt-6.1-sol",
+        "gpt-6-astra",
+        "gpt-6.1-terra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ]);
+    } finally {
+      host.close();
+    }
   });
 
   it("未申告 catalog は switch capability を fail-closed にする (#107)", () => {
-    expect(
-      initialStatusExt({ ...CONFIG, codex_auth_mode: "unknown" }),
-    ).toMatchObject({
-      session_capabilities: {
-        supports_model_switch: false,
-        supports_effort_switch: false,
-      },
-    });
+    const host = new CodexHost(
+      { ...CONFIG, codex_auth_mode: "unknown" },
+      { onState: () => {}, appendSystemPrompt: "p" },
+    );
+    try {
+      expect(host.statusExtSnapshot()).toMatchObject({
+        session_capabilities: {
+          supports_model_switch: false,
+          supports_effort_switch: false,
+        },
+      });
+    } finally {
+      host.close();
+    }
   });
 
   // issue #292: codex_extra_models (relayed from runner.config.json's
@@ -77,20 +84,28 @@ describe("initialStatusExt", () => {
         },
       ],
     };
-    const initial = initialStatusExt(config);
-    expect(
-      (initial.models as { value: string }[]).map((m) => m.value),
-    ).toEqual([
-      "gpt-6.1-sol",
-      "gpt-6-astra",
-      "gpt-6.1-terra",
-      "gpt-6-sol",
-      "gpt-6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-9-nova",
-    ]);
+    const host = new CodexHost(config, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+    });
+    try {
+      const initial = host.statusExtSnapshot();
+      expect(
+        (initial.models as { value: string }[]).map((m) => m.value),
+      ).toEqual([
+        "gpt-6.1-sol",
+        "gpt-6-astra",
+        "gpt-6.1-terra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-9-nova",
+      ]);
+    } finally {
+      host.close();
+    }
   });
 
   it("codex_extra_models overrides an existing value (issue #292)", () => {
@@ -100,27 +115,47 @@ describe("initialStatusExt", () => {
         { value: "gpt-5.6-luna", display_name: "overridden" },
       ],
     };
-    const initial = initialStatusExt(config);
-    const luna = (
-      initial.models as { value: string; display_name: string }[]
-    ).find((m) => m.value === "gpt-5.6-luna");
-    expect(luna?.display_name).toBe("overridden");
+    const host = new CodexHost(config, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+    });
+    try {
+      const initial = host.statusExtSnapshot();
+      const luna = (
+        initial.models as { value: string; display_name: string }[]
+      ).find((m) => m.value === "gpt-5.6-luna");
+      expect(luna?.display_name).toBe("overridden");
+    } finally {
+      host.close();
+    }
   });
 
   it("does not stamp an extra model above the bundled Codex version", () => {
-    const initial = initialStatusExt({
-      ...CONFIG,
-      codex_extra_models: [
-        {
-          value: "requires-newer-codex",
-          display_name: "Requires newer Codex",
-          minimal_client_version: "999.0.0",
-        },
-      ],
-    });
-    expect((initial.models as { value: string }[]).map((model) => model.value)).not.toContain(
-      "requires-newer-codex",
+    const host = new CodexHost(
+      {
+        ...CONFIG,
+        codex_extra_models: [
+          {
+            value: "requires-newer-codex",
+            display_name: "Requires newer Codex",
+            minimal_client_version: "999.0.0",
+          },
+        ],
+      },
+      {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexClientVersion: "0.144.1",
+      },
     );
+    try {
+      const initial = host.statusExtSnapshot();
+      expect(
+        (initial.models as { value: string }[]).map((model) => model.value),
+      ).not.toContain("requires-newer-codex");
+    } finally {
+      host.close();
+    }
   });
 });
 

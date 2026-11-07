@@ -3,12 +3,9 @@
 
 export {
   threadEventToEvents,
-  threadEventToFinalText,
   threadEventToLogs,
-  threadEventToSessionId,
-  threadEventToTasklist,
 } from "./adapter.js";
-export { CODEX_ENGINE, resolveCodexCatalog } from "./catalog.js";
+export { resolveCodexCatalog } from "./catalog.js";
 export { codexHome, codexHomeProblem } from "./codex_home.js";
 export type { ChatGptPlan, CodexAuthMode } from "./catalog.js";
 export { CodexHost } from "./host.js";

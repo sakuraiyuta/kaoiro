@@ -15,9 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   captureCodexPermissionRolloutCursor,
   codexPermissionContextAfter,
-  codexModelFromRolloutIn,
   codexRateLimitsFromRolloutIn,
-  resolveCodexModel,
   codexSidecarPath,
   isRolloutCorruptionDetail,
   repairRolloutCorruption,
@@ -117,57 +115,6 @@ describe("Codex permission rollout cursor", () => {
       chmodSync(path, 0o600);
       rmSync(root, { recursive: true, force: true });
     }
-  });
-});
-
-describe("codexModelFromRolloutIn", () => {
-  it("turn_context の最新 model を返す", () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-rollout-"));
-    const day = join(root, "2026", "07", "12");
-    mkdirSync(day, { recursive: true });
-    const id = "019f55d8-88c5-7823-8d3a-4d0b0c8d74dc";
-    writeFileSync(
-      join(day, `rollout-2026-07-12T00-00-00-${id}.jsonl`),
-      [
-        JSON.stringify({ type: "session_meta", payload: { cwd: "/repo" } }),
-        JSON.stringify({ type: "turn_context", payload: { model: "gpt-old" } }),
-        JSON.stringify({ type: "response_item", payload: {} }),
-        JSON.stringify({ type: "turn_context", payload: { model: "gpt-current" } }),
-        "",
-      ].join("\n"),
-    );
-
-    expect(codexModelFromRolloutIn(root, id)).toBe("gpt-current");
-  });
-
-  it("書きかけの最終行を無視して直前の model を返す", () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-rollout-"));
-    const id = "uuid-partial";
-    writeFileSync(
-      join(root, `rollout-${id}.jsonl`),
-      `${JSON.stringify({ type: "turn_context", payload: { model: "gpt-ok" } })}\n{"type":"turn_context"`,
-    );
-
-    expect(codexModelFromRolloutIn(root, id)).toBe("gpt-ok");
-  });
-
-  it("不正 session id・未作成 rollout は null", () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-rollout-"));
-    expect(codexModelFromRolloutIn(root, "../escape")).toBeNull();
-    expect(codexModelFromRolloutIn(root, "missing-id")).toBeNull();
-  });
-
-  it("rollout の作成 race を再試行して解決する", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-rollout-"));
-    const id = "uuid-race";
-    setTimeout(() => {
-      writeFileSync(
-        join(root, `rollout-${id}.jsonl`),
-        `${JSON.stringify({ type: "turn_context", payload: { model: "gpt-race" } })}\n`,
-      );
-    }, 30);
-
-    await expect(resolveCodexModel(id, root)).resolves.toBe("gpt-race");
   });
 });
 
@@ -395,8 +342,18 @@ describe("issue #263: rollout 破損パターンの実データ再現", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-corrupt-utf8-"));
     const id = "uuid-corrupt-utf8";
     const validLine = JSON.stringify({
-      type: "turn_context",
-      payload: { model: "gpt-before-corruption" },
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          primary: {
+            used_percent: 12.5,
+            window_minutes: 300,
+            resets_at: 1700000000,
+          },
+          secondary: null,
+        },
+      },
     });
     // "あ" (U+3042、UTF-8 で E3 81 82 の3バイト) の最後の1バイトを欠いた
     // まま行が終わる — ENOSPC がマルチバイト文字の書き込み途中で
@@ -413,7 +370,10 @@ describe("issue #263: rollout 破損パターンの実データ再現", () => {
       Buffer.concat([Buffer.from(`${validLine}\n`, "utf8"), corruptLine]),
     );
 
-    expect(codexModelFromRolloutIn(root, id)).toBe("gpt-before-corruption");
+    expect(codexRateLimitsFromRolloutIn(root, id).get("five_hour")).toEqual({
+      utilization: 0.125,
+      resets_at: 1700000000,
+    });
 
     // fixture 自体が本当に不正な UTF-8 であることの検証。
     const raw = readFileSync(join(root, `rollout-${id}.jsonl`));
@@ -428,8 +388,18 @@ describe("issue #263: rollout 破損パターンの実データ再現", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-corrupt-json-"));
     const id = "uuid-corrupt-json";
     const validLine = JSON.stringify({
-      type: "turn_context",
-      payload: { model: "gpt-before-corruption" },
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          primary: {
+            used_percent: 12.5,
+            window_minutes: 300,
+            resets_at: 1700000000,
+          },
+          secondary: null,
+        },
+      },
     });
     // rate_limits オブジェクトの数値を書いている途中でディスクが尽きた形。
     const corruptLine =
@@ -440,7 +410,10 @@ describe("issue #263: rollout 破損パターンの実データ再現", () => {
       `${validLine}\n${corruptLine}`,
     );
 
-    expect(codexModelFromRolloutIn(root, id)).toBe("gpt-before-corruption");
+    expect(codexRateLimitsFromRolloutIn(root, id).get("five_hour")).toEqual({
+      utilization: 0.125,
+      resets_at: 1700000000,
+    });
 
     const raw = readFileSync(join(root, `rollout-${id}.jsonl`), "utf8");
     const lastLine = raw.split("\n").at(-1)!;

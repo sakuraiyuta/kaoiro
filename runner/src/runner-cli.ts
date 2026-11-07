@@ -17,7 +17,7 @@ import { createDeliverySnapshot, deliveryBehaviourRelay } from "./delivery-setti
 //   server-minted signed-token path (issue #133).
 
 import { codexHome, codexHomeProblem } from "@kaoiro/codex";
-import type { EngineCatalogResult, EngineModelInfo } from "@kaoiro/protocol";
+import type { EngineModelInfo } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
 import {
   formatBuildIdentity,

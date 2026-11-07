@@ -173,22 +173,6 @@ function initialStatusExtFromCatalog(
   };
 }
 
-/** Config-static status fields available before the Codex SDK starts.
- *  Catalog resolution is synchronous and matches the host projection. */
-export function initialStatusExt(
-  config: WrapperConfig,
-): Record<string, unknown> {
-  // issue #292: operator-declared codex.extra_models, relayed by the
-  // runner as codex_extra_models, layer on top of the resolved catalog —
-  // same merge the runner already applied to the register's launch list.
-  const catalog = resolveCodexCatalog(
-    config.codex_auth_mode ?? "unknown",
-    config.codex_chatgpt_plan,
-    config.codex_extra_models,
-  );
-  return initialStatusExtFromCatalog(catalog, config.model ?? null, false, false);
-}
-
 /** Who produced a `send()`; only operator input may be steered. */
 export type CodexSendSource = "operator" | "synthetic" | "reset_notice";
 export interface CodexSendOptions {
@@ -596,7 +580,7 @@ export class CodexHost implements EngineAdapter {
       0,
       options.permissionSyncWarningMs ?? DEFAULT_PERMISSION_SYNC_WARNING_MS,
     );
-    // issue #292: same merge as initialStatusExt above, applied to the
+    // issue #292: operator-declared codex_extra_models layer onto the
     // constructor's own catalog (ext.models / effort-switch / setModel).
     this.#catalog = resolveCodexCatalog(
       config.codex_auth_mode ?? "unknown",
