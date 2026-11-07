@@ -38,6 +38,7 @@ describe("launch recovery checkpoint", () => {
     expect(read()).toEqual({ ok: true, record: { version: 1, state: "unbound" } });
     expect(failures).toEqual([1]);
     expect(reporter.observe("late")).toBe(false);
+    reporter.stop("session_binding"); expect(failures).toEqual([1]);
   });
   it.each([undefined, "candidate"] as const)("handles mismatching attach for kind %s", kind => {
     const { reporter, read, failures } = fixture(kind);
