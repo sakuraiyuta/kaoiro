@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kaoiro: 複数の CLI AI エージェントを動かし、見守り、連携させる</title>
+  <meta name="description" content="kaoiro は複数の CLI AI エージェントを同時に動かし、見守り、連携させるシステムです。研究用のプロトタイプです。">
+  <link rel="alternate" hreflang="en" href="../">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <nav class="topbar" aria-label="言語">
+    <a href="../" hreflang="en" lang="en">English</a>
+  </nav>
+  <main>
+    <header>
+      <h1>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="../assets/kaoiro-logo-on-dark.png">
+          <img src="../assets/kaoiro-logo-on-light.png" alt="kaoiro" width="1553" height="466">
+        </picture>
+      </h1>
+      <p class="lead">複数の CLI AI エージェントを同時に動かし、見守り、連携させます。</p>
+      <div class="notices">
+        <p class="notice"><strong>研究用のプロトタイプです。</strong> 主に作者と研究室のメンバーが日常的に使うために開発しています。保守や issue への対応は保証しません。</p>
+        <p class="notice warn"><strong>セキュリティ。</strong> operator の認証情報を持つ人は、エージェントが動く全てのマシンでコマンドを実行できます。それらのホストへの SSH 鍵と同じように扱い、導入の前に <a href="https://github.com/sakuraiyuta/kaoiro/blob/main/SECURITY.md">SECURITY.md</a> を読んでください。</p>
+      </div>
+      <ul class="actions">
+        <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start (英語)</a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/main/docs/README.md">ドキュメント (英語)</a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a></li>
+      </ul>
+    </header>
+
+    <section aria-labelledby="about">
+      <h2 id="about">kaoiro とは</h2>
+      <p>kaoiro (顔色) は、Claude Code、Codex、Antigravity、Grok Build などのエージェントを、管理下のホストで起動します。各エージェントの状態をエンジンのイベントから導き、表情が変わるキャラクターとして描きます。権限の確認や質問をブラウザへ届け、エージェントどうしのメッセージも運びます。</p>
+      <figure>
+        <img src="../assets/agent-grid.png" width="1036" height="619" alt="kaoiro のダッシュボード: 4 体のエージェントのキャラクターカードと会話タイムライン。1 枚のカードに権限の確認待ちの印が付いている">
+        <figcaption>画面の例です。公開デモではありません。kaoiro は自分のマシンで動かします。</figcaption>
+      </figure>
+    </section>
+
+    <section aria-labelledby="features">
+      <h2 id="features">主な機能</h2>
+      <ul class="features">
+        <li>
+          <h3>状態を表情で見せる</h3>
+          <p>状態はエージェントが書いた文章から推測せず、エンジンのイベントから導いて表情に描きます。</p>
+        </li>
+        <li>
+          <h3>ブラウザから操作する</h3>
+          <p>起動、停止、再開も、権限の確認や質問への回答も、ターミナルに触らずに行えます。</p>
+        </li>
+        <li>
+          <h3>エージェントどうしで連絡する</h3>
+          <p>依頼、レビュー、承認をメッセージとして扱い、1 本のタイムラインにまとめて表示します。</p>
+        </li>
+        <li>
+          <h3>複数ホスト、4 つのエンジン</h3>
+          <p>マシンごとの runner がエージェントを監視します。Claude Code、Codex、Antigravity、Grok Build は同じプロトコルで動きます。</p>
+        </li>
+      </ul>
+    </section>
+  </main>
+  <footer>
+    <p><a href="https://github.com/sakuraiyuta/kaoiro/blob/main/SECURITY.md">セキュリティ方針</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/main/LICENSE">MIT License</a></p>
+  </footer>
+</body>
+</html>

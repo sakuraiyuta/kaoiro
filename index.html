@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kaoiro: run, watch and orchestrate CLI AI agents</title>
+  <meta name="description" content="kaoiro runs, watches and orchestrates several CLI AI agents at once. Research prototype.">
+  <link rel="alternate" hreflang="ja" href="ja/">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="topbar" aria-label="Language">
+    <a href="ja/" hreflang="ja" lang="ja">日本語</a>
+  </nav>
+  <main>
+    <header>
+      <h1>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="assets/kaoiro-logo-on-dark.png">
+          <img src="assets/kaoiro-logo-on-light.png" alt="kaoiro" width="1553" height="466">
+        </picture>
+      </h1>
+      <p class="lead">Run, watch and orchestrate several CLI AI agents at once.</p>
+      <div class="notices">
+        <p class="notice"><strong>Research prototype.</strong> Developed mainly for daily use by the author and members of their laboratory, with no guarantees about maintenance or responses to issues.</p>
+        <p class="notice warn"><strong>Security.</strong> An operator credential lets its holder run commands on every machine where agents run. Treat it like an SSH key to those hosts, and read <a href="https://github.com/sakuraiyuta/kaoiro/blob/main/SECURITY.md">SECURITY.md</a> before deploying.</p>
+      </div>
+      <ul class="actions">
+        <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/main/docs/README.md">Documentation</a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a></li>
+      </ul>
+    </header>
+
+    <section aria-labelledby="about">
+      <h2 id="about">What it is</h2>
+      <p>kaoiro (kao-iro, “complexion” or “how someone looks”) launches agents such as Claude Code, Codex, Antigravity and Grok Build on hosts it supervises. It derives each agent's state from engine events and draws it as a character with changing expressions, routes permission requests and questions to the browser, and carries the messages agents send each other.</p>
+      <figure>
+        <img src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission">
+        <figcaption>An example screen, not a public demo. kaoiro runs on your own machines, and the dashboard interface is currently Japanese-only.</figcaption>
+      </figure>
+    </section>
+
+    <section aria-labelledby="features">
+      <h2 id="features">Features</h2>
+      <ul class="features">
+        <li>
+          <h3>State as a face</h3>
+          <p>Each agent's state is derived from engine events and drawn as a character expression, not inferred from the text it writes.</p>
+        </li>
+        <li>
+          <h3>Control from the browser</h3>
+          <p>Launch, stop and resume agents, and answer permission requests and questions, without touching a terminal.</p>
+        </li>
+        <li>
+          <h3>Agents message each other</h3>
+          <p>Delegations, review requests and approvals between agents are first-class messages, shown in one merged timeline.</p>
+        </li>
+        <li>
+          <h3>Multi-host, four engines</h3>
+          <p>One runner per machine supervises its agents, and Claude Code, Codex, Antigravity and Grok Build share one protocol.</p>
+        </li>
+      </ul>
+    </section>
+  </main>
+  <footer>
+    <p><a href="https://github.com/sakuraiyuta/kaoiro/blob/main/SECURITY.md">Security policy</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/main/LICENSE">MIT License</a></p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,175 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f5f8;
+  --surface: #ffffff;
+  --text: #20202c;
+  --muted: #55556a;
+  --border: #d6d6e0;
+  --accent: #6b3fb5;
+  --notice-bg: #f1ecfa;
+  --warn-bg: #fff3e6;
+  --warn-border: #b35c00;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans",
+    "Noto Sans CJK JP", "Yu Gothic", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14141d;
+    --surface: #1e1e2a;
+    --text: #e8e8f0;
+    --muted: #b0b0c2;
+    --border: #3a3a4c;
+    --accent: #c4a6ff;
+    --notice-bg: #262038;
+    --warn-bg: #33261a;
+    --warn-border: #ffb266;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.6;
+}
+
+main,
+.topbar,
+footer {
+  width: min(100%, 60rem);
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+a {
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+a:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.topbar {
+  padding-top: 0.5rem;
+  text-align: right;
+  font-size: 0.9rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+h1 img {
+  width: min(100%, 26rem);
+}
+
+.lead {
+  margin: 0.5rem 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.notices {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.notice {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid var(--accent);
+  background: var(--notice-bg);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.notice.warn {
+  border-left-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+  font-weight: 600;
+}
+
+h2 {
+  margin: 2rem 0 0.5rem;
+  font-size: 1.3rem;
+}
+
+figure {
+  margin: 0;
+}
+
+figure img {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+figcaption {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.features {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.features li {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.features h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
+
+.features p {
+  margin: 0;
+}
+
+footer {
+  margin-top: 2rem;
+  padding-bottom: 2rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (min-width: 48rem) {
+  .notices,
+  .features {
+    grid-template-columns: 1fr 1fr;
+  }
+}
