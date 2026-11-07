@@ -181,7 +181,7 @@
         <li class="reveal"><h3>Client</h3><p>各エージェントをキャラクターとして見せます。同梱の Web ダッシュボードは client の 1 つです。</p></li>
       </ul>
       <figure class="diagram">
-        <svg class="wide" viewBox="0 0 960 486" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner は host の登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
+        <svg class="wide" viewBox="0 0 960 462" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner は host の登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
           <rect class="d-box" x="300" y="6" width="360" height="58" rx="8"/>
           <text class="d-t d-b" x="480" y="30" text-anchor="middle" font-size="17">Client</text>
           <text class="d-m" x="480" y="52" text-anchor="middle" font-size="15">Web ダッシュボードや自作の client</text>
@@ -191,7 +191,7 @@
           <rect class="d-box" x="270" y="124" width="420" height="58" rx="8"/>
           <text class="d-t d-b" x="480" y="148" text-anchor="middle" font-size="17">Server</text>
           <text class="d-m" x="480" y="170" text-anchor="middle" font-size="15">状態を持ち、指示とメッセージを運ぶ</text>
-          <rect class="d-host" x="20" y="270" width="280" height="170" rx="8"/>
+          <rect class="d-host" x="20" y="270" width="280" height="152" rx="8"/>
           <text class="d-t d-b" x="34" y="296" text-anchor="start" font-size="16">ノート PC</text>
           <rect class="d-chip-d" x="32" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="74" y="357" text-anchor="middle" font-size="14">runner</text>
@@ -204,8 +204,9 @@
           <path class="d-line" d="M292 258L330 182"/>
           <path class="d-head" d="M330 184l-5 9h10z"/>
           <path class="d-dash" d="M74 330L74 246"/>
-          <path class="d-dash" d="M74 246L300 182"/>
-          <rect class="d-host" x="340" y="270" width="280" height="170" rx="8"/>
+          <path class="d-dash" d="M74 246L300 184"/>
+          <path class="d-head" d="M300 184l-5 9h10z"/>
+          <rect class="d-host" x="340" y="270" width="280" height="152" rx="8"/>
           <text class="d-t d-b" x="354" y="296" text-anchor="start" font-size="16">ワークステーション</text>
           <rect class="d-chip-d" x="352" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="394" y="357" text-anchor="middle" font-size="14">runner</text>
@@ -223,8 +224,9 @@
           <path class="d-line" d="M612 258L480 182"/>
           <path class="d-head" d="M480 184l-5 9h10z"/>
           <path class="d-dash" d="M394 330L394 246"/>
-          <path class="d-dash" d="M394 246L450 182"/>
-          <rect class="d-host" x="660" y="270" width="280" height="170" rx="8"/>
+          <path class="d-dash" d="M394 246L450 184"/>
+          <path class="d-head" d="M450 184l-5 9h10z"/>
+          <rect class="d-host" x="660" y="270" width="280" height="152" rx="8"/>
           <text class="d-t d-b" x="674" y="296" text-anchor="start" font-size="16">クラウド VM</text>
           <rect class="d-chip-d" x="672" y="330" width="84" height="44" rx="8"/>
           <text class="d-t" x="714" y="357" text-anchor="middle" font-size="14">runner</text>
@@ -237,11 +239,12 @@
           <path class="d-line" d="M932 258L630 182"/>
           <path class="d-head" d="M630 184l-5 9h10z"/>
           <path class="d-dash" d="M714 330L714 246"/>
-          <path class="d-dash" d="M714 246L600 182"/>
-          <path class="d-line" d="M150 470L190 470"/>
-          <text class="d-m" x="198" y="475" text-anchor="start" font-size="15">データ: 状態、メッセージ、指示</text>
-          <path class="d-dash" d="M520 470L560 470"/>
-          <text class="d-m" x="568" y="475" text-anchor="start" font-size="15">制御: ホストの登録、起動</text>
+          <path class="d-dash" d="M714 246L600 184"/>
+          <path class="d-head" d="M600 184l-5 9h10z"/>
+          <path class="d-line" d="M150 448L190 448"/>
+          <text class="d-m" x="198" y="453" text-anchor="start" font-size="15">データ: 状態、メッセージ、指示</text>
+          <path class="d-dash" d="M520 448L560 448"/>
+          <text class="d-m" x="568" y="453" text-anchor="start" font-size="15">制御: ホストの登録、起動</text>
         </svg>
         <svg class="narrow" viewBox="0 0 328 574" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner は host の登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
           <rect class="d-box" x="0" y="2" width="328" height="52" rx="8"/>
@@ -290,13 +293,14 @@
           <path class="d-dash" d="M96 481L120 480"/>
           <path class="d-line" d="M322 480L322 152"/>
           <path class="d-head" d="M322 154l-5 9h10z"/>
-          <path class="d-dash" d="M6 481L6 152"/>
+          <path class="d-dash" d="M6 481L6 154"/>
+          <path class="d-head" d="M6 154l-5 9h10z"/>
           <path class="d-line" d="M4 540L34 540"/>
           <text class="d-m" x="42" y="544" text-anchor="start" font-size="12">データ: 状態、メッセージ</text>
           <path class="d-dash" d="M4 562L34 562"/>
           <text class="d-m" x="42" y="566" text-anchor="start" font-size="12">制御: 登録、起動</text>
         </svg>
-        <figcaption>架空のホストによる構成の例です。実線はデータ、破線は runner の制御の経路で、データの経路とは別です。</figcaption>
+        <figcaption>架空のホストによる構成の例です。実線はデータ、破線は runner の制御の経路で、データの経路とは別です。矢印は接続を開く向きで、データは双方向に流れます。</figcaption>
       </figure>
     </section>
     <section class="wrap block" aria-labelledby="extend">
