@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-11-06
+last_updated: 2026-11-07
 ---
 
 # Release notes
@@ -66,6 +66,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.07.1](v2026.11.07.1.md) | 2026-11-07 | v2026.11.06.2 | The Codex exec backend is retired, wrappers recover through launch-owned checkpoints, retired delivery inputs are removed, and dashboard notifications reach Android. |
 | [v2026.11.06.2](v2026.11.06.2.md) | 2026-11-06 | v2026.11.06.1 | An Antigravity input written after agy exits on its own is delivered on one new epoch, and an unconfirmed write is reported as `receipt_unknown`. |
 | [v2026.11.06.1](v2026.11.06.1.md) | 2026-11-06 | v2026.11.05.1 | Codex launches default to app-server, the Claude delivery opt-in is retired, compaction no longer fail-stops a busy Claude peer, a deadline on the permission-sync wait |
 | [v2026.11.05.1](v2026.11.05.1.md) | 2026-11-05 | v2026.11.04.1 | Work items reduced to five operations, release canary and Codex recovery table retired |
