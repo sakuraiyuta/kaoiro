@@ -1,7 +1,7 @@
 ---
 title: Claude Agent SDK 0.3.306 compatibility and catalog measurement
 status: measured
-last_updated: 2026-10-22
+last_updated: 2026-11-07
 ---
 
 # Claude Agent SDK 0.3.306 compatibility and catalog measurement
@@ -77,6 +77,36 @@ old fixture is unchanged. No synthetic menu row or bootstrap model was added.
 | `claude-opus-4-7` | `claude-opus-4-7` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `claude-opus-4-6` | `claude-opus-4-6` | `low`, `medium`, `high`, `max` |
 | `claude-sonnet-4-6` | `claude-sonnet-4-6` | `low`, `medium`, `high`, `max` |
+
+## Bundled CLI changelog entries (2.1.294 to 2.1.306)
+
+The bundled CLI changelog is the public
+[`CHANGELOG.md`](https://github.com/anthropics/claude-code/blob/0ed94698aa0aeee471465fc9c867c2e8434c4d68/CHANGELOG.md)
+at commit `0ed94698aa0aeee471465fc9c867c2e8434c4d68`. The range has headings
+for 2.1.294 to 2.1.306 except 2.1.297 and 2.1.298, which the changelog does
+not list. The bullets were first filtered by keyword (folding and queued
+input, interrupts, permissions, hooks, model switching). The nine entries
+below were selected from that filtered list as relevant to kaoiro. The
+selection is a judgment, not a line-by-line check of every bullet.
+
+| CLI | Area | Entry (verbatim) |
+|---|---|---|
+| 2.1.299 | Folding and queued input | "Fixed queued prompts sent as content blocks over `--input-format stream-json` running together without a line break when merged into one turn" |
+| 2.1.304 | Model switching and interrupts | "Fixed model switches, messages and interrupts waiting behind a context usage check in SDK and desktop sessions" |
+| 2.1.302 | Permissions | "Changed `claude -p` and Agent SDK sessions with no permission mode to start in `default` mode on third-party providers, with telemetry off or on a fresh install; `--permission-mode auto` keeps auto" |
+| 2.1.299 | Permissions | "Fixed a cloud session sometimes ignoring the answer to a permission prompt or a question when the answer was given while the session's worker was being replaced" |
+| 2.1.295 | Hooks | "Added `onFailure: "block"` for command and HTTP hooks: a hook that can't start, times out, or exits with an unexpected code blocks the action instead of letting it through" |
+| 2.1.300 | Hooks | "Changed hooks: `updatedInput` from PreToolUse and PermissionRequest hooks is now validated like Claude's own input: unknown keys are dropped, and input the tool rejects denies the call" |
+| 2.1.304 | Hooks | "Fixed a PreToolUse hook's deny reason being replaced by a timeout error when an Agent SDK callback hook on the same tool call timed out" |
+| 2.1.299 | Hooks | "Changed `UserPromptSubmit` hooks to run before a skill or custom slash command expands, so a hook that blocks the prompt now also stops its embedded shell commands" |
+| 2.1.305 | Model switching | "Fixed `/effort` and `/autocompact` settings not applying when the model name differed from a `modelOverrides` value by letter case or a `[1m]` tag" |
+
+The two 2.1.294 entries concern `prompt` and `agent` hooks, which the table
+above does not list as touched by kaoiro. They are not selected.
+
+The fold re-measurement (E1 to E4) for SDK 0.3.306 is not recorded in this
+repository: no evidence file exists and no issue comment records it, so this
+section does not restate it.
 
 ## Artifact identity and limits
 

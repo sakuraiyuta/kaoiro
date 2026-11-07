@@ -9,7 +9,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [specs/](specs/) | Pre-taxonomy feature specifications — dissolved into `architecture/`, `reference/`, `operations/`, `evidence/` and `contributing/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368), completed via [plans/phase-35](plans/phase-35-docs-migration.md)); moved pages leave a stub |
 | [evidence/](evidence/) | Dated measurements and their limits — [index](evidence/README.md) |
 | [operations/](operations/) | Operator runbooks |
-| [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md) and the [pre-gate](contributing/pre-gate.md) that runs before a full suite |
+| [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md), the [pre-gate](contributing/pre-gate.md) that runs before a full suite, and the [Agent SDK bump checklist](contributing/agent-sdk-bump.md) |
 | [plans/](plans/) | Phase-based implementation plans and status |
 | [open-questions/](open-questions/) | Unresolved issues |
 | [adr/](adr/) | Architecture decision records |
