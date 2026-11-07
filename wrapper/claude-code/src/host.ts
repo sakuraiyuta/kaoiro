@@ -1,3 +1,4 @@
+import type { RecoveryReporter } from "@kaoiro/wrapper-core";
 import type { ReplyBasis, DetachedReplyBasis, ReplyOrigin } from "@kaoiro/agent-common";
 import { NativeTranscriptReader, type NativeAnchor } from "./native_transcript.js";
 import { ContinuationRegistry } from "./continuation_registry.js";
@@ -418,6 +419,7 @@ export function nativeUnavailableMessage(reason: NativeUnavailableReason): strin
 }
 
 export interface AgentHostOptions {
+  recovery?: RecoveryReporter;
   nativeContinuations?: boolean;
   nativeReplyBasis?: ReplyBasis;
   /** Called once when native continuations close for the rest of this
@@ -2810,7 +2812,10 @@ export class AgentHost implements EngineAdapter {
    *  depends on this evidence, so the host stops; otherwise only native
    *  continuations close and ordinary input continues (issue #426). */
   #nativeEvidenceFailed(reason: NativeUnavailableReason, detail: string): void {
-    if (this.#nativeLeaseHeld()) { this.#failStopLive(detail); return; }
+    if (this.#nativeLeaseHeld()) {
+      if (["terminal_origin_conflict", "tool_session_mismatch", "session_or_path_changed"].includes(reason)) this.#options.recovery?.block("session_binding");
+      this.#failStopLive(detail); return;
+    }
     this.#degradeNative(reason);
   }
 
@@ -3177,7 +3182,19 @@ export class AgentHost implements EngineAdapter {
       // The SDK stamps a session_id on every message; report it before deriving
       // state so the envelopes this message produces already carry it. Forward
       // only on change — the id is stable within a conversation (ADR-0014).
+      let sawSystemInit = false;
+      let requestedAttach = this.#options.queryOptions?.resume;
       for await (const message of this.#fenceTerminals(session)) {
+        if (!sawSystemInit && requestedAttach !== undefined && message.type === "result" &&
+            message.is_error === true && message.subtype === "error_during_execution") {
+          this.#options.recovery?.refuseLaunch();
+          if (this.#options.recovery?.failure) break;
+        }
+        if (message.type === "system" && message.subtype === "init") {
+          if (this.#options.recovery?.accept(message.session_id, requestedAttach) === false) break;
+          sawSystemInit = true;
+          requestedAttach = undefined;
+        }
         if (message.type === "assistant") {
           for (const block of message.message.content) if (block.type === "tool_use" && block.name !== INTER_AGENT_TOOL_FQN) this.toolOrigins.observe(block.id);
         }
@@ -3201,14 +3218,17 @@ export class AgentHost implements EngineAdapter {
         // frame or known session at all (a startup error) supplies the
         // binding itself.
         if (this.#foreignOccupancy !== null && id !== null && this.#intervalSession !== null && id !== this.#intervalSession) {
+          this.#options.recovery?.block("session_binding");
           this.#failStopLive("session changed under a foreign root interval; host admission stopped until this wrapper is relaunched");
         } else if (message.type === "result" && (this.#foreignOccupancy !== null || this.#activeTurn !== null)) {
           if (id === null) {
+            this.#options.recovery?.block("session_binding");
             this.#failStopLive("terminal under a live interval lacks its session; host admission stopped until this wrapper is relaunched");
           }
         }
         this.#noteIntervalSession(id);
         if (id !== null && id !== this.#sessionId) {
+          if (this.#options.recovery?.observe(id) === false) break;
           const hadPriorSession = this.#sessionId !== null;
           if (this.#nativeRegistry && this.#nativeRegistry.sessionId !== id) this.#invalidateNative();
           if (hadPriorSession) {
@@ -3472,6 +3492,7 @@ export class AgentHost implements EngineAdapter {
               true,
             );
           } else {
+            if (this.#sessionId !== null && this.#options.recovery?.confirm(this.#sessionId) === false) break;
             this.#emitResult(result, sdkMessageToCost(message));
             this.#completeActiveTurn(undefined, true);
           }

@@ -2,7 +2,10 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import type {
   EffortLevel,
   ModelInfo,
@@ -10946,4 +10949,42 @@ describe("reserved resume receipt", () => {
     expect(r.starts).toHaveLength(3);
   });
 
+});
+
+describe("native recovery observation", () => {
+  it.each([false, true])("classifies raw pre-init launch failure (candidate=%s)", async candidate => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-recovery-")); const path = join(root, "checkpoint");
+    try {
+      const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path,
+        ...(candidate ? { recovery_resume_kind: "candidate" as const } : {}) }, "requested", () => {});
+      const host = new AgentHost(config, { onState: () => {}, recovery, queryOptions: { resume: "requested" },
+        queryFn: scriptedQuery([result("error_during_execution", { is_error: true, session_id: "requested" })]) });
+      await host.run();
+      expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: candidate ? "unbound" : "blocked" } });
+      expect(recovery.failure?.exitCode).toBe(1);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it.each([false, true])("does not fresh-fallback on init-seen or raw success error (init=%s)", async init => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-recovery-")); const path = join(root, "checkpoint");
+    try {
+      const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path, recovery_resume_kind: "candidate" }, "requested", () => {});
+      const host = new AgentHost(config, { onState: () => {}, recovery, queryOptions: { resume: "requested" },
+        queryFn: scriptedQuery([...(init ? [msg({ type: "system", subtype: "init", session_id: "requested" })] : []),
+          result(init ? "error_during_execution" : "success", { is_error: true, session_id: "requested" })]) });
+      await host.run(); expect(recovery.failure).toBeUndefined();
+      expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: init ? "live" : "unbound" } });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it("records fresh init before first turn and accepted rebind as a new candidate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-recovery-")); const path = join(root, "checkpoint");
+    try {
+      const recovery = new RecoveryReporter({ ...config, recovery_checkpoint_path: path }, undefined, () => {});
+      const host = new AgentHost(config, { onState: () => {}, recovery,
+        queryFn: scriptedQuery([msg({ type: "system", subtype: "init", session_id: "fresh" }),
+          result("success", { session_id: "fresh", is_error: false }),
+          msg({ type: "system", subtype: "init", session_id: "rebind" })]) });
+      await host.run();
+      expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound", candidate_id: "rebind" } });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });

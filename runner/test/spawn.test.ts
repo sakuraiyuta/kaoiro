@@ -172,3 +172,36 @@ process.exit(0);`);
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+it("collects stale initial before cleanup when the actual dist wrapper cannot initialize its checkpoint", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-recovery-launch-"));
+  const preload = join(root, "fail-checkpoint.cjs");
+  const previous = process.env.NODE_OPTIONS;
+  writeFileSync(preload, `const fs = require('node:fs');
+const original = fs.writeFileSync;
+fs.writeFileSync = function(path, data, ...args) {
+  if (String(path).endsWith('.recovery.tmp') && JSON.parse(String(data)).state === 'unbound') throw new Error('owned checkpoint write fault');
+  return original.call(this, path, data, ...args);
+};
+require('node:module').syncBuiltinESMExports();`);
+  let child: ReturnType<ReturnType<typeof makeLauncher>> | undefined;
+  let exited = false;
+  try {
+    process.env.NODE_OPTIONS = `--require=${preload}`;
+    child = makeLauncher()("recovery-launch", {
+      agent_id: "recovery-launch", persona: { id: "p", name: "P", sprite_set: "p" },
+      display_name: "P", server_url: "ws://127.0.0.1:1/wrapper",
+    }, root);
+    await new Promise<void>((resolve, reject) => {
+      child!.on("exit", () => { exited = true; resolve(); });
+      setTimeout(() => reject(new Error("recovery dist wrapper did not exit")), 10_000).unref();
+    });
+    expect(child.exitCode).toBe(79);
+    expect(child.recovery).toEqual({ ok: true, record: { version: 1, state: "initial" } });
+    expect(child.readRecovery?.()).toEqual({ ok: false, reason: "unreadable" });
+  } finally {
+    if (!exited) child?.kill("SIGKILL");
+    if (previous === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

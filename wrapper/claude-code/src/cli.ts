@@ -1,3 +1,4 @@
+import { RecoveryReporter, recoveryExitCode, shutdownForRecovery } from "@kaoiro/wrapper-core";
 import { resolveDelivery } from "@kaoiro/agent-common";
 // Minimal demo CLI — runs an agent session and prints color-coded state
 // transitions, so you can watch the kaoiro state follow real agent behavior.
@@ -294,6 +295,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const prompt = promptArg;
 
   let host: AgentHost;
+  const recovery = new RecoveryReporter(config, resumeSessionId, failure => {
+    void shutdownForRecovery(failure, () => host?.close(),
+      () => link?.reportDisconnectIntent?.("crash"), () => { link?.close(); }).catch(() => {});
+  });
+  if (recovery.failure) throw recovery.failure;
+
   const pendingWorkNotices: string[] = [];
   let broker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
@@ -1331,6 +1338,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
     Omit<AgentHostOptions, "onTurnStart">
   >({
+    recovery,
     onState,
     nativeContinuations,
     ...(nativeContinuations ? { nativeReplyBasis: interAgent!.replyBasis } : {}),
@@ -1477,6 +1485,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       }
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
+      recovery.block("watchdog");
       freezeInterAgentAdmission(turnToken, attribution, "turn watchdog fail-stop",
         "This host admits no new input. The running turn did not end after an interrupt, or could not be " +
           "interrupted or attributed, so this wrapper may not exit by itself: if it stays connected, terminate " +
@@ -1762,9 +1771,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       broker?.close();
       questionBroker?.close();
       try {
-        await link?.reportDisconnectIntent?.(disconnectReason);
+        if (!recovery.failure) await link?.reportDisconnectIntent?.(disconnectReason);
       } finally {
         link?.close();
+        if (recovery.failure) throw recovery.failure;
       }
     }
   }
@@ -1776,6 +1786,6 @@ if (
 ) {
   runClaudeCli().catch((error: unknown) => {
     writeRedactedStderr(`${String(error)}\n`);
-    process.exitCode = 1;
+    process.exitCode = recoveryExitCode(error);
   });
 }

@@ -1,3 +1,4 @@
+import { RecoveryReporter, recoveryExitCode, shutdownForRecovery } from "@kaoiro/wrapper-core";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { retirePermissionSyncInput } from "@kaoiro/agent-common";
 import { randomUUID } from "node:crypto";
@@ -58,6 +59,12 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
   );
   let host: GrokHost | undefined;
   let link: ServerLink | undefined;
+  const recovery = new RecoveryReporter(config, args.resume, failure => {
+    void shutdownForRecovery(failure, () => host?.close(),
+      () => link?.reportDisconnectIntent?.("crash"), () => { link?.close(); }).catch(() => {});
+  });
+  if (recovery.failure) throw recovery.failure;
+
   const platform = dependencies.platform ?? process.platform;
   let permissionSyncSupported = false;
   const pendingPermissions: ({ kind: "sync"; value: PermissionSyncMessage } |
@@ -292,6 +299,7 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     host = (dependencies.createHost ?? ((opts) => new GrokHost(opts)))(
       acknowledgements.withHostOptions({
         config,
+        recovery,
         platform,
         permissionSyncSupported,
         waitForPermissionSync: () => link?.waitForPermissionSync?.() ?? Promise.resolve(),
@@ -372,9 +380,10 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     host?.close();
     await host?.closed;
     try {
-      await link?.reportDisconnectIntent(disconnectReason);
+      if (!recovery.failure) await link?.reportDisconnectIntent(disconnectReason);
     } finally {
       link?.close();
+      if (recovery.failure) throw recovery.failure;
     }
   }
 }
@@ -387,6 +396,6 @@ if (
     const detail =
       error instanceof GrokLaunchError ? error.message : "grok wrapper failed";
     writeRedactedStderr(`[kaoiro] ${detail}\n`);
-    process.exitCode = 1;
+    process.exitCode = recoveryExitCode(error);
   });
 }

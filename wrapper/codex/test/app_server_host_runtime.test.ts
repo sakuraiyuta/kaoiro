@@ -1,3 +1,5 @@
+import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
+import type { WrapperConfig } from "@kaoiro/protocol";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -411,4 +413,25 @@ it("forwards typed context facts once while open and drops callbacks after close
     createSession: async options => { sessionOptions = options;return f.session; } });runtimes.push(runtime);
   await runtime.open();sessionOptions.onContext?.({ kind: "bound", threadId: "thread" });expect(onContext).toHaveBeenCalledTimes(1);
   await runtime.close();sessionOptions.onContext?.({ kind: "bound", threadId: "late" });expect(onContext).toHaveBeenCalledTimes(1);
+});
+
+it.each([undefined, "candidate"] as const)("records native open and launch refusal for recovery kind %s", async kind => {
+  const f = fixture(); const path = `${f.path}.recovery`; const failures: number[] = [];
+  const recovery = new RecoveryReporter({ recovery_checkpoint_path: path,
+    ...(kind ? { recovery_resume_kind: kind } : {}) } as WrapperConfig, "thread", failure => failures.push(failure.exitCode));
+  vi.mocked(f.session.resumeThread).mockRejectedValueOnce(new AppServerRpcError(-32600, "fixture refusal"));
+  const runtime = new AppServerHostRuntime({ session: { turnSignal: () => null }, effortIntent: "default",
+    resumeThreadId: "thread", createSession: async () => f.session, recovery }); runtimes.push(runtime);
+  await expect(runtime.readHistory({} as WrapperConfig, () => "T")).rejects.toThrow("fixture refusal");
+  expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: kind ? "unbound" : "blocked" } });
+  expect(failures).toEqual([1]); expect(f.session.startThread).not.toHaveBeenCalled();
+});
+it("reports a fresh thread candidate directly from open before any turn dispatch", async () => {
+  const f = fixture(); const path = `${f.path}.recovery`;
+  const recovery = new RecoveryReporter({ recovery_checkpoint_path: path } as WrapperConfig, undefined, () => {});
+  const runtime = new AppServerHostRuntime({ session: { turnSignal: () => null }, effortIntent: "default",
+    createSession: async () => f.session, recovery }); runtimes.push(runtime);
+  await runtime.open();
+  expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: { version: 1, state: "unbound", candidate_id: "thread" } });
+  expect(f.session.startProjectedTurn).not.toHaveBeenCalled();
 });
