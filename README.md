@@ -18,6 +18,9 @@
 > every machine where agents run. Treat it like an SSH key to those
 > hosts, and read [SECURITY.md](SECURITY.md) before deploying.
 
+Website: <https://sakuraiyuta.github.io/kaoiro/>
+([日本語](https://sakuraiyuta.github.io/kaoiro/ja/))
+
 A system for **running, watching and orchestrating several CLI AI agents at
 once** (such as Claude Code, Codex, and Antigravity). kaoiro launches agents
 on any host it supervises, derives each agent's state from engine events and
