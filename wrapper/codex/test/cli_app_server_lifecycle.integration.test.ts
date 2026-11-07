@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { ServerLink } from "@kaoiro/wrapper-core";
+import { ServerLink, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import { AppServerRpc } from "../src/app_server_rpc.js";
 import { AppServerSession } from "../src/app_server_session.js";
 import { runCodexCli } from "../src/cli.js";
@@ -116,7 +116,7 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(key, undefined);
     running = runCodexCli({ ...(interrupt ? { watchdogClock: clock } : {}),
       parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
-      loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, model: "gpt-5.6-sol", codex_backend: "app-server" }),
+      loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", recovery_checkpoint_path: join(home, "recovery-checkpoint"), server_url: wire.url, model: "gpt-5.6-sol", codex_backend: "app-server" }),
     });
     await vi.waitFor(() => expect(wire.joins).toBe(1));wire.push("persona_prompt", { prompt: "Lifecycle test" });
     await vi.waitFor(() => expect(wire.received.some(e => e.event === "envelope" && e.payload.type === "state_change")).toBe(true));
@@ -142,8 +142,10 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
       await vi.waitFor(() => expect(held).toBe(true), { timeout: 15_000 });
       expect(toolOutputs.some(value => JSON.stringify(value).includes("REPLY")), JSON.stringify(toolOutputs)).toBe(true);
       expect(userTurns).toHaveLength(1);expect(results()).toHaveLength(0);
+      expect(readRecoveryCheckpoint(join(home, "recovery-checkpoint"))).toMatchObject({ ok: true, record: { state: "unbound", candidate_id: expect.any(String) } });
     }
     release();await vi.waitFor(() => expect(results()).toHaveLength(3), { timeout: 25_000 });
+    expect(readRecoveryCheckpoint(join(home, "recovery-checkpoint"))).toMatchObject({ ok: true, record: { state: "live", session_id: expect.any(String) } });
     expect(userTurns).toHaveLength(3);
     expect(userTurns[0]).toContain("FIRST");expect(userTurns[1]).toContain("OTHER");
     expect(userTurns[2]).toContain("SECOND");expect(userTurns[2]).toContain("THIRD");
