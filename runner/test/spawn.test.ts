@@ -2,8 +2,9 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeLauncher, resolveWrapperLaunch, toManagedChild } from "../src/spawn.js";
+import { phoenixLoopback } from "../../wrapper/codex/test/fixtures/phoenix_loopback.js";
 
 describe("resolveWrapperLaunch", () => {
   afterEach(() => {
@@ -213,5 +214,50 @@ ${stalled ? 'setInterval(() => {}, 1000);' : ''}`);
     if (!exited) child?.kill("SIGKILL");
     if (previous === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous;
     rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
+
+it("keeps native app-server exit 79 distinct from supervised wrapper exit 79", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-native-exit-control-"));
+  const preload = join(root, "native-exit.cjs"), marker = join(root, "native-exits");
+  const previous = process.env.NODE_OPTIONS;
+  const wire = await phoenixLoopback(() => ({}));
+  writeFileSync(preload, `const cp = require('node:child_process'), fs = require('node:fs');
+const original = cp.spawn;
+cp.spawn = function(command, args, options) {
+  if (Array.isArray(args) && args.includes('app-server')) {
+    const child = original.call(this, process.execPath, ['-e', 'process.exit(79)'], options);
+    child.on('exit', code => fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify(code) + '\\n'));
+    return child;
+  }
+  return original.apply(this, arguments);
+};
+require('node:module').syncBuiltinESMExports();`);
+  let child: ReturnType<ReturnType<typeof makeLauncher>> | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let exited = false;
+  try {
+    process.env.NODE_OPTIONS = `${previous ?? ""} --require=${preload}`;
+    child = makeLauncher()("native-exit-control", {
+      agent_id: "native-exit-control", persona: { id: "p", name: "P", sprite_set: "p" },
+      display_name: "P", server_url: wire.url, sandbox: "workspace-write", network_access: false,
+    }, root, undefined, "owned process control", "codex");
+    const finished = new Promise<void>((resolve, reject) => {
+      child!.on("exit", () => { exited = true; resolve(); });
+      timeout = setTimeout(() => reject(new Error("native-exit wrapper did not finish")), 15_000);
+    });
+    await vi.waitFor(() => expect(wire.joins).toBe(1));
+    wire.push("persona_prompt", { prompt: "Fixture" });
+    await finished;
+    const nativeCodes = readFileSync(marker, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(nativeCodes.length).toBeGreaterThan(0); expect(nativeCodes.every(code => code === 79)).toBe(true);
+    expect(child.exitCode).toBe(1); expect(child.signal).toBeNull();
+    expect(child.recovery).toEqual({ ok: true, record: { version: 1, state: "unbound" } });
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    if (!exited) child?.kill("SIGKILL");
+    if (previous === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous;
+    await wire.close(); rmSync(root, { recursive: true, force: true });
   }
 }, 20_000);
