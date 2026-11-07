@@ -36,6 +36,17 @@ Confirm all of these before starting.
 
 ## 1. Deploy the server
 
+### 1.0 Clone at the exact commit
+
+Clone the repository at the exact commit you intend to run, on the server host.
+Every later step runs from this checkout.
+
+```sh
+git clone <repo-url> <repo-path>
+cd <repo-path>
+git checkout <target-sha>
+```
+
 ### 1.1 Issue authentication tokens (three required)
 
 For public operation on an arbitrary host, configure all three
@@ -90,12 +101,9 @@ build identity passed directly (no manual
 `set -a && eval "$(node scripts/build-identity.mjs)"`), and refuses outright if
 it detects any prior state, so it never overwrites an existing deployment (the
 state classes are in [Server deploy configuration](../reference/configuration/server-deploy.md#transaction-states-and-status)).
-Clone the repository at the exact commit you intend to run first:
+Run it from the checkout root of 1.0, after the `.env` of 1.2 exists:
 
 ```sh
-git clone <repo-url> <repo-path>
-cd <repo-path>
-git checkout <target-sha>
 node server/deploy/kaoiro-server-deploy.mjs start --initialize
 ```
 
