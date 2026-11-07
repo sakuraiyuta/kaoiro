@@ -11,6 +11,7 @@
   <script src="site.js" defer></script>
 </head>
 <body>
+  <a class="skip" href="#state">Skip to content</a>
   <nav class="wrap topbar" aria-label="Site">
     <a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a>
     <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Docs</a>
@@ -31,6 +32,7 @@
   </nav>
   <main>
     <header class="wrap hero">
+      <div class="hero-copy">
       <h1><img src="assets/kaoiro-logo-on-dark.png" alt="kaoiro" width="1553" height="466"></h1>
       <p class="lead">Run, watch and orchestrate your CLI AI agents, each with a face and a personality.</p>
       <ul class="actions">
@@ -38,13 +40,20 @@
         <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></li>
         <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Documentation</a></li>
       </ul>
+      </div>
       <div class="notices">
         <p class="notice"><strong>Research prototype.</strong> Developed mainly for daily use by the author and members of their laboratory, with no guarantees about maintenance or responses to issues.</p>
         <p class="notice warn"><strong>Security.</strong> An operator credential lets its holder run commands on every machine where agents run. Treat it like an SSH key to those hosts, and read <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> before deploying.</p>
       </div>
+      <figure class="hero-preview">
+        <div class="preview-bar" aria-hidden="true"><span></span><span></span><span></span><b>kaoiro / dashboard</b></div>
+        <img src="assets/agent-grid.png" width="1036" height="619" alt="Agent cards beside their shared conversation timeline">
+        <figcaption>Inside the dashboard · currently Japanese-only</figcaption>
+      </figure>
     </header>
 
     <section class="wrap block" aria-labelledby="state">
+      <p class="eyebrow"><span>01</span> / Observe</p>
       <h2 id="state">State as a face</h2>
       <p class="intro">kaoiro runs, watches and orchestrates several CLI AI agents at once. Each one becomes a character whose expression follows what it is doing. Rather than cycling through terminals, it feels like watching over a small AI office.</p>
       <div class="scene">
@@ -78,6 +87,7 @@
     </section>
 
     <section class="wrap block" aria-labelledby="features">
+      <p class="eyebrow"><span>02</span> / Operate</p>
       <h2 id="features">One screen for every agent</h2>
       <p class="intro">Everything below is in the dashboard today. kaoiro is open source under the MIT License.</p>
       <ul class="cards">
@@ -91,6 +101,7 @@
     </section>
 
     <section class="wrap block" aria-labelledby="engines">
+      <p class="eyebrow"><span>03</span> / Collaborate</p>
       <h2 id="engines">Four engines, working together</h2>
       <p class="intro">kaoiro supports Claude Code, Codex, Antigravity and Grok Build, and you choose the engine at launch. A message from an agent on one engine reaches an agent on another, so they can delegate, review and answer each other in the same conversation.</p>
       <ul class="cards four">
@@ -174,17 +185,19 @@
     <p class="wrap note">Engines are not identical. Model and effort switching, permission modes and file uploads depend on what each engine declares, and whether a message can reach a running turn differs by engine. The dashboard follows those declared capabilities.</p>
 
     <section class="wrap block" aria-labelledby="uses">
+      <p class="eyebrow"><span>04</span> / Work</p>
       <h2 id="uses">How you might use it</h2>
       <p class="intro">A few ways the features fit together. kaoiro does not limit the role each agent plays.</p>
       <ul class="uses">
         <li class="reveal"><h3>Run agents side by side</h3><p>Give several agents their own tasks and working directories, then watch the grid instead of cycling through terminals.</p></li>
-        <li class="reveal"><h3>Split implementation and review</h3><p>One agent implements and another reviews. The hand-off is a visible message, such as a request to review a diff, without opening anyone.</p></li>
-        <li class="reveal"><h3>Appoint a director</h3><p>Appoint one agent as the director and let it hand out work to the others. With instructions given in advance, it can also judge which model suits each task.</p></li>
+        <li class="reveal"><h3>Split implementation and review</h3><p>One agent implements and another reviews. The hand-off is a visible message, such as a request to review a diff, without opening anyone's screen.</p></li>
+        <li class="reveal director"><h3>Appoint a director</h3><p>Appoint one agent as the director and let it hand out work to the others. With instructions given in advance, it can also judge which model suits each task.</p></li>
         <li class="reveal"><h3>Answer from another device</h3><p>The dashboard has a layout that collapses down to a phone, so you can answer a waiting agent away from your desk, on a deployment you can reach from there.</p></li>
       </ul>
     </section>
 
     <section class="wrap block" aria-labelledby="architecture">
+      <p class="eyebrow"><span>05</span> / Connect</p>
       <h2 id="architecture">Loosely coupled parts, flexible layouts</h2>
       <p class="intro">kaoiro is split into four parts with clear roles. One server can gather agents from several machines, each supervised by its own runner.</p>
       <ul class="cards four">
@@ -307,6 +320,7 @@
       </figure>
     </section>
     <section class="wrap block" aria-labelledby="extend">
+      <p class="eyebrow"><span>06</span> / Extend</p>
       <h2 id="extend">Room to extend</h2>
       <p class="intro">Because the parts are separate, you can change one without rewriting the others.</p>
       <ul class="uses two">
@@ -316,6 +330,7 @@
     </section>
 
     <section class="wrap block" aria-labelledby="screens">
+      <p class="eyebrow"><span>07</span> / Explore</p>
       <h2 id="screens">The screens</h2>
       <div class="screens">
         <figure class="rise">
@@ -330,6 +345,7 @@
     </section>
 
     <section class="wrap block start" aria-labelledby="start">
+      <p class="eyebrow"><span>08</span> / Begin</p>
       <h2 id="start">Get started</h2>
       <p class="intro">kaoiro runs on your own machines. The README has the requirements and the Quick start, and SECURITY.md explains what an operator credential means before you deploy.</p>
       <ul class="actions">

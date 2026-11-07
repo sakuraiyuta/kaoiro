@@ -226,7 +226,7 @@ h3 {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 10px;
-  transition: border-color 0.5s ease;
+
 }
 
 .frame img {
@@ -409,7 +409,7 @@ footer {
   right: 0.75rem;
   z-index: 2;
   transform: translateY(-50%);
-  transition: opacity 0.4s ease, visibility 0.4s;
+  transition: opacity 0.3s ease;
 }
 
 .toc ol {
@@ -436,12 +436,13 @@ footer {
   height: 2px;
   border-radius: 2px;
   background: var(--fg-dim);
-  transition: width 0.3s ease, background-color 0.3s ease;
+  transform-origin: right;
+  transition: transform 0.3s ease;
 }
 
 .toc a:hover::after,
 .toc a[aria-current="true"]::after {
-  width: 2rem;
+  transform: scaleX(1.8);
   background: var(--c-thinking);
 }
 
@@ -470,24 +471,13 @@ footer {
   visibility: hidden;
 }
 
-/* Hiding exists only under .motion, which site.js sets after observers run. */
+/* Motion changes position only: an absent callback cannot dim the content. */
 @media (prefers-reduced-motion: no-preference) {
-  html {
-    scroll-behavior: smooth;
-  }
-
-  .motion .reveal {
-    transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.22, 0.8, 0.3, 1);
-  }
-
-  /* The opacity floor keeps text readable if later callbacks never arrive. */
-  .motion .reveal.pre {
-    opacity: 0.3;
-    transform: translateY(1.75rem);
-  }
+  html { scroll-behavior: smooth; }
 
   @supports (animation-timeline: view()) {
-    .rise {
+    .rise,
+    .reveal {
       animation: rise linear both;
       animation-timeline: view();
       animation-range: entry 0% cover 35%;
@@ -580,4 +570,112 @@ footer {
   .step {
     min-height: 80vh;
   }
+}
+
+/* A quiet frame around the product; state colors remain the only accents. */
+.skip {
+  position: absolute;
+  top: 0.5rem;
+  left: 1rem;
+  z-index: 5;
+  padding: 0.4rem 0.8rem;
+  background: var(--bg-card);
+  transform: translateY(-150%);
+}
+.skip:focus { transform: none; }
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 3.5rem;
+  align-items: center;
+  padding-block: 0.65rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+h2 { scroll-margin-top: 5rem; }
+.wrap { max-width: 76rem; }
+.hero {
+  display: grid;
+  grid-template-areas: "copy" "notices" "preview";
+  align-content: center;
+  gap: 1.5rem;
+  padding-top: 2.5rem;
+  padding-bottom: 3rem;
+  min-height: calc(100svh - 3.5rem);
+}
+.hero-copy { grid-area: copy; min-width: 0; }
+.hero h1 img { width: min(100%, 20rem); }
+.lead { margin: 1.25rem 0; font-size: clamp(1.65rem, 3.3vw, 2.75rem); line-height: 1.25; }
+.actions { gap: 0.75rem 1.1rem; font-size: 0.95rem; }
+.actions a:not(.badge) { text-underline-offset: 0.3em; }
+.hero .notices { grid-area: notices; margin: 0; }
+.notice { background: none; padding-left: 0.8rem; }
+.hero-preview {
+  grid-area: preview;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-card);
+  box-shadow: 0 24px 64px #0003;
+}
+.preview-bar { display: flex; align-items: center; gap: 6px; padding: 0.7rem 0.9rem; }
+.preview-bar span { width: 6px; height: 6px; background: var(--c-idle); border-radius: 50%; }
+.preview-bar b { margin-left: auto; font: 0.7rem var(--mono); color: var(--muted); font-weight: 400; }
+.hero-preview figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.65rem 0.9rem; }
+.block { padding-top: clamp(4.5rem, 10vw, 8rem); }
+.eyebrow { display: flex; gap: 0.65rem; align-items: center; margin: 0 0 1.25rem; color: var(--muted); font: 0.8rem var(--mono); letter-spacing: 0.06em; }
+.eyebrow span { color: var(--fg); }
+.intro { max-width: 46rem; }
+.stage { top: 3.5rem; }
+.step { min-height: 55vh; }
+.step .label { margin-bottom: 0.75rem; }
+.step p { margin-top: 0.75rem; }
+.cards { gap: 1px; padding: 1px; background: var(--line); border-radius: 12px; overflow: hidden; }
+.cards li { border: 0; border-radius: 0; padding: 1.6rem; }
+.cards h3 { margin-bottom: 0.8rem; }
+.cards.four { background: none; padding: 0; gap: 0.75rem; }
+.cards.four li { border: 1px solid var(--line); border-radius: 10px; padding: 1.25rem; }
+.uses { counter-reset: use; gap: 1.75rem 2.5rem; }
+.uses li { counter-increment: use; padding-top: 1.5rem; }
+.uses li::before { content: "0" counter(use); display: block; color: var(--muted); font: 0.8rem var(--mono); margin-bottom: 1rem; }
+.uses h3 { margin-bottom: 0.75rem; }
+.uses .director { border-top-color: var(--c-thinking); }
+.uses .director::before { color: var(--c-thinking); }
+.diagram { padding: 1.25rem 0; border-block: 1px solid var(--line); }
+.diagram .narrow { margin-inline: auto; }
+.screens { gap: 1.5rem; }
+.start { padding-bottom: 5rem; }
+.toc a { width: 2.75rem; height: 1.75rem; }
+.toc a::after { background: var(--muted); }
+.toc.off:focus-within { opacity: 1; visibility: visible; }
+
+@media (min-width: 48rem) {
+  .wrap { width: min(100% - 6rem, 76rem); margin-left: max(1.5rem, calc((100% - 76rem) / 2)); }
+  .toc { right: 1rem; }
+  .cards:not(.four) { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 64rem) {
+  .hero { grid-template-areas: "copy preview" "notices notices"; grid-template-columns: 1fr 1.1fr; gap: 2.5rem; }
+  .hero-preview { transform: rotate(-1.5deg); }
+  .hero-copy { padding-block: 1rem; }
+  .stage { top: 7rem; }
+  .step { min-height: 65vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage img, .hero-preview, .rise, .reveal { transform: none !important; animation: none !important; }
+}
+@media (max-height: 500px) {
+  .stage { position: static; }
+  .step { min-height: 0; }
+}
+@media (max-width: 47.99rem) {
+  .topbar { font-size: 0.78rem; gap: 0.25rem 0.8rem; }
+  .hero { padding-top: 1.5rem; gap: 1rem; }
+  .hero h1 img { width: 15rem; }
+  .lead { font-size: 1.5rem; line-height: 1.3; margin-block: 1rem; }
+  .hero .actions { margin-bottom: 0; }
 }
