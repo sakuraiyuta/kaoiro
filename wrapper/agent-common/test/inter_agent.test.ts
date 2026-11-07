@@ -710,6 +710,59 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     expect(fresh.isError).toBeFalsy();
   });
 
+  // issue #665: a `kind=done` send that omitted `done` carried
+  // meta.done=false, so a conversation both sides meant to end stayed open —
+  // the server reads meta.done and never the kind. The omitted default now
+  // follows the kind; an explicitly passed boolean is never reversed.
+  it.each([
+    { label: "kind=done, done 省略 → true", kind: "done", done: undefined, expected: true },
+    { label: "kind=done, done=true 明示 → true", kind: "done", done: true, expected: true },
+    { label: "kind=done, done=false 明示 → false", kind: "done", done: false, expected: false },
+    { label: "kind=inform, done 省略 → false", kind: "inform", done: undefined, expected: false },
+    { label: "kind=inform, done=true 明示 → true", kind: "inform", done: true, expected: true },
+    { label: "kind=inform, done=false 明示 → false", kind: "inform", done: false, expected: false },
+  ] as const)("issue #665: $label", async ({ kind, done, expected }) => {
+    const { tool, capture } = makeTool("self.agent");
+    const sent = await tool.invoke({
+      to: "peer.agent",
+      body: "b",
+      kind,
+      conversation_id: "cnv-665-meta",
+      ...(done === undefined ? {} : { done }),
+    });
+    expect(sent.isError).toBeFalsy();
+    expect(capture.envelopes).toHaveLength(1);
+    const payload = capture.envelopes[0]!.payload as unknown as InterAgentMessagePayload;
+    expect(payload.meta.done).toBe(expected);
+  });
+
+  it("issue #665: 相手が先に done なら、done 省略の kind=done で会話が閉じる", async () => {
+    const { tool } = makeTool("self.agent");
+    // 相手の done=true が先に届く — この時点では一方的な close 提案。
+    expect((await tool.receiveInbound(doneInbound("cnv-665-close", 1))).mode).toBe(
+      "close-proposal",
+    );
+
+    const closing = await tool.invoke({
+      to: "peer.agent",
+      body: "bye",
+      kind: "done",
+      conversation_id: "cnv-665-close",
+    });
+    expect(closing.isError).toBeFalsy();
+
+    // 閉じたことは、同じ CID への次の送信が AC10 の tool error になることで
+    // 外から観測する — private state は読まない。
+    const retry = await tool.invoke({
+      to: "peer.agent",
+      body: "again?",
+      kind: "inform",
+      conversation_id: "cnv-665-close",
+    });
+    expect(retry.isError).toBe(true);
+    expect(retry.content[0]!.text).toContain("already closed");
+  });
+
   it("stale/duplicate turn_number は inject されない (AC9)", async () => {
     const { tool } = makeTool("self.agent");
     const first = inboundEnvelope("cnv-stale", "inform");
@@ -2935,11 +2988,19 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
   // now gates on the pending-done ack, so it settles ONLY once acceptance
   // is known — this test asserts that resolved value, not an intermediate
   // synchronous read.
-  it(
+  // issue #665 (設計 r2 の S1): 入口で省略時の既定値が決まった後、`done` を
+  // 省略した kind=done はここから先の経路を明示 true と共有する。既存の
+  // 明示 true の主張を省略入力でも確かめる補完で、新しい主張は足していない。
+  const DONE_INPUTS: readonly { label: string; done?: boolean }[] = [
+    { label: "明示 done:true", done: true },
+    { label: "done 省略 (issue #665)" },
+  ];
+
+  it.each(DONE_INPUTS)(
     "M2: peer の closing reply は自分の pending done acceptance が確定するまで " +
       "分類を確定しない — 確定後 (accepted) は terminal になる (review " +
-      "must-fix, round2 で修正)",
-    async () => {
+      "must-fix, round2 で修正) — $label",
+    async ({ done }) => {
       const { tool, settle } = makeDeferredAckTool();
 
       const pending = tool.invoke({
@@ -2947,7 +3008,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
         body: "bye",
         kind: "done",
         conversation_id: "cnv-deferred",
-        done: true,
+        ...(done === undefined ? {} : { done }),
       });
       // invoke() が dispatch を await するところまで 1 tick 待つ — この時点で
       // localDone は既に楽観的に true になっているが、pending-done gate も
@@ -2973,7 +3034,9 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
   // Mutation-tested (my-code-review-cycle guard-shaped-fix rule): with the
   // rollback removed, this assertion fails with mode="terminal" instead of
   // "close-proposal" — confirmed manually before finalizing.
-  it("M2: reject された送信は楽観的な localDone をロールバックする (review must-fix)", async () => {
+  it.each(DONE_INPUTS)(
+    "M2: reject された送信は楽観的な localDone をロールバックする (review must-fix) — $label",
+    async ({ done }) => {
     const { tool, settle } = makeDeferredAckTool();
 
     const pending = tool.invoke({
@@ -2981,7 +3044,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
       body: "bye",
       kind: "done",
       conversation_id: "cnv-deferred",
-      done: true,
+      ...(done === undefined ? {} : { done }),
     });
     await Promise.resolve();
     settle({ kind: "rejected", reason: "unknown_agent" });
@@ -2996,7 +3059,8 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
       propose_next: "",
     };
     expect((await tool.receiveInbound(peerDone)).mode).toBe("close-proposal");
-  });
+    },
+  );
 
   // Like makeDeferredAckTool(), but each sendInterAgent call gets its OWN
   // independent deferred acceptance instead of sharing one — needed to

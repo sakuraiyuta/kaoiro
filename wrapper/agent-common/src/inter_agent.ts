@@ -2105,6 +2105,17 @@ export class InterAgentTool {
       );
     }
 
+    // issue #665: `kind=done` with `done` omitted left meta.done false, so a
+    // conversation both sides meant to end stayed open — the server reads
+    // meta.done and never the kind (docs/reference/inter-agent/messages.md
+    // Constraints). Resolved once here because the envelope's meta and the
+    // localDone flip below must read the SAME value: normalizing at only one
+    // of them closes the conversation server-side while this side's
+    // localDone stays false, which is the split-brain #167 review M2's
+    // `#pendingDoneAcks` gate exists to prevent. An explicitly passed
+    // boolean is carried through unchanged — only the omitted default moves.
+    const resolvedDone = args.done ?? args.kind === "done";
+
     // issue #252: captured BEFORE the `??` below discards the distinction —
     // true only when the CALLER omitted conversation_id, so this wrapper (not
     // the caller) allocated a fresh one. The server rejects an explicit-but-
@@ -2277,7 +2288,7 @@ export class InterAgentTool {
         const sentTurnNumber = track.turnNumber;
 
         const meta: InterAgentMessagePayload["meta"] = {
-          done: args.done ?? false,
+          done: resolvedDone,
           propose_next: args.propose_next ?? "",
         };
         if (args.confidence !== undefined) meta.confidence = args.confidence;
@@ -2354,7 +2365,7 @@ export class InterAgentTool {
         // call for it — review round 3 must-fix).
         let releaseDoneGate: (() => void) | null = null;
         let closedByThisDone = false;
-        if (args.done === true && !track.localDone) {
+        if (resolvedDone && !track.localDone) {
           localDoneSnapshot = {
             localDone: track.localDone,
             closed: track.closed,
