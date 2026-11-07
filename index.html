@@ -3,68 +3,114 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14141d">
   <title>kaoiro: run, watch and orchestrate CLI AI agents</title>
-  <meta name="description" content="kaoiro runs, watches and orchestrates several CLI AI agents at once. Research prototype.">
+  <meta name="description" content="kaoiro runs, watches and orchestrates several CLI AI agents at once, with a face for each one. Open source research prototype.">
   <link rel="alternate" hreflang="ja" href="ja/">
   <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
 </head>
 <body>
-  <nav class="topbar" aria-label="Language">
+  <nav class="wrap topbar" aria-label="Language">
     <a href="ja/" hreflang="ja" lang="ja">日本語</a>
   </nav>
   <main>
-    <header>
-      <h1>
-        <picture>
-          <source media="(prefers-color-scheme: dark)" srcset="assets/kaoiro-logo-on-dark.png">
-          <img src="assets/kaoiro-logo-on-light.png" alt="kaoiro" width="1553" height="466">
-        </picture>
-      </h1>
-      <p class="lead">Run, watch and orchestrate several CLI AI agents at once.</p>
+    <header class="wrap hero">
+      <h1><img src="assets/kaoiro-logo-on-dark.png" alt="kaoiro" width="1553" height="466"></h1>
+      <p class="lead">Run, watch and orchestrate your CLI AI agents, each with a face.</p>
+      <ul class="actions">
+        <li><a class="badge" href="https://github.com/sakuraiyuta/kaoiro"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span>sakuraiyuta/kaoiro</span></a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Documentation</a></li>
+      </ul>
       <div class="notices">
         <p class="notice"><strong>Research prototype.</strong> Developed mainly for daily use by the author and members of their laboratory, with no guarantees about maintenance or responses to issues.</p>
         <p class="notice warn"><strong>Security.</strong> An operator credential lets its holder run commands on every machine where agents run. Treat it like an SSH key to those hosts, and read <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> before deploying.</p>
       </div>
-      <ul class="actions">
-        <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></li>
-        <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Documentation</a></li>
-        <li><a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a></li>
-      </ul>
     </header>
 
-    <section aria-labelledby="about">
-      <h2 id="about">What it is</h2>
-      <p>kaoiro (kao-iro, “complexion” or “how someone looks”) launches agents such as Claude Code, Codex, Antigravity and Grok Build on hosts it supervises. It derives each agent's state from engine events and draws it as a character with changing expressions, routes permission requests and questions to the browser, and carries the messages agents send each other.</p>
-      <figure>
-        <img src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission">
-        <figcaption>An example screen, not a public demo. kaoiro runs on your own machines, and the dashboard interface is currently Japanese-only.</figcaption>
-      </figure>
+    <section class="wrap block" aria-labelledby="state">
+      <h2 id="state">State as a face</h2>
+      <p class="intro">kaoiro runs, watches and orchestrates several CLI AI agents at once. Each one becomes a character whose expression follows what it is doing, so running a few agents feels closer to keeping a small virtual AI office than to cycling through terminals.</p>
+      <div class="scene">
+        <figure class="stage">
+          <div class="frame"><img src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission"></div>
+          <figcaption>An example screen, not a public demo. The dashboard interface is currently Japanese-only.</figcaption>
+        </figure>
+        <div class="steps">
+          <div class="step" data-scene="thinking">
+            <span class="label thinking">thinking</span>
+            <h3>From engine events, not guesses</h3>
+            <p>Each agent's state is derived from engine events and drawn as an expression. It is not inferred from the text the agent writes.</p>
+          </div>
+          <div class="step" data-scene="idle">
+            <span class="label idle">idle</span>
+            <h3>Quiet is visible too</h3>
+            <p>Every running agent keeps its own card, character and state label, with a name that persists across sessions.</p>
+          </div>
+          <div class="step" data-scene="permission">
+            <span class="label permission">permission?</span>
+            <h3>See who needs you</h3>
+            <p>A badge marks the agent waiting on an answer. The permission request comes to the browser, so it never blocks on an unattended terminal.</p>
+          </div>
+          <div class="step" data-scene="all">
+            <span class="label all">timeline</span>
+            <h3>The whole office at a glance</h3>
+            <p>The timeline beside the grid merges what every agent said with the messages they send each other.</p>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <section aria-labelledby="features">
-      <h2 id="features">Features</h2>
-      <ul class="features">
-        <li>
-          <h3>State as a face</h3>
-          <p>Each agent's state is derived from engine events and drawn as a character expression, not inferred from the text it writes.</p>
-        </li>
-        <li>
-          <h3>Control from the browser</h3>
-          <p>Launch, stop and resume agents, and answer permission requests and questions, without touching a terminal.</p>
-        </li>
-        <li>
-          <h3>Agents message each other</h3>
-          <p>Delegations, review requests and approvals between agents are first-class messages, shown in one merged timeline.</p>
-        </li>
-        <li>
-          <h3>Multi-host, four engines</h3>
-          <p>One runner per machine supervises its agents, and Claude Code, Codex, Antigravity and Grok Build share one protocol.</p>
-        </li>
+    <section class="wrap block" aria-labelledby="features">
+      <h2 id="features">One screen for every agent</h2>
+      <p class="intro">Everything below is in the dashboard today. kaoiro is open source under the MIT License.</p>
+      <ul class="cards">
+        <li class="reveal"><h3>Launch from the browser</h3><p>Choose host, persona, engine, working directory and permission mode, then stop, restart, restore or resume a session.</p></li>
+        <li class="reveal"><h3>Approve in the UI</h3><p>A tool call waiting for approval is routed to the client. Multiple-choice questions arrive as dialogs on the same path.</p></li>
+        <li class="reveal"><h3>Agents message each other</h3><p>A delegation, a review request or an approval between agents is a first-class message, grouped into conversations.</p></li>
+        <li class="reveal"><h3>One merged timeline</h3><p>Replies and agent-to-agent messages sit in a single time-ordered pane, with unread marks and click-through to the transcript.</p></li>
+        <li class="reveal"><h3>Four engines, one protocol</h3><p>Claude Code, Codex, Antigravity and Grok Build share one adapter boundary. The UI follows declared capabilities.</p></li>
+        <li class="reveal"><h3>Multi-host</h3><p>One runner per machine registers its host, declares which engines it can spawn and supervises the wrappers living there.</p></li>
+      </ul>
+    </section>
+
+    <section class="wrap block" aria-labelledby="uses">
+      <h2 id="uses">How you might use it</h2>
+      <p class="intro">A few ways the features fit together. These describe the work kaoiro carries, not a promise about results.</p>
+      <ul class="uses">
+        <li class="reveal"><h3>Run agents side by side</h3><p>Give several agents their own tasks and working directories, then watch the grid instead of cycling through terminals.</p></li>
+        <li class="reveal"><h3>Split implementation and review</h3><p>One agent implements and another reviews. The hand-off is a visible message, such as a request to review a diff, without opening anyone.</p></li>
+        <li class="reveal"><h3>Answer from another device</h3><p>The dashboard has a layout that collapses down to a phone, so you can answer a waiting agent away from your desk, on a deployment you can reach from there.</p></li>
+      </ul>
+    </section>
+
+    <section class="wrap block" aria-labelledby="screens">
+      <h2 id="screens">The screens</h2>
+      <div class="screens">
+        <figure class="rise">
+          <img src="assets/agent-grid.png" width="1036" height="619" alt="kaoiro dashboard: four agents rendered as character cards next to a conversation timeline, one card badged as waiting for permission">
+          <figcaption>The grid and the timeline, with sample data.</figcaption>
+        </figure>
+        <figure class="rise">
+          <img src="assets/settings-drawer.png" width="320" height="520" alt="Settings drawer: notification sound, volume and card display options">
+          <figcaption>Settings: notification sound, volume and card display.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="wrap block start" aria-labelledby="start">
+      <h2 id="start">Get started</h2>
+      <p class="intro">kaoiro runs on your own machines. The README has the requirements and the Quick start, and SECURITY.md explains what an operator credential means before you deploy.</p>
+      <ul class="actions">
+        <li><a class="badge" href="https://github.com/sakuraiyuta/kaoiro"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span>sakuraiyuta/kaoiro</span></a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Documentation</a></li>
       </ul>
     </section>
   </main>
-  <footer>
-    <p><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">Security policy</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/LICENSE">MIT License</a></p>
+  <footer class="wrap">
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">Security policy</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/LICENSE">MIT License</a>
   </footer>
 </body>
 </html>
