@@ -39,8 +39,8 @@ report peers that have been inactive for a long time.
 | `state` | string | current state | MUST |
 | `engine` / `model` / `effort` | string | execution characteristics (#99) | not a non-empty string |
 | `context` | `{used_tokens, max_tokens, used_percentage}` | context usage | capability gate fails, unreported, malformed, or disconnected |
-| `session_started_at` | ISO8601 (UTC) | **server-observed** current-session start | server did not observe or recover the start; also omitted for uncorrelated joins even when `SessionStarts` has a value |
-| `turns` | non-negative integer | response round trips in the current session | server did not observe that session start, or the join is uncorrelated |
+| `session_started_at` | ISO8601 (UTC) | **server-observed** activity boundary; not necessarily engine session creation | server did not observe or recover the start; also omitted for uncorrelated joins even when `SessionStarts` has a value |
+| `turns` | non-negative integer | live result envelopes since the observed activity boundary | server did not observe that session start, or the join is uncorrelated |
 | `last_activity_at` | ISO8601 (UTC) | time the server last accepted an envelope | no envelope accepted yet |
 | `conversation` | `{active, peers[]}` | whether an IA conversation is active and its peers | **never omitted** (below) |
 | `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | latest reported usage-limit snapshot, including an account read before the first turn | no usable source, all windows dropped in projection, or disconnected |
@@ -55,6 +55,18 @@ report peers that have been inactive for a long time.
 `session_started_at` and `last_activity_at` are **server timestamps**. They
 are not wrapper measurements and are independent of envelope `ts` (the
 wrapper host clock), avoiding cross-host clock skew in decisions.
+
+The activity boundary can be the server time of a spawn or restore request,
+a confirmed reset connection, or the receipt time of a changed session ID. A correlated
+restore can reset this timestamp and `turns` even when the session ID is
+unchanged. The count excludes replayed results; when only the timestamp can be
+recovered from `SessionStarts`, `turns` is omitted. Ordinary reconnects can
+retain the existing boundary and count.
+
+A restore with a session pointer normally resumes the existing engine session;
+a restore without a session ID starts fresh. A successful explicit session reset starts
+a new session. A recent `session_started_at` or `turns: 0` alone is not
+evidence that the engine session or its context is new.
 
 `build` has the nested shape `{revision, dirty, version, channel}`. The wrapper
 reports flat channel fields, which the server validates with
