@@ -65,8 +65,8 @@ block Git operations targeting `main`.
 
 | Branch | Role | Who may update it |
 |---|---|---|
-| `main` | Release / stable branch; default branch | **Operator only** |
-| `develop` | Integration branch; CI runs here too | Agents allowed |
+| `main` | Release / stable branch | **Operator only** |
+| `develop` | Integration branch; default branch; CI runs here too | Agents allowed |
 | `issue-NNN-*` | feature branch | Agents allowed |
 | `gh-pages` | Published landing page (GitHub Pages branch deploy) | **Director only**, after review |
 | `issue-1035-site` | Candidate for `gh-pages` | Agents allowed |
