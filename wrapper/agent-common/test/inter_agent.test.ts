@@ -3320,11 +3320,11 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
   // pending-done gate removed, this test's final assertion fails with
   // mode="terminal" instead of "close-proposal" — confirmed manually
   // before finalizing.
-  it(
+  it.each(DONE_INPUTS)(
     "round3(b): pending-done 中に peer 自身の done が到着→送信が reject " +
       "されると adapter には terminal が確定注入されず close-proposal に " +
-      "なる (review must-fix)",
-    async () => {
+      "なる (review must-fix) — $label",
+    async ({ done }) => {
       const { tool, settlers } = makeMultiDeferredAckTool();
 
       const pendingDone = tool.invoke({
@@ -3332,7 +3332,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
         body: "bye",
         kind: "done",
         conversation_id: "cnv-peer-race",
-        done: true,
+        ...(done === undefined ? {} : { done }),
       });
       await Promise.resolve();
 

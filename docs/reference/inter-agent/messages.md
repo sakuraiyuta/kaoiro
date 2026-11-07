@@ -115,7 +115,7 @@ Only the `type` value and `payload` schema are new.
 | `turn_number` | MUST | Positive integer starting at 1; increment per send in a conversation. `(conversation_id, turn_number)` defines total order |
 | `kind` | MUST | Nine-value enum below |
 | `body` | MUST | Free-text message body; agents define its semantics |
-| `meta.done` | MUST | Boolean. True when this agent proposes ending the conversation. **Both owner-side agents must send true to complete**. A compliant wrapper derives it from `send_to_agent`'s `done` argument: an omitted argument defaults to true when `kind=done` and false otherwise, while an explicitly passed boolean is carried through unchanged (issue #665) |
+| `meta.done` | MUST | Boolean. True when this agent proposes ending the conversation. **Both owner-side agents must send true to complete**. A compliant wrapper derives it from `send_to_agent`'s `done` argument: an omitted argument defaults to true when `kind=done` and false otherwise, while an explicitly passed boolean is carried through unchanged ([issue #665](https://github.com/sakuraiyuta/kaoiro/issues/665)) |
 | `meta.propose_next` | MUST | String describing the next expectation (may be empty) |
 | `meta.confidence` | optional | 0.0–1.0 |
 | `meta.reject_reason` | MUST when `kind=reject` | String with the concrete reason for rejecting a proposal |
@@ -172,7 +172,7 @@ issuecomment-5384349594.
 | `accept` | Agreement with propose | `propose` ← |
 | `reject` | Opposition to propose (`meta.reject_reason` required) | `propose` ← |
 | `escalate-to-user` | Request for human tie-breaker; also used for server-synthesized notices on hard-limit breach | → user |
-| `done` | Completion declaration | Agent-originated completion requires both owner sides. The kind alone never closes a conversation — admission reads `meta.done` only — but it does set the default for an omitted `done` argument (see `meta.done` above, issue #665). Server notices at `open_conversation_ttl` (issue #211 direction 2) also use this kind, but are one-shot, one-way events distinct from agent-to-agent agreement |
+| `done` | Completion declaration | Agent-originated completion requires both owner sides. The kind alone never closes a conversation — admission reads `meta.done` only — but it does set the default for an omitted `done` argument (see `meta.done` above, [issue #665](https://github.com/sakuraiyuta/kaoiro/issues/665)). Server notices at `open_conversation_ttl` (issue #211 direction 2) also use this kind, but are one-shot, one-way events distinct from agent-to-agent agreement |
 
 Covered cases:
 
