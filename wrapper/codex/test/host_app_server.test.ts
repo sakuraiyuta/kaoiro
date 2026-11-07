@@ -1,8 +1,8 @@
+import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionResetCoordinator, type WrapperConfig } from "@kaoiro/agent-common";
