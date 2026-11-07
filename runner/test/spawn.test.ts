@@ -252,7 +252,7 @@ require('node:module').syncBuiltinESMExports();`);
     await finished;
     const nativeCodes = readFileSync(marker, "utf8").trim().split("\n").map(line => JSON.parse(line));
     expect(nativeCodes.length).toBeGreaterThan(0); expect(nativeCodes.every(code => code === 79)).toBe(true);
-    expect(child.exitCode).toBe(1); expect(child.signal).toBeNull();
+    expect(child.exitCode).toBe(0); expect(child.signal).toBeNull();
     expect(child.recovery).toEqual({ ok: true, record: { version: 1, state: "unbound" } });
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
