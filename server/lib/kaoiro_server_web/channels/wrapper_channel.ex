@@ -767,7 +767,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
              reply_modes: KaoiroServer.InterAgentReplyBasis.snapshot(),
              delivery_modes: WorkStore.modes_snapshot(),
              status_lines: AgentStatusLines.heads(),
-             users: users_projection()
+             users: directory_users()
            }
          end) do
       {:ok, reads} -> directory_reply(socket, self_id, reads)
@@ -842,7 +842,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
     agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
 
-    reply = %{"agents" => agents, "users" => users}
+    reply = %{"agents" => agents, "users" => users_projection(users)}
 
     if TransportLimits.reply_frame_fits?("wrapper:#{self_id}", reply) do
       {:reply, {:ok, reply}, socket}
@@ -1840,14 +1840,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # stray non-boolean config value (e.g. the literal string `"true"`
   # landing in config by a typo'd release override) instead of keeping
   # it closed. Only the exact boolean `true` opens it.
-  defp users_projection do
+  defp directory_users do
     if Application.get_env(:kaoiro_server, :expose_users_to_agents, false) == true do
       KaoiroServer.Users.all_with_role()
-      |> Enum.map(&user_entry/1)
-      |> Enum.filter(&(&1 != nil))
     else
       []
     end
+  end
+
+  defp users_projection(users) do
+    users
+    |> Enum.map(&user_entry/1)
+    |> Enum.filter(&(&1 != nil))
   end
 
   # Peer directory "users" entry (issue #187 段階2). A LITERAL map with
