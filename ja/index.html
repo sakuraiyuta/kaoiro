@@ -35,6 +35,7 @@
       <div class="hero-copy">
       <h1><img src="../assets/kaoiro-logo-on-dark.png" alt="kaoiro" width="1553" height="466"></h1>
       <p class="lead">CLI AI エージェントを動かし、見守り、連携させる。それぞれに顔と人格を。</p>
+      <p class="film-jump"><a href="#intro-film">2 分の動画を見る <span aria-hidden="true">↘</span></a></p>
       <ul class="actions">
         <li><a class="badge" href="https://github.com/sakuraiyuta/kaoiro"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span>sakuraiyuta/kaoiro</span></a></li>
         <li><a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start (英語)</a></li>
@@ -45,10 +46,14 @@
         <p class="notice"><strong>研究用のプロトタイプです。</strong> 主に作者と研究室のメンバーが日常的に使うために開発しています。保守や issue への対応は保証しません。</p>
         <p class="notice warn"><strong>セキュリティ。</strong> operator の認証情報を持つ人は、エージェントが動く全てのマシンでコマンドを実行できます。それらのホストへの SSH 鍵と同じように扱い、導入の前に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
       </div>
-      <figure class="hero-preview">
-        <div class="preview-bar" aria-hidden="true"><span></span><span></span><span></span><b>kaoiro / dashboard</b></div>
-        <img src="../assets/agent-grid.png" width="1036" height="619" alt="エージェントのグリッドと会話のタイムライン">
-        <figcaption>ダッシュボードの画面例・表示は現在日本語のみ</figcaption>
+      <figure class="hero-preview intro-film" id="intro-film">
+        <video id="intro-video" controls preload="none" playsinline width="1280" height="720" poster="../assets/kaoiro-intro-ja-poster.png" aria-label="動く kaoiro を見る">
+          <source src="../assets/kaoiro-intro-ja.webm" type="video/webm">
+        </video>
+        <figcaption>
+          <a class="film-play" href="../assets/kaoiro-intro-ja.webm"><span class="play-icon" aria-hidden="true">▶</span><span><strong>動く kaoiro を見る</strong><small>2 分の紹介動画 · 音声なし</small></span></a>
+          <p class="film-note">架空のデモデータ。再生できない場合は <a class="film-file" href="../assets/kaoiro-intro-ja.webm" download>WebM をダウンロード (3.5 MB)</a></p>
+        </figcaption>
       </figure>
     </header>
 
@@ -58,7 +63,7 @@
       <p class="intro">kaoiro は複数の CLI AI エージェントを同時に動かし、見守り、連携させます。エージェントはそれぞれキャラクターになり、表情で今の様子を伝えます。ターミナルを巡回するより、小さな AI のオフィスを見守る感覚です。</p>
       <div class="scene">
         <figure class="stage">
-          <div class="frame"><img src="../assets/agent-grid.png" width="1036" height="619" alt="kaoiro のダッシュボード: 4 体のエージェントのキャラクターカードと会話タイムライン。1 枚のカードに権限の確認待ちの印が付いている"></div>
+          <div class="frame"><img loading="lazy" fetchpriority="low" src="../assets/agent-grid.png" width="1036" height="619" alt="kaoiro のダッシュボード: 4 体のエージェントのキャラクターカードと会話タイムライン。1 枚のカードに権限の確認待ちの印が付いている"></div>
           <figcaption>画面の例です。公開デモではありません。</figcaption>
         </figure>
         <div class="steps">
@@ -334,11 +339,11 @@
       <h2 id="screens">画面</h2>
       <div class="screens">
         <figure class="rise">
-          <img src="../assets/agent-grid.png" width="1036" height="619" alt="kaoiro のダッシュボード: 4 体のエージェントのキャラクターカードと会話タイムライン。1 枚のカードに権限の確認待ちの印が付いている">
+          <img loading="lazy" fetchpriority="low" src="../assets/agent-grid.png" width="1036" height="619" alt="kaoiro のダッシュボード: 4 体のエージェントのキャラクターカードと会話タイムライン。1 枚のカードに権限の確認待ちの印が付いている">
           <figcaption>グリッドとタイムライン。内容はサンプルです。</figcaption>
         </figure>
         <figure class="rise">
-          <img src="../assets/settings-drawer.png" width="320" height="520" alt="設定のドロワー: 通知音、音量、カードの表示の設定">
+          <img loading="lazy" fetchpriority="low" src="../assets/settings-drawer.png" width="320" height="520" alt="設定のドロワー: 通知音、音量、カードの表示の設定">
           <figcaption>設定: 通知音、音量、カードの表示。</figcaption>
         </figure>
       </div>
