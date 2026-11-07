@@ -775,83 +775,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  defp read_directory_stores(fun) do
-    {:ok, fun.()}
-  catch
-    :exit, reason ->
-      Logger.warning(
-        "directory store unavailable: #{inspect(reason, limit: 10, printable_limit: 256)}"
-      )
-
-      :unavailable
-  end
-
-  defp directory_reply(socket, self_id, reads) do
-    %{
-      activities: activities,
-      peer_index: peer_index,
-      deliveries: {deliveries, _},
-      states: states,
-      directory: directory,
-      build_infos: build_infos,
-      reply_modes: reply_modes,
-      delivery_modes: delivery_modes,
-      status_lines: status_lines,
-      users: users
-    } = reads
-
-    live =
-      Enum.map(states, fn {id, env} ->
-        directory_entry(
-          id,
-          env,
-          Map.get(directory, id),
-          Map.get(activities, id),
-          Map.get(peer_index, id, []),
-          Map.get(deliveries, id),
-          Map.get(build_infos, id)
-        )
-        |> maybe_put_optional_field("inter_agent_reply_basis", Map.get(reply_modes, id))
-        |> maybe_put_optional_field("delivery_modes", Map.get(delivery_modes, id))
-      end)
-
-    # issue #259 仕様5: AgentStates 側を優先。同一 agent_id を重複させない。
-    directory_only =
-      directory
-      |> Map.drop(Map.keys(states))
-      |> Enum.map(fn {id, entry} ->
-        directory_only_entry(id, entry, Map.get(peer_index, id, []))
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    # issue #259 仕様5 / S9: requester 除外は合流後にここ 1 箇所だけ
-    # (live / directory_only の両方をこの 1 箇所でカバーする)。
-    #
-    # ふじ MF-1: この除外を N=32 の cap より前に置く。requester 自身が
-    # AgentDirectory にのみ存在する窓 (AgentStates 未登録、例えば spawn
-    # 直後に自分の初回 envelope をまだ送っていない状態) では、cap を
-    # 先にかけると self が枠を 1 つ消費してから落ち、真の eligible peer
-    # 数より少なく返る事故になる (33 件 eligible のとき 31 件しか返らない
-    # など)。self reject → directory_only 印付きのみを 32 件で cap、の
-    # 順にすることでこれを閉じる。
-    merged =
-      (live ++ directory_only)
-      |> Enum.reject(&(&1["agent_id"] == self_id))
-      |> Enum.map(&put_status_line(&1, status_lines))
-
-    {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
-    agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
-
-    reply = %{"agents" => agents, "users" => users_projection(users)}
-
-    if TransportLimits.reply_frame_fits?("wrapper:#{self_id}", reply) do
-      {:reply, {:ok, reply}, socket}
-    else
-      Logger.warning("directory_request reply exceeded the transport frame budget")
-      {:reply, {:error, %{reason: "directory_too_large"}}, socket}
-    end
-  end
-
   # Issue 482. The agent id is the socket's own; a payload `agent_id` is never
   # read, so a wrapper can only ever write its own line.
   defp handle_wrapper_in("status_line_set", payload, socket) do
@@ -1528,6 +1451,83 @@ defmodule KaoiroServerWeb.WrapperChannel do
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: PeerSessionResetReplyReasons.normalize(reason)}}, socket}
+    end
+  end
+
+  defp read_directory_stores(fun) do
+    {:ok, fun.()}
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "directory store unavailable: #{inspect(reason, limit: 10, printable_limit: 256)}"
+      )
+
+      :unavailable
+  end
+
+  defp directory_reply(socket, self_id, reads) do
+    %{
+      activities: activities,
+      peer_index: peer_index,
+      deliveries: {deliveries, _},
+      states: states,
+      directory: directory,
+      build_infos: build_infos,
+      reply_modes: reply_modes,
+      delivery_modes: delivery_modes,
+      status_lines: status_lines,
+      users: users
+    } = reads
+
+    live =
+      Enum.map(states, fn {id, env} ->
+        directory_entry(
+          id,
+          env,
+          Map.get(directory, id),
+          Map.get(activities, id),
+          Map.get(peer_index, id, []),
+          Map.get(deliveries, id),
+          Map.get(build_infos, id)
+        )
+        |> maybe_put_optional_field("inter_agent_reply_basis", Map.get(reply_modes, id))
+        |> maybe_put_optional_field("delivery_modes", Map.get(delivery_modes, id))
+      end)
+
+    # issue #259 仕様5: AgentStates 側を優先。同一 agent_id を重複させない。
+    directory_only =
+      directory
+      |> Map.drop(Map.keys(states))
+      |> Enum.map(fn {id, entry} ->
+        directory_only_entry(id, entry, Map.get(peer_index, id, []))
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    # issue #259 仕様5 / S9: requester 除外は合流後にここ 1 箇所だけ
+    # (live / directory_only の両方をこの 1 箇所でカバーする)。
+    #
+    # ふじ MF-1: この除外を N=32 の cap より前に置く。requester 自身が
+    # AgentDirectory にのみ存在する窓 (AgentStates 未登録、例えば spawn
+    # 直後に自分の初回 envelope をまだ送っていない状態) では、cap を
+    # 先にかけると self が枠を 1 つ消費してから落ち、真の eligible peer
+    # 数より少なく返る事故になる (33 件 eligible のとき 31 件しか返らない
+    # など)。self reject → directory_only 印付きのみを 32 件で cap、の
+    # 順にすることでこれを閉じる。
+    merged =
+      (live ++ directory_only)
+      |> Enum.reject(&(&1["agent_id"] == self_id))
+      |> Enum.map(&put_status_line(&1, status_lines))
+
+    {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
+    agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
+
+    reply = %{"agents" => agents, "users" => users_projection(users)}
+
+    if TransportLimits.reply_frame_fits?("wrapper:#{self_id}", reply) do
+      {:reply, {:ok, reply}, socket}
+    else
+      Logger.warning("directory_request reply exceeded the transport frame budget")
+      {:reply, {:error, %{reason: "directory_too_large"}}, socket}
     end
   end
 
