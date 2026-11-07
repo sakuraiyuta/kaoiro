@@ -11,7 +11,10 @@
   <script src="../site.js" defer></script>
 </head>
 <body>
-  <nav class="wrap topbar" aria-label="言語">
+  <nav class="wrap topbar" aria-label="サイト">
+    <a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">ドキュメント</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">リリースノート</a>
     <a href="../" hreflang="en" lang="en">English</a>
   </nav>
   <main>
@@ -70,10 +73,22 @@
         <li class="reveal"><h3>UI で承認</h3><p>承認待ちのツール呼び出しはクライアントに届きます。選択式の質問も同じ経路でダイアログになります。</p></li>
         <li class="reveal"><h3>エージェントどうしの連絡</h3><p>依頼、レビューの依頼、承認をメッセージとして扱い、会話ごとにまとめます。</p></li>
         <li class="reveal"><h3>1 本のタイムライン</h3><p>返信とエージェント間のメッセージを時刻順に並べます。未読の印が付き、クリックで全文を開けます。</p></li>
-        <li class="reveal"><h3>4 つのエンジン、1 つのプロトコル</h3><p>Claude Code、Codex、Antigravity、Grok Build は同じ adapter の境界で動きます。UI は宣言された機能に従います。</p></li>
-        <li class="reveal"><h3>複数ホスト</h3><p>マシンごとの runner がホストを登録し、起動できるエンジンを宣言して、wrapper を監視します。</p></li>
+        <li class="reveal"><h3>ペルソナは zip のパック</h3><p>キャラクターは版と hash を持つパックで、取り込み用のディレクトリから読みます。既定のセットも同梱しています。</p></li>
+        <li class="reveal"><h3>通知</h3><p>エージェントから操作が戻ると、デスクトップ通知と状態ごとの音で知らせます。</p></li>
       </ul>
     </section>
+
+    <section class="wrap block" aria-labelledby="engines">
+      <h2 id="engines">4 つのエンジンが、一緒に働く</h2>
+      <p class="intro">kaoiro は Claude Code、Codex、Antigravity、Grok Build に対応し、エンジンは起動のときに選びます。あるエンジンのエージェントから別のエンジンのエージェントへメッセージが届くので、同じ会話の中で依頼、レビュー、回答を交わせます。</p>
+      <ul class="cards four">
+        <li class="reveal"><h3>Claude Code</h3><p>Claude Agent SDK を通して動かします。</p></li>
+        <li class="reveal"><h3>Codex</h3><p>Codex app-server を通して動かします。</p></li>
+        <li class="reveal"><h3>Antigravity</h3><p>Antigravity CLI を通して動かします。</p></li>
+        <li class="reveal"><h3>Grok Build</h3><p>常駐の ACP session として動かします。</p></li>
+      </ul>
+    </section>
+    <p class="wrap note">エンジンの機能は同じではありません。model や effort の切り替え、権限のモード、ファイルの添付は各エンジンの宣言によります。実行中の turn にメッセージが届くかどうかもエンジンごとに違います。ダッシュボードは宣言された機能に従います。</p>
 
     <section class="wrap block" aria-labelledby="uses">
       <h2 id="uses">使い方の例</h2>
@@ -82,6 +97,25 @@
         <li class="reveal"><h3>複数のエージェントを並べて動かす</h3><p>それぞれに別の作業とディレクトリを任せ、ターミナルを巡回する代わりにグリッドを見ます。</p></li>
         <li class="reveal"><h3>実装とレビューを分ける</h3><p>あるエージェントが実装し、別のエージェントがレビューします。引き継ぎはメッセージとして見えるので、誰かの画面を開かずに追えます。</p></li>
         <li class="reveal"><h3>別の端末から答える</h3><p>ダッシュボードはスマートフォンの幅まで畳めます。手元の端末から届く環境なら、席を離れていても待っているエージェントに答えられます。</p></li>
+      </ul>
+    </section>
+
+    <section class="wrap block" aria-labelledby="architecture">
+      <h2 id="architecture">分かれた部品、複数のホスト</h2>
+      <p class="intro">kaoiro は役割の分かれた 4 つの部品でできています。1 つの server に複数のマシンのエージェントを集められ、マシンごとの runner がそれぞれを監督します。</p>
+      <ul class="cards four">
+        <li class="reveal"><h3>Server</h3><p>wrapper を束ねて状態を持ち、client へリアルタイムに届けて、指示を該当のエージェントへ運びます。</p></li>
+        <li class="reveal"><h3>Runner</h3><p>ホストごとに 1 つ。wrapper の起動、停止、再起動とホストの登録を担い、データの経路には入りません。</p></li>
+        <li class="reveal"><h3>Wrapper</h3><p>エージェントを起動し、エンジン固有のイベントを共通の形式へ変換します。wrapper は server へ直接つながります。</p></li>
+        <li class="reveal"><h3>Client</h3><p>各エージェントをキャラクターとして見せます。同梱の Web ダッシュボードは client の 1 つです。</p></li>
+      </ul>
+    </section>
+    <section class="wrap block" aria-labelledby="extend">
+      <h2 id="extend">拡張の余地</h2>
+      <p class="intro">部品が分かれているので、ほかの部品を書き直さずに 1 つを変えられます。</p>
+      <ul class="uses two">
+        <li class="reveal"><h3>自分の client を作る</h3><p>server と client は<a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/protocol">文書化された公開 protocol (英語)</a>でつながります。同梱のダッシュボードはこの protocol の参照実装なので、同じ protocol で別の client を作れます。</p></li>
+        <li class="reveal"><h3>source を変更してエンジンを足す</h3><p>エンジンごとに wrapper package があり、共有の core の上に載っています。エンジンの追加は、runner と server のエンジンの一覧を含む source の変更です。Grok Build はこの形で追加しました。</p></li>
       </ul>
     </section>
 

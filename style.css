@@ -102,9 +102,27 @@ h3 {
 
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 0.1rem 1rem;
   padding-top: 0.5rem;
   font-size: 0.9rem;
+}
+
+.topbar a,
+.topbar a:visited {
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.topbar a:hover {
+  text-decoration: underline;
+}
+
+.note {
+  margin-top: 1.25rem;
+  color: var(--muted);
+  font-size: 0.95rem;
 }
 
 /* Hero */
@@ -399,12 +417,21 @@ footer {
   .screens {
     grid-template-columns: 2.4fr 1fr;
   }
+
+  .cards.four,
+  .uses.two {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 @media (min-width: 60rem) {
   .scene {
     grid-template-columns: 1.5fr 1fr;
     gap: 3rem;
+  }
+
+  .cards.four {
+    grid-template-columns: repeat(4, 1fr);
   }
 
   .stage {

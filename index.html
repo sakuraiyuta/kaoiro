@@ -11,7 +11,10 @@
   <script src="site.js" defer></script>
 </head>
 <body>
-  <nav class="wrap topbar" aria-label="Language">
+  <nav class="wrap topbar" aria-label="Site">
+    <a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Docs</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">Release notes</a>
     <a href="ja/" hreflang="ja" lang="ja">日本語</a>
   </nav>
   <main>
@@ -70,10 +73,22 @@
         <li class="reveal"><h3>Approve in the UI</h3><p>A tool call waiting for approval is routed to the client. Multiple-choice questions arrive as dialogs on the same path.</p></li>
         <li class="reveal"><h3>Agents message each other</h3><p>A delegation, a review request or an approval between agents is a first-class message, grouped into conversations.</p></li>
         <li class="reveal"><h3>One merged timeline</h3><p>Replies and agent-to-agent messages sit in a single time-ordered pane, with unread marks and click-through to the transcript.</p></li>
-        <li class="reveal"><h3>Four engines, one protocol</h3><p>Claude Code, Codex, Antigravity and Grok Build share one adapter boundary. The UI follows declared capabilities.</p></li>
-        <li class="reveal"><h3>Multi-host</h3><p>One runner per machine registers its host, declares which engines it can spawn and supervises the wrappers living there.</p></li>
+        <li class="reveal"><h3>Personas as zip packs</h3><p>Characters are versioned, hash-checked packs read from an ingest directory, with a bundled set as the default.</p></li>
+        <li class="reveal"><h3>Notifications</h3><p>A desktop notification and a per-state sound tell you when an agent hands control back.</p></li>
       </ul>
     </section>
+
+    <section class="wrap block" aria-labelledby="engines">
+      <h2 id="engines">Four engines, working together</h2>
+      <p class="intro">kaoiro supports Claude Code, Codex, Antigravity and Grok Build, and you choose the engine at launch. A message from an agent on one engine reaches an agent on another, so they can delegate, review and answer each other in the same conversation.</p>
+      <ul class="cards four">
+        <li class="reveal"><h3>Claude Code</h3><p>Hosted through the Claude Agent SDK.</p></li>
+        <li class="reveal"><h3>Codex</h3><p>Hosted through the Codex app-server.</p></li>
+        <li class="reveal"><h3>Antigravity</h3><p>Hosted through the Antigravity CLI.</p></li>
+        <li class="reveal"><h3>Grok Build</h3><p>Hosted as one resident ACP session.</p></li>
+      </ul>
+    </section>
+    <p class="wrap note">Engines are not identical. Model and effort switching, permission modes and file uploads depend on what each engine declares, and whether a message can reach a running turn differs by engine. The dashboard follows those declared capabilities.</p>
 
     <section class="wrap block" aria-labelledby="uses">
       <h2 id="uses">How you might use it</h2>
@@ -82,6 +97,25 @@
         <li class="reveal"><h3>Run agents side by side</h3><p>Give several agents their own tasks and working directories, then watch the grid instead of cycling through terminals.</p></li>
         <li class="reveal"><h3>Split implementation and review</h3><p>One agent implements and another reviews. The hand-off is a visible message, such as a request to review a diff, without opening anyone.</p></li>
         <li class="reveal"><h3>Answer from another device</h3><p>The dashboard has a layout that collapses down to a phone, so you can answer a waiting agent away from your desk, on a deployment you can reach from there.</p></li>
+      </ul>
+    </section>
+
+    <section class="wrap block" aria-labelledby="architecture">
+      <h2 id="architecture">Separate parts, many hosts</h2>
+      <p class="intro">kaoiro is split into four parts with clear roles. One server can gather agents from several machines, each supervised by its own runner.</p>
+      <ul class="cards four">
+        <li class="reveal"><h3>Server</h3><p>Aggregates wrappers, keeps their state, delivers it to clients in real time and routes instructions to the right agent.</p></li>
+        <li class="reveal"><h3>Runner</h3><p>One per host. It spawns, stops and restarts wrappers and registers the host, and it stays out of the data path.</p></li>
+        <li class="reveal"><h3>Wrapper</h3><p>Launches an agent and translates engine-specific events into a common format. Wrappers connect directly to the server.</p></li>
+        <li class="reveal"><h3>Client</h3><p>Shows each agent as a character. The bundled web dashboard is one client.</p></li>
+      </ul>
+    </section>
+    <section class="wrap block" aria-labelledby="extend">
+      <h2 id="extend">Room to extend</h2>
+      <p class="intro">Because the parts are separate, you can change one without rewriting the others.</p>
+      <ul class="uses two">
+        <li class="reveal"><h3>Build your own client</h3><p>The server and client talk over a <a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/protocol">documented public protocol</a>. The bundled dashboard is the reference implementation and uses the same protocol, so another client can be built on it.</p></li>
+        <li class="reveal"><h3>Add an engine in the source</h3><p>Each engine has its own wrapper package on a shared core. Adding one means changing the source, including the engine lists in the runner and the server. Grok Build was added this way.</p></li>
       </ul>
     </section>
 
