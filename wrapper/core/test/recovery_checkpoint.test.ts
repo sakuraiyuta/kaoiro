@@ -31,6 +31,7 @@ describe("launch recovery checkpoint", () => {
     expect(reporter.accept("first-turn", "first-turn")).toBe(true);
     expect(read()).toEqual({ ok: true, record: { version: 1, state: "live", session_id: "first-turn" } });
     reporter.observe("rebind");
+    expect(reporter.confirm("first-turn")).toBe(false);
     expect(read()).toEqual({ ok: true, record: { version: 1, state: "unbound", candidate_id: "rebind" } });
   });
   it("retains the attempted candidate through initialization, but clears a refusal", () => {
