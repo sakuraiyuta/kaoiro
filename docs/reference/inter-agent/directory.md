@@ -117,7 +117,7 @@ same name authority and validation as peer entries, including the
 absent-row fallback and invalid-row omission above; it works before the
 first state envelope and returns no peers or users. An oversized reply
 fails with `self_identity_too_large`. An explicit scope other than `"self"`
-fails with `unsupported_scope`; omitting scope retains the peer directory.
+fails with `unsupported_scope`; omitting scope retains the peer directory. For either scope, `directory_unavailable` means a directory store did not answer. The server log identifies the store, but the reply does not; the request can be retried.
 
 An older server ignores scope and returns the ordinary directory. The new
 wrapper treats that response, a mismatched caller id, transport errors,

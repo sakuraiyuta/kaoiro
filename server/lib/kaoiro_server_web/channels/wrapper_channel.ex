@@ -717,14 +717,21 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp handle_wrapper_in("directory_request", %{"scope" => "self"}, socket) do
     id = socket.assigns.agent_id
-    name = directory_display_name(AgentStates.get_envelope(id) || %{}, AgentDirectory.get(id))
-    identity = %{"agent_id" => id} |> maybe_put_directory_field("display_name", name)
-    reply = %{"self" => identity}
 
-    if TransportLimits.reply_frame_fits?("wrapper:#{id}", reply) do
-      {:reply, {:ok, reply}, socket}
-    else
-      {:reply, {:error, %{reason: "self_identity_too_large"}}, socket}
+    case read_directory_stores(fn -> {AgentStates.get_envelope(id), AgentDirectory.get(id)} end) do
+      {:ok, {envelope, entry}} ->
+        name = directory_display_name(envelope || %{}, entry)
+        identity = %{"agent_id" => id} |> maybe_put_directory_field("display_name", name)
+        reply = %{"self" => identity}
+
+        if TransportLimits.reply_frame_fits?("wrapper:#{id}", reply) do
+          {:reply, {:ok, reply}, socket}
+        else
+          {:reply, {:error, %{reason: "self_identity_too_large"}}, socket}
+        end
+
+      :unavailable ->
+        {:reply, {:error, %{reason: "directory_unavailable"}}, socket}
     end
   end
 
@@ -748,16 +755,50 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # (S9); requester self-exclusion applies once, after the merge.
   defp handle_wrapper_in("directory_request", _payload, socket) do
     self_id = socket.assigns.agent_id
-    activities = AgentActivity.snapshot()
-    peer_index = ConversationStates.peer_index()
-    {deliveries, _incomplete?} = DeliveryStates.wire_projection()
-    states = AgentStates.snapshot()
-    directory = AgentDirectory.all()
-    build_infos = WrapperBuildInfos.snapshot()
-    reply_modes = KaoiroServer.InterAgentReplyBasis.snapshot()
-    delivery_modes = WorkStore.modes_snapshot()
-    # One read of every committed head: a complete view, or none at all.
-    status_lines = AgentStatusLines.heads()
+
+    case read_directory_stores(fn ->
+           %{
+             activities: AgentActivity.snapshot(),
+             peer_index: ConversationStates.peer_index(),
+             deliveries: DeliveryStates.wire_projection(),
+             states: AgentStates.snapshot(),
+             directory: AgentDirectory.all(),
+             build_infos: WrapperBuildInfos.snapshot(),
+             reply_modes: KaoiroServer.InterAgentReplyBasis.snapshot(),
+             delivery_modes: WorkStore.modes_snapshot(),
+             status_lines: AgentStatusLines.heads(),
+             users: users_projection()
+           }
+         end) do
+      {:ok, reads} -> directory_reply(socket, self_id, reads)
+      :unavailable -> {:reply, {:error, %{reason: "directory_unavailable"}}, socket}
+    end
+  end
+
+  defp read_directory_stores(fun) do
+    {:ok, fun.()}
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "directory store unavailable: #{inspect(reason, limit: 10, printable_limit: 256)}"
+      )
+
+      :unavailable
+  end
+
+  defp directory_reply(socket, self_id, reads) do
+    %{
+      activities: activities,
+      peer_index: peer_index,
+      deliveries: {deliveries, _},
+      states: states,
+      directory: directory,
+      build_infos: build_infos,
+      reply_modes: reply_modes,
+      delivery_modes: delivery_modes,
+      status_lines: status_lines,
+      users: users
+    } = reads
 
     live =
       Enum.map(states, fn {id, env} ->
@@ -801,7 +842,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
     agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
 
-    reply = %{"agents" => agents, "users" => users_projection()}
+    reply = %{"agents" => agents, "users" => users}
 
     if TransportLimits.reply_frame_fits?("wrapper:#{self_id}", reply) do
       {:reply, {:ok, reply}, socket}
