@@ -1,6 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it, vi } from "vitest";
-import { parseCliArgs } from "@kaoiro/wrapper-core";
+import { readRecoveryCheckpoint, parseCliArgs } from "@kaoiro/wrapper-core";
 import { cliAppFixture } from "./fixtures/cli_app_server.js";
 
 const rateLimitStates = (f: Awaited<ReturnType<typeof cliAppFixture>>) => f.envelopes("state_change")
@@ -143,7 +143,7 @@ it("fences interrupt by Host token, keeps the queue until interrupted terminal, 
 });
 
 it.each(["app-server"] as const)("%s fail-stops once, retires pending and dispatched-but-unstarted IA, and ignores late terminal", async backend => {
-  const f = await cliAppFixture(false, backend);
+  const f = await cliAppFixture(false, backend, "legacy", { recoveryCheckpoint: true });
   const stderr = vi.spyOn(process.stderr, "write");
   try {
     await f.inbound(1, "active");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
@@ -154,6 +154,7 @@ it.each(["app-server"] as const)("%s fail-stops once, retires pending and dispat
     f.clock.advance(1000);
     expect(stderr.mock.calls.filter(([text]) => String(text).includes("turn watchdog fail-stop:"))).toHaveLength(1);
     await f.running;
+    expect(readRecoveryCheckpoint(f.recoveryCheckpoint)).toMatchObject({ ok: true, record: { state: "blocked", reason: "watchdog" } });
     expect(f.envelopes("result")).toHaveLength(0);expect(f.turns()).toHaveLength(1);expect(f.spawned).toBe(1);
     expect(f.envelopes("state_change").filter(e => e.state === "error")).toHaveLength(1);
     expect(stderr.mock.calls.filter(([text]) => String(text).includes("turn watchdog interrupt grace expired"))).toHaveLength(1);

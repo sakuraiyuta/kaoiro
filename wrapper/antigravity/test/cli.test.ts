@@ -6,8 +6,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
-import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
+import { readRecoveryCheckpoint, requirePositiveSafePid } from "@kaoiro/wrapper-core";
 import { relayAntigravityInstruction, runAntigravityCli } from "../src/cli.js";
+import { AntigravityHost } from "../src/host.js";
 import { ToolHost } from "../src/toolhost.js";
 
 function config(): WrapperConfig {
@@ -447,4 +448,27 @@ describe("SSH-agent PID signal helper", () => {
     stopSshAgent("42", fakeSignal);
     expect(calls).toEqual([[42, "SIGTERM"]]);
   });
+});
+
+
+it("writes a blocked checkpoint through the real Antigravity watchdog callback", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-watchdog-recovery-")); const checkpoint = join(root, "checkpoint");
+  let host: AntigravityHost | undefined;
+  const running = runAntigravityCli({
+    parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
+    loadConfig: () => ({ ...config(), recovery_checkpoint_path: checkpoint }),
+    createServerLink: (_url, _id, options) => {
+      queueMicrotask(() => options.onPersonaPrompt?.("fixture"));
+      return { send: () => {}, close: () => {}, reportDisconnectIntent: async () => true,
+        flushInterAgentRetirements: async () => {}, retireInterAgentDeliveries: () => true } as never;
+    },
+    createHost: (cfg, options) => (host = new AntigravityHost(cfg, options)),
+  });
+  try {
+    await vi.waitFor(() => expect(host).toBeDefined());
+    expect(readRecoveryCheckpoint(checkpoint)).toMatchObject({ ok: true, record: { state: "unbound" } });
+    expect(host!.failStopForWatchdogAttributionUnknown()).toBe(true);
+    expect(readRecoveryCheckpoint(checkpoint)).toMatchObject({ ok: true, record: { state: "blocked", reason: "watchdog" } });
+    await running;
+  } finally { await host?.close(); await running; rmSync(root, { recursive: true, force: true }); }
 });
