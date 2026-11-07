@@ -2,7 +2,7 @@
 title: Antigravity tools and permissions
 description: Current hook-gate, tool-child, bridge, and permission contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-10-09
+last_updated: 2026-11-07
 related: [protocol, antigravity-adapter]
 ---
 
@@ -62,18 +62,28 @@ The hook command receives the tool call on stdin and answers on stdout:
   --output-format json` registration check before the first turn. Its measured
   output and the effect of omitting `--add-dir` are recorded in
   [Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#customization-discovery-persona-hooks-skills).
-- `PreToolUse` fires for every tool including reads. The 57 names in
-  `init.tools` (1.1.26), classified for ADR-0057 F4 — the table is the
-  source of truth and any name outside it is *unclassified*:
+- `PreToolUse` fires for every tool including reads. The `agy` 1.5.2
+  `init.tools` inventory contained 60 names. The model also invoked
+  `read_file` at runtime even though it was absent from that inventory. These
+  names are classified for ADR-0057 F4 — the table is the source of truth and
+  any name outside it is *unclassified*:
 
   | class | tools |
   |---|---|
-  | read (local, side-effect free) | `view_file`, `list_dir`, `grep_search`, `find_by_name`, `command_status`, `list_permissions`, `manage_task`, `wait`, `wait_5_seconds`, `finish` |
+  | read (local, side-effect free) | `view_file`, `read_file`, `list_dir`, `grep_search`, `find_by_name`, `command_status`, `list_permissions`, `manage_task`, `wait`, `wait_5_seconds`, `finish` |
   | write (local files) | `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file`, `notebook_edit` |
   | shell | `run_command`, `send_command_input`, `notebook_execution` |
-  | network | `read_url_content`, `search_web`, `open_browser_url`, `generate_image`, `read_browser_page`, `list_browser_pages`, `browser_*` (15 names), `capture_browser_console_logs`, `capture_browser_screenshot`, `click_browser_pixel`, `execute_browser_javascript`, `browser_subagent` |
+  | network | `read_url_content`, `search_web`, `search_marketplace`, `open_browser_url`, `generate_image`, `read_browser_page`, `list_browser_pages`, `browser_*` (15 names), `capture_browser_console_logs`, `capture_browser_screenshot`, `click_browser_pixel`, `execute_browser_javascript`, `browser_subagent` |
   | subagent | `define_subagent`, `invoke_subagent`, `manage_subagents` (`browser_subagent` is in network so the `network_access` toggle can switch it off) |
-  | agent-internal (deny in headless) | `ask_question`, `ask_permission`, `ask_custom_permission`, `schedule`, `send_message`, `manage_inbox`, `delete_knowledge`, `call_mcp_tool`, `list_resources`, `read_resource` |
+  | agent-internal (deny in headless) | `ask_question`, `ask_permission`, `ask_custom_permission`, `schedule`, `send_message`, `manage_inbox`, `delete_knowledge`, `call_mcp_tool`, `list_resources`, `read_resource`, `list_plugin_accounts`, `run_workflow` |
+
+- `read_file` accepts only `Path` (non-empty string), optional integer
+  `StartLine` / `EndLine`, and optional non-negative integer `ByteOffset`.
+  It rejects malformed or extra arguments with
+  `kaoiro: read_file argument is missing or malformed` before checking whether
+  the path references the protected customization directory. A valid path
+  into that directory is denied with
+  `kaoiro: customization directory is protected`.
 
 - Hooks are also the only PostToolUse / Stop observation channel; not used
   by the adapter in Stage A.

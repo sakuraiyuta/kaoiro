@@ -42,7 +42,7 @@ export interface HookRequest {
 
 const classes: Readonly<Record<AntigravityToolClass, readonly string[]>> = {
   read: [
-    "view_file", "list_dir", "grep_search", "find_by_name", "command_status",
+    "view_file", "read_file", "list_dir", "grep_search", "find_by_name", "command_status",
     "list_permissions", "manage_task", "wait", "wait_5_seconds", "finish",
   ],
   write: [
@@ -55,13 +55,14 @@ const classes: Readonly<Record<AntigravityToolClass, readonly string[]>> = {
     "browser_get_network_request", "browser_input", "browser_list_network_requests", "browser_mouse_down",
     "browser_mouse_up", "browser_move_mouse", "browser_press_key", "browser_refresh_page",
     "browser_resize_window", "browser_scroll", "browser_scroll_dom", "browser_select_option",
-    "capture_browser_console_logs", "capture_browser_screenshot", "click_browser_pixel",
+    "capture_browser_console_logs", "capture_browser_screenshot", "click_browser_pixel", "search_marketplace",
     "execute_browser_javascript", "browser_subagent",
   ],
   subagent: ["define_subagent", "invoke_subagent", "manage_subagents"],
   "agent-internal": [
     "ask_question", "ask_permission", "ask_custom_permission", "schedule", "send_message",
     "manage_inbox", "delete_knowledge", "call_mcp_tool", "list_resources", "read_resource",
+    "list_plugin_accounts", "run_workflow",
   ],
 };
 
@@ -82,7 +83,8 @@ const BRIDGE_ARG_KEYS = new Set([
   "toolAction",
   "toolSummary",
 ]);
-const PATH_ARGUMENT_KEYS = new Set(["AbsolutePath", "DirectoryPath", "TargetFile", "Cwd"]);
+const PATH_ARGUMENT_KEYS = new Set(["AbsolutePath", "DirectoryPath", "TargetFile", "Cwd", "Path"]);
+const READ_FILE_ARGUMENT_KEYS = new Set(["Path", "StartLine", "EndLine", "ByteOffset"]);
 const WRITE_TARGET_KEYS: Readonly<Record<string, readonly string[]>> = {
   write_to_file: ["TargetFile", "AbsolutePath"],
   replace_file_content: ["TargetFile", "AbsolutePath"],
@@ -109,6 +111,16 @@ const LOCAL_GIT_SUBCOMMANDS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validReadFileArguments(args: unknown): boolean {
+  if (!isRecord(args)) return false;
+  if (Object.keys(args).some((key) => !READ_FILE_ARGUMENT_KEYS.has(key))) return false;
+  if (typeof args.Path !== "string" || args.Path.length === 0) return false;
+  if (args.StartLine !== undefined && (typeof args.StartLine !== "number" || !Number.isInteger(args.StartLine))) return false;
+  if (args.EndLine !== undefined && (typeof args.EndLine !== "number" || !Number.isInteger(args.EndLine))) return false;
+  return args.ByteOffset === undefined ||
+    (typeof args.ByteOffset === "number" && Number.isInteger(args.ByteOffset) && args.ByteOffset >= 0);
 }
 
 function canonical(path: string): string | null {
@@ -451,6 +463,9 @@ export class AntigravityGate {
   }
 
   evaluate(toolCall: HookToolCall): GateDecision {
+    if (toolCall.name === "read_file" && !validReadFileArguments(toolCall.args)) {
+      return { decision: "deny", reason: "kaoiro: read_file argument is missing or malformed" };
+    }
     const toolClass = TOOL_CLASS_BY_NAME.get(toolCall.name);
     if (toolClass === undefined) return this.#approval === "never"
       ? { decision: "deny", reason: "kaoiro: unclassified tool denied" }
