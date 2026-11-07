@@ -30,7 +30,7 @@ it.each(["completion-response", "event-inform", "setting-absent", "gate-absent",
   "native Monitor advice: %s", async mode => {
     const sdkPath = dirname(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"));
     const sdk = JSON.parse(await readFile(join(sdkPath, "package.json"), "utf8"));
-    expect([sdk.version, sdk.claudeCodeVersion]).toEqual(["0.3.306", "2.1.306"]);
+    expect([sdk.version, sdk.claudeCodeVersion]).toEqual(["0.3.319", "2.1.319"]);
     const advice = monitorNotifications[0]!.advice;
     const root = await mkdtemp(join(tmpdir(), "kaoiro-monitor-advice-native-"));
     const cfg = join(root, ".claude"), cwd = join(root, "project");
