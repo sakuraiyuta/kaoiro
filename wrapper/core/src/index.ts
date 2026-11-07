@@ -87,3 +87,6 @@ export type {
   UserDirectoryEntry,
   UserRole,
 } from "@kaoiro/protocol";
+
+export { RecoveryReporter, RecoveryFailure, recoveryExitCode, shutdownForRecovery, readRecoveryCheckpoint, writeRecoveryCheckpoint, RECOVERY_CHECKPOINT_UNAVAILABLE_EXIT_CODE } from "./recovery_checkpoint.js";
+export type { RecoveryRecord, RecoverySnapshot, RecoveryBlockReason } from "./recovery_checkpoint.js";

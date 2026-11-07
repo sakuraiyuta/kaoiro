@@ -459,6 +459,12 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
     config.codex_backend = raw.codex_backend;
   }
+  if (raw.recovery_checkpoint_path !== undefined)
+    config.recovery_checkpoint_path = nonEmptyString(raw.recovery_checkpoint_path, "recovery_checkpoint_path");
+  if (raw.recovery_resume_kind !== undefined) {
+    if (raw.recovery_resume_kind !== "candidate") throw new ConfigError("invalid recovery_resume_kind");
+    config.recovery_resume_kind = "candidate";
+  }
   if (raw.codex_tool_home !== undefined) {
     config.codex_tool_home = nonEmptyString(raw.codex_tool_home, "codex_tool_home");
   }
