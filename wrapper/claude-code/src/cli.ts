@@ -1493,8 +1493,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onAdmissionFailStop: ({ turnToken }) => {
       freezeInterAgentAdmission(turnToken, "unattributed", "notification result fail-stop",
-        "This host admits no new input. The wrapper exits once the running turn ends, and the runner relaunches " +
-          "it (a fresh session unless this process was launched with --resume).");
+        "This host admits no new input. Once the wrapper exits, the runner uses its latest recovery checkpoint; " +
+          "a blocked or unavailable checkpoint leaves it down for operator recovery.");
     },
     onHostEnd: ({ error }) => {
       turnWatchdog.dispose();
