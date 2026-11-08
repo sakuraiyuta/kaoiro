@@ -712,12 +712,11 @@ h2 { scroll-margin-top: 5rem; }
 .page-head h1 { margin: 0 0 1rem; font-size: clamp(2.2rem, 6vw, 4rem); letter-spacing: -0.02em; }
 .page-head .lead { max-width: 46rem; margin: 0; color: var(--muted); font-size: clamp(1.1rem, 2.2vw, 1.45rem); font-weight: 400; line-height: 1.5; }
 .eyebrow a, .eyebrow a:visited { color: var(--fg); }
-h3.sub { margin: 2.5rem 0 0.75rem; font-size: 1.2rem; }
 .cards h3 a { text-decoration: none; }
 .cards h3 a:hover { text-decoration: underline; }
 .cards.three { grid-template-columns: 1fr; }
 .notice.future { margin: 0 0 1.5rem; border-left-color: var(--c-waiting_permission); font-size: 0.95rem; }
-.notice.warn + .intro, .notice + .path { margin-top: 1.5rem; }
+.notice.warn + .intro, .notice + .path, .notice + .cards { margin-top: 1.5rem; }
 .path { max-width: 46rem; margin: 1.5rem 0 0; padding-left: 1.5rem; }
 .path li { margin-bottom: 0.6rem; padding-left: 0.25rem; }
 .path li::marker { color: var(--muted); font-family: var(--mono); }
@@ -725,16 +724,12 @@ h3.sub { margin: 2.5rem 0 0.75rem; font-size: 1.2rem; }
 .table-wrap:focus-visible { outline: 3px solid var(--c-thinking); outline-offset: 3px; }
 .table-wrap table { width: 100%; border-collapse: collapse; font-size: 0.92rem; line-height: 1.55; }
 .table-wrap table.wide { min-width: 36rem; }
-.table-wrap table.terms { min-width: 60rem; }
-.table-wrap table.terms td:last-child { min-width: 11rem; }
-.table-wrap table.terms td:last-child a { overflow-wrap: normal; }
 .table-wrap th, .table-wrap td { padding: 0.65rem 0.8rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .table-wrap tr:last-child th, .table-wrap tr:last-child td { border-bottom: 0; }
 .table-wrap thead th { background: var(--bg-card); color: var(--muted); font-weight: 600; }
 .table-wrap tbody th { font-weight: 600; }
 .table-wrap th:first-child { white-space: nowrap; }
 .table-wrap small { color: var(--muted); }
-.table-wrap q { color: var(--fg); font-style: italic; }
 .diagram.stack svg { max-width: 30rem; margin-inline: auto; }
 .d-out { fill: none; stroke: var(--fg-dim); stroke-dasharray: 6 4; }
 .d-future { fill: none; stroke: var(--c-waiting_permission); stroke-dasharray: 8 5; }

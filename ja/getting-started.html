@@ -57,19 +57,14 @@
     <section class="wrap block" aria-labelledby="accounts">
       <p class="eyebrow"><span>02</span> / 契約</p>
       <h2 id="accounts">engine ごとの契約と認証</h2>
-      <p class="intro">各 engine の利用には、各社との契約が要ります。各 engine は、agent の host の上で、それぞれの CLI か SDK で login します。以下は、2026 年 11 月 8 日に各社自身のページで確かめた内容です。価格はあえて書いていません。</p>
-      <p class="notice warn"><strong>使う前に確かめてください。</strong>プランと規約は変わります。このページは法的な助言ではありません。下の各社の規則が、自分の契約で kaoiro を動かすことに当てはまるかは<strong>未確認</strong>です。気になる点は各社に確かめてください。</p>
-      <div class="table-wrap" role="region" aria-label="各社が文書にしている内容" tabindex="0">
-        <table class="terms">
-          <thead><tr><th scope="col">engine</th><th scope="col">各社が案内する認証</th><th scope="col">他のツールから使うことについての各社の文 (原文)</th><th scope="col">各社が書いている上限</th><th scope="col">出典 (2026-11-08 確認)</th></tr></thead>
-          <tbody>
-          <tr><th scope="row">Claude Code<br><small>Claude Agent SDK</small></th><td>SDK の案内は API key、または Amazon Bedrock などのクラウド事業者です。Claude Code の CLI は、Pro・Max・Ultra と Claude for Teams・Enterprise の claude.ai の login も受け付けます。</td><td><q>Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK.</q> 同じページは、代わりに API key の認証を使うよう案内しています。</td><td>Pro と Max の利用上限は Claude と Claude Code で共有です。複数の session を同時に動かすことについては記述がありません。</td><td><a href="https://code.claude.com/docs/en/agent-sdk/overview">Agent SDK overview</a><br><a href="https://code.claude.com/docs/en/agent-sdk/quickstart">Agent SDK quickstart</a><br><a href="https://code.claude.com/docs/en/authentication">Claude Code authentication</a></td></tr>
-          <tr><th scope="row">Codex<br><small>Codex app-server</small></th><td>app-server は API key、ChatGPT の login などを受け付けます。Codex は ChatGPT の Free・Go・Plus・Pro・Business・Edu・Enterprise に含まれます。</td><td><q>If you&#8217;ve built a local or open-source application using Codex app-server authentication, you can continue using it</q>、<q>App-server authentication has never been permitted for commercial or hosted services.</q></td><td>local と cloud の利用はプランの枠を共有します。同時の session の上限は記述がありません。</td><td><a href="https://learn.chatgpt.com/docs/app-server">Codex app-server</a><br><a href="https://learn.chatgpt.com/docs/pricing">Codex pricing</a></td></tr>
-          <tr><th scope="row">Antigravity<br><small>Antigravity CLI</small></th><td>個人の Google アカウント (Free・Pro・Ultra) の browser での login、Google Cloud などの業務用アカウント、Gemini API key。</td><td><q>Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement.</q> 公式の CLI を別の program から起動することがこれに当たるかは未確認です。</td><td>Pro と Ultra には 5 時間と週の上限があり、agent の作業量に応じます。同時の session については記述がありません。</td><td><a href="https://antigravity.google/docs/install/">Install and sign in</a><br><a href="https://antigravity.google/terms/">Additional terms</a><br><a href="https://antigravity.google/docs/plans/">Plans</a></td></tr>
-          <tr><th scope="row">Grok Build<br><small>ACP session</small></th><td>初回起動時に browser で login します。browser の無い環境では API key (<code>XAI_API_KEY</code>)。SuperGrok と X Premium Plus の加入者向けと告知されています。</td><td>docs は Grok Build を <q>through the Agent Client Protocol (ACP) in other apps</q> 使えると書いています。消費者向けの規約は開けず、未確認です。</td><td>開いたページには記述がありません。</td><td><a href="https://docs.x.ai/build/overview">Grok Build overview</a><br><a href="https://x.ai/news/grok-build-cli">Grok Build の告知</a></td></tr>
-          </tbody>
-        </table>
-      </div>
+      <p class="intro">各 engine の利用には、各社との契約が要ります。各 engine は、agent の host の上で、それぞれの CLI か SDK で login します。</p>
+      <p class="notice warn"><strong>各サービスの規約を確認してください。</strong>プランと規約は変わります。kaoiro から engine を使う前に、各社の規約・利用条件を読んでください。</p>
+      <ul class="cards">
+        <li><h3>Anthropic (Claude Code)</h3><p><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK overview</a><br><a href="https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan">Using Claude Code with your Pro or Max plan</a></p></li>
+        <li><h3>OpenAI (Codex)</h3><p><a href="https://learn.chatgpt.com/docs/app-server">Codex app-server (Auth endpoints の節)</a><br><a href="https://help.openai.com/en/articles/20001542-using-your-chatgpt-plan-in-other-apps-and-sites">Using your ChatGPT plan in other apps and sites</a></p></li>
+        <li><h3>Google (Antigravity)</h3><p><a href="https://antigravity.google/terms/">Antigravity の追加規約</a><br><a href="https://antigravity.google/docs/plans/">Antigravity のプラン</a></p></li>
+        <li><h3>xAI (Grok Build)</h3><p><a href="https://x.ai/legal/terms-of-service">Terms of Service - Consumer</a></p></li>
+      </ul>
       <p class="note">kaoiro 自身は engine の認証情報を保存しません。各 engine は agent の host にある自分の login を読みます。各 engine の詳細は repo の <a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/engines">engine の reference (英語)</a> にあります。</p>
     </section>
     <section class="wrap block" aria-labelledby="hosts">

@@ -96,19 +96,7 @@
         </svg>
         <figcaption>例 A。host 名は別名です。実線はデータ、破線は runner の制御の経路です。下の破線の枠は kaoiro の外にあります。</figcaption>
       </figure>
-      <h3 class="sub">この構成での各 engine の契約</h3>
-      <div class="table-wrap" role="region" aria-label="例 A の各 engine の契約" tabindex="0">
-        <table>
-          <thead><tr><th scope="col">engine</th><th scope="col">kaoiro からの使い方</th><th scope="col">この構成の契約</th></tr></thead>
-          <tbody>
-          <tr><th scope="row">Claude Code</th><td>Claude Agent SDK</td><td>Claude Ultra</td></tr>
-          <tr><th scope="row">Codex</th><td>Codex app-server</td><td>ChatGPT Pro</td></tr>
-          <tr><th scope="row">Antigravity</th><td>Antigravity CLI</td><td>Google AI Pro</td></tr>
-          <tr><th scope="row">Grok Build</th><td>常駐する 1 つの ACP session</td><td>SuperGrok</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="note">プランと規約は変わります。各社が文書にしている内容は <a href="getting-started.html#accounts">はじめかた</a> にまとめました。operator の認証情報を持つ人は agent-host で command を実行できます。server を外に出す前に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
+      <p class="note">各 engine の利用には、各社との契約が要ります (<a href="getting-started.html#accounts">はじめかた</a>)。operator の認証情報を持つ人は agent-host で command を実行できます。server を外に出す前に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
     </section>
     <section class="wrap block" aria-labelledby="single-host">
       <p class="eyebrow"><span>02</span> / 例 B</p>
