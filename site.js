@@ -46,3 +46,20 @@
   steps.forEach((step) => sceneObserver.observe(step));
   document.documentElement.classList.add("motion");
 })();
+
+// The link remains a direct-file fallback when enhancement is unavailable.
+(() => {
+  const video = document.querySelector(".intro-film video");
+  const play = document.querySelector(".film-play");
+  const file = document.querySelector(".film-file");
+  if (!video || !play || typeof video.play !== "function") return;
+  play.addEventListener("click", (event) => {
+    event.preventDefault();
+    try {
+      const started = video.play();
+      if (started && typeof started.catch === "function") started.catch(() => file.focus());
+    } catch {
+      file.focus();
+    }
+  });
+})();
