@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14141d">
+  <title>kaoiro deployment examples</title>
+  <meta name="description" content="Example kaoiro layouts: several on-premises hosts, everything on one machine, and an offline intranet setup that is a future concept.">
+  <link rel="alternate" hreflang="ja" href="ja/deployments.html">
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#multi-host">Skip to content</a>
+  <nav class="wrap topbar" aria-label="Site">
+    <a href="./">Home</a>
+    <a href="how-it-works.html">How it works</a>
+    <a href="deployments.html" aria-current="page">Deployments</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Docs</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">Release notes</a>
+    <a href="ja/deployments.html" hreflang="ja" lang="ja">日本語</a>
+  </nav>
+  <nav class="toc" aria-label="Sections">
+    <ol>
+      <li><a href="#multi-host"><span>A: several hosts</span></a></li>
+      <li><a href="#single-host"><span>B: one host</span></a></li>
+      <li><a href="#offline"><span>C: offline (future)</span></a></li>
+      <li><a href="#compare"><span>Compare</span></a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="wrap page-head">
+      <p class="eyebrow"><a href="./">kaoiro</a> / Deployments</p>
+      <h1>Deployments</h1>
+      <p class="lead">Three example layouts. Host names are placeholders, and the offline example is a future concept, not something you can run today.</p>
+    </header>
+
+    <section class="wrap block" aria-labelledby="multi-host">
+      <p class="eyebrow"><span>01</span> / Example A</p>
+      <h2 id="multi-host">Several on-premises hosts, split by role</h2>
+      <p class="intro">The layout the author uses every day, with host names replaced by placeholders. The server, the agents and heavy tests each have a machine of their own.</p>
+      <ul class="cards">
+        <li><h3>server-host</h3><p>One Linux machine. The kaoiro server runs under Docker Compose behind an HTTPS reverse proxy and is reachable from the Internet.</p></li>
+        <li><h3>agent-host</h3><p>One Linux machine. The runner stays resident as a systemd user unit and supervises about a dozen agents on this host: roughly 6 Claude Code, 4 Codex, 2 Antigravity and 1 Grok Build.</p></li>
+        <li><h3>test-host</h3><p>A separate machine that runs heavy tests in isolated containers. This is the author's own arrangement, not a kaoiro feature.</p></li>
+        <li><h3>Clients and files</h3><p>The operator uses the dashboard in a browser on a PC and on a phone. Files for the operator to read are passed through a self-hosted Nextcloud, also outside kaoiro.</p></li>
+      </ul>
+      <figure class="diagram stack">
+        <svg viewBox="0 0 400 560" role="img" aria-label="Example A. A PC browser and a phone browser reach server-host over HTTPS through the Internet. On server-host an HTTPS reverse proxy forwards to the kaoiro server running under Docker Compose. On agent-host a runner, running as a systemd user unit, supervises about 6 Claude Code, 4 Codex, 2 Antigravity and 1 Grok Build agents, which connect to the server for data while the runner connects separately for control. A test-host with isolated containers and a Nextcloud file share sit outside kaoiro.">
+          <rect class="d-box" x="20" y="8" width="170" height="52" rx="8"/>
+          <text class="d-t d-b" x="105" y="30" text-anchor="middle" font-size="14">PC browser</text>
+          <text class="d-m" x="105" y="49" text-anchor="middle" font-size="12">dashboard</text>
+          <rect class="d-box" x="210" y="8" width="170" height="52" rx="8"/>
+          <text class="d-t d-b" x="295" y="30" text-anchor="middle" font-size="14">Phone browser</text>
+          <text class="d-m" x="295" y="49" text-anchor="middle" font-size="12">dashboard</text>
+          <path class="d-line" d="M105 60L105 112"/>
+          <path class="d-line" d="M295 60L295 112"/>
+          <text class="d-k" x="200" y="88" text-anchor="middle" font-size="12">HTTPS over the Internet</text>
+          <rect class="d-host" x="20" y="100" width="360" height="140" rx="8"/>
+          <rect class="d-chip" x="40" y="112" width="320" height="40" rx="8"/>
+          <text class="d-t" x="200" y="137" text-anchor="middle" font-size="14">HTTPS reverse proxy</text>
+          <path class="d-line" d="M200 152L200 162"/>
+          <rect class="d-chip" x="40" y="162" width="320" height="48" rx="8"/>
+          <text class="d-t d-b" x="200" y="183" text-anchor="middle" font-size="14">kaoiro server</text>
+          <text class="d-m" x="200" y="202" text-anchor="middle" font-size="12">Docker Compose</text>
+          <text class="d-t d-b" x="34" y="230" text-anchor="start" font-size="13">server-host</text>
+          <path class="d-line" d="M262 210L262 296"/>
+          <text class="d-k" x="270" y="262" text-anchor="start" font-size="12">data</text>
+          <path class="d-dash" d="M86 210L86 296"/>
+          <text class="d-k" x="94" y="262" text-anchor="start" font-size="12">control</text>
+          <rect class="d-host" x="20" y="280" width="360" height="200" rx="8"/>
+          <rect class="d-chip-d" x="36" y="296" width="100" height="40" rx="8"/>
+          <text class="d-t" x="86" y="321" text-anchor="middle" font-size="14">runner</text>
+          <text class="d-m" x="86" y="352" text-anchor="middle" font-size="11">systemd user unit</text>
+          <text class="d-t d-b" x="34" y="470" text-anchor="start" font-size="13">agent-host</text>
+          <rect class="d-chip" x="160" y="296" width="204" height="34" rx="8"/>
+          <text class="d-t" x="172" y="318" text-anchor="start" font-size="13">Claude Code × about 6</text>
+          <path class="d-dash" d="M136 316L160 313"/>
+          <rect class="d-chip" x="160" y="336" width="204" height="34" rx="8"/>
+          <text class="d-t" x="172" y="358" text-anchor="start" font-size="13">Codex × about 4</text>
+          <path class="d-dash" d="M136 316L160 353"/>
+          <rect class="d-chip" x="160" y="376" width="204" height="34" rx="8"/>
+          <text class="d-t" x="172" y="398" text-anchor="start" font-size="13">Antigravity × about 2</text>
+          <path class="d-dash" d="M136 316L160 393"/>
+          <rect class="d-chip" x="160" y="416" width="204" height="34" rx="8"/>
+          <text class="d-t" x="172" y="438" text-anchor="start" font-size="13">Grok Build × about 1</text>
+          <path class="d-dash" d="M136 316L160 433"/>
+          <rect class="d-out" x="20" y="504" width="170" height="48" rx="8"/>
+          <text class="d-t d-b" x="105" y="524" text-anchor="middle" font-size="13">test-host</text>
+          <text class="d-m" x="105" y="543" text-anchor="middle" font-size="11">isolated containers</text>
+          <rect class="d-out" x="210" y="504" width="170" height="48" rx="8"/>
+          <text class="d-t d-b" x="295" y="524" text-anchor="middle" font-size="13">file share</text>
+          <text class="d-m" x="295" y="543" text-anchor="middle" font-size="11">Nextcloud</text>
+        </svg>
+        <figcaption>Example A with placeholder host names. Solid lines carry data and dashed lines are the runner&#39;s control path. The dashed boxes at the bottom are outside kaoiro.</figcaption>
+      </figure>
+      <h3 class="sub">Engine plans in this setup</h3>
+      <div class="table-wrap" role="region" aria-label="Engine plans in example A" tabindex="0">
+        <table>
+          <thead><tr><th scope="col">Engine</th><th scope="col">Hosted through</th><th scope="col">Plan used here</th></tr></thead>
+          <tbody>
+          <tr><th scope="row">Claude Code</th><td>Claude Agent SDK</td><td>TODO-plan</td></tr>
+          <tr><th scope="row">Codex</th><td>Codex app-server</td><td>TODO-plan</td></tr>
+          <tr><th scope="row">Antigravity</th><td>Antigravity CLI</td><td>TODO-plan</td></tr>
+          <tr><th scope="row">Grok Build</th><td>one resident ACP session</td><td>SuperGrok</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Plans and terms change. What each vendor documents is on <a href="getting-started.html#accounts">Getting started</a>. An operator credential lets its holder run commands on agent-host, so read <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> before you expose a server.</p>
+    </section>
+    <section class="wrap block" aria-labelledby="single-host">
+      <p class="eyebrow"><span>02</span> / Example B</p>
+      <h2 id="single-host">Everything on one machine</h2>
+      <p class="intro">For one person, the server, a runner and the agents can share a single host. You follow the same runbooks as for several hosts, on one machine.</p>
+      <ul class="cards">
+        <li><h3>Where it runs</h3><p>One machine runs the server under Docker Compose, a runner, and the agents you launch. By default the server binds only to 127.0.0.1:4000 and a reverse proxy on the same host reaches it.</p></li>
+        <li><h3>Answering from a phone</h3><p>Decide how the server is reached before writing <code>.env</code>: an HTTPS reverse proxy, or a direct address inside a VPN that must never be exposed to the public Internet. Both are in the <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/network-and-login.md">network and login runbook</a>.</p></li>
+        <li><h3>Trying it first</h3><p>The README&#39;s <a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a> starts every layer on one machine with <code>./scripts/dev.sh</code>, with hot reload. For daily use, follow the <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">production manual</a>.</p></li>
+        <li><h3>Keep in mind</h3><p>Restarting a runner stops every agent beneath it. With one host, every agent you run is beneath that runner.</p></li>
+      </ul>
+      <figure class="diagram stack">
+        <svg viewBox="0 0 400 330" role="img" aria-label="Example B. A browser reaches one host. On that host the kaoiro server runs under Docker Compose, and a runner supervises agents such as Claude Code and Codex, which connect to the server on the same machine.">
+          <rect class="d-box" x="100" y="8" width="200" height="52" rx="8"/>
+          <text class="d-t d-b" x="200" y="30" text-anchor="middle" font-size="14">Browser</text>
+          <text class="d-m" x="200" y="49" text-anchor="middle" font-size="12">this PC or another device</text>
+          <path class="d-line" d="M200 60L200 110"/>
+          <rect class="d-host" x="20" y="96" width="360" height="220" rx="8"/>
+          <rect class="d-chip" x="40" y="110" width="320" height="48" rx="8"/>
+          <text class="d-t d-b" x="200" y="131" text-anchor="middle" font-size="14">kaoiro server</text>
+          <text class="d-m" x="200" y="150" text-anchor="middle" font-size="12">Docker Compose</text>
+          <rect class="d-chip-d" x="40" y="182" width="100" height="40" rx="8"/>
+          <text class="d-t" x="90" y="207" text-anchor="middle" font-size="14">runner</text>
+          <path class="d-dash" d="M90 182L90 158"/>
+          <rect class="d-chip" x="164" y="178" width="196" height="34" rx="8"/>
+          <text class="d-t" x="176" y="200" text-anchor="start" font-size="13">Claude Code</text>
+          <rect class="d-chip" x="164" y="218" width="196" height="34" rx="8"/>
+          <text class="d-t" x="176" y="240" text-anchor="start" font-size="13">Codex</text>
+          <rect class="d-chip" x="164" y="258" width="196" height="34" rx="8"/>
+          <text class="d-m" x="176" y="280" text-anchor="start" font-size="12">other engines …</text>
+          <path class="d-dash" d="M140 202L164 195"/>
+          <path class="d-dash" d="M140 202L164 235"/>
+          <path class="d-dash" d="M140 202L164 275"/>
+          <path class="d-line" d="M262 178L262 158"/>
+          <text class="d-t d-b" x="34" y="306" text-anchor="start" font-size="13">one host</text>
+        </svg>
+        <figcaption>Example B. Any of the four engines can run on the same host.</figcaption>
+      </figure>
+    </section>
+    <section class="wrap block" aria-labelledby="offline">
+      <p class="eyebrow"><span>03</span> / Example C</p>
+      <h2 id="offline">Offline, inside an intranet: a future concept</h2>
+      <p class="notice future"><strong>Not possible today.</strong> kaoiro does not support local AI agents yet. This section describes how it could work if that support arrives. Do not plan a deployment around it.</p>
+      <p class="intro">Claude Code, Codex, Antigravity and Grok Build all rely on their vendors&#39; cloud services, so kaoiro cannot run cut off from the Internet today.</p>
+      <ul class="cards">
+        <li><h3>What would have to change</h3><p>An engine that runs a model on your own hardware. <a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">Issue 1043</a> proposes making engines pluggable, so that an external engine could connect over a public protocol instead of being added to the source. It is an open proposal with no release date.</p></li>
+        <li><h3>What could stay inside</h3><p>The server, the runners and the dashboard already run on your own machines. With such an engine, the whole set could in principle stay inside the intranet.</p></li>
+      </ul>
+      <figure class="diagram stack">
+        <svg viewBox="0 0 400 350" role="img" aria-label="Example C, a future concept that does not work today. Inside an intranet, a browser reaches the kaoiro server, and a runner on agent-host would start an external engine that uses a local model. The external engine and the local model do not exist yet.">
+          <rect class="d-future" x="8" y="8" width="384" height="300" rx="8"/>
+          <text class="d-k" x="22" y="30" text-anchor="start" font-size="12">intranet (future concept)</text>
+          <rect class="d-box" x="40" y="44" width="320" height="40" rx="8"/>
+          <text class="d-t d-b" x="200" y="69" text-anchor="middle" font-size="14">Browser</text>
+          <path class="d-line" d="M200 84L200 100"/>
+          <rect class="d-chip" x="40" y="100" width="320" height="40" rx="8"/>
+          <text class="d-t d-b" x="200" y="125" text-anchor="middle" font-size="14">kaoiro server</text>
+          <path class="d-line" d="M200 140L200 160"/>
+          <rect class="d-host" x="40" y="160" width="320" height="130" rx="8"/>
+          <rect class="d-chip-d" x="56" y="176" width="90" height="36" rx="8"/>
+          <text class="d-t" x="101" y="199" text-anchor="middle" font-size="14">runner</text>
+          <path class="d-dash" d="M146 194L166 194"/>
+          <rect class="d-future-chip" x="166" y="176" width="178" height="36" rx="8"/>
+          <text class="d-t" x="255" y="199" text-anchor="middle" font-size="13">external engine</text>
+          <path class="d-dash" d="M255 212L255 222"/>
+          <rect class="d-future-chip" x="166" y="222" width="178" height="36" rx="8"/>
+          <text class="d-t" x="255" y="245" text-anchor="middle" font-size="13">local model</text>
+          <text class="d-t d-b" x="54" y="282" text-anchor="start" font-size="13">agent-host</text>
+          <text class="d-k" x="200" y="336" text-anchor="middle" font-size="12">Not possible today. Concept only.</text>
+        </svg>
+        <figcaption>A concept sketch, not a supported layout. The parts drawn with dashed purple lines do not exist yet.</figcaption>
+      </figure>
+    </section>
+    <section class="wrap block" aria-labelledby="compare">
+      <p class="eyebrow"><span>04</span> / Compare</p>
+      <h2 id="compare">The three examples side by side</h2>
+      <div class="table-wrap" role="region" aria-label="Comparison of the three examples" tabindex="0">
+        <table class="wide">
+          <thead><tr><th scope="col"></th><th scope="col">A: several hosts</th><th scope="col">B: one host</th><th scope="col">C: offline (future)</th></tr></thead>
+          <tbody>
+          <tr><th scope="row">Status</th><td>In daily use</td><td>Possible today</td><td>Concept only</td></tr>
+          <tr><th scope="row">Hosts</th><td>Server, agents and tests on separate machines</td><td>One</td><td>One or more, inside the intranet</td></tr>
+          <tr><th scope="row">Reached from</th><td>The Internet, through HTTPS</td><td>The same machine, or through a reverse proxy or a VPN</td><td>The intranet only</td></tr>
+          <tr><th scope="row">Engines</th><td>All four, on vendor cloud services</td><td>Any of the four</td><td>An external engine with a local model, which does not exist yet</td></tr>
+          <tr><th scope="row">Start with</th><td><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">Production manual</a></td><td><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">Production manual</a> or <a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></td><td><a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">Issue 1043</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <nav class="wrap block next" aria-label="Read next">
+      <h2 class="next-title">Read next</h2>
+      <ul class="actions">
+        <li><a href="how-it-works.html">How it works</a></li>
+        <li><a href="getting-started.html">Getting started</a></li>
+        <li><a href="poster.html">JAMS 2026 poster</a></li>
+        <li><a href="./">Back to the kaoiro home page</a></li>
+      </ul>
+    </nav>
+  </main>
+  <footer class="wrap">
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">Security policy</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/LICENSE">MIT License</a>
+    · <a href="poster.html">JAMS 2026 poster</a>
+  </footer>
+</body>
+</html>

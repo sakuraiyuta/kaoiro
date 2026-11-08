@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14141d">
+  <title>Getting started with kaoiro</title>
+  <meta name="description" content="From the account each engine needs to installing the kaoiro server and runners, launching the first agent and running it day to day.">
+  <link rel="alternate" hreflang="ja" href="ja/getting-started.html">
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#before">Skip to content</a>
+  <nav class="wrap topbar" aria-label="Site">
+    <a href="./">Home</a>
+    <a href="how-it-works.html">How it works</a>
+    <a href="deployments.html">Deployments</a>
+    <a href="getting-started.html" aria-current="page">Getting started</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Docs</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">Release notes</a>
+    <a href="ja/getting-started.html" hreflang="ja" lang="ja">日本語</a>
+  </nav>
+  <nav class="toc" aria-label="Sections">
+    <ol>
+      <li><a href="#before"><span>The path</span></a></li>
+      <li><a href="#accounts"><span>Accounts</span></a></li>
+      <li><a href="#hosts"><span>Hosts</span></a></li>
+      <li><a href="#server"><span>Server</span></a></li>
+      <li><a href="#runner"><span>Runner</span></a></li>
+      <li><a href="#launch"><span>First agent</span></a></li>
+      <li><a href="#daily"><span>Day to day</span></a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="wrap page-head">
+      <p class="eyebrow"><a href="./">kaoiro</a> / Getting started</p>
+      <h1>Getting started</h1>
+      <p class="lead">From the account each engine needs to the first agent on your screen, and what running it looks like after that.</p>
+    </header>
+
+    <section class="wrap block" aria-labelledby="before">
+      <p class="eyebrow"><span>01</span> / Overview</p>
+      <h2 id="before">The path, in order</h2>
+      <p class="notice warn"><strong>Security.</strong> An operator credential lets its holder run commands on every machine where agents run. Treat it like an SSH key to those hosts, and read <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> first.</p>
+      <ol class="path">
+        <li><a href="#accounts">Arrange an account for each engine you will use</a></li>
+        <li><a href="#hosts">Prepare the hosts</a></li>
+        <li><a href="#server">Install the server</a></li>
+        <li><a href="#runner">Install a runner on each agent host</a></li>
+        <li><a href="#launch">Launch your first agent</a></li>
+        <li><a href="#daily">Run it day to day</a></li>
+      </ol>
+      <p class="note">This page is a map. The commands and their exact order live in the repository docs, and when this page and the docs differ, the docs win. Start from the <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">production manual</a>.</p>
+    </section>
+    <section class="wrap block" aria-labelledby="accounts">
+      <p class="eyebrow"><span>02</span> / Accounts</p>
+      <h2 id="accounts">An account for each engine</h2>
+      <p class="intro">Each engine signs in through its own CLI or SDK on the agent host. What follows is what each vendor&#39;s own pages said when we checked them on 8 November 2026. Prices are left out on purpose.</p>
+      <p class="notice warn"><strong>Check before you use it.</strong> Plans and terms change, and this page is not legal advice. Whether a vendor&#39;s rule below applies to running kaoiro with your own account is <strong>not confirmed</strong>; where it matters, ask the vendor.</p>
+      <div class="table-wrap" role="region" aria-label="What each vendor documents" tabindex="0">
+        <table class="terms">
+          <thead><tr><th scope="col">Engine</th><th scope="col">Sign-in the vendor documents</th><th scope="col">Use through other tools, in the vendor&#39;s words</th><th scope="col">Limits the vendor states</th><th scope="col">Sources (checked 2026-11-08)</th></tr></thead>
+          <tbody>
+          <tr><th scope="row">Claude Code<br><small>Claude Agent SDK</small></th><td>The SDK guide sets up an API key, or a cloud provider such as Amazon Bedrock. The Claude Code CLI also accepts a claude.ai login on Pro, Max or Ultra and on Claude for Teams or Enterprise.</td><td><q>Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK.</q> The same page points to API key authentication instead.</td><td>Pro and Max usage limits are shared between Claude and Claude Code. Running several sessions at once: not stated.</td><td><a href="https://code.claude.com/docs/en/agent-sdk/overview">Agent SDK overview</a><br><a href="https://code.claude.com/docs/en/agent-sdk/quickstart">Agent SDK quickstart</a><br><a href="https://code.claude.com/docs/en/authentication">Claude Code authentication</a></td></tr>
+          <tr><th scope="row">Codex<br><small>Codex app-server</small></th><td>The app-server accepts an API key, a ChatGPT login and other modes. Codex is included in ChatGPT Free, Go, Plus, Pro, Business, Edu and Enterprise plans.</td><td><q>If you&#8217;ve built a local or open-source application using Codex app-server authentication, you can continue using it</q>, and <q>App-server authentication has never been permitted for commercial or hosted services.</q></td><td>Local messages and cloud chats share the plan&#39;s usage allowance. A cap on concurrent sessions: not stated.</td><td><a href="https://learn.chatgpt.com/docs/app-server">Codex app-server</a><br><a href="https://learn.chatgpt.com/docs/pricing">Codex pricing</a></td></tr>
+          <tr><th scope="row">Antigravity<br><small>Antigravity CLI</small></th><td>Browser sign-in with a personal Google account (Free, Pro or Ultra plan), work accounts through Google Cloud, or a Gemini API key.</td><td><q>Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement.</q> Whether starting the official CLI from another program counts as this: not confirmed.</td><td>Pro and Ultra have a 5-hour and a weekly limit, which follows the amount of work the agent does. Concurrent sessions: not stated.</td><td><a href="https://antigravity.google/docs/install/">Install and sign in</a><br><a href="https://antigravity.google/terms/">Additional terms</a><br><a href="https://antigravity.google/docs/plans/">Plans</a></td></tr>
+          <tr><th scope="row">Grok Build<br><small>ACP session</small></th><td>Browser sign-in on first launch, or an API key (<code>XAI_API_KEY</code>) where no browser is available. Announced for SuperGrok and X Premium Plus subscribers.</td><td>The docs describe using Grok Build <q>through the Agent Client Protocol (ACP) in other apps</q>. The consumer terms could not be opened: not confirmed.</td><td>Not stated in the pages we opened.</td><td><a href="https://docs.x.ai/build/overview">Grok Build overview</a><br><a href="https://x.ai/news/grok-build-cli">Grok Build announcement</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">kaoiro itself stores no engine credentials: each engine reads its own login on the agent host. The engine reference pages in the <a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/engines">repository docs</a> describe each one.</p>
+    </section>
+    <section class="wrap block" aria-labelledby="hosts">
+      <p class="eyebrow"><span>03</span> / Hosts</p>
+      <h2 id="hosts">Prepare the hosts</h2>
+      <p class="intro">Decide which machine runs the server and which run agents. They can be the same machine (<a href="deployments.html#single-host">example B</a>).</p>
+      <ul class="cards">
+        <li><h3>Server host</h3><p>Docker Engine with the Docker Compose plugin, Elixir <code>~&gt; 1.15</code> with Phoenix, and Node.js 22 or later for the deploy CLI.</p></li>
+        <li><h3>Agent hosts</h3><p>Node.js 22 or later, and the CLI of each engine you will run there. Linux runs the runner as a systemd user unit; orchestration on macOS is <a href="https://github.com/sakuraiyuta/kaoiro/issues/242">not yet verified</a>.</p></li>
+        <li><h3>How the server is reached</h3><p>Choose before writing <code>.env</code>: the default is <code>127.0.0.1</code> behind an nginx reverse proxy, and a direct address inside a VPN is the alternative.</p></li>
+        <li><h3>Access</h3><p>SSH access to the server host and every runner host, with each host key already known.</p></li>
+      </ul>
+      <p class="note">Full list: <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/server-install.md#prerequisites">Server install runbook, Prerequisites</a>.</p>
+    </section>
+    <section class="wrap block" aria-labelledby="server">
+      <p class="eyebrow"><span>04</span> / Server</p>
+      <h2 id="server">Install the server</h2>
+      <ol class="path">
+        <li>Clone the repository on the server host at the exact commit you intend to run.</li>
+        <li>Run <code>mix kaoiro.env</code> in <code>server/</code>. It writes <code>.env</code>, generates <code>SECRET_KEY_BASE</code> and the client and runner tokens, and asks for the public host name. Keep the runner token it prints for the runner step.</li>
+        <li>Start it with <code>node server/deploy/kaoiro-server-deploy.mjs start --initialize</code> from the checkout root.</li>
+        <li>Set up the reverse proxy or the VPN address, and optionally Google, GitHub or Nextcloud login, from the <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/network-and-login.md">network and login runbook</a>.</li>
+      </ol>
+      <p class="note">Detail: <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/server-install.md">Server install runbook</a> and <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#1-server-install-first-time">production manual, section 1</a>.</p>
+    </section>
+    <section class="wrap block" aria-labelledby="runner">
+      <p class="eyebrow"><span>05</span> / Runner</p>
+      <h2 id="runner">Install a runner on each agent host</h2>
+      <ol class="path">
+        <li>Build the runner tarball for the host&#39;s OS and CPU, and copy it to the host.</li>
+        <li>Run <code>kaoiro-runner-bootstrap.sh</code> from the unpacked tarball. Its wizard is the only interactive step; it then installs the runner and starts it as a service.</li>
+        <li>On Linux, enable lingering for the user so the runner starts at boot without a login.</li>
+        <li>Install each engine&#39;s CLI on the host and sign it in as the user the runner runs as. Production Codex uses a dedicated home directory; see <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/codex-home.md">Codex home for production</a>.</li>
+      </ol>
+      <p class="note">Detail: <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/runner-install.md">Runner install and distribution</a> and <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#2-runner-install-first-time-per-host">production manual, section 2</a>. Check the result with <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#3-verify">section 3, Verify</a>.</p>
+    </section>
+    <section class="wrap block" aria-labelledby="launch">
+      <p class="eyebrow"><span>06</span> / Launch</p>
+      <h2 id="launch">Launch your first agent</h2>
+      <ul class="cards three">
+        <li><h3>Sign in</h3><p>Open the dashboard and sign in with a client token or with the login you configured.</p></li>
+        <li><h3>Launch</h3><p>Choose host, persona, engine, working directory and permission mode, and start the agent. The working directory has to be one the runner allows.</p></li>
+        <li><h3>Watch and answer</h3><p>The agent appears as a character card. A tool call waiting for approval comes to the browser, and you answer it there.</p></li>
+      </ul>
+    </section>
+    <section class="wrap block start" aria-labelledby="daily">
+      <p class="eyebrow"><span>07</span> / Daily</p>
+      <h2 id="daily">Run it day to day</h2>
+      <ul class="cards">
+        <li><h3>Approvals and notifications</h3><p>A desktop notification and a per-state sound tell you when an agent hands control back. The dashboard collapses down to a phone, so you can answer away from your desk.</p></li>
+        <li><h3>Updates and rollback</h3><p>Server and runner updates have their own order. Take it from the <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#4-update">production manual, section 4</a>, and roll back with <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#5-rollback">section 5</a>. Restarting a runner stops every agent beneath it.</p></li>
+        <li><h3>When something breaks</h3><p>Start from <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/deployment-troubleshooting.md">deployment troubleshooting</a>.</p></li>
+        <li><h3>Release notes</h3><p>What changed in each release is in the <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">release notes</a>.</p></li>
+      </ul>
+    </section>
+
+    <nav class="wrap block next" aria-label="Read next">
+      <h2 class="next-title">Read next</h2>
+      <ul class="actions">
+        <li><a href="how-it-works.html">How it works</a></li>
+        <li><a href="deployments.html">Deployments</a></li>
+        <li><a href="poster.html">JAMS 2026 poster</a></li>
+        <li><a href="./">Back to the kaoiro home page</a></li>
+      </ul>
+    </nav>
+  </main>
+  <footer class="wrap">
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">Security policy</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/LICENSE">MIT License</a>
+    · <a href="poster.html">JAMS 2026 poster</a>
+  </footer>
+</body>
+</html>

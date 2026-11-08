@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14141d">
+  <title>学会発表のポスター (JAMS 2026) | kaoiro</title>
+  <meta name="description" content="数理社会学会 第 81 回大会 (2026 年 8 月) で発表した kaoiro のポスターとサマリ。">
+  <link rel="alternate" hreflang="en" href="../poster.html">
+  <link rel="stylesheet" href="../style.css">
+  <script src="../site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#about">本文へ</a>
+  <nav class="wrap topbar" aria-label="サイト">
+    <a href="./">ホーム</a>
+    <a href="how-it-works.html">仕組み</a>
+    <a href="deployments.html">構築事例</a>
+    <a href="getting-started.html">はじめかた</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">ドキュメント</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">リリースノート</a>
+    <a href="../poster.html" hreflang="en" lang="en">English</a>
+  </nav>
+  <nav class="toc" aria-label="目次">
+    <ol>
+      <li><a href="#about"><span>発表について</span></a></li>
+      <li><a href="#summary"><span>サマリ</span></a></li>
+      <li><a href="#poster-file"><span>ポスター</span></a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="wrap page-head">
+      <p class="eyebrow"><a href="./">kaoiro</a> / 学会発表のポスター</p>
+      <h1>学会発表のポスター</h1>
+      <p class="lead">2026 年 8 月に発表した、kaoiro の設計についてのポスターとサマリ。</p>
+    </header>
+
+    <section class="wrap block" aria-labelledby="about">
+      <p class="eyebrow"><span>01</span> / 概要</p>
+      <h2 id="about">発表について</h2>
+      <p class="intro">数理社会学会 第 81 回大会 (2026 年 8 月) の萌芽的セッションで発表したポスターです。このページは、発表した時点のポスターの内容に沿っています。</p>
+      <div class="table-wrap" role="region" aria-label="ポスターの情報" tabindex="0">
+        <table>
+          <thead><tr><th scope="col">項目</th><th scope="col">内容</th></tr></thead>
+          <tbody>
+          <tr><th scope="row">題名</th><td>複数 CLI AI エージェントの並行運用を支える状態-表情分離アーキテクチャ: 可視化システム kaoiro の設計</td></tr>
+          <tr><th scope="row">著者</th><td>櫻井 雄大 (桃山学院大学)</td></tr>
+          <tr><th scope="row">形式</th><td>A0 のポスター 1 枚</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="wrap block" aria-labelledby="summary">
+      <p class="eyebrow"><span>02</span> / 要約</p>
+      <h2 id="summary">サマリ</h2>
+      <ul class="cards">
+        <li><h3>問い</h3><p>複数の AI エージェントを並行して動かすとき、内部の状態をどこまで operator に見せるかは、タスクの性能だけでは決まらない設計の軸です。kaoiro は観測可能性の側の一端に立ち、状態機械を一次信号に、表情の表現を別のレイヤにしました。</p></li>
+        <li><h3>2 つの問題</h3><p>(A) 実用: 並行運用で各エージェントの状態と進み具合を一覧で把握しにくい。対応する設計は状態の可視化です。(B) 情緒: 協働相手としての心理的な距離。対応する設計はキャラクターの表現です。ポスターが機能として示すのは (A) と、状態から表情への写像です。(B) への効果は評価していません。</p></li>
+        <li><h3>一次信号は 10 状態の状態機械</h3><p>idle、sending、thinking、tool_running、waiting_permission、waiting_input、waiting_question、done、error、disconnected。SDK が通知するイベントとコールバックから決定論的に導きます。端末の画面の文字を読み取る方式ではありません。</p></li>
+        <li><h3>信号源の分離</h3><p>状態を表情へ 1 対 1 で写像します。感情の推定ではありません。感情の NLP フィルタは、落ちても実用が崩れない二次信号 (味付け) で、今は実装していません。応答の文の感情推定を一次信号にすると、「承認待ち」という統制点の検出が推定器に依存してしまいます。</p></li>
+        <li><h3>実装の構成</h3><p>エージェント 1 体ごとのラッパー (TypeScript と Agent SDK) が状態を導き、サーバ (Elixir/OTP と Phoenix) が状態を集約して権限の承認と拒否を扱い、Web のダッシュボード (Svelte) がキャラクターと表情で状態を見せます。ホストに常駐するランナーがプロセスの起動と停止を担い、データの経路の外に置かれます。Codex などはアダプタで対応します。</p></li>
+        <li><h3>提案する軸</h3><p>エージェント同士の協調は、人間から見えるべきか、隠されるべきか。隠蔽 (opacity) から観測可能性 (observability) への連続した軸です。Fugu や Conductor などの学習型オーケストレーションは隠蔽の側にあり、kaoiro は観測可能性の側の一端に位置する実装例です。概念上の配置で、各システムの全ての機能を分類するものではありません。</p></li>
+        <li><h3>何を研究できるか</h3><p>行動・実験経済学: 表示の条件 (生のログ、状態ラベル、表情、両方) を切り替え、状態の理解の正確さ、異常を見つけるまでの時間、不適切な承認・拒否の率を測る研究計画。経営情報学: opacity を hidden action の分析の枠組みとつなぐ。HAI・CSCW・ガバナンス: 信頼の校正、状態機械を使った運用の教育、監査可能性。</p></li>
+        <li><h3>まだ示していないこと</h3><p>状態を把握するコストの軽減、信頼の校正、心理的な距離への効果など、人間の側の行動指標の定量的な評価。表示の条件の間で人間の行動を比べるのは、今後の研究計画です。</p></li>
+      </ul>
+    </section>
+    <section class="wrap block" aria-labelledby="poster-file">
+      <p class="eyebrow"><span>03</span> / ポスター</p>
+      <h2 id="poster-file">ポスターを見る</h2>
+      <figure class="poster-figure">
+        <a href="../assets/jams2026-poster.pdf"><img loading="lazy" src="../assets/jams2026-poster.jpg" width="1200" height="1697" alt="kaoiro についての JAMS 2026 のポスター。節は、2 つの問題、10 状態の状態機械、デモ用データのエージェント一覧画面と承認の画面、信号源の分離、状態から表情への写像、実装の構成、隠蔽と観測可能性の軸、研究への使い道。"></a>
+        <figcaption>画像を選ぶと PDF (A0、4.5 MB) が開きます。ポスターの画面はデモ用のデータです。</figcaption>
+      </figure>
+    </section>
+
+    <nav class="wrap block next" aria-label="次に読む">
+      <h2 class="next-title">次に読む</h2>
+      <ul class="actions">
+        <li><a href="how-it-works.html">仕組み</a></li>
+        <li><a href="deployments.html">構築事例</a></li>
+        <li><a href="getting-started.html">はじめかた</a></li>
+        <li><a href="./">kaoiro のトップへ戻る</a></li>
+      </ul>
+    </nav>
+  </main>
+  <footer class="wrap">
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">セキュリティ方針</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/LICENSE">MIT License</a>
+    · <a href="poster.html">学会発表のポスター</a>
+  </footer>
+</body>
+</html>
