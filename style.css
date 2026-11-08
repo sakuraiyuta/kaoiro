@@ -714,6 +714,7 @@ h2 { scroll-margin-top: 5rem; }
 .eyebrow a, .eyebrow a:visited { color: var(--fg); }
 .cards h3 a { text-decoration: none; }
 .cards h3 a:hover { text-decoration: underline; }
+.cards h3 small { color: var(--muted); font-size: 0.8em; font-weight: 400; }
 .cards.three { grid-template-columns: 1fr; }
 .notice.future { margin: 0 0 1.5rem; border-left-color: var(--c-waiting_permission); font-size: 0.95rem; }
 .notice.warn + .intro, .notice + .path, .notice + .cards { margin-top: 1.5rem; }
@@ -734,9 +735,6 @@ h2 { scroll-margin-top: 5rem; }
 .d-out { fill: none; stroke: var(--fg-dim); stroke-dasharray: 6 4; }
 .d-future { fill: none; stroke: var(--c-waiting_permission); stroke-dasharray: 8 5; }
 .d-future-chip { fill: var(--bg-card); stroke: var(--c-waiting_permission); stroke-dasharray: 5 4; }
-.poster-figure { margin: 0; }
-.poster-figure img { width: min(100%, 40rem); border: 1px solid var(--line); border-radius: 6px; background: #fff; }
-.poster-figure figcaption { margin-top: 0.75rem; color: var(--muted); font-size: 0.9rem; }
 .next { padding-bottom: 1rem; }
 .next .next-title { font-size: 1.3rem; }
 @media (min-width: 48rem) {
