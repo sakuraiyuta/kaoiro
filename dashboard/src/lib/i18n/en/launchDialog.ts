@@ -51,7 +51,7 @@ export const launchDialog = {
     "Refresh the model list (live probe, ignoring the runner cache)",
   refreshing: "Refreshing…",
   permissionMode: "permission mode (work intent)",
-  permissionKeep: "Keep the previous value (stored on the server)",
+  permissionKeep: "Keep the previous value (server-stored)",
   permissionModeTitle: ({ sandbox, approval }) =>
     `Write: ${sandbox} / Approval: ${approval}`,
   permissionModeOption: ({ mode, sandbox, approval }) =>
