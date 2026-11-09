@@ -76,4 +76,6 @@ default `auto` reads en in jsdom. Add one switch test (mount in ja, then
 `setLocale("en")`, then read named elements) for each new screen.
 
 Playwright pins `locale: "ja-JP"` in its three configs; an English spec uses
-`test.use({ locale: "en-US" })`.
+`test.use({ locale: "en-US" })`. `e2e/i18nOverflow.spec.ts` opens each screen
+in both languages and fails when English text overflows a box that Japanese
+text fits; add a new screen to it.
