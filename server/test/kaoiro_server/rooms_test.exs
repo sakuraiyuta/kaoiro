@@ -91,6 +91,7 @@ defmodule KaoiroServer.RoomsTest do
     assert {:ok, %{moved: []}} = Rooms.change({:move, "a", "lobby"}, ctx.name)
     assert {:ok, %{moved: ["a"]}} = Rooms.change({:move, "a", blue}, ctx.name)
     assert {:ok, %{moved: []}} = Rooms.change({:move, "a", blue}, ctx.name)
+
     assert {:ok, %{moved: ["a"], members: members}} =
              Rooms.change({:move, "a", "lobby"}, ctx.name)
 
