@@ -1,7 +1,7 @@
 ---
 title: Security enforcement boundaries
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-11-10
 ---
 
 # Security enforcement boundaries
@@ -94,6 +94,26 @@ Related security topics: [Security boundaries](../../architecture/security-bound
   role.
 - SHOULD: Separate operator tokens from viewer tokens and minimize their
   distribution.
+
+### Rooms
+
+- MUST: Decide the same-room rule on the server, from the server's own
+  membership record. A room named in a payload or `ext` is never read
+  ([rooms](../inter-agent/rooms.md#the-same-room-rule)).
+- MUST: Gate room management (`create_room`, `rename_room`, `delete_room`,
+  `move_agent` and the two previews) on the operator role at the channel
+  entry.
+- Rooms prevent a message from reaching the wrong team. They are not a
+  boundary against a hostile agent: when the store cannot be read at start,
+  every agent is in the lobby.
+- Per-pair permissions
+  ([issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189)) combine
+  with rooms by AND. A pair permission never allows a send across rooms, and
+  a shared room grants no pair permission. Operator and admin controls are
+  not subject to rooms.
+- A viewer reads every room's name, and memberships only for the agents in
+  its own snapshot. It never receives message bodies or directory-only
+  identities through rooms.
 
 ### Session-reset control (`/new` / `/clear` / `/reset`, phase-17)
 

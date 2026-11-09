@@ -99,6 +99,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.QuagmireSettings
   alias KaoiroServer.QuagmireWatch
+  alias KaoiroServer.Rooms
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
@@ -193,7 +194,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # from the join and needs no interception.
     "status_line",
     "status_line_settings",
-    "delivery_policy_changed"
+    "delivery_policy_changed",
+    # Rooms and memberships (issue #537). The broadcast carries the stored
+    # snapshot; `handle_out` projects it per role, because a viewer sees
+    # only the memberships of the agents in its own grid.
+    "rooms_snapshot"
   ])
 
   # Every server -> client event must leave through `push_versioned/3`.
@@ -208,6 +213,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     work_changed work_scope_overlap
     envelope spawn_result runner_sessions catalog_result wrapper_build_info
     status_line_snapshot status_line status_line_settings delivery_policy_changed
+    rooms_snapshot
   ))
 
   @join_snapshot_events [
@@ -262,7 +268,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    transfer_pending verdict_not_effective
                    invalid_status_line_retention status_line_unavailable
                    status_line_history_too_large
-                   session_lifecycle_unavailable)a
+                   session_lifecycle_unavailable
+                   missing_room_id unknown_room lobby_protected invalid_room_name
+                   rooms_unavailable room_change_unconfirmed)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -390,6 +398,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # snapshot frames and not part of it: every role gets the rows it may see,
     # built from the same AgentStates snapshot as the agent frame.
     push_versioned(socket, StatusLineSnapshot.event(), StatusLineSnapshot.build(role, states))
+
+    # Issue #537. Supplementary like the frame above. Skipped when the rooms
+    # cannot be read: a client must not fill a missing snapshot with the lobby.
+    with {:ok, rooms} <- Rooms.snapshot() do
+      push_versioned(socket, "rooms_snapshot", rooms_snapshot_payload(role, rooms))
+    end
 
     # Reply-log history, host set, and the identity ledger are operator-only;
     # viewers stay at the grid and never see host info (cwd allow-lists are
@@ -588,6 +602,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
       end
 
     if visible?, do: push_versioned(socket, event, payload)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_out("rooms_snapshot", rooms, socket) do
+    push_versioned(
+      socket,
+      "rooms_snapshot",
+      rooms_snapshot_payload(socket.assigns[:role], rooms)
+    )
+
     {:noreply, socket}
   end
 
@@ -1480,6 +1505,48 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # Room management (issue #537 Phase 0, docs/reference/inter-agent/rooms.md).
+  # Operator-only, gated here and nowhere deeper, like `close_conversation`.
+  # Creating and renaming do not change who shares a room, so they go to
+  # `Rooms` directly.
+  def handle_in(event, payload, socket) when event in ["create_room", "rename_room"] do
+    with :ok <- require_operator(socket, payload, event),
+         {:ok, name} <- fetch_room_name(payload),
+         {:ok, saved} <- save_room(event, payload, name) do
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "rooms_snapshot", saved)
+      {:reply, {:ok, %{"room" => Rooms.wire(saved, saved.room_id)}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # A move or a delete changes who shares a room, so it runs inside
+  # ConversationStates, which closes the conversations it splits; this
+  # handler then delivers the notices. `closed_count` is what was closed.
+  def handle_in(event, payload, socket) when event in ["move_agent", "delete_room"] do
+    with :ok <- require_operator(socket, payload, event),
+         {:ok, command} <- room_command(event, payload),
+         {:ok, change} <- ConversationStates.apply_room_change(command),
+         :ok <- announce_room_change(change) do
+      {:reply, {:ok, room_change_counts(change, "closed_count")}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Advisory: `closing_count` is what a move or delete would close if it ran
+  # now. Nothing is reserved, and the real call decides again.
+  def handle_in(event, payload, socket)
+      when event in ["preview_room_move", "preview_room_delete"] do
+    with :ok <- require_operator(socket, payload, event),
+         {:ok, command} <- room_command(event, payload),
+         {:ok, change} <- ConversationStates.preview_room_change(command) do
+      {:reply, {:ok, room_change_counts(change, "closing_count")}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # Operator-only restore (#22, ADR-0014「復帰」): bring a disconnected agent
   # back under its SAME agent_id by re-spawning with resume. The server holds
   # everything needed: the SessionPointer (session_id + cwd, restart-surviving)
@@ -1977,6 +2044,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
       SessionResets.delete(agent_id)
       _ = PeerConnectivity.delete(agent_id)
       AgentActivity.delete(agent_id)
+      # issue #537. A failed purge leaves a stale membership behind, which
+      # no list shows once the identity is gone; it must not fail the delete.
+      with {:error, reason} <- Rooms.purge(agent_id) do
+        Logger.warning("delete_agent: room membership of #{agent_id} not purged (#{reason})")
+      end
+
       # issue 482. A refused purge (the store is dirty or restarting) is
       # completed by the next store start, which drops the record of every
       # revoked id, and the token was revoked above: so the result is not
@@ -2193,6 +2266,106 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp session_events_payload(events) do
     bounded_reply_list_payload("events", events, "events_incomplete")
+  end
+
+  # Every room, and the room of every agent this role may see: for an
+  # operator the live and the directory-only agents, for a viewer the agents
+  # in its own grid. Memberships are cut to the frame budget like the other
+  # snapshots; a cut one is marked incomplete, never filled with the lobby.
+  defp rooms_snapshot_payload(role, rooms) do
+    memberships = Map.new(room_visible_agents(role), &{&1, Rooms.room_of(rooms, &1)})
+
+    static = %{
+      "rooms" =>
+        rooms.rooms
+        |> Map.keys()
+        |> Enum.sort_by(&{&1 != Rooms.lobby_id(), &1})
+        |> Enum.map(&Rooms.wire(rooms, &1)),
+      "memberships" => %{},
+      "snapshot_incomplete" => true
+    }
+
+    projected = bounded_push_map("rooms_snapshot", memberships, static)
+
+    static
+    |> Map.put("memberships", projected)
+    |> maybe_drop_incomplete("snapshot_incomplete", map_size(projected) < map_size(memberships))
+  end
+
+  defp room_visible_agents(role) when role in @operator_capable_roles,
+    do: Enum.uniq(Map.keys(AgentStates.snapshot()) ++ Map.keys(AgentDirectory.all()))
+
+  defp room_visible_agents(:viewer) do
+    for {id, envelope} <- AgentStates.snapshot(),
+        StatusLineVisibility.viewer_visible?(envelope),
+        do: id
+  end
+
+  defp room_visible_agents(_role), do: []
+
+  defp fetch_room_id(%{"room_id" => room_id}) when is_binary(room_id) and room_id != "",
+    do: {:ok, room_id}
+
+  defp fetch_room_id(_payload), do: {:error, :missing_room_id}
+
+  # The same rule as an agent's display name (`validate_agent_rename_name/1`).
+  defp fetch_room_name(%{"name" => name}) when is_binary(name) do
+    trimmed = String.trim(name)
+
+    if trimmed != "" and valid_display_name_value?(trimmed),
+      do: {:ok, trimmed},
+      else: {:error, :invalid_room_name}
+  end
+
+  defp fetch_room_name(_payload), do: {:error, :invalid_room_name}
+
+  defp save_room("create_room", _payload, name), do: Rooms.create(name)
+
+  defp save_room("rename_room", payload, name) do
+    with {:ok, room_id} <- fetch_room_id(payload), do: Rooms.rename(room_id, name)
+  end
+
+  defp room_command(event, payload) when event in ["move_agent", "preview_room_move"] do
+    with {:ok, agent_id} <- fetch_restorable_agent_id(payload),
+         {:ok, room_id} <- fetch_room_id(payload) do
+      {:ok, {:move, agent_id, room_id}}
+    end
+  end
+
+  defp room_command(_delete_event, payload) do
+    with {:ok, room_id} <- fetch_room_id(payload), do: {:ok, {:delete, room_id}}
+  end
+
+  defp room_change_counts(change, count_key),
+    do: %{count_key => length(change.closed), "member_count" => length(change.moved)}
+
+  # The change is already saved and the conversations closed. A notice that
+  # fails here must not take this channel down or be reported as success, so
+  # the operator is told to read the rooms and conversations again.
+  defp announce_room_change(change) do
+    for {cid, agent_ids} <- change.closed do
+      SynthEnvelope.deliver_conversation_closed(cid, agent_ids, change.reason)
+    end
+
+    # Only a connected agent is told; one moved while offline learns its
+    # room from list_agents (operator decision 2026-11-10).
+    for agent_id <- change.moved, AgentStates.connected?(agent_id) do
+      SynthEnvelope.deliver_room_changed(
+        agent_id,
+        Rooms.wire(change, Rooms.room_of(change, agent_id))
+      )
+    end
+
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "rooms_snapshot", change)
+    :ok
+  rescue
+    error ->
+      Logger.warning("rooms: a room change notice raised #{inspect(error.__struct__)}")
+      {:error, :room_change_unconfirmed}
+  catch
+    kind, _reason ->
+      Logger.warning("rooms: a room change notice ended with #{kind}")
+      {:error, :room_change_unconfirmed}
   end
 
   defp bounded_push_map_payload(event, key, entries, marker) do

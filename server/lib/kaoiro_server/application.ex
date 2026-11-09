@@ -121,6 +121,10 @@ defmodule KaoiroServer.Application do
       # session cookie, so it must be up before Endpoint (below) starts
       # serving those requests.
       KaoiroServer.Users,
+      # Rooms and room memberships (issue #537). ConversationStates reads it
+      # on every record and saves through it on a move or delete, so it
+      # starts first; it calls no other store.
+      KaoiroServer.Rooms,
       # Per-conversation hard limits for inter-agent messaging
       # (docs/reference/inter-agent/conversations.md, phase-8 Stage B). `:on_auto_closed`
       # (issue #211 direction 2) is the ONLY place this otherwise

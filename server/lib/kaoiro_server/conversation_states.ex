@@ -100,6 +100,12 @@ defmodule KaoiroServer.ConversationStates do
 
   require Logger
 
+  alias KaoiroServer.Rooms
+
+  # Longer than the 2,000 ms a room save may take inside `Rooms`, so the
+  # caller of a room change still hears the outcome.
+  @room_change_timeout 5_000
+
   # Sweep frequency for the wallclock-based GC of stale entries
   # (protocol-inter-agent memory-DoS defense). Set well below both
   # open_conversation_ttl_ms and tombstone_ttl_ms so an expired entry never
@@ -127,12 +133,16 @@ defmodule KaoiroServer.ConversationStates do
   turns it into a broadcast envelope. Keeping this module's own
   `KaoiroServerWeb` dependency at zero is deliberate: every test below
   boots this GenServer alone, without the web layer.
+
+  `:rooms` names the `KaoiroServer.Rooms` process this tracker reads the
+  same-room rule from and saves room changes through (issue #537).
   """
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     clock = Keyword.get(opts, :clock, &default_clock/0)
     on_auto_closed = Keyword.get(opts, :on_auto_closed, &default_on_auto_closed/3)
-    GenServer.start_link(__MODULE__, {name, clock, on_auto_closed}, name: name)
+    rooms = Keyword.get(opts, :rooms, Rooms)
+    GenServer.start_link(__MODULE__, {name, clock, on_auto_closed, rooms}, name: name)
   end
 
   defp default_clock, do: System.monotonic_time(:millisecond)
@@ -337,6 +347,41 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @doc """
+  Moves an agent to a room (`{:move, agent_id, room_id}`) or deletes a room
+  (`{:delete, room_id}`), and closes every open conversation the change
+  leaves with participants in different rooms (issue #537).
+
+  The save in `Rooms` and the closes happen inside one call of this process,
+  so no message can be recorded between them: a record that ran first is
+  closed here, and one that runs later sees the new rooms. The closes are
+  decided from the memberships as saved, so a delete returns all members to
+  the lobby at once and conversations among them stay open.
+
+  Returns `{:ok, %{moved:, rooms:, members:, closed: [{conversation_id,
+  agent_ids}], reason:}}`; the caller delivers the `conversation_closed`
+  notices, as for `close_by_operator/2`. A failed save changes nothing here.
+  `{:error, :room_change_unconfirmed}` means the call did not answer, either
+  this one or the save inside it: the change may still have been applied, and
+  in the second case the conversations were not closed.
+  """
+  def apply_room_change(command, server \\ __MODULE__),
+    do: room_change(server, :apply, command)
+
+  @doc """
+  What `apply_room_change/2` would do right now, without changing anything.
+  The result is advisory: rooms and conversations can change before the
+  real call.
+  """
+  def preview_room_change(command, server \\ __MODULE__),
+    do: room_change(server, :preview, command)
+
+  defp room_change(server, mode, command) do
+    GenServer.call(server, {:room_change, mode, command}, @room_change_timeout)
+  catch
+    :exit, {_reason, {GenServer, :call, _args}} -> {:error, :room_change_unconfirmed}
+  end
+
+  @doc """
   Claims at most `limit` still-open conversations in which `agent_id` takes
   part and whose peers have not been told yet that this agent is
   unreachable, marks them as notified, and returns
@@ -390,11 +435,17 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @impl true
-  def init({_name, clock, on_auto_closed}) do
+  def init({_name, clock, on_auto_closed, rooms}) do
     schedule_gc()
 
     {:ok,
-     %{conversations: %{}, limits: load_limits(), clock: clock, on_auto_closed: on_auto_closed}}
+     %{
+       conversations: %{},
+       limits: load_limits(),
+       clock: clock,
+       on_auto_closed: on_auto_closed,
+       rooms: rooms
+     }}
   end
 
   defp load_limits do
@@ -424,10 +475,59 @@ defmodule KaoiroServer.ConversationStates do
         state
       )
       when action in [:record, :preview] do
-    {:reply, result, next} =
-      decide_record(cid, from, to, body, turn_number, done?, new_conversation?, admission, state)
+    # Read here, in the same call that records, so a room change (which also
+    # runs in this process) cannot land between the check and the record.
+    case Rooms.same_room(from, to, state.rooms) do
+      :ok ->
+        {:reply, result, next} =
+          decide_record(
+            cid,
+            from,
+            to,
+            body,
+            turn_number,
+            done?,
+            new_conversation?,
+            admission,
+            state
+          )
 
-    {:reply, result, if(action == :preview, do: state, else: next)}
+        {:reply, result, if(action == :preview, do: state, else: next)}
+
+      {:error, _reason} = rejected ->
+        {:reply, rejected, state}
+    end
+  end
+
+  def handle_call({:room_change, mode, command}, _from, state) do
+    result =
+      case mode do
+        :apply -> Rooms.change(command, state.rooms)
+        :preview -> Rooms.preview(command, state.rooms)
+      end
+
+    case result do
+      {:ok, change} ->
+        closed = split_conversations(state.conversations, change)
+        reason = room_close_reason(command)
+        reply = {:ok, Map.merge(change, %{closed: closed, reason: reason})}
+
+        if mode == :apply do
+          now = state.clock.()
+
+          conversations =
+            Enum.reduce(closed, state.conversations, fn {cid, _agent_ids}, acc ->
+              Map.update!(acc, cid, &close_entry(&1, reason, now))
+            end)
+
+          {:reply, reply, %{state | conversations: conversations}}
+        else
+          {:reply, reply, state}
+        end
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
+    end
   end
 
   def handle_call({:get, cid}, _from, state) do
@@ -769,6 +869,21 @@ defmodule KaoiroServer.ConversationStates do
   # conversation.
   defp close(state, cid, next, reason, now) do
     %{state | conversations: Map.put(state.conversations, cid, close_entry(next, reason, now))}
+  end
+
+  defp room_close_reason({:move, _agent_id, _room_id}), do: :room_changed
+  defp room_close_reason({:delete, _room_id}), do: :room_deleted
+
+  # Open conversations of a moved agent whose participants are, after the
+  # change, no longer all in one room.
+  defp split_conversations(conversations, %{moved: moved} = change) do
+    moved = MapSet.new(moved)
+
+    for {cid, %{status: :open, agents: agents}} <- conversations,
+        not MapSet.disjoint?(agents, moved),
+        agents |> Enum.map(&Rooms.room_of(change, &1)) |> Enum.uniq() |> length() > 1 do
+      {cid, MapSet.to_list(agents)}
+    end
   end
 
   defp close_entry(entry, reason, now) do

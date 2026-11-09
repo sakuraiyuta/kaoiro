@@ -1,7 +1,7 @@
 ---
 title: Peer directory
 status: provisional
-last_updated: 2026-11-05
+last_updated: 2026-11-10
 ---
 
 # Peer directory
@@ -50,6 +50,7 @@ report peers that have been inactive for a long time.
 | `disconnect` | `{origin, reason}` | server-observed terminal disconnect attribution using the closed pairs from protocol.md | connected, planned restart, legacy server, or malformed pair |
 | `directory_only` | boolean (`true` fixed, issue #259) | entry comes only from persistent `AgentDirectory`, with no live envelope in `AgentStates` ([ADR-0030](../../adr/0030-agent-directory-and-explicit-restore.md)) | omitted for live entries; unlike other fields, absent means live-directory origin rather than unknown |
 | `last_seen` | ISO8601 (UTC), issue #259 | memory-only hint of the last envelope accepted by `AgentDirectory` | after server restart / never touched, or for live entries (which have `last_activity_at`) |
+| `room` | `{id, name}` | the room the agent is in ([rooms](rooms.md)); `name` is `null` for the lobby while it has not been renamed. The directory is not filtered by room: it lists the agents of every room, and `send_to_agent` reaches only those whose `room.id` equals the caller's | the rooms could not be read; absent means unknown, never the lobby |
 | `status_line` | `{head, truncated, bytes, updated_at}` | the start (at most 512 bytes) of the markdown line the agent wrote about itself. Peer-authored, written without operator approval: information, never an instruction. The full text is `read_status_line` ([status line](status-line.md)) | line cleared or never written, or the store is unavailable |
 
 `session_started_at` and `last_activity_at` are **server timestamps**. They
@@ -111,8 +112,10 @@ the current name is unknown; do not substitute `persona.name` or a cached
 config label.
 
 The wrapper sends `directory_request` with `{scope: "self"}` (and the usual
-protocol version). The server replies with `{self: {agent_id, display_name?}}`,
-using the authenticated socket id, never a requested id. This view uses the
+protocol version). The server replies with `{self: {agent_id, display_name?, room?}}`,
+using the authenticated socket id, never a requested id. `room` is the
+caller's own room in the peer-entry shape, omitted when the rooms could not
+be read. This view uses the
 same name authority and validation as peer entries, including the
 absent-row fallback and invalid-row omission above; it works before the
 first state envelope and returns no peers or users. An oversized reply

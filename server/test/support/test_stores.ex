@@ -42,6 +42,7 @@ defmodule KaoiroServer.TestStores do
     KaoiroServer.DeliveryPolicies,
     KaoiroServer.AgentDirectory,
     KaoiroServer.AgentStatusLines,
+    KaoiroServer.Rooms,
     KaoiroServer.ClearWatermarks,
     KaoiroServer.SessionStarts,
     KaoiroServer.IngressOrder

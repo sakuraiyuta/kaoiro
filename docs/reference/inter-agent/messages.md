@@ -1,7 +1,7 @@
 ---
 title: Inter-agent message contract
 status: provisional
-last_updated: 2026-11-05
+last_updated: 2026-11-10
 description: Inter-agent message contract and its boundaries.
 ---
 
@@ -152,7 +152,9 @@ See [work authority and operations](work.md#work-authority-and-operations).
 For negotiated v1 ordinary sends, `in_reply_to` names the latest ordinary peer
 turn actually handed to the sender; the server rejects a stale basis before
 accepting the message. An internal `notice_type` identifies one of the two
-validated, non-ordinary notices. A recovery `loss_id` identifies a reported
+validated, non-ordinary notices a wrapper may send. A third value,
+`room_changed`, marks the server's own room-change status notice and is
+refused from a wrapper ([rooms](rooms.md#notices)). A recovery `loss_id` identifies a reported
 delivery loss independently of its transport sequence. Their validation and
 ownership rules live in [reply basis](reply-basis.md#negotiation-and-comparison)
 and [delivery](delivery.md#negotiated-gap-recovery).

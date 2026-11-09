@@ -52,6 +52,19 @@ defmodule KaoiroServer.ApplicationChildrenTest do
     assert store < index.(KaoiroServerWeb.Endpoint)
   end
 
+  # issue #537. ConversationStates reads Rooms on every record, and no channel
+  # may send before both exist.
+  test "Rooms precedes ConversationStates and the Endpoint" do
+    children = App.children(true)
+
+    index = fn module ->
+      Enum.find_index(children, &(&1 == module or match?({^module, _}, &1)))
+    end
+
+    assert index.(KaoiroServer.Rooms) < index.(KaoiroServer.ConversationStates)
+    assert index.(KaoiroServer.ConversationStates) < index.(KaoiroServerWeb.Endpoint)
+  end
+
   test "the test node runs the status line store" do
     assert is_pid(Process.whereis(KaoiroServer.AgentStatusLines))
   end

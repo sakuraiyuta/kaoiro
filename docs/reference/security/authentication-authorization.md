@@ -1,7 +1,7 @@
 ---
 title: Authentication and authorization
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-10
 ---
 
 # Authentication and authorization
@@ -111,6 +111,8 @@ Call `require_operator(socket)` first, both directly and inside
 - `attach_open` / `attach_chunk` / `attach_close`
 - `set_quagmire_settings`
 - `set_status_line_retention`
+- `create_room` / `rename_room` / `delete_room` / `move_agent` /
+  `preview_room_move` / `preview_room_delete`
 
 The same events from a viewer are rejected with `{:error, :forbidden}`. Resolve
 the role with `ClientSocket.role_for/1` for every operation rather than using a
