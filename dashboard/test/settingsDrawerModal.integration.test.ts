@@ -42,7 +42,8 @@ const mounted: object[] = [];
 
 beforeEach(() => {
   localStorage.clear();
-  updateSettings(DEFAULT_SETTINGS);
+  // The UI language stays pinned to ja (locale.setup.ts); "auto" would read en in jsdom.
+  updateSettings({ ...DEFAULT_SETTINGS, locale: "ja" });
 });
 
 afterEach(async () => {

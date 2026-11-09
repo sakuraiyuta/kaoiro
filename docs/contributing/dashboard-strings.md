@@ -70,7 +70,9 @@ Japanese (a test fails otherwise).
 Tests run in ja: `dashboard/test/locale.setup.ts` calls `setLocale("ja")` before
 every test file and test, in jsdom and in the node environment. Expectations
 are Japanese literals. A test of the English UI calls `setLocale("en")` itself;
-the next test starts in ja again. Add one switch test (mount in ja, then
+the next test starts in ja again. A test that resets the settings to the defaults
+keeps the pin: `updateSettings({ ...DEFAULT_SETTINGS, locale: "ja" })`, because the
+default `auto` reads en in jsdom. Add one switch test (mount in ja, then
 `setLocale("en")`, then read named elements) for each new screen.
 
 Playwright pins `locale: "ja-JP"` in its three configs; an English spec uses

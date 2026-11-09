@@ -48,7 +48,8 @@ beforeEach(() => {
   // that value to leak into whichever test ran next — an order-dependent
   // fixture. Resetting the whole object (not naming fields) also means a
   // FUTURE field added to Settings is reset automatically.
-  updateSettings(DEFAULT_SETTINGS);
+  // The UI language stays pinned to ja (locale.setup.ts); "auto" would read en in jsdom.
+  updateSettings({ ...DEFAULT_SETTINGS, locale: "ja" });
 });
 
 afterEach(async () => {
