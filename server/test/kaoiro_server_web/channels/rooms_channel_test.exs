@@ -746,7 +746,8 @@ defmodule KaoiroServerWeb.RoomsChannelTest do
       :ok = close(sa)
       ref = push(operator, "delete_agent", %{"version" => "0", "agent_id" => ctx.a})
       assert_reply ref, :ok, %{}, TestTimeouts.purge_reply()
-      assert {:ok, %{members: %{}}} = Rooms.snapshot()
+      assert {:ok, %{members: members}} = Rooms.snapshot()
+      assert members == %{}
     end
 
     test "a delete succeeds even when the membership cannot be purged", ctx do

@@ -91,7 +91,10 @@ defmodule KaoiroServer.RoomsTest do
     assert {:ok, %{moved: []}} = Rooms.change({:move, "a", "lobby"}, ctx.name)
     assert {:ok, %{moved: ["a"]}} = Rooms.change({:move, "a", blue}, ctx.name)
     assert {:ok, %{moved: []}} = Rooms.change({:move, "a", blue}, ctx.name)
-    assert {:ok, %{moved: ["a"], members: %{}}} = Rooms.change({:move, "a", "lobby"}, ctx.name)
+    assert {:ok, %{moved: ["a"], members: members}} =
+             Rooms.change({:move, "a", "lobby"}, ctx.name)
+
+    assert members == %{}
   end
 
   test "unknown rooms and the lobby's deletion are refused" do
@@ -141,7 +144,8 @@ defmodule KaoiroServer.RoomsTest do
 
     assert Rooms.purge("a", ctx.name) == :ok
     assert Rooms.purge("never-moved", ctx.name) == :ok
-    assert {:ok, %{members: %{}}} = Rooms.snapshot(ctx.name)
+    assert {:ok, %{members: members}} = Rooms.snapshot(ctx.name)
+    assert members == %{}
   end
 
   describe "stored records that are malformed" do
@@ -289,7 +293,8 @@ defmodule KaoiroServer.RoomsTest do
     log = capture_log(fn -> send(self(), Rooms.change({:move, "a", blue}, ctx.name)) end)
     assert_received {:error, :rooms_unavailable}
     assert log =~ "was not saved"
-    assert {:ok, %{members: %{}}} = Rooms.snapshot(ctx.name)
+    assert {:ok, %{members: members}} = Rooms.snapshot(ctx.name)
+    assert members == %{}
 
     assert {:ok, %{moved: ["a"]}} = Rooms.change({:move, "a", blue}, ctx.name)
     restart(ctx, pid)
@@ -307,7 +312,8 @@ defmodule KaoiroServer.RoomsTest do
 
     capture_log(fn -> send(self(), Rooms.change({:move, "a", blue}, ctx.name)) end)
     assert_received {:error, :rooms_unavailable}
-    assert {:ok, %{members: %{}}} = Rooms.snapshot(ctx.name)
+    assert {:ok, %{members: members}} = Rooms.snapshot(ctx.name)
+    assert members == %{}
 
     restart(ctx, pid)
     assert {:ok, %{members: %{"a" => ^blue}}} = Rooms.snapshot(ctx.name)
