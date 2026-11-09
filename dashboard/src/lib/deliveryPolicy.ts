@@ -1,3 +1,5 @@
+import { msg } from "./i18n/index.svelte";
+
 export type DeliveryPolicy = "on" | "off";
 export interface DeliveryMechanisms {
   operator_early: "fold" | "steer" | "hook" | "none";
@@ -94,10 +96,11 @@ export class DeliveryPolicyError extends Error {
 }
 
 export function deliveryPolicyLabel(view: DeliveryPolicyView, ownerConnected: boolean): string {
-  if (!ownerConnected) return "接続待ち";
-  if (view.policy === "unknown") return "状態不明・通常配送";
-  if (view.policy === "off") return `off（新しい割込配送を停止）${view.pending ? "・wrapper 確認待ち" : ""}`;
-  if (!hasDeliveryMechanism(view.mechanisms)) return "非対応・通常配送のみ";
-  if (!view.wrapper_support) return "実行中の切替は未対応";
-  return view.confirmed && view.applied_revision === view.revision ? "on（確認済み）" : "確認待ち";
+  const t = msg().deliveryPolicy;
+  if (!ownerConnected) return t.waitingConnection;
+  if (view.policy === "unknown") return t.unknownNormal;
+  if (view.policy === "off") return t.off({ pending: view.pending });
+  if (!hasDeliveryMechanism(view.mechanisms)) return t.unsupportedNormalOnly;
+  if (!view.wrapper_support) return t.switchUnsupported;
+  return view.confirmed && view.applied_revision === view.revision ? t.onConfirmed : t.awaitingConfirmation;
 }

@@ -7,7 +7,7 @@
   // log is. Entries are immutable, and a component instance is kept for as
   // long as its entry stays, so a refetch re-parses nothing that did not
   // change.
-  import { intlTag } from "./i18n/index.svelte";
+  import { intlTag, msg } from "./i18n/index.svelte";
   import Modal from "./Modal.svelte";
   import UntrustedMarkdown from "./UntrustedMarkdown.svelte";
   import type { StatusLineHistoryEntry } from "./statusLine";
@@ -45,7 +45,7 @@
 
   function firstLine(text: string): string {
     const line = text.split("\n", 1)[0] ?? "";
-    return line === "" ? "(空の先頭行)" : line;
+    return line === "" ? msg().statusLineHistoryDialog.emptyFirstLine : line;
   }
 
   function summary(text: string): string {
@@ -84,11 +84,11 @@
           // The agent left the set this viewer may see while the dialog was
           // open: keep nothing, so a stale log is not shown as current.
           entries = [];
-          notice = "このエージェントの履歴は現在表示できません";
+          notice = msg().statusLineHistoryDialog.agentGone;
         } else if (reason === "status_line_unavailable") {
-          notice = "履歴を一時的に取得できません";
+          notice = msg().statusLineHistoryDialog.temporarilyUnavailable;
         } else {
-          notice = `履歴を取得できません (${reason})`;
+          notice = msg().common.historyFetchFailed({ reason });
         }
       },
     );
@@ -108,10 +108,10 @@
   }
 </script>
 
-<Modal ariaLabel="{label} の状況表示の履歴" {onClose} contentClass="status-line-history">
+<Modal ariaLabel={msg().statusLineHistoryDialog.ariaLabel({ label })} {onClose} contentClass="status-line-history">
   <header class="head">
-    <h2>{label} の状況表示</h2>
-    <button type="button" class="close" onclick={onClose} aria-label="閉じる">✕</button>
+    <h2>{msg().statusLineHistoryDialog.title({ label })}</h2>
+    <button type="button" class="close" onclick={onClose} aria-label={msg().common.close}>✕</button>
   </header>
 
   {#if notice !== null}
@@ -119,9 +119,9 @@
   {/if}
 
   {#if entries === null}
-    {#if notice === null}<p class="loading">読み込み中…</p>{/if}
+    {#if notice === null}<p class="loading">{msg().common.loading}</p>{/if}
   {:else if entries.length === 0 && notice === null}
-    <p class="empty">履歴はありません</p>
+    <p class="empty">{msg().common.noHistory}</p>
   {:else}
     <ol class="entries">
       {#each entries as entry, index (keyOf(entry))}
@@ -131,15 +131,15 @@
             {#if entry.bytes !== null}<span class="size">{entry.bytes} B</span>{/if}
           </p>
           {#if entry.text === null}
-            <p class="cleared">(クリア)</p>
+            <p class="cleared">{msg().statusLineHistoryDialog.cleared}</p>
           {:else if index === 0 || keyOf(entry) in expanded}
             <UntrustedMarkdown text={entry.text} />
             {#if index !== 0}
-              <button type="button" class="toggle" onclick={() => toggle(entry)}>折りたたむ</button>
+              <button type="button" class="toggle" onclick={() => toggle(entry)}>{msg().statusLineHistoryDialog.collapse}</button>
             {/if}
           {:else}
             <p class="first-line"><UntrustedMarkdown text={summary(entry.text)} variant="inline" /></p>
-            <button type="button" class="toggle" onclick={() => toggle(entry)}>展開</button>
+            <button type="button" class="toggle" onclick={() => toggle(entry)}>{msg().statusLineHistoryDialog.expand}</button>
           {/if}
         </li>
       {/each}

@@ -1,3 +1,4 @@
+import { msg } from "./i18n/index.svelte";
 import type { Envelope, KaoiroConnection } from "./protocol";
 import { DeliveryPolicyError, parseDeliveryPolicy, unknownDeliveryPolicy, hasDeliveryMechanism,
   type DeliveryPolicy, type DeliveryPolicyView } from "./deliveryPolicy";
@@ -90,7 +91,7 @@ export class DeliveryPolicyStore {
           version !== (this.versions.get(id) ?? 0)) return;
       this.observe(id, view);
     } catch {
-      if (reportFailure && current() && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.notices = { ...this.notices, [id]: this.notices[id] === "保存結果未確認" ? "保存結果未確認・状態を再取得できませんでした" : "状態を再取得できませんでした" };
+      if (reportFailure && current() && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.notices = { ...this.notices, [id]: this.notices[id] === msg().deliveryPolicy.saveUnconfirmed ? msg().deliveryPolicy.saveUnconfirmedRefreshFailed : msg().deliveryPolicy.refreshFailed };
     } finally {
       if (current()) { this.reads.delete(id); this.reading = { ...this.reading, [id]: false }; }
     }
@@ -121,12 +122,12 @@ export class DeliveryPolicyStore {
       const conflict = error instanceof DeliveryPolicyError && error.reason === "revision_conflict";
       const uncertain = !(error instanceof DeliveryPolicyError) || error.uncertain;
       if ((this.versions.get(id) ?? 0) === version && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) {
-        this.notices = { ...this.notices, [id]: conflict ? "別の操作で更新されました。再取得後に選び直してください" :
-          uncertain ? "保存結果未確認" : "設定を保存できませんでした" };
+        this.notices = { ...this.notices, [id]: conflict ? msg().deliveryPolicy.conflictReselectAfterRefresh :
+          uncertain ? msg().deliveryPolicy.saveUnconfirmed : msg().deliveryPolicy.saveFailed };
       }
       if (conflict || uncertain) {
         await this.refresh(id, noticeEpoch === (this.noticeEpochs.get(id) ?? 0));
-        if (current() && conflict && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.notices = { ...this.notices, [id]: "別の操作で更新されました。選び直してください" };
+        if (current() && conflict && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.notices = { ...this.notices, [id]: msg().deliveryPolicy.conflictReselect };
       }
     } finally {
       if (current()) { this.requests.delete(id); this.saving = { ...this.saving, [id]: false }; }

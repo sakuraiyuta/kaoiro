@@ -20,6 +20,7 @@
     UserSummary,
   } from "./protocol";
   import type { StatusLineSettings } from "./statusLine";
+  import { msg } from "./i18n/index.svelte";
   import LanguageSelect from "./LanguageSelect.svelte";
   import Modal from "./Modal.svelte";
 
@@ -99,10 +100,15 @@
     onOpenSessionLifecycle(id);
   }
 
+  function sourceText(source: "stored" | "env" | "default"): string {
+    const t = msg().settingsDrawer;
+    return source === "stored" ? t.sourceStored : source === "env" ? t.sourceEnv : t.sourceDefault;
+  }
+
   const retentionSourceLabel = $derived(
     statusLineSettings === null
-      ? "取得中"
-      : { stored: "設定済み", env: "環境変数", default: "既定値" }[statusLineSettings.source],
+      ? msg().settingsDrawer.sourceFetching
+      : sourceText(statusLineSettings.source),
   );
 
   // The browser lets any number through; the server rejects out-of-range
@@ -134,10 +140,8 @@
 
   const rallySourceLabel = $derived(
     quagmireSettings === null
-      ? "取得中"
-      : { stored: "設定済み", env: "環境変数", default: "既定値" }[
-          quagmireSettings.source
-        ],
+      ? msg().settingsDrawer.sourceFetching
+      : sourceText(quagmireSettings.source),
   );
 
   function commitRallyTurns(value: number | null): void {
@@ -279,11 +283,11 @@
         return;
       }
       if (conversations.incomplete) {
-        bulkResetError = "会話一覧が不完全なため、一括操作を確認できません";
+        bulkResetError = msg().settingsDrawer.bulkListIncomplete;
         return;
       }
       if (!agentSnapshotComplete) {
-        bulkResetError = "エージェント一覧を取得できていません";
+        bulkResetError = msg().settingsDrawer.bulkAgentsMissing;
         return;
       }
       bulkResetTargets = {
@@ -302,7 +306,7 @@
         appConnectionGeneration === appGeneration
       ) {
         bulkResetError =
-          err instanceof Error ? err.message : "会話一覧を更新できませんでした";
+          err instanceof Error ? err.message : msg().settingsDrawer.conversationsRefreshFailed;
       }
     } finally {
       if (preparationGeneration === bulkResetPreparationGeneration) {
@@ -368,12 +372,12 @@
             break;
           }
           if (err instanceof Error && err.message === "forbidden") {
-            console.warn("一括操作の実行中に operator 権限を失いました", err);
+            console.warn("lost operator permission during the bulk operation", err);
             stopped = true;
             break;
           }
           closeSkipped += 1;
-          console.warn("一括 close をスキップしました", conversationId, err);
+          console.warn("skipped the bulk close", conversationId, err);
         }
       }
 
@@ -402,28 +406,28 @@
             }
             const reason = err instanceof Error ? err.message : "error";
             if (reason === "forbidden") {
-              console.warn("一括操作の実行中に operator 権限を失いました", err);
+              console.warn("lost operator permission during the bulk operation", err);
               stopped = true;
               break;
             }
             if (reason === "timeout" || reason === "session_reset_pending") {
               resetUnknown += 1;
               console.warn(
-                "一括 session_reset の結果は不明です。再試行しません",
+                "bulk session_reset outcome is unknown; not retrying",
                 agentId,
                 err,
               );
             } else if (DEFINITE_SESSION_RESET_REJECTIONS.has(reason)) {
               resetSkipped += 1;
               console.warn(
-                "一括 session_reset をスキップしました",
+                "skipped the bulk session_reset",
                 agentId,
                 err,
               );
             } else {
               resetUnknown += 1;
               console.warn(
-                "一括 session_reset の結果は不明です。再試行しません",
+                "bulk session_reset outcome is unknown; not retrying",
                 agentId,
                 err,
               );
@@ -434,7 +438,13 @@
 
       if (current() && !stopped) {
         onBulkResetSummary(
-          `一括操作: 会話を ${closed} 件 close (skip ${closeSkipped})、セッションを ${accepted} 件 reset 受付 (skip ${resetSkipped}、結果不明 ${resetUnknown})`,
+          msg().settingsDrawer.bulkSummary({
+            closed,
+            closeSkipped,
+            accepted,
+            resetSkipped,
+            resetUnknown,
+          }),
         );
       }
     } finally {
@@ -714,10 +724,10 @@
   }
 </script>
 
-<Modal ariaLabel="設定" {onClose} contentClass="settings-drawer-content">
+<Modal ariaLabel={msg().settingsDrawer.title} {onClose} contentClass="settings-drawer-content">
   {#snippet children()}
   <div class="drawer-header">
-    <h2>設定</h2>
+    <h2>{msg().settingsDrawer.title}</h2>
     <!-- svelte-ignore a11y_autofocus -- inside a native <dialog> opened
          via showModal() (Modal.svelte), autofocus is the spec-sanctioned
          initial-focus mechanism (issue #232 MF-3), not page-load
@@ -726,7 +736,7 @@
       type="button"
       class="close"
       onclick={onClose}
-      aria-label="閉じる"
+      aria-label={msg().common.close}
       autofocus
     >
       ×
@@ -744,11 +754,11 @@
           notificationSoundEnabled: e.currentTarget.checked,
         })}
     />
-    通知音
+    {msg().settingsDrawer.notificationSound}
   </label>
 
   <label>
-    音量
+    {msg().settingsDrawer.volume}
     <input
       type="range"
       min="0"
@@ -775,7 +785,7 @@
           agentCardStatsEnabled: e.currentTarget.checked,
         })}
     />
-    カードに engine・model・effort と ctx・5h・7day を表示
+    {msg().settingsDrawer.statsToggle}
   </label>
 
   <label class="row">
@@ -787,7 +797,7 @@
           hideNonMessageLogEntries: e.currentTarget.checked,
         })}
     />
-    エージェント詳細のログでツール呼び出しなどを非表示
+    {msg().settingsDrawer.hideNonMessage}
   </label>
 
   {#if isOperator}
@@ -795,7 +805,7 @@
   {/if}
 
   <label class="grid-sort">
-    グリッドの並び順
+    {msg().settingsDrawer.gridSort}
     <select
       value={settings.gridSort}
       onchange={(e) =>
@@ -803,33 +813,32 @@
           gridSort: e.currentTarget.value === "recent" ? "recent" : "name",
         })}
     >
-      <option value="name">名前順</option>
-      <option value="recent">最近動いた順 (状態が変わると並びが動く)</option>
+      <option value="name">{msg().settingsDrawer.sortName}</option>
+      <option value="recent">{msg().settingsDrawer.sortRecent}</option>
     </select>
   </label>
 
   {#if connection}
     {#if onOpenSessionLifecycle}
       <section class="session-lifecycle">
-        <h3>セッション履歴</h3>
+        <h3>{msg().settingsDrawer.sessionHistory}</h3>
         <form onsubmit={openSessionLifecycle}>
-          <label for="lifecycle-agent-id">エージェント ID</label>
+          <label for="lifecycle-agent-id">{msg().settingsDrawer.agentId}</label>
           <input id="lifecycle-agent-id" bind:value={lifecycleAgentId} list="lifecycle-agent-ids" placeholder="host-a.agent-1" />
           <datalist id="lifecycle-agent-ids">
             {#each [...new Set([...Object.keys(agents), ...Object.keys(directory)])].sort() as id}
               <option value={id}></option>
             {/each}
           </datalist>
-          <button type="submit" disabled={lifecycleAgentId.trim() === ""}>履歴を表示</button>
+          <button type="submit" disabled={lifecycleAgentId.trim() === ""}>{msg().settingsDrawer.showHistory}</button>
         </form>
-        <p>削除済みのエージェントも、ID を入力して保持されている履歴を確認できます。</p>
+        <p>{msg().settingsDrawer.deletedAgentsHint}</p>
       </section>
     {/if}
     <section class="quagmire">
-      <h3>停滞検知のしきい値</h3>
+      <h3>{msg().settingsDrawer.quagmireTitle}</h3>
       <p class="hint">
-        エージェント間のやり取りがこの通数に達すると警告バナーを出します
-        (現在の設定元: {rallySourceLabel})。
+        {msg().settingsDrawer.quagmireHint({ source: rallySourceLabel })}
       </p>
 
       <label class="row">
@@ -841,11 +850,11 @@
               e.currentTarget.checked ? null : lastNumericRallyTurns,
             )}
         />
-        検知しない (∞)
+        {msg().settingsDrawer.neverDetect}
       </label>
 
       <label>
-        しきい値
+        {msg().settingsDrawer.threshold}
         <input
           type="range"
           min="4"
@@ -858,12 +867,12 @@
         <span class="value"
           >{rallyOff
             ? "∞"
-            : `${quagmireSettings?.rallyTurns ?? lastNumericRallyTurns} 通`}</span
+            : msg().settingsDrawer.turnsCount({ n: quagmireSettings?.rallyTurns ?? lastNumericRallyTurns })}</span
         >
       </label>
 
       <label>
-        直接入力 (1〜{MAX_RALLY_TURNS})
+        {msg().settingsDrawer.directInput({ max: MAX_RALLY_TURNS })}
         <input
           type="number"
           min="1"
@@ -875,21 +884,19 @@
       </label>
 
       {#if quagmireError}
-        <p class="error">しきい値を変更できません: {quagmireError}</p>
+        <p class="error">{msg().settingsDrawer.thresholdError({ reason: quagmireError })}</p>
       {/if}
     </section>
 
     <section class="status-retention">
-      <h3>状況表示の履歴件数</h3>
+      <h3>{msg().settingsDrawer.retentionTitle}</h3>
       <p class="hint">
-        各エージェントの状況表示について、変更履歴を何件まで残すかを決めます。
-        減らすと、超えた古い履歴はすぐに消えます
-        (現在の設定元: {retentionSourceLabel})。
+        {msg().settingsDrawer.retentionHint({ source: retentionSourceLabel })}
       </p>
       <label>
-        件数{statusLineSettings
-          ? ` (${statusLineSettings.min}〜${statusLineSettings.max})`
-          : ""}
+        {statusLineSettings
+          ? msg().settingsDrawer.retentionLabelRange({ min: statusLineSettings.min, max: statusLineSettings.max })
+          : msg().settingsDrawer.retentionLabel}
         <input
           type="number"
           min={statusLineSettings?.min ?? 1}
@@ -900,58 +907,58 @@
         />
       </label>
       {#if retentionError}
-        <p class="error">件数を変更できません: {retentionError}</p>
+        <p class="error">{msg().settingsDrawer.retentionError({ reason: retentionError })}</p>
       {/if}
     </section>
 
     <section class="bulk-reset">
-      <h3>一括クリーンアップ</h3>
-      <p class="hint">開いている会話を閉じ、接続中のエージェントのセッションを clear します。</p>
+      <h3>{msg().settingsDrawer.bulkTitle}</h3>
+      <p class="hint">{msg().settingsDrawer.bulkHint}</p>
       <button
         type="button"
         class="danger"
         onclick={prepareBulkReset}
         disabled={!agentSnapshotComplete || bulkResetRunning || bulkResetPreparing}
       >
-        {bulkResetPreparing ? "対象を確認中…" : "一括 close + session reset"}
+        {bulkResetPreparing ? msg().settingsDrawer.bulkChecking : msg().settingsDrawer.bulkButton}
       </button>
       {#if bulkResetError}
-        <p class="conv-status" role="status">一括操作を準備できませんでした: {bulkResetError}</p>
+        <p class="conv-status" role="status">{msg().settingsDrawer.bulkPrepareFailed({ reason: bulkResetError })}</p>
       {/if}
     </section>
 
     <section class="conversations">
       <div class="conversations-header">
-        <h3>会話一覧</h3>
+        <h3>{msg().settingsDrawer.conversationsTitle}</h3>
         <button
           type="button"
           class="refresh"
           onclick={refreshConversations}
-          aria-label="会話一覧を更新"
+          aria-label={msg().settingsDrawer.refreshConversationsAria}
         >
-          更新
+          {msg().settingsDrawer.refresh}
         </button>
       </div>
       <div class="conversation-filters">
         <label class="conversation-toggle">
           <input type="checkbox" bind:checked={showClosedConversations} />
-          閉じた会話も表示
+          {msg().settingsDrawer.showClosed}
         </label>
         {#if !showClosedConversations && hiddenClosedCount > 0}
-          <span class="conv-status">閉じた会話 {hiddenClosedCount} 件を非表示</span>
+          <span class="conv-status">{msg().settingsDrawer.hiddenClosed({ n: hiddenClosedCount })}</span>
         {/if}
       </div>
       {#if conversationsError}
-        <p class="conv-status">取得に失敗しました({conversationsError})</p>
+        <p class="conv-status">{msg().settingsDrawer.fetchFailed({ reason: conversationsError })}</p>
       {:else}
         {#if conversationsIncomplete}
-          <p class="conv-status">一部の会話を表示できません</p>
+          <p class="conv-status">{msg().settingsDrawer.partialConversations}</p>
         {/if}
       {/if}
       {#if !conversationsError && conversations === null}
-        <p class="conv-status">読み込み中…</p>
+        <p class="conv-status">{msg().common.loading}</p>
       {:else if !conversationsError && conversations && visibleConversations.length === 0}
-        <p class="conv-status">開いている会話はありません</p>
+        <p class="conv-status">{msg().settingsDrawer.noOpenConversations}</p>
       {:else if !conversationsError && conversations}
         <ul class="conv-list">
           {#each visibleConversations as conv (conv.conversationId)}
@@ -984,7 +991,7 @@
                   class="conv-close"
                   onclick={() => (confirmCloseTarget = conv)}
                 >
-                  閉じる
+                  {msg().settingsDrawer.closeConversation}
                 </button>
               {/if}
             </li>
@@ -1000,22 +1007,22 @@
          between the two sections wherever both have rows. -->
     <section class="users">
       <div class="conversations-header">
-        <h3>ユーザー一覧</h3>
+        <h3>{msg().settingsDrawer.usersTitle}</h3>
         <button
           type="button"
           class="refresh"
           onclick={refreshUsers}
-          aria-label="ユーザー一覧を更新"
+          aria-label={msg().settingsDrawer.refreshUsersAria}
         >
-          更新
+          {msg().settingsDrawer.refresh}
         </button>
       </div>
       {#if usersError}
-        <p class="user-status">取得に失敗しました({usersError})</p>
+        <p class="user-status">{msg().settingsDrawer.fetchFailed({ reason: usersError })}</p>
       {:else if users === null}
-        <p class="user-status">読み込み中…</p>
+        <p class="user-status">{msg().common.loading}</p>
       {:else if users.length === 0}
-        <p class="user-status">登録されているユーザーはいません</p>
+        <p class="user-status">{msg().settingsDrawer.noUsers}</p>
       {:else}
         <ul class="user-list">
           {#each users as u (u.id)}
@@ -1026,25 +1033,25 @@
                     type="text"
                     bind:value={renameDraft}
                     disabled={renaming}
-                    aria-label="{u.id} の表示名"
+                    aria-label={msg().settingsDrawer.displayNameAria({ id: u.id })}
                   />
                   <button
                     type="button"
                     onclick={submitRename}
                     disabled={renaming}
                   >
-                    {renaming ? "保存中…" : "保存"}
+                    {renaming ? msg().settingsDrawer.saving : msg().settingsDrawer.save}
                   </button>
                   <button
                     type="button"
                     onclick={cancelRename}
                     disabled={renaming}
                   >
-                    キャンセル
+                    {msg().settingsDrawer.cancel}
                   </button>
                 </div>
                 {#if renameError}
-                  <p class="user-status">失敗しました({renameError})</p>
+                  <p class="user-status">{msg().settingsDrawer.failed({ reason: renameError })}</p>
                 {/if}
               {:else}
                 <span class="user-name">{u.displayName}</span>
@@ -1056,7 +1063,7 @@
                   onclick={() => startRename(u)}
                   disabled={renaming}
                 >
-                  名前を変更
+                  {msg().settingsDrawer.rename}
                 </button>
               {/if}
             </li>
@@ -1068,7 +1075,7 @@
 
   {#if connection && confirmCloseTarget}
     <Modal
-      ariaLabel="会話を閉じる確認"
+      ariaLabel={msg().settingsDrawer.confirmCloseAria}
       onClose={() => {
         confirmCloseTarget = null;
         closeError = null;
@@ -1080,7 +1087,7 @@
              svelte-check does not carry that narrowing across the
              boundary (confirmed 2026-08-30 — "possibly null" otherwise). -->
         {#if confirmCloseTarget}
-          <p>この会話を閉じますか?参加エージェントに通知されます。</p>
+          <p>{msg().settingsDrawer.confirmClose}</p>
           <p class="confirm-target">
             <span class="conv-participants">
               {#each confirmCloseTarget.participants as agentId, index}
@@ -1094,7 +1101,7 @@
           </p>
         {/if}
         {#if closeError}
-          <p class="conv-status">失敗しました({closeError})</p>
+          <p class="conv-status">{msg().settingsDrawer.failed({ reason: closeError })}</p>
         {/if}
         <div class="confirm-actions">
           <!-- svelte-ignore a11y_autofocus -- inside a native <dialog>
@@ -1115,7 +1122,7 @@
             disabled={closing}
             autofocus
           >
-            キャンセル
+            {msg().settingsDrawer.cancel}
           </button>
           <button
             type="button"
@@ -1123,7 +1130,7 @@
             onclick={handleConfirmClose}
             disabled={closing}
           >
-            {closing ? "閉じています…" : "閉じる"}
+            {closing ? msg().settingsDrawer.closing : msg().settingsDrawer.closeConversation}
           </button>
         </div>
       {/snippet}
@@ -1132,14 +1139,16 @@
 
   {#if connection && bulkResetTargets && bulkResetTargets.appGeneration === appConnectionGeneration}
     <Modal
-      ariaLabel="一括クリーンアップ確認"
+      ariaLabel={msg().settingsDrawer.bulkConfirmAria}
       onClose={cancelBulkReset}
     >
       {#snippet children()}
         {#if bulkResetTargets}
           <p>
-            会話 {bulkResetTargets.conversationIds.length} 件を閉じ、エージェント
-            {bulkResetTargets.agentIds.length} 体のセッションを clear します。続けますか?
+            {msg().settingsDrawer.bulkConfirm({
+              conversations: bulkResetTargets.conversationIds.length,
+              agents: bulkResetTargets.agentIds.length,
+            })}
           </p>
           <div class="confirm-actions">
             <!-- svelte-ignore a11y_autofocus -- Modal opens a native
@@ -1152,7 +1161,7 @@
               disabled={bulkResetExecuting}
               autofocus
             >
-              キャンセル
+              {msg().settingsDrawer.cancel}
             </button>
             <button
               type="button"
@@ -1160,7 +1169,7 @@
               onclick={confirmBulkReset}
               disabled={bulkResetExecuting}
             >
-              {bulkResetExecuting ? "処理中…" : "実行"}
+              {bulkResetExecuting ? msg().settingsDrawer.processing : msg().settingsDrawer.execute}
             </button>
           </div>
         {/if}
@@ -1174,7 +1183,7 @@
       class="logout"
       onclick={() => void onLogout?.()}
     >
-      ログアウト
+      {msg().settingsDrawer.logout}
     </button>
   {/if}
   {/snippet}

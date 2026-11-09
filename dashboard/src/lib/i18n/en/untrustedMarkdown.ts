@@ -1,3 +1,5 @@
 import type { Messages } from "../ja";
 
-export const untrustedMarkdown = {} satisfies Messages["untrustedMarkdown"];
+export const untrustedMarkdown = {
+  plainNote: "Shown as plain text because the formatting cannot be displayed",
+} satisfies Messages["untrustedMarkdown"];

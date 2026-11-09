@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { msg } from "./i18n/index.svelte";
   import { deliveryPolicyLabel, hasDeliveryMechanism, unknownDeliveryPolicy,
     type DeliveryPolicy, type DeliveryPolicyView } from "./deliveryPolicy";
   let { agentId, view = unknownDeliveryPolicy(), connected, available = false, saving = false,
@@ -21,24 +22,24 @@
   });
 </script>
 
-<section class="delivery-policy" aria-label="実行中の割込配送">
-  <strong>実行中の割込配送</strong>
-  <p>保存設定: {view.policy}</p>
-  <p role="status" aria-live="polite">{saving ? "保存中" : notice || deliveryPolicyLabel(view, connected)}</p>
-  {#if !available}<p>この server の操作 API は未確認</p>{/if}
+<section class="delivery-policy" aria-label={msg().deliveryPolicy.title}>
+  <strong>{msg().deliveryPolicy.title}</strong>
+  <p>{msg().deliveryPolicy.savedPolicy({ policy: view.policy })}</p>
+  <p role="status" aria-live="polite">{saving ? msg().deliveryPolicy.saving : notice || deliveryPolicyLabel(view, connected)}</p>
+  {#if !available}<p>{msg().deliveryPolicy.apiUnconfirmed}</p>{/if}
   {#if view.mechanisms}
-    <p>あなたから: {view.mechanisms.operator_early} / エージェント間: {view.mechanisms.inter_agent_early}</p>
-    <p>エージェント間の停止: {view.mechanisms.inter_agent_yield === "none" ? "非対応" : "ツール境界"}
-      {#if view.mechanisms.inter_agent_early === "steer" && view.mechanisms.inter_agent_yield === "none"}（early のみ）{/if}</p>
+    <p>{msg().deliveryPolicy.mechanisms({ operatorEarly: view.mechanisms.operator_early, interAgentEarly: view.mechanisms.inter_agent_early })}</p>
+    <p>{msg().deliveryPolicy.interAgentStop({ value: view.mechanisms.inter_agent_yield === "none" ? msg().deliveryPolicy.stopUnsupported : msg().deliveryPolicy.stopToolBoundary })}
+      {#if view.mechanisms.inter_agent_early === "steer" && view.mechanisms.inter_agent_yield === "none"}{msg().deliveryPolicy.earlyOnly}{/if}</p>
   {/if}
-  {#if view.policy === "off"}<p>すでに受け付けた処理は完了する場合があります。</p>{/if}
+  {#if view.policy === "off"}<p>{msg().deliveryPolicy.acceptedMayComplete}</p>{/if}
   {#if onChange}
     <label><input type="checkbox" bind:checked disabled={!writable}
       onchange={(event) => { if (writable) onChange?.(event.currentTarget.checked ? "on" : "off"); }} />
-      割込配送を許可する</label>
+      {msg().deliveryPolicy.allow}</label>
   {/if}
   {#if onRefresh && available}<button type="button" disabled={reading} onclick={onRefresh}
-    title="対応する配送方法での受け付けを許可します。配送の成功を保証する設定ではありません。">配送状態を再取得</button>{/if}
+    title={msg().deliveryPolicy.refreshTitle}>{msg().deliveryPolicy.refresh}</button>{/if}
 </section>
 
 <style>

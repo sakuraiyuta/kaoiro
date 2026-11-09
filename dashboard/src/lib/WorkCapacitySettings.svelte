@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import type { WorkCapacityKey, WorkCapacityPatch, WorkSettingsSnapshot } from "@kaoiro/protocol";
   import { WORK_CAPACITY_KEYS, isWorkCapacityValue } from "./workSettings";
+  import { msg } from "./i18n/index.svelte";
   import type { KaoiroConnection } from "./protocol";
 
   let { connection, generation, snapshot, onSnapshot }: {
@@ -17,11 +18,15 @@
   let newerSettings = $state(false);
   let uncertain = $state(false);
   let error = $state<string | null>(null);
-  const labels: Record<WorkCapacityKey, string> = {
-    work_nominated_per_principal: "指名待ちの上限（依頼者・担当者ごと）",
-    work_active_per_assignee: "実行中の上限（担当者ごと）",
-  };
-  const sourceLabels = { dashboard: "ダッシュボード", config: "サーバー設定", default: "既定値" };
+  function labelOf(key: WorkCapacityKey): string {
+    return key === "work_nominated_per_principal"
+      ? msg().workCapacitySettings.nominatedLimit
+      : msg().workCapacitySettings.activeLimit;
+  }
+  function sourceLabelOf(source: "dashboard" | "config" | "default"): string {
+    const t = msg().workCapacitySettings;
+    return source === "dashboard" ? t.sourceDashboard : source === "config" ? t.sourceConfig : t.sourceDefault;
+  }
   $effect(() => {
     if (snapshot?.state === "ready") {
       if (untrack(() => dirty)) newerSettings = true;
@@ -94,7 +99,7 @@
     catch (cause) {
       if (!current()) return;
       const reason = cause instanceof Error ? cause.message : "error";
-      error = reason === "revision_conflict" ? "別の変更が保存されました。最新の値を確認して、もう一度入力してください。" : reason;
+      error = reason === "revision_conflict" ? msg().workCapacitySettings.revisionConflict : reason;
       uncertain = true;
       try {
         const value = await requestConnection.getWorkSettings();
@@ -106,32 +111,32 @@
 </script>
 
 <section aria-label="Work admission settings">
-  <h3>作業の受け入れ上限</h3>
-  <p>0 は無制限です。保存した値は再起動後も残ります。上限を下げても既存の作業は取り消されません。</p>
-  <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/reference/configuration/server.md#work-admission-settings" target="_blank" rel="noreferrer">設定の説明</a>
+  <h3>{msg().workCapacitySettings.title}</h3>
+  <p>{msg().workCapacitySettings.intro}</p>
+  <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/reference/configuration/server.md#work-admission-settings" target="_blank" rel="noreferrer">{msg().workCapacitySettings.docsLink}</a>
   {#if snapshot?.state === "unavailable"}
-    <p role="alert">{snapshot.reason === "work_settings_corrupt" ? "Invalid saved work settings" : "保存状態を確認できません"}</p>
+    <p role="alert">{snapshot.reason === "work_settings_corrupt" ? "Invalid saved work settings" : msg().workCapacitySettings.stateUnknown}</p>
     <p>{snapshot.message}</p>
-    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/reference/configuration/server.md#repair-invalid-work-capacity-settings" target="_blank" rel="noreferrer">復旧手順</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/reference/configuration/server.md#repair-invalid-work-capacity-settings" target="_blank" rel="noreferrer">{msg().workCapacitySettings.repairLink}</a>
   {:else if snapshot === null}
-    <p>設定未取得、未接続、またはサーバーがこの設定に対応していません。</p>
+    <p>{msg().workCapacitySettings.unavailable}</p>
   {/if}
   {#each WORK_CAPACITY_KEYS as key}
-    <label>{labels[key]}<input aria-label={labels[key]} inputmode="numeric" type="text" bind:value={drafts[key]} oninput={() => { dirty = true; touched[key] = true; }} disabled={!enabled} /></label>
+    <label>{labelOf(key)}<input aria-label={labelOf(key)} inputmode="numeric" type="text" bind:value={drafts[key]} oninput={() => { dirty = true; touched[key] = true; }} disabled={!enabled} /></label>
     {#if snapshot?.state === "ready"}
-      <p>適用値: {snapshot.effective[key] === 0 ? "無制限 (0)" : snapshot.effective[key]} / 設定元: {sourceLabels[snapshot.sources[key]]} / サーバー設定: {snapshot.fallbacks[key]}</p>
+      <p>{msg().workCapacitySettings.effective({ value: snapshot.effective[key] === 0 ? msg().workCapacitySettings.unlimited : String(snapshot.effective[key]), source: sourceLabelOf(snapshot.sources[key]), fallback: snapshot.fallbacks[key] })}</p>
     {/if}
-    <button onclick={() => save(key)} disabled={!enabled}>サーバー設定に戻す: {labels[key]}</button>
+    <button onclick={() => save(key)} disabled={!enabled}>{msg().workCapacitySettings.resetToServer({ label: labelOf(key) })}</button>
   {/each}
-  <button onclick={() => save()} disabled={!enabled || !valid || !anyTouched}>保存</button>
-  <button onclick={refresh} disabled={!connection || pending}>設定・変更履歴を読み直す</button>
-  {#if newerSettings}<p role="status">サーバーの設定が更新されました。入力は保持しています。適用値を確認してから保存してください。</p>{/if}
+  <button onclick={() => save()} disabled={!enabled || !valid || !anyTouched}>{msg().workCapacitySettings.save}</button>
+  <button onclick={refresh} disabled={!connection || pending}>{msg().workCapacitySettings.reload}</button>
+  {#if newerSettings}<p role="status">{msg().workCapacitySettings.newerSettings}</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
-  {#if uncertain}<p role="alert">結果が不明です。保存を繰り返さず、設定を読み直してください。</p>{/if}
+  {#if uncertain}<p role="alert">{msg().workCapacitySettings.uncertain}</p>{/if}
   {#if snapshot?.state === "ready" && snapshot.last_change}
-    <p>最終変更: {snapshot.last_change.at} / {snapshot.last_change.actor.id} / revision {snapshot.revision}</p>
+    <p>{msg().workCapacitySettings.lastChange({ at: snapshot.last_change.at, actor: snapshot.last_change.actor.id, revision: snapshot.revision })}</p>
     {#if snapshot.changes}
-      <details><summary>最近の変更（最大100件）</summary><ul>
+      <details><summary>{msg().workCapacitySettings.recentChanges}</summary><ul>
         {#each snapshot.changes as change (change.revision)}
           <li>{change.at} / {change.actor.id} / revision {change.revision}: {JSON.stringify(change.new_overrides)}</li>
         {/each}

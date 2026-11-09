@@ -1,3 +1,77 @@
 import type { Messages } from "../ja";
+import { plural } from "./plural";
 
-export const settingsDrawer = {} satisfies Messages["settingsDrawer"];
+export const settingsDrawer = {
+  title: "Settings",
+  sourceFetching: "fetching",
+  sourceStored: "stored",
+  sourceEnv: "environment variable",
+  sourceDefault: "default",
+  bulkListIncomplete:
+    "The conversation list is incomplete, so the bulk operation cannot be confirmed",
+  bulkAgentsMissing: "The agent list has not been loaded",
+  conversationsRefreshFailed: "Could not refresh the conversation list",
+  bulkSummary: ({ closed, closeSkipped, accepted, resetSkipped, resetUnknown }) =>
+    `Bulk operation: closed ${plural(closed, "conversation", "conversations")} (skipped ${closeSkipped}), accepted reset for ${plural(accepted, "session", "sessions")} (skipped ${resetSkipped}, unknown ${resetUnknown})`,
+  notificationSound: "Notification sound",
+  volume: "Volume",
+  statsToggle: "Show engine, model, effort and ctx, 5h, 7day on cards",
+  hideNonMessage: "Hide tool calls and similar entries in the agent detail log",
+  gridSort: "Grid order",
+  sortName: "By name",
+  sortRecent: "By recent activity (the order moves when the state changes)",
+  sessionHistory: "Session history",
+  agentId: "Agent ID",
+  showHistory: "Show history",
+  deletedAgentsHint:
+    "For a deleted agent too, enter its ID to see the history that is kept.",
+  quagmireTitle: "Stall detection threshold",
+  quagmireHint: ({ source }) =>
+    `A warning banner appears when the exchange between agents reaches this number of messages (current source: ${source}).`,
+  neverDetect: "Never detect (∞)",
+  threshold: "Threshold",
+  turnsCount: ({ n }) => plural(n, "message", "messages"),
+  directInput: ({ max }) => `Type a value (1 to ${max})`,
+  thresholdError: ({ reason }) => `Cannot change the threshold: ${reason}`,
+  retentionTitle: "Status line history size",
+  retentionHint: ({ source }) =>
+    `Sets how many history entries are kept for each agent's status line. Lowering it removes older entries at once (current source: ${source}).`,
+  retentionLabel: "Entries",
+  retentionLabelRange: ({ min, max }) => `Entries (${min} to ${max})`,
+  retentionError: ({ reason }) => `Cannot change the number of entries: ${reason}`,
+  bulkTitle: "Bulk cleanup",
+  bulkHint:
+    "Closes the open conversations and clears the sessions of the connected agents.",
+  bulkChecking: "Checking targets…",
+  bulkButton: "Bulk close + session reset",
+  bulkPrepareFailed: ({ reason }) =>
+    `Could not prepare the bulk operation: ${reason}`,
+  conversationsTitle: "Conversations",
+  refreshConversationsAria: "Refresh the conversation list",
+  refresh: "Refresh",
+  showClosed: "Show closed conversations too",
+  hiddenClosed: ({ n }) => `${plural(n, "closed conversation", "closed conversations")} hidden`,
+  fetchFailed: ({ reason }) => `Could not load (${reason})`,
+  partialConversations: "Some conversations cannot be shown",
+  noOpenConversations: "No open conversations",
+  closeConversation: "Close",
+  usersTitle: "Users",
+  refreshUsersAria: "Refresh the user list",
+  noUsers: "No registered users",
+  displayNameAria: ({ id }) => `Display name of ${id}`,
+  saving: "Saving…",
+  save: "Save",
+  cancel: "Cancel",
+  failed: ({ reason }) => `Failed (${reason})`,
+  rename: "Rename",
+  confirmCloseAria: "Confirm closing the conversation",
+  confirmClose:
+    "Close this conversation? The participating agents are notified.",
+  closing: "Closing…",
+  bulkConfirmAria: "Confirm the bulk cleanup",
+  bulkConfirm: ({ conversations, agents }) =>
+    `This closes ${plural(conversations, "conversation", "conversations")} and clears the sessions of ${plural(agents, "agent", "agents")}. Continue?`,
+  processing: "Processing…",
+  execute: "Run",
+  logout: "Log out",
+} satisfies Messages["settingsDrawer"];

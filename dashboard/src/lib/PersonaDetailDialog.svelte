@@ -6,6 +6,7 @@
   // close-restore) live in the shared Modal.svelte primitive (issue #232
   // MF-3); the close button follows SettingsDrawer.svelte's top-right
   // `.close` styling.
+  import { msg } from "./i18n/index.svelte";
   import Modal from "./Modal.svelte";
   import { fetchPersonaPackDetail } from "./protocol";
   import type { PersonaPackDetail } from "./protocol";
@@ -60,10 +61,10 @@
   }
 </script>
 
-<Modal ariaLabel="ペルソナ詳細" {onClose} contentClass="persona-detail-content">
+<Modal ariaLabel={msg().personaDetailDialog.title} {onClose} contentClass="persona-detail-content">
   {#snippet children()}
     <div class="dialog-header">
-      <h2>{detail?.name ?? "ペルソナ詳細"}</h2>
+      <h2>{detail?.name ?? msg().personaDetailDialog.title}</h2>
       <!-- svelte-ignore a11y_autofocus -- inside a native <dialog>
            opened via showModal() (Modal.svelte), autofocus is exactly
            the spec-sanctioned initial-focus mechanism (issue #232
@@ -72,7 +73,7 @@
         type="button"
         class="close"
         onclick={onClose}
-        aria-label="閉じる"
+        aria-label={msg().common.close}
         autofocus
       >
         ×
@@ -80,10 +81,10 @@
     </div>
 
     {#if loading}
-      <p class="note">読み込み中…</p>
+      <p class="note">{msg().common.loading}</p>
     {:else if detail === null}
       <p class="note">
-        {loadError ? "取得に失敗しました。" : "見つかりませんでした。"}
+        {loadError ? msg().personaDetailDialog.loadFailed : msg().personaDetailDialog.notFound}
       </p>
     {:else}
       <dl class="meta">

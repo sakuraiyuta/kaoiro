@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { msg } from "./i18n/index.svelte";
   import Modal from "./Modal.svelte";
   import { agentDisplayName } from "./personaName";
   import type { DirectoryEntry, Envelope, SessionLifecycleEventList, SessionLifecycleEventView } from "./protocol";
@@ -61,33 +62,33 @@
   }
 </script>
 
-<Modal ariaLabel="{label} のセッション履歴" {onClose} contentClass="session-lifecycle-dialog">
+<Modal ariaLabel={msg().sessionLifecycleDialog.title({ label })} {onClose} contentClass="session-lifecycle-dialog">
   <header>
-    <h2>{label} のセッション履歴</h2>
-    <button type="button" onclick={onClose} aria-label="閉じる">閉じる</button>
+    <h2>{msg().sessionLifecycleDialog.title({ label })}</h2>
+    <button type="button" onclick={onClose} aria-label={msg().common.close}>{msg().common.close}</button>
   </header>
   <p class="target-id">{agentId}</p>
-  <button type="button" onclick={() => manualRefresh += 1}>更新</button>
-  <p class="refresh-note">reset の開始・完了時に自動で再取得します。記録の順序により最新の行がまだ出ない場合や、ほかの種類の履歴は「更新」で取得できます。</p>
-  {#if loading}<p class="loading" role="status">読み込み中</p>{/if}
-  {#if error !== null}<p class="error" role="alert">履歴を取得できません ({error})</p>{/if}
-  {#if incomplete}<p class="incomplete" role="status">履歴の一部を表示しています。古い行は応答サイズの上限により省略されています。</p>{/if}
+  <button type="button" onclick={() => manualRefresh += 1}>{msg().sessionLifecycleDialog.refresh}</button>
+  <p class="refresh-note">{msg().sessionLifecycleDialog.refreshNote}</p>
+  {#if loading}<p class="loading" role="status">{msg().sessionLifecycleDialog.loading}</p>{/if}
+  {#if error !== null}<p class="error" role="alert">{msg().common.historyFetchFailed({ reason: error })}</p>{/if}
+  {#if incomplete}<p class="incomplete" role="status">{msg().sessionLifecycleDialog.incomplete}</p>{/if}
   {#if !loading && error === null && !incomplete && events.length === 0}
-    <p class="empty">履歴はありません</p>
+    <p class="empty">{msg().common.noHistory}</p>
   {/if}
   <ol class="events">
     {#each events as entry}
       {#if entry.status === "malformed"}
-        <li class="lifecycle-row malformed">読めない行 — kind: {entry.rawKind ?? "unknown"} / at: {entry.rawAt ?? "unknown"}</li>
+        <li class="lifecycle-row malformed">{msg().sessionLifecycleDialog.malformedRow({ kind: entry.rawKind ?? "unknown", at: entry.rawAt ?? "unknown" })}</li>
       {:else}
         <li class="lifecycle-row normal">
           <span class="kind">{entry.kind}</span> <time datetime={entry.at}>{timestamp(entry.at)}</time>
           {#if entry.trigger !== null}<span class="trigger">trigger: {entry.trigger}</span>{/if}
-          {#if entry.disconnect !== null}<p>切断: {entry.disconnect.origin} ({entry.disconnect.reason})</p>{/if}
+          {#if entry.disconnect !== null}<p>{msg().sessionLifecycleDialog.disconnect({ origin: entry.disconnect.origin, reason: entry.disconnect.reason })}</p>{/if}
           {#if entry.resetAttribution !== null}
-            <p>要求元: {entry.resetAttribution.origin}</p>
+            <p>{msg().sessionLifecycleDialog.requestOrigin({ origin: entry.resetAttribution.origin })}</p>
             {#if entry.resetAttribution.origin === "director"}
-              <p class="requester">要求者: {requester(entry.resetAttribution.requested_by.id)}</p>
+              <p class="requester">{msg().sessionLifecycleDialog.requester({ who: requester(entry.resetAttribution.requested_by.id) })}</p>
               <p class="work">work: {entry.resetAttribution.work_title === undefined
                 ? entry.resetAttribution.work_id
                 : `${entry.resetAttribution.work_title} (${entry.resetAttribution.work_id})`}</p>

@@ -100,8 +100,10 @@ function operation() {
 try {
   await start();
   browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
-  const operatorContext = await browser.newContext();
-  const viewerContext = await browser.newContext();
+  // The specs below select Japanese UI text, so pin the browser language
+  // (a context does not inherit a Playwright config's `use.locale`).
+  const operatorContext = await browser.newContext({ locale: "ja-JP" });
+  const viewerContext = await browser.newContext({ locale: "ja-JP" });
   const operator = await client(operatorContext, token);
   const viewer = await client(viewerContext, viewerToken);
   await until(() => operator.settings.length === 1, "operator initial snapshot");

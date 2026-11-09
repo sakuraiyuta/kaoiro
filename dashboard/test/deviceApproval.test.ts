@@ -5,7 +5,7 @@ import {
   clearDeviceEntry,
   decideDeviceCode,
   DEVICE_STORAGE_KEY,
-  formatRemainingJa,
+  formatRemaining,
   lookupDeviceCode,
   readStoredDeviceEntry,
   writeDeviceEntry,
@@ -277,11 +277,11 @@ describe("fetchAuthMethods device flag", () => {
   });
 });
 
-describe("formatRemainingJa", () => {
+describe("formatRemaining", () => {
   it("formats seconds, minutes and the floor at zero", () => {
-    expect(formatRemainingJa(540)).toBe("9 分 0 秒");
-    expect(formatRemainingJa(61)).toBe("1 分 1 秒");
-    expect(formatRemainingJa(59.9)).toBe("59 秒");
-    expect(formatRemainingJa(-5)).toBe("0 秒");
+    expect(formatRemaining(540)).toBe("9 分 0 秒");
+    expect(formatRemaining(61)).toBe("1 分 1 秒");
+    expect(formatRemaining(59.9)).toBe("59 秒");
+    expect(formatRemaining(-5)).toBe("0 秒");
   });
 });

@@ -1,7 +1,9 @@
 // Device authorization approval (issue 801, design §4.3): the entry state kept
 // per tab across the OAuth round trip, and the two browser API calls the
 // approval view makes. The view itself is DeviceApproval.svelte. Plain TS with
-// no dependency on the rest of the dashboard.
+// no dependency on the rest of the dashboard except the UI strings.
+
+import { msg } from "./i18n/index.svelte";
 
 /** sessionStorage key for the "device approval started" state. */
 export const DEVICE_STORAGE_KEY = "kaoiro:device";
@@ -222,10 +224,14 @@ export async function decideDeviceCode(
     : GENERIC;
 }
 
-/** 「N 分 M 秒」 for a remaining time in seconds. */
-export function formatRemainingJa(seconds: number): string {
+/** "N min M s" (or "N 分 M 秒") for a remaining time in seconds, worded by the
+ *  current locale. */
+export function formatRemaining(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(total / 60);
   const rest = total % 60;
-  return minutes === 0 ? `${rest} 秒` : `${minutes} 分 ${rest} 秒`;
+  const t = msg().deviceApproval;
+  return minutes === 0
+    ? t.remainingSeconds({ seconds: rest })
+    : t.remainingMinutes({ minutes, seconds: rest });
 }

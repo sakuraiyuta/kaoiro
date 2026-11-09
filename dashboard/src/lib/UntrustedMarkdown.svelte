@@ -7,6 +7,7 @@
   // `inline` is the agent card's profile: the text sits inside a button, so the
   // output is phrasing content in span wrappers only, and the plain fallback
   // carries no explanatory note.
+  import { msg } from "./i18n/index.svelte";
   import {
     inlineLineCount,
     renderUntrustedInline,
@@ -38,7 +39,7 @@
   <svelte:element this={inline ? "span" : "div"} class="untrusted-markdown" class:inline>{@html rendered.html}</svelte:element>
 {:else}
   {#if !inline}
-    <p class="untrusted-markdown-note">書式を表示できないため、そのまま表示しています</p>
+    <p class="untrusted-markdown-note">{msg().untrustedMarkdown.plainNote}</p>
   {/if}
   <svelte:element this={inline ? "span" : "div"} class="untrusted-markdown plain" class:inline>{text}</svelte:element>
 {/if}

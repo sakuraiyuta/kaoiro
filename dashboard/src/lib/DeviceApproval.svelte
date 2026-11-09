@@ -7,14 +7,14 @@
   import Modal from "./Modal.svelte";
   import {
     decideDeviceCode,
-    formatRemainingJa,
+    formatRemaining,
     lookupDeviceCode,
     writeDeviceEntry,
     type DeviceDecision,
     type DeviceError,
     type DeviceLookup,
   } from "./deviceApproval";
-  import { intlTag } from "./i18n/index.svelte";
+  import { intlTag, msg } from "./i18n/index.svelte";
   import { formatRelative } from "./relativeTime";
 
   let {
@@ -82,23 +82,24 @@
   }
 
   function errorText(error: DeviceError): string {
+    const t = msg().deviceApproval;
     switch (error.kind) {
       case "unknown_code":
-        return "この code は見つかりません。device に表示された code と入力を確かめてください。";
+        return t.unknownCode;
       case "expired":
-        return "この code は期限が切れています。device で login をやり直し、新しい code を取得してください。";
+        return t.expired;
       case "rate_limited":
-        return `試行が多すぎます。${error.retryAfter ?? 0} 秒ほど待ってから、もう一度入力してください。`;
+        return t.rateLimited({ seconds: error.retryAfter ?? 0 });
       case "already_decided":
-        return "この code はすでに承認または拒否されています。";
+        return t.alreadyDecided;
       case "unauthorized":
-        return "session が切れました。OAuth で login し直してください。";
+        return t.unauthorized;
       case "oauth_session_required":
-        return "共有 token の session では承認できません。OAuth で login し直してください。";
+        return t.oauthSessionRequired;
       case "unavailable":
-        return "この server は device 承認を提供していません。";
+        return t.unavailable;
       case "generic":
-        return "処理に失敗しました。入力をやり直してください。";
+        return t.generic;
     }
   }
 
@@ -106,15 +107,15 @@
     error.kind === "unauthorized" || error.kind === "oauth_session_required";
 </script>
 
-<Modal ariaLabel="device の login の承認" onClose={close} contentClass="device-approval">
+<Modal ariaLabel={msg().deviceApproval.title} onClose={close} contentClass="device-approval">
   <header class="head">
-    <h2>device の login の承認</h2>
-    <button type="button" class="close" onclick={close} disabled={busy} aria-label="閉じる">✕</button>
+    <h2>{msg().deviceApproval.title}</h2>
+    <button type="button" class="close" onclick={close} disabled={busy} aria-label={msg().common.close}>✕</button>
   </header>
 
   {#if view.kind === "entry"}
     <form onsubmit={submitCode}>
-      <label for="device-user-code">device に表示された code を入力</label>
+      <label for="device-user-code">{msg().deviceApproval.enterCode}</label>
       <input
         id="device-user-code"
         type="text"
@@ -126,7 +127,7 @@
         disabled={busy}
       />
       <button type="submit" disabled={busy || code.trim() === ""}>
-        {busy ? "確認中…" : "確認"}
+        {busy ? msg().deviceApproval.checking : msg().deviceApproval.check}
       </button>
     </form>
   {:else if view.kind === "confirm"}
@@ -136,34 +137,34 @@
       <dt>code</dt>
       <dd class="code">{info.userCode}</dd>
       <dt>client</dt>
-      <dd>{info.clientId} <span class="note">(client の自己申告。信頼の根拠ではない)</span></dd>
+      <dd>{info.clientId} <span class="note">{msg().deviceApproval.selfReported}</span></dd>
       {#if issued !== null}
-        <dt>発行</dt>
+        <dt>{msg().deviceApproval.issued}</dt>
         <dd>{issued}</dd>
       {/if}
-      <dt>残り</dt>
-      <dd>{formatRemainingJa(info.expiresIn)}</dd>
-      <dt>承認する identity</dt>
+      <dt>{msg().deviceApproval.remaining}</dt>
+      <dd>{formatRemaining(info.expiresIn)}</dd>
+      <dt>{msg().deviceApproval.identityToApprove}</dt>
       <dd>{info.identity.provider} / {info.identity.uid}</dd>
       <dt>role</dt>
       <dd>{info.role}</dd>
     </dl>
-    <p class="note">この identity と role で device が接続する。</p>
+    <p class="note">{msg().deviceApproval.connectsAs}</p>
     <p class="warn">
-      device に表示された code と一致することを確かめる。自分が今始めた login でなければ拒否する。
+      {msg().deviceApproval.verifyWarning}
     </p>
     <div class="actions">
-      <button type="button" disabled={busy} onclick={() => void decide(info, "approve")}>承認</button>
-      <button type="button" disabled={busy} onclick={() => void decide(info, "deny")}>拒否</button>
+      <button type="button" disabled={busy} onclick={() => void decide(info, "approve")}>{msg().deviceApproval.approve}</button>
+      <button type="button" disabled={busy} onclick={() => void decide(info, "deny")}>{msg().deviceApproval.deny}</button>
     </div>
   {:else if view.kind === "done"}
     {#if view.decision === "approve"}
-      <p role="status">承認した。device 側は数秒で接続する。</p>
+      <p role="status">{msg().deviceApproval.approved}</p>
     {:else}
-      <p role="status">拒否した。device 側には拒否が伝わる。</p>
+      <p role="status">{msg().deviceApproval.denied}</p>
     {/if}
     <div class="actions">
-      <button type="button" onclick={close}>閉じる</button>
+      <button type="button" onclick={close}>{msg().common.close}</button>
     </div>
   {:else}
     {@const error = view.error}
@@ -172,13 +173,13 @@
       {#if needsLogin(error)}
         {#each providers as provider (provider.id)}
           <a class="button" href={`/auth/${provider.id}`} onclick={rememberForLogin}>
-            {provider.label} でログイン
+            {msg().deviceApproval.loginWith({ provider: provider.label })}
           </a>
         {/each}
       {:else if error.kind !== "unavailable"}
-        <button type="button" onclick={() => (view = { kind: "entry" })}>入力し直す</button>
+        <button type="button" onclick={() => (view = { kind: "entry" })}>{msg().deviceApproval.enterAgain}</button>
       {/if}
-      <button type="button" onclick={close}>閉じる</button>
+      <button type="button" onclick={close}>{msg().common.close}</button>
     </div>
   {/if}
 </Modal>

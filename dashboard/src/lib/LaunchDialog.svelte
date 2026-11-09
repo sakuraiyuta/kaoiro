@@ -14,6 +14,7 @@
     resolveLaunchDefaultEffort,
   } from "./protocol";
   import { formatRunnerHostLabel } from "./buildIdentity";
+  import { msg } from "./i18n/index.svelte";
   import Modal from "./Modal.svelte";
   import { hasDeliveryMechanism, launchDeliveryDefault, parseLaunchDeliveryPolicy, type DeliveryPolicy } from "./deliveryPolicy";
 
@@ -187,43 +188,36 @@
   const buildRevisionWarning = $derived.by(() => {
     if (!host) return null;
     const runnerRevision = host.build_revision;
+    const t = msg().launchDialog;
     if (runnerRevision === undefined) {
-      return "この host は build revision 情報を報告していません(古い runner)。";
+      return t.runnerNoRevision;
     }
     if (runnerRevision === "unknown") {
-      return "この host の build revision が unknown です(git 情報なしでビルドされたか、pnpm build を経ていません)。";
+      return t.runnerRevisionUnknown;
     }
     if (serverBuildRevision === null) {
-      return "server の build revision を取得できません(古い server、または /api/health の取得に失敗)。";
+      return t.serverRevisionUnavailable;
     }
     if (serverBuildRevision === "unknown") {
-      return "server 自身の build revision が unknown です。";
+      return t.serverRevisionUnknown;
     }
     if (runnerRevision !== serverBuildRevision) {
-      return (
-        `この host の build revision (${runnerRevision.slice(0, 12)}…) が ` +
-        `server (${serverBuildRevision.slice(0, 12)}…) と一致しません。`
-      );
+      return t.revisionMismatch({
+        runner: runnerRevision.slice(0, 12),
+        server: serverBuildRevision.slice(0, 12),
+      });
     }
     const runnerDirty = host.build_dirty === true;
     const serverDirty = serverBuildDirty === true;
+    const runner = runnerRevision.slice(0, 12);
     if (runnerDirty && serverDirty) {
-      return (
-        `この host の build (${runnerRevision.slice(0, 12)}…) は runner・` +
-        "server の両方でコミットされていない変更を含んでいます(dirty)。"
-      );
+      return t.dirtyBoth({ runner });
     }
     if (runnerDirty) {
-      return (
-        `この host の build (${runnerRevision.slice(0, 12)}…) は runner 側で` +
-        "コミットされていない変更を含んでいます(dirty)。"
-      );
+      return t.dirtyRunner({ runner });
     }
     if (serverDirty) {
-      return (
-        `この host の build (${runnerRevision.slice(0, 12)}…) は server 側で` +
-        "コミットされていない変更を含んでいます(dirty)。"
-      );
+      return t.dirtyServer({ runner });
     }
     return null;
   });
@@ -539,17 +533,17 @@
       // returns the operator to the grid where the new agent will appear.
       onClose();
     } catch (e) {
-      error = e instanceof Error ? e.message : "起動に失敗しました。";
+      error = e instanceof Error ? e.message : msg().launchDialog.launchFailed;
     } finally {
       busy = false;
     }
   }
 </script>
 
-<Modal ariaLabel="エージェント起動" {onClose} contentClass="launch-dialog-content">
+<Modal ariaLabel={msg().launchDialog.dialogTitle} {onClose} contentClass="launch-dialog-content">
   {#snippet children()}
   <form onsubmit={launch}>
-    <h2>エージェントを起動</h2>
+    <h2>{msg().launchDialog.heading}</h2>
 
     <div class="tabs" role="tablist">
       <!-- svelte-ignore a11y_autofocus -- inside a native <dialog> opened
@@ -570,7 +564,7 @@
         onclick={() => (mode = "new")}
         autofocus
       >
-        新規
+        {msg().launchDialog.tabNew}
       </button>
       <button
         type="button"
@@ -579,28 +573,28 @@
         aria-selected={mode === "resume"}
         onclick={() => (mode = "resume")}
       >
-        再開
+        {msg().launchDialog.tabResume}
       </button>
     </div>
 
     {#if hosts.length === 0}
-      <p class="note">起動可能なホストがありません(runner 未接続)。</p>
+      <p class="note">{msg().launchDialog.noHosts}</p>
     {:else}
       <div class="delivery-choice">
         <label class="row"><input type="checkbox" checked={deliveryChoice === "on"} disabled={!deliveryEnabled || busy}
-          onchange={(event) => { deliveryManual = true; deliveryChoice = event.currentTarget.checked ? "on" : "off"; }} />実行中の割込配送</label>
-        <p class="hint">{!deliveryPolicyAvailable ? "この server の操作 API は未確認" :
-          !deliveryMetadata ? "起動時の配送方法は未確認" :
-          deliveryDefault.source === "unknown" ? "host の既定設定は未確認" :
-          !deliveryMetadata.ceiling ? "host の上限設定で無効" :
-          !hasDeliveryMechanism(deliveryModes) ? "この engine では未対応。メッセージは queue に入る" :
-          deliveryManual ? "手動で選択した設定を使用" :
-          deliveryDefault.source === "fallback" ? "host の既定値がないため on を使用" : "host の既定設定を使用"}</p>
-        <p class="hint">あなたやエージェントからの入力は対応する方法で配送し、それ以外は通常の待ち行列に入ります。</p>
+          onchange={(event) => { deliveryManual = true; deliveryChoice = event.currentTarget.checked ? "on" : "off"; }} />{msg().launchDialog.deliveryLabel}</label>
+        <p class="hint">{!deliveryPolicyAvailable ? msg().launchDialog.hintApiUnconfirmed :
+          !deliveryMetadata ? msg().launchDialog.hintMethodUnconfirmed :
+          deliveryDefault.source === "unknown" ? msg().launchDialog.hintHostDefaultUnknown :
+          !deliveryMetadata.ceiling ? msg().launchDialog.hintHostCeilingOff :
+          !hasDeliveryMechanism(deliveryModes) ? msg().launchDialog.hintEngineUnsupported :
+          deliveryManual ? msg().launchDialog.hintManual :
+          deliveryDefault.source === "fallback" ? msg().launchDialog.hintFallbackOn : msg().launchDialog.hintHostDefault}</p>
+        <p class="hint">{msg().launchDialog.deliveryDescription}</p>
       </div>
 
       <label>
-        ホスト
+        {msg().launchDialog.host}
         <select bind:value={hostId}>
           {#each hosts as h (h.host_id)}
             <option value={h.host_id}>{formatRunnerHostLabel(h)}</option>
@@ -621,13 +615,13 @@
       {/if}
 
       {#if ingestWarnings === null}
-        <p class="hint" role="status">pack の診断情報は未対応または未確認です。</p>
+        <p class="hint" role="status">{msg().launchDialog.packDiagnosticsUnknown}</p>
       {:else if ingestWarnings.length > 0}
-        <p class="hint" role="status">{ingestWarnings.join("; ")}。設定を修正し server を再起動後、画面を再読込してください。</p>
+        <p class="hint" role="status">{msg().launchDialog.ingestWarnings({ warnings: ingestWarnings.join("; ") })}</p>
       {/if}
 
       <label>
-        ペルソナ
+        {msg().launchDialog.persona}
         <select bind:value={personaId} disabled={!host}>
           {#each host?.personas ?? [] as p (p.id)}
             <option value={p.id}>{p.name}</option>
@@ -636,7 +630,7 @@
       </label>
 
       <label>
-        作業ディレクトリ
+        {msg().launchDialog.cwd}
         <select bind:value={cwd} disabled={!host}>
           {#each host?.cwd_allowlist ?? [] as c (c)}
             <option value={c}>{c}</option>
@@ -646,7 +640,7 @@
 
       {#if showEngineSelect}
         <label>
-          エンジン
+          {msg().launchDialog.engine}
           <select bind:value={engine}>
             {#each engines as e (e)}
               <option value={e}>{e === "grok" ? "Grok Build" : e}</option>
@@ -657,7 +651,7 @@
 
       {#if engineModels.length > 0}
         <label>
-          モデル
+          {msg().launchDialog.model}
           <select
             value={model}
             onchange={chooseModel}
@@ -665,7 +659,7 @@
               ? "launch-model-resolution"
               : undefined}
           >
-            <option value="">既定</option>
+            <option value="">{msg().launchDialog.defaultOption}</option>
             {#each engineModels as m (m.value)}
               <option value={m.value}>{m.display_name}</option>
             {/each}
@@ -673,7 +667,7 @@
         </label>
         {#if selectedResolvedModel}
           <p id="launch-model-resolution" class="note model-resolution">
-            取得時点の解決先: <code>{selectedResolvedModel}</code> (起動時に変わる場合があります)
+            {msg().launchDialog.resolvedModelBefore} <code>{selectedResolvedModel}</code> {msg().launchDialog.resolvedModelAfter}
           </p>
         {/if}
       {/if}
@@ -687,10 +681,10 @@
             type="button"
             onclick={() => void triggerCatalogRefresh(true)}
             disabled={refreshingCatalog || hostId === ""}
-            aria-label="モデル一覧を再取得"
-            title="モデル一覧を再取得 (runner のキャッシュを無視して live probe)"
+            aria-label={msg().launchDialog.refreshCatalog}
+            title={msg().launchDialog.refreshCatalogTitle}
           >
-            {refreshingCatalog ? "更新中…" : "モデル一覧を再取得"}
+            {refreshingCatalog ? msg().launchDialog.refreshing : msg().launchDialog.refreshCatalog}
           </button>
           {#if catalogError}
             <span class="catalog-error" role="alert">{catalogError}</span>
@@ -702,7 +696,7 @@
         <label>
           effort
           <select value={effort} onchange={chooseEffort}>
-            <option value="">既定</option>
+            <option value="">{msg().launchDialog.defaultOption}</option>
             {#each effortLevels as l (l)}
               <option value={l}>{l}</option>
             {/each}
@@ -717,19 +711,22 @@
              tooltip に PERMISSION_MODE_AXES の二軸 (書込 / 承認) を併記して
              AgentDetail の現行 mode ラベルと同じ読み方に揃える。 -->
         <label>
-          permission mode(作業意図)
+          {msg().launchDialog.permissionMode}
           <select bind:value={permissionMode}>
-            <option value="">前回値を継続 (server 保存値)</option>
+            <option value="">{msg().launchDialog.permissionKeep}</option>
             {#each PERMISSION_MODE_VALUES as m (m)}
               <option
                 value={m}
-                title={"書込: " +
-                  PERMISSION_MODE_AXES[m].sandbox +
-                  " / 承認: " +
-                  PERMISSION_MODE_AXES[m].approval}
+                title={msg().launchDialog.permissionModeTitle({
+                  sandbox: PERMISSION_MODE_AXES[m].sandbox,
+                  approval: PERMISSION_MODE_AXES[m].approval,
+                })}
               >
-                {m} (書込 {PERMISSION_MODE_AXES[m].sandbox} / 承認
-                {PERMISSION_MODE_AXES[m].approval})
+                {msg().launchDialog.permissionModeOption({
+                  mode: m,
+                  sandbox: PERMISSION_MODE_AXES[m].sandbox,
+                  approval: PERMISSION_MODE_AXES[m].approval,
+                })}
               </option>
             {/each}
           </select>
@@ -741,73 +738,69 @@
              F4c): sandbox 軸を選択。承認 (approval) は Codex では upstream
              制約で never 固定、Antigravity では選択可能 (Stage A, F4c)。 -->
         <label>
-          sandbox(書き込み範囲)
+          {msg().launchDialog.sandboxLabel}
           <select bind:value={sandbox}>
-            <option value="read-only">read-only — 読み取りのみ</option>
+            <option value="read-only">{msg().launchDialog.sandboxReadOnly}</option>
             <option value="workspace-write">
-              workspace-write — 作業ディレクトリ内のみ書込可
+              {msg().launchDialog.sandboxWorkspace}
             </option>
             <option value="danger-full-access">
-              danger-full-access — 無制限(危険)
+              {msg().launchDialog.sandboxFull}
             </option>
           </select>
         </label>
         {#if sandbox === "workspace-write"}
           <label class="row">
             <input type="checkbox" bind:checked={networkAccess} />
-            sandbox 内のネットワークアクセスを許可
+            {msg().launchDialog.networkAccess}
           </label>
         {/if}
         {#if hasApprovalAxis}
           <label>
-            承認 (approval)
+            {msg().launchDialog.approvalLabel}
             <select bind:value={approval}>
-              <option value="untrusted">untrusted — 常に確認</option>
-              <option value="on-request">on-request — 必要な時だけ確認</option>
+              <option value="untrusted">{msg().launchDialog.approvalUntrusted}</option>
+              <option value="on-request">{msg().launchDialog.approvalOnRequest}</option>
               {#if engine === "antigravity"}
-                <option value="local">local — 読取と観察系 git は自動</option>
+                <option value="local">{msg().launchDialog.approvalLocal}</option>
               {/if}
-              <option value="never">never — 確認しない</option>
+              <option value="never">{msg().launchDialog.approvalNever}</option>
             </select>
           </label>
           <p class="note">
-            sandbox 軸はこのエンジンでは advisory (wrapper が引数を検査する
-            だけで OS 強制ではありません)。
-            local は read-only coreutils と working tree 内の観察系 git を
-            保守的に分類します。.git への書込と commit / merge は確認し、既存の
-            repo / global config が指定する helper は operator の信頼範囲です。
+            {msg().launchDialog.approvalNote}
           </p>
         {:else}
           <p class="note">
-            承認 (approval) は never 固定 — Codex は実行中の承認要求に対応しません。
+            {msg().launchDialog.approvalFixedNever}
           </p>
         {/if}
       {/if}
 
       <label>
-        エージェント名(任意)
+        {msg().launchDialog.agentName}
         <input
           type="text"
           bind:value={name}
           maxlength="64"
-          placeholder="未入力ならペルソナ名"
+          placeholder={msg().launchDialog.agentNamePlaceholder}
         />
       </label>
 
       {#if mode === "new"}
         <label>
-          初期プロンプト(任意)
+          {msg().launchDialog.initialPrompt}
           <textarea
             bind:value={prompt}
             rows="3"
-            placeholder="最初の指示(空ならアイドルで待機)"
+            placeholder={msg().launchDialog.initialPromptPlaceholder}
           ></textarea>
         </label>
       {:else}
         <label>
-          セッション
+          {msg().launchDialog.session}
           {#if candidates.length === 0}
-            <span class="note">この cwd に再開可能なセッションはありません。</span>
+            <span class="note">{msg().launchDialog.noSessions}</span>
           {:else}
             <select bind:value={sessionId}>
               {#each candidates as s (s.session_id)}
@@ -827,10 +820,10 @@
 
     <div class="actions">
       <button type="button" class="ghost" onclick={onClose}>
-        キャンセル
+        {msg().launchDialog.cancel}
       </button>
       <button type="submit" disabled={!canLaunch}>
-        {busy ? "起動中…" : "起動"}
+        {busy ? msg().launchDialog.launching : msg().launchDialog.launch}
       </button>
     </div>
   </form>
