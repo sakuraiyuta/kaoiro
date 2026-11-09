@@ -2,7 +2,7 @@
 title: Claude model catalog
 description: Exact contract for Claude catalog refresh, canonical model identifiers, and two-pass catalog-row matching.
 status: accepted
-last_updated: 2026-10-22
+last_updated: 2026-11-10
 related: [extensions, adapter-contract, protocol]
 ---
 
@@ -203,23 +203,32 @@ The Codex catalog is static and does not distinguish canonical from alias, so it
 is unchanged. A row with absent `resolved_model` behaves as it did before the
 field was added.
 
-## The model list ships inside the bundled CLI, not kaoiro (issue #398; probe updated 2026-11-07)
+## kaoiro declares no model; the bundled CLI reports the list at run time (issue #398; probe updated 2026-11-10)
 
 kaoiro declares no Claude model of its own: the bootstrap floor is the single
 `default` row, and both catalog paths read what the Claude Code CLI bundled with
-`@anthropic-ai/claude-agent-sdk` reports. A new Anthropic model therefore reaches
-kaoiro through an SDK version bump, not a catalog edit — the same conclusion the
-Fable 5.1 rollout reached.
+`@anthropic-ai/claude-agent-sdk` reports when it starts. A new model never needs
+a catalog edit in kaoiro.
 
-The latest measurement used SDK **0.3.319 / CLI 2.1.319** on 2026-11-07
-(issue #1044). The existing compiled production probe returned `ok: true`,
-`source: "init"`, and 13 rows. Its value, resolved-model and effort projection
-is identical field by field to the 0.3.306 capture, and therefore still matches
-the 0.3.293 table below, so CLI 2.1.311's removal of the `[1m]` suffix from
-models where it has no effect did not move the projection. The complete
-projected rows, the fold re-measurement and the compatibility review are in the
-[0.3.319 measurement record](../../evidence/claude/issue-1044/sdk-0.3.319-2026-11-07.md);
-the previous pin's record is the
+The pinned SDK version does not fix that list. On 2026-11-09 the pin
+0.3.319 / CLI 2.1.319 reported 14 rows, one more than the 13 it reported on
+2026-11-07: a `claude-fable-5-2` row, although that CLI's executable does not
+contain the string `claude-fable-5-2`. A new model's row can therefore appear
+without an SDK bump. What a bump changes is what the bundled CLI knows about
+the model, including where an alias points: `fable` resolves to
+`claude-fable-5-1` on 0.3.319 and to `claude-fable-5-2` on 0.3.321. Where the
+rows come from has not been measured.
+
+The latest measurement used SDK **0.3.321 / CLI 2.1.321** on 2026-11-10
+([issue #1063](https://github.com/sakuraiyuta/kaoiro/issues/1063)). The compiled
+production probe returned `ok: true`, `source: "init"`, and 14 rows. Against
+the 0.3.293 table below, `fable` resolves to `claude-fable-5-2` and a
+`claude-fable-5-1` row is added; the other 12 rows are the same. The complete
+rows, the same-day list on 0.3.319, the fold re-measurement and the
+compatibility review are in the
+[0.3.321 measurement record](../../evidence/claude/issue-1063/sdk-0.3.321-2026-11-10.md);
+the earlier pins' records are the
+[0.3.319 one](../../evidence/claude/issue-1044/sdk-0.3.319-2026-11-07.md) and the
 [0.3.306 one](../../evidence/claude/issue-700/sdk-0.3.306-2026-10-22.md).
 No user prompt was yielded; this does not establish model generation or tool
 permission behavior.

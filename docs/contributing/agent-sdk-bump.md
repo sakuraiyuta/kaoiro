@@ -1,7 +1,7 @@
 ---
 title: Agent SDK bump checklist
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-10
 description: The steps for raising @anthropic-ai/claude-agent-sdk in wrapper/claude-code, including the changelog reads and the input-folding re-measurement each bump must record.
 ---
 
@@ -29,9 +29,14 @@ versions and the commit it was measured on.
    [2026-09-28 fold measurements](../evidence/issue-429/2026-09-28-claude-fold-measurements.md).
    Do not carry a verdict forward from an earlier bump; a premise that was not
    re-measured is recorded as not re-measured.
-5. **Update the lockfile**, then run the wrapper, runner, server and dashboard
-   suites and both typechecks. The commands are in
-   [CLAUDE.md](../../CLAUDE.md#commands).
+5. **Update the lockfile**, then re-pin the guards on the installed artifact.
+   Search the whole tracked tree outside `docs/` and the lockfile for the
+   outgoing SDK version, the outgoing CLI version and the outgoing artifact
+   hashes, and move every assertion that is bound to the installed artifact.
+   Do not stop at the files a failing test names: one guard can sit behind
+   another that fails first. The same search must then find each new value.
+   Run the wrapper, runner, server and dashboard suites and both typechecks.
+   The commands are in [CLAUDE.md](../../CLAUDE.md#commands).
 6. **Write the evidence file**: the versions, the date, the commit, the
    changelog ranges and citations, the E1 to E4 verdicts, and the limits of
    the measurement.
