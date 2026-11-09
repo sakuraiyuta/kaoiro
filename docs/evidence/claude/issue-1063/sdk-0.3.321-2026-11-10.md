@@ -396,13 +396,16 @@ host. kaoiro binds the model's next turn to the launch that started the
 command only if the two agree, including on the summary text
 (`continuation_proof.ts:95`; the path used when native continuations are off
 compares the same two strings at `host.ts:2578`). The summary quotes a label:
-the call's `description` when it has one, otherwise the command itself.
+the call's `description` when it has one, otherwise the command itself. The
+comparison is not specific to Bash: `continuation_proof.ts:90-95` applies it
+to every completed run that is not an Agent, a Monitor included.
 
 Measured in the remote heavy-test slot, with no network and no real model, by
 running the committed `bash-idle` case of
-`monitor_notification_advice_native.test.ts` with its command, its description
-or both changed inside the run (the committed file was not changed). Label
-lengths are in characters before XML escaping:
+`monitor_notification_advice_native.test.ts`, and for the two Monitor rows its
+`completion-response` case, with the command, the description or both changed
+inside the run (the committed file was not changed). Label lengths are in
+characters before XML escaping:
 
 | Pin | Label | Outcome |
 |---|---|---|
@@ -413,9 +416,17 @@ lengths are in characters before XML escaping:
 | 0.3.321 | no description; command of 899 | bound; the report was sent |
 | 0.3.321 | no description; command of 1,339 | **refused**: `native_completion_unproved` |
 | 0.3.321 | description of 1,000, 1,001 or 1,200; short command | **refused**: `native_completion_unproved` |
-| 0.3.321 | Monitor with a description; command padded by 1,200 | bound; the report was sent |
+| 0.3.321 | Monitor with a description of 15; command padded by 1,200 | bound; the report was sent |
+| 0.3.321 | Monitor with a description of 1,200; command padded by 1,200 | **refused**: `native_completion_unproved` |
 
 The unchanged case passes on both pins.
+
+The last row was measured by the reviewer in the implementation review of
+this record, on `0f6a09f1`, whose source is the same as `edb7cbe0`. Neither
+Monitor row was run on the previous pin, and the Monitor's block and the
+SDK's report were not read for the refused one. That the long description is
+shortened in the same form as a Bash label is therefore an inference from
+the shared comparison and from the row above it, not an observation.
 
 The shortened form, read from the block and, where the proof refused, from
 the SDK's report through a line added to the built proof inside the run: the
@@ -436,28 +447,36 @@ notification's turn still ended in a result that is not an error, the wrapper
 process stayed up, and an inter-agent input sent afterwards started a turn
 that also ended in a result that is not an error. The wrapper's output held
 the one line `native continuation refused: native_completion_unproved` and no
-line asking for a restart or reporting stopped admission. That is one
-scripted scene; the server's journal and a production peer were not observed.
+line asking for a restart or reporting stopped admission. The reviewer's
+Monitor scene with the 1,200-character description showed the same: the
+refusal line, `unbound_tool_call`, no message sent, three results that are
+not errors, and a live wrapper process after the following input. Those are
+two scripted scenes; the server's journal and a production peer were not
+observed.
 
-What triggers it: a Bash call run in the background whose label is about
-1,000 characters or longer — a command that long with no `description`, or a
-`description` that long. A short description hides a long command, and
-kaoiro's registry only accepts a Monitor call that carries one
-(`continuation_registry.ts:108`). How often a model omits the description was
-not measured.
+What triggers it: a background command whose label is about 1,000 characters
+or longer. For a Bash call run in the background that is a command that long
+with no `description`, or a `description` that long. For a Monitor it is a
+`description` that long; kaoiro's registry only accepts a Monitor call that
+carries one (`continuation_registry.ts:108`), and a short one hides a long
+command for both tools. How often a model omits the description, or writes
+one that long, was not measured.
 
 kaoiro's code is not changed by this bump, so the regression ships with the
-pin. The way around it is to give a background Bash call a short description.
-Teaching the proof the shortened form is a change to the continuation proof
-and is left to a separate issue.
+pin. The way around it is to keep the description of a background command
+short, for a Bash call and for a Monitor alike. Teaching the proof the
+shortened form is a change to the continuation proof and is left to
+[issue #1068](https://github.com/sakuraiyuta/kaoiro/issues/1068).
 
-Runs, the first three on `edb7cbe0` or `6bdc9015` and the last two on the
-record's own commit, whose source is the same as `edb7cbe0`:
+Runs, the first three on `edb7cbe0` or `6bdc9015`, the next two on `77fc9cdf`
+and the reviewer's last one on `0f6a09f1`, both of whose source is the same as
+`edb7cbe0`:
 `kohaku-edb7cbe-longcmdnew-1110063127-40cd.3094e34cc5337a95`,
 `kohaku-6bdc901-longcmdold-1110063127-e24e.3141c60342b67430`,
 `kohaku-edb7cbe-longcmd2-1110063347-e366.31cb6d19b7f00275`,
-`kohaku-77fc9cd-longcmd3-1110064237-47ff.b97831f750016c81` and
-`kohaku-77fc9cd-longcmd5-1110064358-3070.5bd53947721db69d`.
+`kohaku-77fc9cd-longcmd3-1110064237-47ff.b97831f750016c81`,
+`kohaku-77fc9cd-longcmd5-1110064358-3070.5bd53947721db69d` and
+`fuji-0f6a09f-mon1063-1110070213-70bb.de278c4e1bf612a7`.
 
 ## Step 4: re-measurement of the input-folding premises E1 to E4
 
@@ -628,10 +647,12 @@ kaoiro makes:
 - **Long background-command labels.** A background Bash call whose
   description, or whose command when it has no description, is about 1,000
   characters or longer completes into a turn that cannot call kaoiro tools:
-  `send_to_agent` and the others return `unbound_tool_call`. The previous pin
-  does not do this. In the one scene observed the peer was not stopped and
-  its next input ran normally. Give a background Bash call a short
-  description to avoid it.
+  `send_to_agent` and the others return `unbound_tool_call`. So does a
+  Monitor whose description is that long (measured at 1,200). The previous
+  pin does not do this for the Bash call; a Monitor was not run on it. In the
+  two scenes observed the peer was not stopped and its next input ran
+  normally. Keep the description of a background command short, for a Bash
+  call and for a Monitor alike, to avoid it.
 - **Auto mode.** Reports from background subagents that wait together are
   answered in one model call; all but the last arrive as a result with an
   empty text.
@@ -651,10 +672,13 @@ kaoiro makes:
 - The categories record what was checked, not what applies. The 21 "not
   checked" placements are the absence of a check.
 - The new pin ships a measured regression: a background Bash call whose label
-  is about 1,000 characters or longer completes into a turn kaoiro refuses to
-  bind, so that turn cannot call kaoiro tools. It fails closed, and the
-  previous pin does not do it. Its exact length threshold, what the server's
-  journal records, and its behaviour on a production peer were not observed.
+  is about 1,000 characters or longer, or a Monitor whose description is
+  1,200 characters, completes into a turn kaoiro refuses to bind, so that
+  turn cannot call kaoiro tools. It fails closed, and the previous pin does
+  not do it for the Bash call. Not observed: the exact length threshold, a
+  Monitor on the previous pin, a Monitor description between 15 and 1,200
+  characters, the shortened form of a Monitor's label, what the server's
+  journal records, and the behaviour on a production peer.
 - Not measured: the auto-mode shared report call, the AskUserQuestion round
   trip, a mod's tool call against the PreToolUse callback, the CLI's migration
   of saved Fable 5.1 picks, and an account without a `claude-fable-5-1` row.
