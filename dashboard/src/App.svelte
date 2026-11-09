@@ -11,6 +11,7 @@
     clearDeviceEntry,
     type DeviceEntry,
   } from "./lib/deviceApproval";
+  import LanguageSelect from "./lib/LanguageSelect.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
   import PersonaDetailDialog from "./lib/PersonaDetailDialog.svelte";
   import PersonaFace from "./lib/PersonaFace.svelte";
@@ -100,11 +101,17 @@
   } from "./lib/notify";
   import { RELATIVE_TIME_TICK_MS } from "./lib/relativeTime";
   import { sortAgents } from "./lib/gridSort";
+  import { currentLocale, msg } from "./lib/i18n/index.svelte";
   import { settings } from "./lib/settings.svelte";
   import {
     clientBuildIdentity,
     formatBuildIdentity,
   } from "./lib/buildIdentity";
+
+  // The document language follows the UI language (docs/reference/ui/i18n.md).
+  $effect(() => {
+    document.documentElement.lang = currentLocale();
+  });
 
   let agents = $state<Record<string, Envelope>>({});
   let snapshotIncomplete = $state(false);
@@ -463,15 +470,25 @@
       const names = notice.participants
         .map((id) => formatAgentLabel(agents, id))
         .join(" ⇔ ");
-      return `${names} のやり取りが ${notice.turns} 通 (${notice.conversations} 会話、閾値 ${notice.threshold}) に達しました。進捗を確認してください。`;
+      return msg().app.quagmireRally({
+        names,
+        turns: notice.turns,
+        conversations: notice.conversations,
+        threshold: notice.threshold,
+      });
     }
     // Not asserted: an unacknowledged delivery also looks like this while the
     // recipient is simply mid-turn (director addendum).
     const label = formatAgentLabel(agents, notice.agentId);
     const diagnosis = notice.reason === "delivery_confirmation_gap"
-      ? "配送確認の遅延が疑われます (期間内に処理完了あり)。"
-      : "停滞の疑いがあります。";
-    return `${label} 宛のメッセージ ${notice.undelivered} 件の配送確認が未完了です (${notice.pendingSince ?? "時刻不明"} から)。${diagnosis}`;
+      ? msg().app.quagmireDeliveryGap
+      : msg().app.quagmireStalled;
+    return msg().app.quagmireUnconfirmed({
+      label,
+      undelivered: notice.undelivered,
+      since: notice.pendingSince ?? msg().app.timeUnknown,
+      diagnosis,
+    });
   }
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -509,22 +526,22 @@
         .filter(
           (axis) => axis.axis !== "sandbox" && axis.axis !== "network_access",
         )
-        .map(
-          (axis) =>
-            `${axis.axis} を ${String(axis.ceiling)} に狭めてから reset (現在: ${String(axis.current)})`,
-        );
+        .map((axis) => ceilingNarrowText(axis));
       return [
-        `現在の sandbox は danger-full-access なので network_access は true に固定されています。先に sandbox を ${String(sandbox.ceiling)} に狭めてください。`,
-        `その後も network_access が上限を超える場合は ${String(network.ceiling)} に狭めてください。`,
+        msg().app.ceilingSandboxFixed({ ceiling: String(sandbox.ceiling) }),
+        msg().app.ceilingNetworkNarrow({ ceiling: String(network.ceiling) }),
         ...otherAxes,
       ].join("; ");
     }
-    return axes
-      .map(
-        (axis) =>
-          `${axis.axis} を ${String(axis.ceiling)} に狭めてから reset (現在: ${String(axis.current)})`,
-      )
-      .join("; ");
+    return axes.map((axis) => ceilingNarrowText(axis)).join("; ");
+  }
+
+  function ceilingNarrowText(axis: PermissionCeilingConflictAxis): string {
+    return msg().app.ceilingNarrow({
+      axis: axis.axis,
+      ceiling: String(axis.ceiling),
+      current: String(axis.current),
+    });
   }
 
   function notifySpawn(result: SpawnResult): void {
@@ -542,17 +559,24 @@
     if (pendingSpawnResult !== null) {
       const label = formatAgentLabel(agents, pendingSpawnResult.agent_id);
       return pendingSpawnResult.ok
-        ? `起動しました: ${label}`
-        : `起動に失敗: ${label} (${pendingSpawnResult.reason ?? "error"})`;
+        ? msg().app.spawnStarted({ label })
+        : msg().app.spawnFailed({
+            label,
+            reason: pendingSpawnResult.reason ?? "error",
+          });
     }
     return spawnNotice;
   });
 
   // Surface a control-command failure (stop / restore) that the grid buttons
-  // would otherwise only console.warn (#22). `label` names the action.
-  function notifyActionError(label: string, err: unknown): void {
+  // would otherwise only console.warn (#22).
+  function notifyActionError(action: "terminate" | "restore", err: unknown): void {
     const reason = err instanceof Error ? err.message : "error";
-    showNotice(`${label}できません (${reason})`);
+    showNotice(
+      action === "terminate"
+        ? msg().app.terminateFailed({ reason })
+        : msg().app.restoreFailed({ reason }),
+    );
   }
 
   // Login form (案A): shown when there is no live session — first load with
@@ -1413,16 +1437,19 @@
           // wrapper-side upload rejection (file-upload spec / ADR-0025);
           // surface to operator via the shared transient notice channel.
           showNotice(
-            `添付却下: ${payload.upload_id} (${payload.reason}${
-              payload.detail !== undefined ? ` — ${payload.detail}` : ""
-            })`,
+            msg().app.attachRejected({
+              uploadId: payload.upload_id,
+              reason: payload.reason,
+              detail: payload.detail ?? null,
+            }),
           );
         },
         onInstructionRejected: (payload) => {
           showNotice(
-            `指示却下: ${payload.reason}${
-              payload.detail !== undefined ? ` — ${payload.detail}` : ""
-            }`,
+            msg().app.instructionRejected({
+              reason: payload.reason,
+              detail: payload.detail ?? null,
+            }),
           );
         },
         // phase-17 17-9: session-reset lifecycle events. `started` /
@@ -1494,10 +1521,14 @@
           const hint =
             payload.ceiling_conflict !== undefined &&
             payload.ceiling_conflict.length > 0
-              ? ` — ${formatCeilingConflictHint(payload.ceiling_conflict)}`
-              : "";
+              ? formatCeilingConflictHint(payload.ceiling_conflict)
+              : null;
           showNotice(
-            `session_reset 失敗 (${payload.mode}): ${payload.reason}${hint}`,
+            msg().app.sessionResetFailed({
+              mode: payload.mode,
+              reason: payload.reason,
+              hint,
+            }),
           );
         },
       },
@@ -1625,7 +1656,7 @@
   async function restoreAllOffline(): Promise<void> {
     if (!connection || offlineEntries.length === 0) return;
     const count = offlineEntries.length;
-    if (!confirm(`${count} 体のオフラインエージェントを一括復元します。よろしいですか?`)) {
+    if (!confirm(msg().app.restoreAllConfirm({ count }))) {
       return;
     }
     for (const tile of offlineEntries) {
@@ -1649,12 +1680,7 @@
   async function deleteAllOffline(): Promise<void> {
     if (!connection || offlineEntries.length === 0 || deletingAllOffline) return;
     const ids = offlineEntries.map((tile) => tile.id);
-    if (
-      !confirm(
-        `${ids.length} 体のオフラインエージェントを完全に削除します。` +
-          "\n会話の復元情報も削除されます。この操作は取り消せません。よろしいですか?",
-      )
-    ) {
+    if (!confirm(msg().app.deleteAllConfirm({ count: ids.length }))) {
       return;
     }
 
@@ -1673,7 +1699,7 @@
     }
 
     if (failed > 0) {
-      showNotice(`${failed} 体を削除できませんでした`);
+      showNotice(msg().app.deleteAllFailed({ failed }));
     }
   }
 
@@ -1713,11 +1739,11 @@
         body: JSON.stringify({ token }),
       });
       if (!res.ok) {
-        loginError = "トークンが無効です。";
+        loginError = msg().app.loginTokenInvalid;
         return;
       }
     } catch {
-      loginError = "サーバに接続できませんでした。";
+      loginError = msg().app.loginServerUnreachable;
       return;
     } finally {
       loginBusy = false;
@@ -1735,7 +1761,7 @@
   // and return to the login form. Re-entry needs a token (no personal
   // accounts yet — issue #65), so confirm to avoid an accidental logout.
   async function logout(): Promise<void> {
-    if (!confirm("ログアウトしますか?")) return;
+    if (!confirm(msg().app.logoutConfirm)) return;
     try {
       await fetch("/session", { method: "DELETE" });
     } catch {
@@ -1768,19 +1794,19 @@
     needLogin = true;
   }
 
-  // Japanese wording for the callback's `?auth_error=` code (ADR-0042 API
+  // Localized wording for the callback's `?auth_error=` code (ADR-0042 API
   // contract). Unknown codes fall back to a generic message rather than
   // showing nothing.
   function authErrorMessage(code: string): string {
     switch (code) {
       case "provider_error":
-        return "認証プロバイダでのログインに失敗しました。";
+        return msg().app.authErrorProvider;
       case "not_allowed":
-        return "このアカウントはアクセスを許可されていません。管理者に確認してください。";
+        return msg().app.authErrorNotAllowed;
       case "invalid_state":
-        return "認証セッションの有効期限が切れました。もう一度お試しください。";
+        return msg().app.authErrorInvalidState;
       default:
-        return "ログインに失敗しました。もう一度お試しください。";
+        return msg().app.authErrorDefault;
     }
   }
 
@@ -1852,13 +1878,13 @@
           if (!result.ok) {
             if (!destroyed) {
               needLogin = true;
-              loginError = "トークンが無効です。";
+              loginError = msg().app.loginTokenInvalid;
             }
           } else if (!destroyed) await connectFromCookie();
         } catch {
           if (!destroyed) {
             needLogin = true;
-            loginError = "サーバに接続できませんでした。";
+            loginError = msg().app.loginServerUnreachable;
           }
         }
       } else {
@@ -1900,13 +1926,14 @@
   <main class="login">
     <form class="login-card" onsubmit={login}>
       <h1>kaoiro</h1>
+      <LanguageSelect />
       {#if authMethods.token}
-        <p class="login-note">アクセストークンを入力してください。</p>
+        <p class="login-note">{msg().app.loginEnterToken}</p>
       {:else if authMethods.oauth.length > 0}
-        <p class="login-note">ログイン方法を選択してください。</p>
+        <p class="login-note">{msg().app.loginChooseMethod}</p>
       {:else}
         <p class="login-note">
-          認証手段が構成されていません。管理者に問い合わせてください。
+          {msg().app.loginNoMethod}
         </p>
       {/if}
       {#if loginError}
@@ -1914,32 +1941,32 @@
       {/if}
       {#if deviceStart !== null}
         <p class="login-note" data-device-login>
-          device の login を承認するには、先に login してください。
+          {msg().app.loginForDevice}
         </p>
       {/if}
       {#if authMethods.token}
         <input
           type="password"
           bind:value={loginToken}
-          placeholder="トークン"
+          placeholder={msg().app.tokenPlaceholder}
           autocomplete="off"
-          aria-label="アクセストークン"
+          aria-label={msg().app.tokenAria}
         />
         <button
           type="submit"
           disabled={loginBusy || loginToken.trim() === ""}
         >
-          {loginBusy ? "確認中…" : "ログイン"}
+          {loginBusy ? msg().app.loginChecking : msg().app.loginSubmit}
         </button>
       {/if}
       {#if authMethods.token && authMethods.oauth.length > 0}
-        <p class="login-divider">または</p>
+        <p class="login-divider">{msg().app.loginOr}</p>
       {/if}
       {#if authMethods.oauth.length > 0}
         <div class="login-oauth">
           {#each authMethods.oauth as provider (provider)}
             <a class="login-oauth-button" href={`/auth/${provider}`}>
-              {oauthProviderLabel(provider)} でログイン
+              {msg().app.loginWithProvider({ provider: oauthProviderLabel(provider) })}
             </a>
           {/each}
         </div>
@@ -1953,7 +1980,7 @@
       <img class="brand-icon" src="/icons/icon-32.png" alt="" width="24" height="24" />
       <h1>kaoiro</h1>
     </div>
-    <div class="build-identities" aria-label="ビルド情報">
+    <div class="build-identities" aria-label={msg().app.buildInfoAria}>
       <span data-component="server">
         {formatBuildIdentity(
           "server",
@@ -1973,7 +2000,7 @@
     </div>
   </div>
   {#if selectedEnvelope && sorted.length > 1}
-    <nav class="agent-strip" aria-label="エージェント一覧">
+    <nav class="agent-strip" aria-label={msg().app.agentListAria}>
       {#each sorted as envelope (envelope.agent_id)}
         {@const expr = expressionFor(envelope.state)}
         {@const chipFatigued = isFatigued(envelope)}
@@ -2014,8 +2041,8 @@
       type="button"
       class="settings-toggle"
       onclick={() => (showSettings = true)}
-      aria-label="設定"
-      title="設定"
+      aria-label={msg().app.settings}
+      title={msg().app.settings}
     >
       ⚙
     </button>
@@ -2031,13 +2058,13 @@
           showLaunch = true;
         }}
       >
-        + 起動
+        {msg().app.launch}
       </button>
     {/if}
     <p class="conn" data-status={status}>
       <span class="conn-dot"></span><span class="conn-label">{status}</span>
     </p>
-    <button type="button" class="logout" onclick={logout}>ログアウト</button>
+    <button type="button" class="logout" onclick={logout}>{msg().app.logout}</button>
   </div>
 </header>
 
@@ -2053,7 +2080,7 @@
             (n) => quagmireKey(n) !== quagmireKey(notice),
           ))}
       >
-        閉じる
+        {msg().common.close}
       </button>
     </p>
   {/each}
@@ -2073,22 +2100,22 @@
 }
   <p class="snapshot-notice" role="status">
     {#if snapshotIncomplete}
-      一部のエージェントは snapshot の上限により表示されていません。
+      {msg().app.snapshotAgentsCapped}
     {/if}
     {#if deliverySnapshotIncomplete}
-      一部の inter-agent 配送確認は snapshot の上限により表示されていません。
+      {msg().app.snapshotDeliveryCapped}
     {/if}
     {#if buildInfoIncomplete}
-      ビルド情報の一部を表示できません。
+      {msg().app.snapshotBuildInfoPartial}
     {/if}
     {#if historyIncomplete}
-      履歴の一部を表示できません。
+      {msg().app.snapshotHistoryPartial}
     {/if}
     {#if hostsIncomplete}
-      ホスト一覧の一部を表示できません。
+      {msg().app.snapshotHostsPartial}
     {/if}
     {#if directoryIncomplete}
-      エージェント一覧の一部を表示できません。
+      {msg().app.snapshotDirectoryPartial}
     {/if}
   </p>
 {/if}
@@ -2185,8 +2212,8 @@
         <button
           type="button"
           class="agent-switch previous"
-          aria-label="前のエージェント {agentDisplayName(previousAgentId)} へ"
-          title="前: {agentDisplayName(previousAgentId)}"
+          aria-label={msg().app.previousAgentAria({ name: agentDisplayName(previousAgentId) })}
+          title={msg().app.previousAgentTitle({ name: agentDisplayName(previousAgentId) })}
           onclick={() => selectAdjacentAgent(previousAgentId)}
         >◀</button>
       {/if}
@@ -2247,8 +2274,8 @@
         <button
           type="button"
           class="agent-switch next"
-          aria-label="次のエージェント {agentDisplayName(nextAgentId)} へ"
-          title="次: {agentDisplayName(nextAgentId)}"
+          aria-label={msg().app.nextAgentAria({ name: agentDisplayName(nextAgentId) })}
+          title={msg().app.nextAgentTitle({ name: agentDisplayName(nextAgentId) })}
           onclick={() => selectAdjacentAgent(nextAgentId)}
         >▶</button>
       {/if}
@@ -2328,13 +2355,13 @@
                   ? () =>
                       connection!
                         .stop(envelope.agent_id)
-                        .catch((e) => notifyActionError("終了", e))
+                        .catch((e) => notifyActionError("terminate", e))
                   : undefined}
                 onRestore={connection
                   ? () =>
                       connection!
                         .restore(envelope.agent_id)
-                        .catch((e) => notifyActionError("復帰", e))
+                        .catch((e) => notifyActionError("restore", e))
                   : undefined}
                 onDelete={connection
                   ? () => connection!.deleteAgent(envelope.agent_id)
@@ -2356,7 +2383,7 @@
              detail against, so they stay non-interactive (offline label + no click). -->
         <details class="offline">
           <summary>
-            オフライン({offlineEntries.length})
+            {msg().app.offlineSummary({ count: offlineEntries.length })}
             {#if connection}
               <button
                 type="button"
@@ -2365,9 +2392,9 @@
                   e.preventDefault();
                   void restoreAllOffline();
                 }}
-                title="オフライン全体を一括復元"
+                title={msg().app.restoreAllTitle}
               >
-                前回の状態を復元
+                {msg().app.restoreAll}
               </button>
               <button
                 type="button"
@@ -2377,9 +2404,9 @@
                   e.preventDefault();
                   void deleteAllOffline();
                 }}
-                title="オフライン全体を台帳ごと削除"
+                title={msg().app.deleteAllTitle}
               >
-                {deletingAllOffline ? "削除中…" : "すべて削除"}
+                {deletingAllOffline ? msg().app.deletingAll : msg().app.deleteAll}
               </button>
             {/if}
           </summary>
@@ -2402,7 +2429,7 @@
                     ? () =>
                         connection!
                           .restore(tile.id)
-                          .catch((e) => notifyActionError("復帰", e))
+                          .catch((e) => notifyActionError("restore", e))
                     : undefined}
                   onDelete={connection
                     ? () => connection!.deleteAgent(tile.id)
@@ -2420,7 +2447,7 @@
 </main>
 {:else}
   <main class="login">
-    <p class="login-note">接続中…</p>
+    <p class="login-note">{msg().app.connecting}</p>
   </main>
 {/if}
 

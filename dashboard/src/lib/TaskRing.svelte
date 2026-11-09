@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { msg } from "./i18n/index.svelte";
+
   let {
     faceOrbit = false,
     orbitRx,
@@ -109,7 +111,7 @@
     role={dot.i === 0 ? "img" : undefined}
     aria-hidden={dot.i === 0 ? undefined : "true"}
     aria-label={dot.i === 0
-      ? `サブエージェント/workflow実行中 (${count}件)`
+      ? msg().taskRing.running({ count })
       : undefined}
     style:--orbit-rx={orbitRx}
     style:--orbit-ry={orbitRy}

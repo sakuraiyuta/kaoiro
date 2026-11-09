@@ -20,6 +20,7 @@
     UserSummary,
   } from "./protocol";
   import type { StatusLineSettings } from "./statusLine";
+  import LanguageSelect from "./LanguageSelect.svelte";
   import Modal from "./Modal.svelte";
 
   // A future rejection reason cannot prove that the reset was not accepted.
@@ -731,6 +732,8 @@
       ×
     </button>
   </div>
+
+  <LanguageSelect />
 
   <label class="row">
     <input

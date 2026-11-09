@@ -2,6 +2,8 @@
 // to localStorage under a single namespaced key. `settings` is the shared
 // reactive source read by SettingsDrawer (writer) and notify.ts (reader).
 
+import type { LocaleSetting } from "./i18n/index.svelte";
+
 export interface Settings {
   notificationSoundEnabled: boolean;
   notificationSoundVolume: number;
@@ -20,6 +22,9 @@ export interface Settings {
    *  "recent" puts the agent with the newest grid envelope first (mostly a
    *  state change; see gridSort.ts), so the cards move as states change. */
   gridSort: GridSort;
+  /** UI language: "auto" follows the browser's language list (see
+   *  i18n/index.svelte.ts); "ja" / "en" is an explicit choice. */
+  locale: LocaleSetting;
 }
 
 export type GridSort = "name" | "recent";
@@ -32,6 +37,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentCardStatsEnabled: true,
   hideNonMessageLogEntries: false,
   gridSort: "name",
+  locale: "auto",
 };
 
 function clampVolume(value: number): number {
@@ -66,12 +72,17 @@ export function loadSettings(): Settings {
       parsed.gridSort === "name" || parsed.gridSort === "recent"
         ? parsed.gridSort
         : DEFAULT_SETTINGS.gridSort;
+    const locale =
+      parsed.locale === "auto" || parsed.locale === "ja" || parsed.locale === "en"
+        ? parsed.locale
+        : DEFAULT_SETTINGS.locale;
     return {
       notificationSoundEnabled: enabled,
       notificationSoundVolume: volume,
       agentCardStatsEnabled,
       hideNonMessageLogEntries,
       gridSort,
+      locale,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -108,6 +119,9 @@ export function updateSettings(patch: Partial<Settings>): void {
   }
   if (patch.gridSort !== undefined) {
     settings.gridSort = patch.gridSort;
+  }
+  if (patch.locale !== undefined) {
+    settings.locale = patch.locale;
   }
   saveSettings(settings);
 }

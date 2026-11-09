@@ -6,8 +6,9 @@
   // the change log wherever the agent has written or withdrawn a line, and its
   // newest entry is the whole text. Nothing interactive encloses the markdown
   // here, so links are real http(s) links.
-  import { formatRelativeJa } from "./relativeTime";
-  import { HEAD_OMITTED, headOmitted, type StatusLineView } from "./statusLine";
+  import { intlTag, msg } from "./i18n/index.svelte";
+  import { formatRelative } from "./relativeTime";
+  import { headOmitted, headOmittedText, type StatusLineView } from "./statusLine";
   import UntrustedMarkdown from "./UntrustedMarkdown.svelte";
 
   let {
@@ -21,7 +22,7 @@
 
   const more = $derived(
     view.kind === "set" && view.truncated
-      ? `…続きあり (${(view.bytes / 1024).toFixed(1)} KB)`
+      ? msg().statusLine.moreAvailable({ kb: (view.bytes / 1024).toFixed(1) })
       : null,
   );
   // An agent that never wrote a line has no change log to read.
@@ -30,24 +31,24 @@
     if (view.kind !== "set") return "";
     const date = new Date(view.updatedAt);
     if (Number.isNaN(date.getTime())) return "—";
-    return date.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false });
+    return date.toLocaleTimeString(intlTag(), { hour: "2-digit", minute: "2-digit", hour12: false });
   });
   const ago = $derived(
-    view.kind === "set" ? formatRelativeJa(view.updatedAt, Date.now()) : "",
+    view.kind === "set" ? formatRelative(view.updatedAt, Date.now()) : "",
   );
 </script>
 
 {#if view.kind !== "none"}
-  <section class="status-line-panel" aria-label="状況表示">
+  <section class="status-line-panel" aria-label={msg().statusLinePanel.title}>
     <header>
-      <h3>状況表示</h3>
+      <h3>{msg().statusLinePanel.title}</h3>
       {#if view.kind === "set"}
         <time class="when" datetime={view.updatedAt} title={ago}>{clock}</time>
       {/if}
     </header>
     {#if view.kind === "set"}
       {#if headOmitted(view)}
-        <p class="omitted">{HEAD_OMITTED}</p>
+        <p class="omitted">{headOmittedText()}</p>
       {:else}
         <div class="body"><UntrustedMarkdown text={view.head} /></div>
       {/if}
@@ -55,11 +56,11 @@
         <p class="more">{more}</p>
       {/if}
     {:else}
-      <p class="unset">未設定</p>
+      <p class="unset">{msg().statusLine.unset}</p>
     {/if}
     {#if onOpenHistory !== undefined && hasLog}
       <div class="actions">
-        <button type="button" class="read-more" onclick={onOpenHistory}>続きを読む</button>
+        <button type="button" class="read-more" onclick={onOpenHistory}>{msg().statusLinePanel.readMore}</button>
       </div>
     {/if}
   </section>

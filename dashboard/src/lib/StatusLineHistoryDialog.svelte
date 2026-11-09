@@ -7,6 +7,7 @@
   // log is. Entries are immutable, and a component instance is kept for as
   // long as its entry stays, so a refetch re-parses nothing that did not
   // change.
+  import { intlTag } from "./i18n/index.svelte";
   import Modal from "./Modal.svelte";
   import UntrustedMarkdown from "./UntrustedMarkdown.svelte";
   import type { StatusLineHistoryEntry } from "./statusLine";
@@ -57,7 +58,7 @@
   function clock(iso: string): string {
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return iso;
-    return date.toLocaleString("ja-JP", { hour12: false });
+    return date.toLocaleString(intlTag(), { hour12: false });
   }
 
   // Reads on open and again when the agent writes. A reply that arrives after

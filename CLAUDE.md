@@ -102,7 +102,8 @@ and comments, specs / plans / ADRs under `docs/`, code comments, test names,
 and log messages. When editing an existing Japanese document, you may
 translate the sections you change into English; a full rewrite is not
 required. Exceptions are places where Japanese itself is the specification,
-such as `docs/specs/personas.md`, and the Japanese landing page
+such as `docs/specs/personas.md`, the Japanese UI tables under
+`dashboard/src/lib/i18n/ja/`, and the Japanese landing page
 (`ja/index.html` on `gh-pages`). Conversations with the operator and
 inter-agent messages follow the session's language setting (do not switch
 these to English).

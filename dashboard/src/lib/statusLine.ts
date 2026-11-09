@@ -6,6 +6,8 @@
 // card shows the head as plain text and the history dialog renders markdown
 // through UntrustedMarkdown.
 
+import { msg } from "./i18n/index.svelte";
+
 /** One agent's latest line as the join snapshot and the live event carry it.
  *  A clear is a row too: the stamp lets the ordering rule reject an older line
  *  that arrives after it. */
@@ -36,10 +38,13 @@ export type StatusLineView =
 
 /** Drawn in place of a truncated head that has nothing left to draw. A fixed
  *  sentence of the dashboard, never markdown: the agent's text cannot spell it
- *  into its own line without the normal class. */
-export const HEAD_OMITTED = "(冒頭が長いため省略)";
+ *  into its own line without the normal class. A function, not a constant, so
+ *  it follows the locale. */
+export function headOmittedText(): string {
+  return msg().statusLine.headOmitted;
+}
 
-/** Whether a `set` view draws HEAD_OMITTED instead of its head. A complete line
+/** Whether a `set` view draws headOmittedText() instead of its head. A complete line
  *  that is only blank keeps drawing its blank body. */
 export function headOmitted(view: { head: string; truncated: boolean }): boolean {
   return view.truncated && view.head.trim() === "";

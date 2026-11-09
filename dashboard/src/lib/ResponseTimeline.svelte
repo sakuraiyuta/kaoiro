@@ -19,7 +19,8 @@
     type ConversationEntry,
   } from "./conversationTimeline";
   import PersonaFace from "./PersonaFace.svelte";
-  import { formatRelativeJa } from "./relativeTime";
+  import { msg } from "./i18n/index.svelte";
+  import { formatRelative } from "./relativeTime";
   import {
     personaForAgent,
     agentDisplayName as resolveAgentDisplayName,
@@ -49,7 +50,7 @@
      * 取り出して時系列マージする（result は turn boundary として除外）。 */
     logs: Record<string, Envelope[]>;
     manifest?: PersonaManifest | null;
-    /** ms clock。 formatRelativeJa の tick 用に App から受ける。 */
+    /** ms clock。 formatRelative の tick 用に App から受ける。 */
     now: number;
     /** App session が所有する既読 marker。detail 表示でこの component が
      * unmount しても既読状態を失わない。 */
@@ -132,10 +133,10 @@
   }
 </script>
 
-<aside class="timeline" aria-label="会話タイムライン">
-  <h2 class="title">会話タイムライン</h2>
+<aside class="timeline" aria-label={msg().responseTimeline.title}>
+  <h2 class="title">{msg().responseTimeline.title}</h2>
   {#if entries.length === 0}
-    <p class="empty">まだ会話なし</p>
+    <p class="empty">{msg().responseTimeline.empty}</p>
   {:else}
     <ul class="rows" onscroll={loadMore}>
       {#each visibleEntries as entry (conversationEntryKey(entry.envelope))}
@@ -163,7 +164,7 @@
               markRead(key);
               onSelectAgent(entry);
             }}
-            title={`${agentName(entry.agentId)} の詳細を開く`}
+            title={msg().responseTimeline.openDetail({ name: agentName(entry.agentId) })}
           >
             <!-- issue #234: sprite-less fallback mirrors agent-strip
                  (App.svelte) / AgentCard.svelte / AgentDetail.svelte's
@@ -196,16 +197,16 @@
                   {#if entry.kind === "user"}
                     <span class="who-badge" aria-label="operator prompt">→ {agentName(entry.agentId)}</span>
                   {:else if entry.kind === "inter_agent"}
-                    <span class="who-name">{agentName(entry.agentId)} <span class="receiver">→ {entry.recipientId ? agentName(entry.recipientId) : "受信側"}</span></span>
+                    <span class="who-name">{agentName(entry.agentId)} <span class="receiver">→ {entry.recipientId ? agentName(entry.recipientId) : msg().responseTimeline.recipientFallback}</span></span>
                   {:else}
                     <span class="who-name">{agentName(entry.agentId)}</span>
                   {/if}
                 </span>
-                <span class="when">{formatRelativeJa(entry.envelope.ts, now)}</span>
+                <span class="when">{formatRelative(entry.envelope.ts, now)}</span>
               </span>
               <span class="summary">
                 {entry.text ||
-                  (entry.kind === "user" ? "(空メッセージ)" : entry.kind === "inter_agent" ? "(空の連携メッセージ)" : "(空応答)")}
+                  (entry.kind === "user" ? msg().responseTimeline.emptyUserMessage : entry.kind === "inter_agent" ? msg().responseTimeline.emptyInterAgentMessage : msg().responseTimeline.emptyResponse)}
               </span>
             </span>
           </button>

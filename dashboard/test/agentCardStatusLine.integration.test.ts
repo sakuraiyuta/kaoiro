@@ -7,7 +7,9 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentCard from "../src/lib/AgentCard.svelte";
 import type { Envelope } from "../src/lib/protocol";
-import { HEAD_OMITTED, type StatusLineView } from "../src/lib/statusLine";
+import { headOmittedText, type StatusLineView } from "../src/lib/statusLine";
+
+const HEAD_OMITTED = headOmittedText();
 import { renderUntrustedInline } from "../src/lib/untrustedMarkdown";
 import { reactiveObject } from "./reactiveObject.svelte";
 

@@ -14,7 +14,8 @@
     type DeviceError,
     type DeviceLookup,
   } from "./deviceApproval";
-  import { formatRelativeJa } from "./relativeTime";
+  import { intlTag } from "./i18n/index.svelte";
+  import { formatRelative } from "./relativeTime";
 
   let {
     initialCode,
@@ -76,8 +77,8 @@
   function issuedAtText(issuedAt: string): string | null {
     const parsed = Date.parse(issuedAt);
     if (Number.isNaN(parsed)) return null;
-    const absolute = new Date(parsed).toLocaleString("ja-JP", { hour12: false });
-    return `${absolute} (${formatRelativeJa(issuedAt, Date.now())})`;
+    const absolute = new Date(parsed).toLocaleString(intlTag(), { hour12: false });
+    return `${absolute} (${formatRelative(issuedAt, Date.now())})`;
   }
 
   function errorText(error: DeviceError): string {

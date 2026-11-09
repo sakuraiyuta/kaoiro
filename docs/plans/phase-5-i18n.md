@@ -1,10 +1,10 @@
 ---
 title: Phase 5 — Internationalization (Pre-Beta English Translation)
 description: An independent milestone to translate all documentation and UI into English for external release.
-status: planned
+status: in_progress
 phase: 5
 depends_on: [phase-4-host-runner]
-last_updated: 2026-06-24
+last_updated: 2026-11-10
 ---
 
 # Phase 5 — Internationalization (Pre-Beta English Translation)
@@ -26,7 +26,7 @@ The decision is [ADR-0006](../adr/0006-doc-language-i18n.md).
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | 5-1 | Translate docs/ into English | ⏳ | |
-| 5-2 | Internationalize UI text | ⏳ | |
+| 5-2 | Internationalize UI text | 🟡 | [issue #269](https://github.com/sakuraiyuta/kaoiro/issues/269): mechanism, language switch and the lobby are in; the dialogs, settings and agent detail follow in two more units |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 

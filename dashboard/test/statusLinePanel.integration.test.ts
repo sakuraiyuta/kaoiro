@@ -6,7 +6,9 @@ import "./isolation.setup";
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import StatusLinePanel from "../src/lib/StatusLinePanel.svelte";
-import { HEAD_OMITTED, type StatusLineView } from "../src/lib/statusLine";
+import { headOmittedText, type StatusLineView } from "../src/lib/statusLine";
+
+const HEAD_OMITTED = headOmittedText();
 
 const mounted: object[] = [];
 

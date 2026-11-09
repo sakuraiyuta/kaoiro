@@ -9,7 +9,13 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
   fullyParallel: true,
-  use: port ? { baseURL: `http://127.0.0.1:${port}` } : {},
+  // The UI language is pinned so the specs read the same on any host; the
+  // product's own "auto" resolution then yields ja. An English spec uses
+  // test.use({ locale: "en-US" }).
+  use: {
+    locale: "ja-JP",
+    ...(port ? { baseURL: `http://127.0.0.1:${port}` } : {}),
+  },
   webServer: {
     command: "pnpm exec vite --host 127.0.0.1 --port 4173",
     // Vite reports a busy port before it logs the bound URL; capture only Local.

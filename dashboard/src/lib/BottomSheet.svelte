@@ -18,6 +18,7 @@
   //   breakpoint 跨ぎ — シート化されないサイズへ遷移したら open を破棄
   //   handle — シート化されるサイズでのみ表示 (閉時も出しつづける)
   import { tick } from "svelte";
+  import { msg } from "./i18n/index.svelte";
   import type { Snippet } from "svelte";
 
   let {
@@ -141,8 +142,8 @@
           class="pending-lamp"
           data-tone={pendingTone}
           role="status"
-          aria-label="対応待ちがあります"
-          title="対応待ちがあります"
+          aria-label={msg().bottomSheet.pending}
+          title={msg().bottomSheet.pending}
         ></span>
       {/if}
     </button>
@@ -152,9 +153,9 @@
         class="attention"
         data-tone={attentionTone}
         onclick={onAttention}
-        title="一覧へ戻って対応する"
+        title={msg().bottomSheet.backToList}
       >
-        他に {attentionCount} 体が要対応
+        {msg().bottomSheet.othersNeedAttention({ count: attentionCount })}
       </button>
     {/if}
   </div>
@@ -163,7 +164,7 @@
       class="backdrop"
       role="button"
       tabindex="-1"
-      aria-label="閉じる"
+      aria-label={msg().common.close}
       onclick={close}
       onkeydown={(e) => e.key === "Escape" && close()}
     ></div>

@@ -20,9 +20,10 @@
     STOP_SAFE_STATES,
   } from "./protocol";
   import type { Envelope, PersonaManifest } from "./protocol";
-  import { formatRelativeJa } from "./relativeTime";
+  import { intlTag, msg } from "./i18n/index.svelte";
+  import { formatRelative } from "./relativeTime";
   import { settings } from "./settings.svelte";
-  import { HEAD_OMITTED, headOmitted, type StatusLineView } from "./statusLine";
+  import { headOmitted, headOmittedText, type StatusLineView } from "./statusLine";
   import UntrustedMarkdown from "./UntrustedMarkdown.svelte";
 
   let {
@@ -136,20 +137,22 @@
   let statusLineLines = $state(0);
   const statusLineMore = $derived(
     statusLine.kind === "set" && (statusLine.truncated || statusLineLines > 3)
-      ? `…続きあり (${(statusLine.bytes / 1024).toFixed(1)} KB)`
+      ? msg().statusLine.moreAvailable({
+          kb: (statusLine.bytes / 1024).toFixed(1),
+        })
       : null,
   );
   const statusLineClock = $derived(
     statusLine.kind === "set" ? clockOf(statusLine.updatedAt) : "",
   );
   const statusLineAgo = $derived(
-    statusLine.kind === "set" ? formatRelativeJa(statusLine.updatedAt, Date.now()) : "",
+    statusLine.kind === "set" ? formatRelative(statusLine.updatedAt, Date.now()) : "",
   );
 
   function clockOf(iso: string): string {
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return "—";
-    return date.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false });
+    return date.toLocaleTimeString(intlTag(), { hour: "2-digit", minute: "2-digit", hour12: false });
   }
   const fatigued = $derived(isFatigued(envelope));
   const spriteUrl = $derived(
@@ -334,7 +337,7 @@
   }
 
   function rateBarLabel(bar: RateBar): string {
-    if (bar.resetComplete) return "リセット済み";
+    if (bar.resetComplete) return msg().agentCard.rateResetDone;
     const parts: string[] = [];
     if (bar.pct !== null) parts.push(`${bar.pct}%`);
     if (bar.reset !== null) parts.push(bar.reset);
@@ -442,7 +445,7 @@
       // stale state in the warning.
       const liveLabel = expressionFor(envelope.state).label;
       const ok = window.confirm(
-        `「${name}」は${liveLabel}です。終了すると進行中の作業は失われる可能性があります。終了しますか?`,
+        msg().agentCard.terminateConfirm({ name, state: liveLabel }),
       );
       if (!ok) return;
     }
@@ -493,11 +496,7 @@
     // Don't open the detail when the operator clicks delete on the tile.
     event.stopPropagation();
     if (deleting || !onDelete) return;
-    const ok = window.confirm(
-      `オフラインのエージェント「${name}」を完全に削除します。` +
-        `保存された persona / session ポインタ / permission_mode も破棄され、` +
-        `以後この agent_id は復元できなくなります。よろしいですか?`,
-    );
+    const ok = window.confirm(msg().agentCard.deleteConfirm({ name }));
     if (!ok) return;
     deleting = true;
     try {
@@ -523,13 +522,13 @@
   <div class="card-media">
     <span class="lamp" title={expression.label}></span>
     {#if directoryOnly}
-      <span class="offline-label" aria-label="オフライン">offline</span>
+      <span class="offline-label" aria-label={msg().agentCard.offline}>offline</span>
     {/if}
     {#if spawnError}
-      <span class="error-icon" title="復元失敗: {spawnError}" aria-label="復元失敗">⚠</span>
+      <span class="error-icon" title={msg().agentCard.restoreFailedTitle({ reason: spawnError })} aria-label={msg().agentCard.restoreFailed}>⚠</span>
     {/if}
     {#if attention}
-      <span class="badge" data-state={expression.variant}>要対応</span>
+      <span class="badge" data-state={expression.variant}>{msg().agentCard.needsAttention}</span>
     {/if}
     <div class="sprite-slot">
       <!-- Same action as `.open`, so it is kept out of the Tab order to
@@ -546,7 +545,7 @@
         aria-hidden="true"
         onclick={directoryOnly ? undefined : selectFrom}
         disabled={directoryOnly}
-        aria-label={`${name} の詳細を開く`}
+        aria-label={msg().agentCard.openDetail({ name })}
       >
         {#key display.shown}
           <PersonaFace
@@ -574,8 +573,8 @@
     class="open"
     onclick={directoryOnly ? undefined : selectFrom}
     aria-label={directoryOnly
-      ? `${name} (オフライン)`
-      : `${name} の詳細を開く`}
+      ? msg().agentCard.offlineName({ name })
+      : msg().agentCard.openDetail({ name })}
     disabled={directoryOnly}
   >
     <h2>{name}</h2>
@@ -591,7 +590,7 @@
         {/if}
         {#if ctxPct !== null}
           <div class="stat-row">
-            <span class="stat-label">生窓</span>
+            <span class="stat-label">{msg().agentCard.contextWindow}</span>
             <div class="meter">
               <div class="meter-fill" style:width="{ctxPct}%"></div>
             </div>
@@ -605,7 +604,7 @@
         {/if}
         {#if ctxPct !== null && ctxUsed !== null && ctxBudgetPct !== null && ctxBudgetTokens !== null}
           <div class="stat-row">
-            <span class="stat-label">作業予算</span>
+            <span class="stat-label">{msg().agentCard.workBudget}</span>
             <div class="meter">
               <div
                 class="meter-fill"
@@ -649,12 +648,12 @@
       class:unset={statusLine.kind === "unset"}
       onclick={() => onOpenStatusLineHistory?.(envelope.agent_id)}
       disabled={onOpenStatusLineHistory === undefined}
-      aria-label="{name} の状況表示の履歴を開く"
+      aria-label={msg().agentCard.openStatusHistory({ name })}
     >
       {#if statusLine.kind === "set"}
         <span class="status-text">
           {#if headOmitted(statusLine)}
-            <span class="status-omitted">{HEAD_OMITTED}</span>
+            <span class="status-omitted">{headOmittedText()}</span>
           {:else}
             <UntrustedMarkdown text={statusLine.head} variant="inline" bind:lines={statusLineLines} />
           {/if}
@@ -664,7 +663,7 @@
         {/if}
         <span class="status-time" title={statusLineAgo}>{statusLineClock}</span>
       {:else}
-        <span class="status-text">未設定</span>
+        <span class="status-text">{msg().statusLine.unset}</span>
       {/if}
     </button>
   {/if}
@@ -674,10 +673,10 @@
       class="terminate"
       onclick={handleStop}
       disabled={stopping}
-      title="エージェント(wrapper)を終了する"
-      aria-label="{name} を終了"
+      title={msg().agentCard.terminateTitle}
+      aria-label={msg().agentCard.terminateAria({ name })}
     >
-      <span class="terminate-label">{stopping ? "終了中…" : "終了"}</span>
+      <span class="terminate-label">{stopping ? msg().agentCard.terminating : msg().agentCard.terminate}</span>
     </button>
   {:else if canRestore}
     <button
@@ -685,10 +684,10 @@
       class="restore"
       onclick={handleRestore}
       disabled={restoring}
-      title="セッションを再開してエージェントを復帰させる"
-      aria-label="{name} を復帰"
+      title={msg().agentCard.restoreTitle}
+      aria-label={msg().agentCard.restoreAria({ name })}
     >
-      <span class="restore-label">{restoring ? "復帰中…" : "復帰"}</span>
+      <span class="restore-label">{restoring ? msg().agentCard.restoring : msg().agentCard.restore}</span>
     </button>
   {/if}
   {#if canInterrupt}
@@ -697,11 +696,11 @@
       class="stop"
       onclick={handleInterrupt}
       disabled={interrupting}
-      title="現在のターンを中断 (ESC 相当)"
-      aria-label="{name} のターンを中断"
+      title={msg().agentCard.interruptTitle}
+      aria-label={msg().agentCard.interruptAria({ name })}
     >
       <span class="stop-icon" aria-hidden="true">■</span>
-      <span class="stop-label">{interrupting ? "中断中…" : "中断"}</span>
+      <span class="stop-label">{interrupting ? msg().agentCard.interrupting : msg().agentCard.interrupt}</span>
     </button>
   {:else if canDelete}
     <button
@@ -709,11 +708,11 @@
       class="remove"
       onclick={handleDelete}
       disabled={deleting}
-      title="オフラインエージェントを台帳ごと削除"
-      aria-label="{name} を削除"
+      title={msg().agentCard.deleteTitle}
+      aria-label={msg().agentCard.deleteAria({ name })}
     >
       <span class="remove-icon" aria-hidden="true">✕</span>
-      <span class="remove-label">{deleting ? "削除中…" : "削除"}</span>
+      <span class="remove-label">{deleting ? msg().agentCard.deleting : msg().agentCard.delete}</span>
     </button>
   {/if}
 </article>

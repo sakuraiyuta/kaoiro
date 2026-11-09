@@ -93,6 +93,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [0066](adr/0066-tag-derived-lockstep-build-identity.md) | Derive lockstep build identity from immutable landing tags | accepted |
 | [0067](adr/0067-grok-resident-acp-host.md) | Grok Build as a resident ACP engine | accepted |
 | [0068](adr/0068-director-requested-peer-session-reset.md) | Director-requested session reset of an assigned peer | accepted |
+| [0071](adr/0071-dashboard-i18n.md) | Dashboard UI language — typed in-repo string tables, switch without reload | accepted |
 <!-- adr-index:end -->
 
 Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh docs` (the script lives in the skill, not in this repository). Do not edit inside the markers manually.
@@ -159,6 +160,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Visual design tokens and principles: [kaoiro design principles](reference/ui/design.md).
 - Breakpoints, layout switching, and sheet mechanism: [Responsive layout specification](reference/ui/responsive-layout.md).
 - Per-size reachability paths and scroll owners: [Responsive reachability](reference/ui/responsive-reachability.md).
+- UI language, its resolution and what is translated: [Dashboard i18n](reference/ui/i18n.md); how to add text: [Dashboard strings](contributing/dashboard-strings.md).
 
 ## Codex app-server documentation
 

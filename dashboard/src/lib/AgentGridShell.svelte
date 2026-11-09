@@ -16,6 +16,7 @@
   // the stagger animation.
 
   import BottomSheet from "./BottomSheet.svelte";
+  import { msg } from "./i18n/index.svelte";
   import ResponseTimeline from "./ResponseTimeline.svelte";
   import type { ConversationEntry } from "./conversationTimeline";
   import { shouldShowResponseTimeline } from "./protocol";
@@ -87,7 +88,7 @@
          (F6). -->
     <BottomSheet
       mode="smartphone"
-      label="タイムライン"
+      label={msg().agentGridShell.timeline}
       pendingTone={lobbyPendingTone}
     >
       <ResponseTimeline

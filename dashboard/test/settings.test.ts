@@ -25,6 +25,7 @@ describe("loadSettings", () => {
       agentCardStatsEnabled: false,
       hideNonMessageLogEntries: true,
       gridSort: "recent",
+      locale: "en",
     });
     expect(loadSettings()).toEqual({
       notificationSoundEnabled: false,
@@ -32,6 +33,7 @@ describe("loadSettings", () => {
       agentCardStatsEnabled: false,
       hideNonMessageLogEntries: true,
       gridSort: "recent",
+      locale: "en",
     });
   });
 
@@ -41,6 +43,25 @@ describe("loadSettings", () => {
       JSON.stringify({ gridSort: "random" }),
     );
     expect(loadSettings().gridSort).toBe("name");
+  });
+
+  it("locale の不正値と locale の無い保存値は default の auto に戻す (issue #269)", () => {
+    for (const locale of ["fr", "", 1, null, "AUTO"]) {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ locale }));
+      expect(loadSettings().locale).toBe("auto");
+    }
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({ gridSort: "recent" }),
+    );
+    expect(loadSettings().locale).toBe("auto");
+  });
+
+  it("locale の auto / ja / en は保存値から復元する (issue #269)", () => {
+    for (const locale of ["auto", "ja", "en"]) {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ locale }));
+      expect(loadSettings().locale).toBe(locale);
+    }
   });
 
   it("壊れた JSON なら default にフォールバックする", () => {
@@ -129,6 +150,8 @@ describe("updateSettings", () => {
       agentCardStatsEnabled: true,
       hideNonMessageLogEntries: false,
       gridSort: "name",
+      // The shared test setup pins the UI language to ja.
+      locale: "ja",
     });
   });
 
