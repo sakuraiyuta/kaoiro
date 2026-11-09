@@ -31,13 +31,13 @@ describe("recorded native peer root and installed pin", () => {
   });
   it("requires review of the native framing on SDK updates", () => {
     const sdk = JSON.parse(readFileSync(join(dirname(sdkRequire.resolve("@anthropic-ai/claude-agent-sdk")), "package.json"), "utf8"));
-    expect(sdk.version).toBe("0.3.319");
+    expect(sdk.version).toBe("0.3.321");
   });
   // CI runs this artifact check on Linux x64; version and golden checks also run on other platforms.
   it.skipIf(process.platform !== "linux" || process.arch !== "x64")("pins the installed native formatter artifact", async () => {
     const binary = join(dirname(sdkRequire.resolve("@anthropic-ai/claude-agent-sdk-linux-x64/package.json")), "claude");
     const hash = createHash("sha256");
     for await (const bytes of createReadStream(binary)) hash.update(bytes);
-    expect(hash.digest("hex")).toBe("dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed");
+    expect(hash.digest("hex")).toBe("426c33815ca6645a772f722fbff10dbf2cbdb124a8aeab733c1365dbf8bbf61f");
   });
 });
