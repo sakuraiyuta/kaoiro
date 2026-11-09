@@ -3,6 +3,16 @@ import type { Envelope, KaoiroConnection } from "./protocol";
 import { DeliveryPolicyError, parseDeliveryPolicy, unknownDeliveryPolicy, hasDeliveryMechanism,
   type DeliveryPolicy, type DeliveryPolicyView } from "./deliveryPolicy";
 
+// What a notice says, kept apart from its wording: decisions look at the kind,
+// never at the translated text, so a language switch cannot change them.
+type NoticeKind =
+  | "saveUnconfirmed"
+  | "saveUnconfirmedRefreshFailed"
+  | "refreshFailed"
+  | "conflictReselectAfterRefresh"
+  | "saveFailed"
+  | "conflictReselect";
+
 export class DeliveryPolicyStore {
   views = $state<Record<string, DeliveryPolicyView>>({});
   notices = $state<Record<string, string>>({});
@@ -15,6 +25,7 @@ export class DeliveryPolicyStore {
   private versions = new Map<string, number>();
   private floors = new Map<string, number>();
   private noticeEpochs = new Map<string, number>();
+  private noticeKinds = new Map<string, NoticeKind>();
   private requests = new Map<string, symbol>();
   private reads = new Map<string, symbol>();
 
@@ -25,6 +36,7 @@ export class DeliveryPolicyStore {
     this.available = false;
     this.ready = false;
     this.views = {}; this.notices = {}; this.saving = {}; this.reading = {};
+    this.noticeKinds.clear();
     this.buffered.clear(); this.versions.clear(); this.floors.clear(); this.requests.clear(); this.reads.clear(); this.noticeEpochs.clear();
   }
   disconnect(): void {
@@ -58,19 +70,25 @@ export class DeliveryPolicyStore {
     if (floor !== undefined && view.revision !== undefined && view.revision < floor) return;
     this.views = { ...this.views, [id]: view };
     if (view.revision !== undefined && floor !== undefined && view.revision >= floor) this.floors.delete(id);
-    this.notices = { ...this.notices, [id]: "" };
+    this.setNotice(id, null);
   }
   remove(id: string): void {
     const { [id]: _view, ...views } = this.views; this.views = views;
     const { [id]: _notice, ...notices } = this.notices; this.notices = notices;
+    this.noticeKinds.delete(id);
     this.buffered.delete(id); this.versions.delete(id); this.floors.delete(id); this.requests.delete(id);
     this.reads.delete(id); this.noticeEpochs.delete(id);
     const { [id]: _saving, ...saving } = this.saving; this.saving = saving;
     const { [id]: _reading, ...reading } = this.reading; this.reading = reading;
   }
+  /** Shows a notice in the current language; null clears it. */
+  private setNotice(id: string, kind: NoticeKind | null): void {
+    if (kind === null) this.noticeKinds.delete(id); else this.noticeKinds.set(id, kind);
+    this.notices = { ...this.notices, [id]: kind === null ? "" : msg().deliveryPolicy[kind] };
+  }
   clearNotice(id: string): void {
     this.noticeEpochs.set(id, (this.noticeEpochs.get(id) ?? 0) + 1);
-    this.notices = { ...this.notices, [id]: "" };
+    this.setNotice(id, null);
   }
   private authorized(): KaoiroConnection | null {
     const access = this.access();
@@ -91,7 +109,7 @@ export class DeliveryPolicyStore {
           version !== (this.versions.get(id) ?? 0)) return;
       this.observe(id, view);
     } catch {
-      if (reportFailure && current() && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.notices = { ...this.notices, [id]: this.notices[id] === msg().deliveryPolicy.saveUnconfirmed ? msg().deliveryPolicy.saveUnconfirmedRefreshFailed : msg().deliveryPolicy.refreshFailed };
+      if (reportFailure && current() && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.setNotice(id, this.noticeKinds.get(id) === "saveUnconfirmed" ? "saveUnconfirmedRefreshFailed" : "refreshFailed");
     } finally {
       if (current()) { this.reads.delete(id); this.reading = { ...this.reading, [id]: false }; }
     }
@@ -106,7 +124,7 @@ export class DeliveryPolicyStore {
     const token = Symbol(); this.requests.set(id, token);
     const version = this.versions.get(id) ?? 0;
     this.saving = { ...this.saving, [id]: true };
-    this.notices = { ...this.notices, [id]: "" };
+    this.setNotice(id, null);
     const current = () => generation === this.generation && this.requests.get(id) === token &&
       Object.hasOwn(this.views, id) && this.authorized() !== null;
     try {
@@ -122,12 +140,11 @@ export class DeliveryPolicyStore {
       const conflict = error instanceof DeliveryPolicyError && error.reason === "revision_conflict";
       const uncertain = !(error instanceof DeliveryPolicyError) || error.uncertain;
       if ((this.versions.get(id) ?? 0) === version && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) {
-        this.notices = { ...this.notices, [id]: conflict ? msg().deliveryPolicy.conflictReselectAfterRefresh :
-          uncertain ? msg().deliveryPolicy.saveUnconfirmed : msg().deliveryPolicy.saveFailed };
+        this.setNotice(id, conflict ? "conflictReselectAfterRefresh" : uncertain ? "saveUnconfirmed" : "saveFailed");
       }
       if (conflict || uncertain) {
         await this.refresh(id, noticeEpoch === (this.noticeEpochs.get(id) ?? 0));
-        if (current() && conflict && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.notices = { ...this.notices, [id]: msg().deliveryPolicy.conflictReselect };
+        if (current() && conflict && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.setNotice(id, "conflictReselect");
       }
     } finally {
       if (current()) { this.requests.delete(id); this.saving = { ...this.saving, [id]: false }; }

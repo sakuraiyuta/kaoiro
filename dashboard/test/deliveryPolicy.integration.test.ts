@@ -1,7 +1,8 @@
 import "./isolation.setup";
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { DeliveryPolicyError, deliveryPolicyLabel, parseDeliveryPolicy, parseLaunchDeliveryPolicy,
+import { deliveryPolicyLabel } from "../src/lib/deliveryPolicyLabel";
+import { DeliveryPolicyError, parseDeliveryPolicy, parseLaunchDeliveryPolicy,
   launchDeliveryDefault, type DeliveryPolicyView } from "../src/lib/deliveryPolicy";
 import { DeliveryPolicyStore } from "../src/lib/deliveryPolicyStore.svelte";
 import type { Envelope, KaoiroConnection } from "../src/lib/protocol";

@@ -5,6 +5,7 @@ import "./isolation.setup";
 // reads them again; the expected text is the table value, with a few literals.
 import { mount, tick, unmount, type Component } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
 import type { KaoiroConnection } from "../src/lib/protocol";
 import DeliveryPolicyControl from "../src/lib/DeliveryPolicyControl.svelte";
 import DeviceApproval from "../src/lib/DeviceApproval.svelte";
@@ -13,7 +14,8 @@ import SessionLifecycleDialog from "../src/lib/SessionLifecycleDialog.svelte";
 import SettingsDrawer from "../src/lib/SettingsDrawer.svelte";
 import StatusLineHistoryDialog from "../src/lib/StatusLineHistoryDialog.svelte";
 import WorkCapacitySettings from "../src/lib/WorkCapacitySettings.svelte";
-import { deliveryPolicyLabel, unknownDeliveryPolicy } from "../src/lib/deliveryPolicy";
+import { unknownDeliveryPolicy } from "../src/lib/deliveryPolicy";
+import { deliveryPolicyLabel } from "../src/lib/deliveryPolicyLabel";
 import { formatRemaining } from "../src/lib/deviceApproval";
 import { en } from "../src/lib/i18n/en";
 import { ja } from "../src/lib/i18n/ja";
@@ -140,6 +142,48 @@ describe("dialogs and settings repaint on setLocale", () => {
     expect(text(body, "h3")).toBe("Work admission limits");
     expect(body.textContent).toContain(en.workCapacitySettings.unavailable);
     expect(body.textContent).toContain(en.workCapacitySettings.nominatedLimit);
+  });
+
+  it("WorkCapacitySettings: the source and unlimited text of a ready snapshot", async () => {
+    const ready: WorkSettingsSnapshot = {
+      version: "0", state: "ready", revision: 3, overrides: {},
+      effective: { work_nominated_per_principal: 0, work_active_per_assignee: 16 },
+      fallbacks: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
+      sources: { work_nominated_per_principal: "dashboard", work_active_per_assignee: "config" },
+      last_change: null,
+    };
+    const body = await render(WorkCapacitySettings, { generation: 0, snapshot: ready, onSnapshot: () => {} });
+    const lines = () => [...body.querySelectorAll("p")].map((p) => p.textContent?.trim() ?? "");
+    expect(lines()).toContain(
+      `適用値: ${ja.workCapacitySettings.unlimited} / 設定元: ${ja.workCapacitySettings.sourceDashboard} / サーバー設定: 16`,
+    );
+    expect(lines()).toContain(
+      `適用値: 16 / 設定元: ${ja.workCapacitySettings.sourceConfig} / サーバー設定: 16`,
+    );
+    setLocale("en");
+    await tick();
+    expect(lines()).toContain("Effective: unlimited (0) / Source: Dashboard / Server setting: 16");
+    expect(lines()).toContain("Effective: 16 / Source: Server configuration / Server setting: 16");
+  });
+
+  it("SettingsDrawer: the source of the stall threshold and of the history size", async () => {
+    const connection = {
+      listConversations: async () => Object.assign([], { incomplete: false }),
+      listUsers: async () => [],
+    } as unknown as KaoiroConnection;
+    const body = await render(SettingsDrawer, {
+      onClose: () => {},
+      connection,
+      quagmireSettings: { rallyTurns: 16, source: "env" },
+      statusLineSettings: { retention: 20, source: "stored", min: 1, max: 100 },
+    });
+    const hints = () => [...body.querySelectorAll("p.hint")].map((p) => p.textContent?.trim() ?? "");
+    expect(hints()).toContain(ja.settingsDrawer.quagmireHint({ source: ja.settingsDrawer.sourceEnv }));
+    expect(hints()).toContain(ja.settingsDrawer.retentionHint({ source: ja.settingsDrawer.sourceStored }));
+    setLocale("en");
+    await tick();
+    expect(hints().join("|")).toContain("(current source: environment variable)");
+    expect(hints().join("|")).toContain("(current source: stored)");
   });
 
   it("DeliveryPolicyControl: title, saved setting and the state line", async () => {

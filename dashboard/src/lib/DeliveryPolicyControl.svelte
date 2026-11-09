@@ -1,7 +1,8 @@
 <script lang="ts">
   import { msg } from "./i18n/index.svelte";
-  import { deliveryPolicyLabel, hasDeliveryMechanism, unknownDeliveryPolicy,
+  import { hasDeliveryMechanism, unknownDeliveryPolicy,
     type DeliveryPolicy, type DeliveryPolicyView } from "./deliveryPolicy";
+  import { deliveryPolicyLabel } from "./deliveryPolicyLabel";
   let { agentId, view = unknownDeliveryPolicy(), connected, available = false, saving = false,
     reading = false, notice = "", generation = 0, onChange, onRefresh }: {
     agentId: string; view?: DeliveryPolicyView | undefined; connected: boolean; available?: boolean;

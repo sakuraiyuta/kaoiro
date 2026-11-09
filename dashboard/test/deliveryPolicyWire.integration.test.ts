@@ -2,7 +2,8 @@ import "./isolation.setup";
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { connectKaoiro, type KaoiroConnection } from "../src/lib/protocol";
-import { deliveryPolicyLabel, DeliveryPolicyError } from "../src/lib/deliveryPolicy";
+import { DeliveryPolicyError } from "../src/lib/deliveryPolicy";
+import { deliveryPolicyLabel } from "../src/lib/deliveryPolicyLabel";
 import { deliveryLoopback, deliveryView, LoopbackWebSocket } from "./deliveryPolicyLoopback";
 let loop: Awaited<ReturnType<typeof deliveryLoopback>>;
 let conn: KaoiroConnection | undefined;
