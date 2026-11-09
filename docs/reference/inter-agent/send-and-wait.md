@@ -1,7 +1,7 @@
 ---
 title: Send and wait
 status: provisional
-last_updated: 2026-10-27
+last_updated: 2026-11-10
 description: Send and wait contracts and compatibility.
 ---
 
@@ -51,6 +51,11 @@ and separators between the individual formatted messages:
 
 (meta: done=<done>, propose_next=<propose_next>, conversation_id=<conversation_id>, turn_number=<turn_number>)
 ```
+
+A server room-change notice (`notice_type: "room_changed"`,
+[rooms](rooms.md#notices)) is injected with its own marker line, which says it
+is a server status notice and that no reply is needed. It creates no
+conversation track and no reply basis.
 
 When the payload carries a server `work` stamp, one more line follows the meta
 line, with `op` only when `work_control_result` is present:
@@ -159,9 +164,13 @@ Errors for unknown `to`, self-routing, participant mismatch, invalid
 conversation IDs (`unknown_agent`, `self_routing`, `participants_mismatch`,
 `invalid value: payload.turn_number`, `stale_turn`, `conversation_closed`
  (the latter three from issue #167), `unknown_conversation_id` (issue #252),
-`delivery_backlog`, `peer_reconnecting`, `peer_reconnecting_capacity` (issue #256), and
+`delivery_backlog`, `peer_reconnecting`, `peer_reconnecting_capacity` (issue #256),
 `disconnected` (issue #257, when `to` is known but not currently connected
-and no planned intent covers it)) are returned in the `envelope` reply.
+and no planned intent covers it), and `room_mismatch` / `rooms_unavailable`
+([rooms](rooms.md#the-same-room-rule))) are returned in the `envelope` reply.
+`room_mismatch` is decided right after `unknown_agent`, before the
+reachability checks, so it registers no later notice; the tool tells the
+caller to ask the operator for a move instead of retrying.
 `peer_reconnecting` and `disconnected` are normalized by the wrapper to a
 structured `peer_error` (`code=reconnecting` / `code=disconnected`
 respectively). A disconnected rejection also carries optional

@@ -181,6 +181,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Error and reachability notices: [error notices](reference/inter-agent/errors.md).
 - Session tools: [compaction, threshold notices, and session reset](reference/inter-agent/session-tools.md).
 - Agent status line: [writing, reading, change log, and failure model](reference/inter-agent/status-line.md).
+- Rooms: [membership, the same-room rule, management, and failure model](reference/inter-agent/rooms.md).
 - Permission recovery: [approval flow](reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 - Open questions carried from the former protocol spec: [inter-agent messaging](architecture/inter-agent-messaging.md#open-questions).
 - Provisional: external human messaging (Discord) — [protocol entry](specs/protocol-external-human.md).

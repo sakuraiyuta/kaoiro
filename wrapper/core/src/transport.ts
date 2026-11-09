@@ -21,6 +21,7 @@ import type {
   DirectoryEntry,
   DirectoryRateLimitWindow,
   DirectoryResult,
+  DirectoryRoom,
   SelfIdentityResult,
   DirectoryStatusLine,
   StatusLineReadResult,
@@ -1166,7 +1167,19 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   if (lastSeen !== undefined) entry.last_seen = lastSeen;
   const statusLine = statusLineFrom(v.status_line);
   if (statusLine !== undefined) entry.status_line = statusLine;
+  const room = roomFrom(v.room);
+  if (room !== undefined) entry.room = room;
   return entry;
+}
+
+/** Narrow for the room a directory entry or the self identity carries. A
+ *  `null` name is the unrenamed lobby; any other name must pass the display
+ *  name rule or the whole field is dropped (unknown, never the lobby). */
+function roomFrom(value: unknown): DirectoryRoom | undefined {
+  if (!isObject(value) || typeof value.id !== "string" || value.id === "") return undefined;
+  if (value.name === null) return { id: value.id, name: null };
+  const name = typeof value.name === "string" ? validDisplayNameOrNull(value.name) : null;
+  return name === null ? undefined : { id: value.id, name };
 }
 
 /** Longest head the server sends (issue 482). Mirrors the server's constant;
@@ -2733,8 +2746,10 @@ export class ServerLink {
           }
           const name = typeof identity.display_name === "string"
             ? validDisplayNameOrNull(identity.display_name) : null;
+          const room = roomFrom(identity.room);
           resolve({ agent_id: this.#agentId,
-            ...(name === null ? {} : { display_name: name }) });
+            ...(name === null ? {} : { display_name: name }),
+            ...(room === undefined ? {} : { room }) });
         })
         .receive("error", () => resolve(null))
         .receive("timeout", () => resolve(null));

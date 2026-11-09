@@ -1807,6 +1807,20 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     return narrowed as unknown as Record<string, unknown>;
   }
 
+  it.each([
+    [{ id: "lobby", name: null }, { id: "lobby", name: null }],
+    [{ id: "r1", name: " Blue " }, { id: "r1", name: "Blue" }],
+  ])("room を narrow して残す (issue #537): %j", async (room, expected) => {
+    expect((await narrowOne({ room })).room).toEqual(expected);
+  });
+
+  it.each([
+    null, "lobby", {}, { id: "", name: null }, { id: 7, name: "Blue" }, { id: "r1" },
+    { id: "r1", name: "" }, { id: "r1", name: "bad\nname" }, { id: "r1", name: 3 },
+  ])("不正な room は lobby で補わず field ごと落とす: %j", async room => {
+    expect(await narrowOne({ room })).not.toHaveProperty("room");
+  });
+
   it("状況判断メタデータ 6 field を素通しする (#160)", async () => {
     const narrowed = await narrowOne({
       context: { used_tokens: 1200, max_tokens: 200000, used_percentage: 0.6 },

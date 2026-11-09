@@ -2,7 +2,7 @@
 title: Server configuration
 description: The server's .env variables, DETS persistence paths, and persona/footer mount points.
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-10
 related: [deployment]
 ---
 
@@ -52,10 +52,11 @@ the conditional PermissionSettings entry when enabling set_permission: `KAOIRO_S
 `KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH` /
 `KAOIRO_WORK_STORE_PATH` / `KAOIRO_DELIVERY_POLICIES_PATH` /
 `KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH` / `KAOIRO_QUAGMIRE_SETTINGS_PATH` /
-`KAOIRO_AGENT_STATUS_LINES_PATH` /
+`KAOIRO_AGENT_STATUS_LINES_PATH` / `KAOIRO_ROOMS_PATH` /
 `KAOIRO_PERMISSION_SETTINGS_PATH` (required when set_permission is enabled).
 Unset paths fall under a container-equivalent of `/tmp` and disappear after `docker compose down`
-(the offline-agent list is lost).
+(the offline-agent list is lost, and every agent returns to the lobby:
+[rooms](../inter-agent/rooms.md#storage-and-failure)).
 
 For deployments enabling `set_permission` (issue #305), the `PermissionSettings`
 store adds `KAOIRO_PERMISSION_SETTINGS_PATH=/var/lib/kaoiro/permission_settings.dets`

@@ -5,6 +5,8 @@ defmodule KaoiroServerWeb.DisplayNameProjectionTest do
   alias KaoiroServerWeb.{AgentsChannel, ClientSocket, WrapperChannel, WrapperSocket}
 
   @persona %{"id" => "default", "name" => "Default", "sprite_set" => "default"}
+  # The self view also carries the caller's room (issue #537).
+  @lobby %{"id" => "lobby", "name" => nil}
 
   setup do
     previous = Application.get_env(:kaoiro_server, :client_tokens)
@@ -120,7 +122,13 @@ defmodule KaoiroServerWeb.DisplayNameProjectionTest do
                  :ok,
                  reply
 
-    assert reply == %{"self" => %{"agent_id" => "self.caller", "display_name" => "Caller"}}
+    assert reply == %{
+             "self" => %{
+               "agent_id" => "self.caller",
+               "display_name" => "Caller",
+               "room" => @lobby
+             }
+           }
   end
 
   test "self view without either source omits the name" do
@@ -130,7 +138,7 @@ defmodule KaoiroServerWeb.DisplayNameProjectionTest do
                  :ok,
                  %{"self" => %{"agent_id" => "self.missing"}} = reply
 
-    assert reply == %{"self" => %{"agent_id" => "self.missing"}}
+    assert reply == %{"self" => %{"agent_id" => "self.missing", "room" => @lobby}}
   end
 
   test "unknown scopes are refused instead of returning peers", ctx do

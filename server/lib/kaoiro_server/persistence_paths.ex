@@ -150,6 +150,14 @@ defmodule KaoiroServer.PersistencePaths do
       config_key: :agent_status_lines_path,
       env: "KAOIRO_AGENT_STATUS_LINES_PATH",
       default_file: "agent_status_lines.dets"
+    },
+    # Rooms and room memberships (issue #537). Without a persistent volume a
+    # container recreation puts every agent back in the lobby.
+    %{
+      store: "rooms",
+      config_key: :rooms_path,
+      env: "KAOIRO_ROOMS_PATH",
+      default_file: "rooms.dets"
     }
   ]
 

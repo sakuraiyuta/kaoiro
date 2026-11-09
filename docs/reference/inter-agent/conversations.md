@@ -1,7 +1,7 @@
 ---
 title: Inter-agent conversation contract
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-11-10
 description: Inter-agent conversation contract and its boundaries.
 ---
 
@@ -40,6 +40,9 @@ work in [phase-8](../../plans/phase-8-inter-agent-messaging.md#future--stage-d--
   checks the caller's role, not `owner.id`, and closes the tracked conversation
   with reason `operator_closed`, notifying its participants. It is distinct
   from the proposed owner-authorized event.
+- An operator's room move or room deletion closes the open conversations it
+  leaves with participants in different rooms, with reason `room_changed` or
+  `room_deleted`, through the same tombstone and notice ([rooms](rooms.md#managing-rooms)).
 
 ### Hard limits (config + mechanical enforcement)
 

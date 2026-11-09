@@ -1338,7 +1338,9 @@ export interface InterAgentErrorPayload {
  *  a fresh, context-less thread under a mistyped or stale id. */
 export interface InterAgentMessagePayload {
   in_reply_to?: number;
-  notice_type?: "turn_failure" | "stale_delivery";
+  /** `room_changed` is server-authored only (a status notice on a fresh
+   *  conversation_id); the server refuses it from a wrapper. */
+  notice_type?: "turn_failure" | "stale_delivery" | "room_changed";
   /** Server recovery notification identity, independent of ingress sequence. */
   loss_id?: string;
   to: string;
@@ -1436,6 +1438,13 @@ export interface InterAgentDeliveryStatus {
   skipped_ranges?: [number, number][];
 }
 
+/** The room an agent is in (docs/reference/inter-agent/rooms.md). `name` is
+ * `null` only for the lobby while it has not been renamed. */
+export interface DirectoryRoom {
+  id: string;
+  name: string | null;
+}
+
 /** One agent in the `directory_request` response. Runtime traits are optional
  * because an old or not-yet-initialized wrapper may not have stamped them.
  * Omitted situational fields mean unknown, never zero or fine. */
@@ -1474,6 +1483,9 @@ export interface DirectoryEntry {
    * Absent when the peer has no line, cleared it, or the store was
    * unavailable: absence never means "idle". */
   status_line?: DirectoryStatusLine;
+  /** Absent when the server predates rooms or could not read them: absence
+   * means unknown, never the lobby. */
+  room?: DirectoryRoom;
 }
 
 /** The head of a peer's status line as `list_agents` carries it. The text is
@@ -1533,6 +1545,7 @@ export interface UserDirectoryEntry {
 export interface SelfIdentityResult {
   agent_id: string;
   display_name?: string;
+  room?: DirectoryRoom;
 }
 
 /** `directory_request` response. `agents` and `users` are intentionally

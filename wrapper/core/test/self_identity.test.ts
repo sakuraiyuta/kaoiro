@@ -44,6 +44,16 @@ it.each([undefined, null, 1, "", "bad\nname", "x".repeat(65)])("omits an unusabl
   expect(await link.requestSelfIdentity()).toEqual({ agent_id: "self.agent" });
 });
 
+it("carries the room of the self reply and omits a malformed one", async () => {
+  let room: unknown = { id: "lobby", name: null };
+  const { link } = await setup(() => ({ self: { agent_id: "self.agent", room } }));
+  expect(await link.requestSelfIdentity()).toEqual({ agent_id: "self.agent", room: { id: "lobby", name: null } });
+  room = { id: "r1", name: "Blue" };
+  expect(await link.requestSelfIdentity()).toEqual({ agent_id: "self.agent", room: { id: "r1", name: "Blue" } });
+  room = { id: "r1" };
+  expect(await link.requestSelfIdentity()).toEqual({ agent_id: "self.agent" });
+});
+
 it("does not reuse a successful name after errors or an old-server response", async () => {
   let reply: Record<string, unknown> = { self: { agent_id: "self.agent", display_name: "Original" } };
   let error: Record<string, unknown> | undefined;

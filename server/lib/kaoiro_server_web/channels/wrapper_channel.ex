@@ -33,6 +33,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.PeerSessionResetReplyReasons
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.Rooms
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResetRequestReplyReasons
@@ -721,7 +722,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
     case read_directory_stores(fn -> {AgentStates.get_envelope(id), AgentDirectory.get(id)} end) do
       {:ok, {envelope, entry}} ->
         name = directory_display_name(envelope || %{}, entry)
-        identity = %{"agent_id" => id} |> maybe_put_directory_field("display_name", name)
+
+        identity =
+          %{"agent_id" => id}
+          |> maybe_put_directory_field("display_name", name)
+          |> put_room(Rooms.snapshot())
+
         reply = %{"self" => identity}
 
         if TransportLimits.reply_frame_fits?("wrapper:#{id}", reply) do
@@ -767,6 +773,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
              reply_modes: KaoiroServer.InterAgentReplyBasis.snapshot(),
              delivery_modes: WorkStore.modes_snapshot(),
              status_lines: AgentStatusLines.heads(),
+             rooms: Rooms.snapshot(),
              users: directory_users()
            }
          end) do
@@ -1476,6 +1483,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       reply_modes: reply_modes,
       delivery_modes: delivery_modes,
       status_lines: status_lines,
+      rooms: rooms,
       users: users
     } = reads
 
@@ -1517,6 +1525,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       (live ++ directory_only)
       |> Enum.reject(&(&1["agent_id"] == self_id))
       |> Enum.map(&put_status_line(&1, status_lines))
+      |> Enum.map(&put_room(&1, rooms))
 
     {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
     agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
@@ -1942,6 +1951,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
       _ -> entry
     end
   end
+
+  # The directory lists every room's agents (issue #537). When the rooms
+  # cannot be read the field is omitted: absent means unknown, not the lobby.
+  defp put_room(entry, :unavailable), do: entry
+
+  defp put_room(%{"agent_id" => id} = entry, {:ok, snapshot}),
+    do: Map.put(entry, "room", Rooms.wire(snapshot, Rooms.room_of(snapshot, id)))
 
   defp directory_display_name(envelope, directory) do
     # Rename commits before the wrapper echo. Reading the authoritative row
@@ -3103,6 +3119,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
       not AgentStates.known?(to) ->
         {:error, :unknown_agent}
 
+      # Before the bounce tracking below, so a refused cross-room send
+      # registers no later reachability notice (issue #537). The record in
+      # ConversationStates checks again; this one only refuses early.
+      room_error = room_error(from, to) ->
+        {:error, room_error}
+
       true ->
         # Active detection and target registration are one state-machine
         # call. A concurrent close that wins makes this return :noop and the
@@ -3274,6 +3296,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp preflight_inter_agent(_envelope, _from, _protected?, _work_enabled?, _sender_modes),
     do: {:ok, :not_inter_agent}
+
+  defp room_error(from, to) do
+    case Rooms.same_room(from, to) do
+      :ok -> nil
+      {:error, reason} -> reason
+    end
+  end
 
   defp prepare_work_operation(
          nil,

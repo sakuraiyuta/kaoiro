@@ -145,4 +145,37 @@ defmodule KaoiroServerWeb.SynthEnvelope do
 
     :ok
   end
+
+  @doc """
+  Tells an agent that an operator moved it to `room` (issue #537). A status
+  notice like the reachability ones: `kind: "inform"`, `turn_number: 0`,
+  `meta.done: false`, marked `notice_type: "room_changed"`. It carries a fresh
+  conversation id under which no conversation is recorded, so it opens
+  nothing and asks for no reply.
+  """
+  @spec deliver_room_changed(String.t(), map()) :: :ok
+  def deliver_room_changed(recipient, %{"id" => room_id, "name" => name}) do
+    conversation_id = KaoiroServer.Rooms.new_id()
+    label = if name, do: "room #{inspect(name)}", else: "the lobby"
+
+    payload = %{
+      "to" => recipient,
+      "conversation_id" => conversation_id,
+      "turn_number" => 0,
+      "kind" => "inform",
+      "notice_type" => "room_changed",
+      "body" =>
+        "room changed: an operator moved you to #{label} (room id #{room_id}). " <>
+          "send_to_agent reaches only agents in the same room; list_agents shows " <>
+          "each agent's room.",
+      "meta" => %{"done" => false, "propose_next" => ""},
+      "owner" => %{"kind" => "user", "id" => "system"}
+    }
+
+    deliver(recipient, build(payload, DateTime.utc_now() |> DateTime.to_iso8601()), %{
+      synthetic: true,
+      kind: "room_changed",
+      conversation_id: conversation_id
+    })
+  end
 end
