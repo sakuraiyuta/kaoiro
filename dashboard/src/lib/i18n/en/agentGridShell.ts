@@ -1,5 +1,5 @@
 import type { Messages } from "../ja";
 
-export const agentGridShell: Messages["agentGridShell"] = {
+export const agentGridShell = {
   timeline: "Timeline",
-};
+} satisfies Messages["agentGridShell"];

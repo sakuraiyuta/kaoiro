@@ -1,3 +1,3 @@
 import type { Messages } from "../ja";
 
-export const tasklistFloat: Messages["tasklistFloat"] = {};
+export const tasklistFloat = {} satisfies Messages["tasklistFloat"];

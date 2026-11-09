@@ -32,9 +32,14 @@ Japanese (a test fails otherwise).
    Forgetting either side fails `pnpm check`.
 2. Read it with `msg()`: `{msg().agentCard.terminate}` or
    `aria-label={msg().agentCard.openDetail({ name })}`.
-3. A new area is a pair of files registered in both `index.ts`. The en object
-   is annotated `Messages["<area>"]`; without the annotation an extra key is
-   caught only by the reverse check in `en/index.ts`.
+3. A new area is a pair of files registered in both `index.ts`. Write the en
+   object as `export const <area> = { ... } satisfies Messages["<area>"];`.
+   `satisfies` keeps the real shape of the object, which `en/index.ts` checks
+   in both directions. Do not annotate the object (`: Messages[...]`) or cast
+   it (`as`): that replaces the shape with the ja type, and an extra key in an
+   area whose ja table is empty then passes `pnpm check`.
+4. An extra key in an area whose ja table is empty is reported only as TS1360
+   at `ja satisfies typeof table` in `en/index.ts`, without the key name.
 
 ## Rules
 
@@ -46,6 +51,8 @@ Japanese (a test fails otherwise).
 - One sentence is one key. Variable parts are arguments, never concatenated
   fragments. When an element sits inside a sentence, use two keys
   (`xBefore`, `xAfter`).
+- An en function declares the same parameter as the ja one, even when it does
+  not use it (`(_p) => "..."`); leaving it out fails `pnpm check`.
 - A count is an argument; the en table writes singular and plural
   (`plural(n, "agent", "agents")` from `en/plural.ts`).
 - `common` holds only text with the same role everywhere (close, cancel).

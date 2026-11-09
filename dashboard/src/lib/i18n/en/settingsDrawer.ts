@@ -1,3 +1,3 @@
 import type { Messages } from "../ja";
 
-export const settingsDrawer: Messages["settingsDrawer"] = {};
+export const settingsDrawer = {} satisfies Messages["settingsDrawer"];

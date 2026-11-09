@@ -49,8 +49,9 @@ const table = {
   workCapacitySettings,
 };
 
-// Missing keys, extra areas and argument mismatches fail here.
+// Missing keys and argument mismatches fail here.
 export const en: Messages = table;
-// An area file that forgot its `Messages[...]` annotation and gained an extra
-// key fails here.
+// Extra keys and extra areas fail here. An area is written with `satisfies`,
+// so `typeof table` keeps its real shape; an annotation or `as` would hide it.
+// An empty ja area (`{}`) reports an extra en key only as TS1360 at this line.
 ja satisfies typeof table;

@@ -1,3 +1,3 @@
 import type { Messages } from "../ja";
 
-export const statusLineHistoryDialog: Messages["statusLineHistoryDialog"] = {};
+export const statusLineHistoryDialog = {} satisfies Messages["statusLineHistoryDialog"];

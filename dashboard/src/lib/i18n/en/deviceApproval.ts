@@ -1,3 +1,3 @@
 import type { Messages } from "../ja";
 
-export const deviceApproval: Messages["deviceApproval"] = {};
+export const deviceApproval = {} satisfies Messages["deviceApproval"];

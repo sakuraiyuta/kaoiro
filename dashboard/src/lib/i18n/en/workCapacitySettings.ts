@@ -1,3 +1,3 @@
 import type { Messages } from "../ja";
 
-export const workCapacitySettings: Messages["workCapacitySettings"] = {};
+export const workCapacitySettings = {} satisfies Messages["workCapacitySettings"];

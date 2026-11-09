@@ -1,3 +1,3 @@
 import type { Messages } from "../ja";
 
-export const untrustedMarkdown: Messages["untrustedMarkdown"] = {};
+export const untrustedMarkdown = {} satisfies Messages["untrustedMarkdown"];

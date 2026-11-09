@@ -1,3 +1,3 @@
 import type { Messages } from "../ja";
 
-export const deliveryPolicy: Messages["deliveryPolicy"] = {};
+export const deliveryPolicy = {} satisfies Messages["deliveryPolicy"];

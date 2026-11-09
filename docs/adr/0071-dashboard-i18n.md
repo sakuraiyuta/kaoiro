@@ -26,9 +26,9 @@ English UI while Japanese stays selectable.
    split by area (`dashboard/src/lib/i18n/{ja,en}/<area>.ts`). A value is a
    string or a one-argument function, so word order and English plurals live
    in the table. The ja tables are the source of the type; each en area is
-   annotated with `Messages["<area>"]`, and the aggregation checks both
-   directions, so `pnpm check` rejects a missing key, an extra key and an
-   argument mismatch. No dependency or lockfile change.
+   written with `satisfies Messages["<area>"]` so that its real shape is kept,
+   and the aggregation checks both directions, so `pnpm check` rejects a
+   missing key, an extra key and an argument mismatch. No dependency or lockfile change.
 2. **A switch without reload.** Text is looked up at the point it is drawn
    (`msg()` reads a reactive setting), so a choice repaints the page and keeps
    drafts and open views. A string looked up once into a constant would not

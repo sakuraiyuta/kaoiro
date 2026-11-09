@@ -1,7 +1,7 @@
 import type { Messages } from "../ja";
 import { plural } from "./plural";
 
-export const app: Messages["app"] = {
+export const app = {
   quagmireRally: ({ names, turns, conversations, threshold }) =>
     `The exchange between ${names} reached ${plural(turns, "message", "messages")} ` +
     `(${plural(conversations, "conversation", "conversations")}, threshold ${threshold}). ` +
@@ -79,4 +79,4 @@ export const app: Messages["app"] = {
   deleteAll: "Delete all",
   deletingAll: "Deleting…",
   connecting: "Connecting…",
-};
+} satisfies Messages["app"];

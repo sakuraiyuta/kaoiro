@@ -1,6 +1,6 @@
 import type { Messages } from "../ja";
 
-export const agentCard: Messages["agentCard"] = {
+export const agentCard = {
   rateResetDone: "Reset",
   terminateConfirm: ({ name, state }) =>
     `"${name}" is ${state}. Terminating it may lose work in progress. Terminate?`,
@@ -33,4 +33,4 @@ export const agentCard: Messages["agentCard"] = {
   deleteAria: ({ name }) => `Delete ${name}`,
   delete: "Delete",
   deleting: "Deleting…",
-};
+} satisfies Messages["agentCard"];

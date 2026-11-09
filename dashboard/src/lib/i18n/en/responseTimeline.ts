@@ -1,6 +1,6 @@
 import type { Messages } from "../ja";
 
-export const responseTimeline: Messages["responseTimeline"] = {
+export const responseTimeline = {
   title: "Conversation timeline",
   empty: "No conversations yet",
   openDetail: ({ name }) => `Open details of ${name}`,
@@ -8,4 +8,4 @@ export const responseTimeline: Messages["responseTimeline"] = {
   emptyUserMessage: "(empty message)",
   emptyInterAgentMessage: "(empty inter-agent message)",
   emptyResponse: "(empty response)",
-};
+} satisfies Messages["responseTimeline"];

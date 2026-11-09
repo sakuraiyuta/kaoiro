@@ -1,3 +1,3 @@
 import type { Messages } from "../ja";
 
-export const agentDetail: Messages["agentDetail"] = {};
+export const agentDetail = {} satisfies Messages["agentDetail"];
