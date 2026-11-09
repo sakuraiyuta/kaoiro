@@ -28,6 +28,7 @@ import { DeliveryPolicyError, parseDeliveryPolicy, parseLaunchDeliveryPolicy, po
   type DeliveryPolicy, type DeliveryPolicyView, type DeliveryPolicyAccepted, type LaunchDeliveryPolicy } from "./deliveryPolicy";
 
 import { randomUUID } from "./uuid";
+import { msg } from "./i18n/index.svelte";
 import {
   parseStatusLine,
   parseStatusLineHistory,
@@ -171,12 +172,13 @@ export function disconnectFrom(envelope: Envelope): DisconnectInfo | null {
 }
 
 export function disconnectLabel(disconnect: DisconnectInfo): string {
-  if (disconnect.origin === "operator") return "オペレーターによる停止";
-  if (disconnect.origin === "runner") return "ランナーによる停止";
-  if (disconnect.reason === "quota_exhausted") return "利用枠の枯渇による停止";
-  if (disconnect.reason === "crash") return "エージェントの異常終了";
-  if (disconnect.origin === "agent_self") return "エージェント自身による停止";
-  return "不慮の接続断";
+  const text = msg().protocol;
+  if (disconnect.origin === "operator") return text.disconnectOperator;
+  if (disconnect.origin === "runner") return text.disconnectRunner;
+  if (disconnect.reason === "quota_exhausted") return text.disconnectQuotaExhausted;
+  if (disconnect.reason === "crash") return text.disconnectCrash;
+  if (disconnect.origin === "agent_self") return text.disconnectAgentSelf;
+  return text.disconnectUnplanned;
 }
 
 /** Shape of a pending tool-permission request — carried on
@@ -1461,26 +1463,17 @@ export interface ResultPayload {
   recovery_hint?: string;
 }
 
-/** Human-readable Japanese label for a wrapper's error_subtype (issue #123).
- *  Falls back to null for absent / unknown subtypes so the caller can either
- *  omit the label or default to the plain "エラーで終了" wording. Kept
- *  co-located with ResultPayload so #124 (retry button) can share the same
- *  error-classification path. */
-const ERROR_SUBTYPE_LABELS: Record<string, string> = {
-  error_max_turns: "最大ターン数到達",
-  error_during_execution: "実行中エラー",
-  error_max_budget_usd: "予算上限到達",
-  error_max_structured_output_retries: "構造化出力リトライ上限",
-  // Historical label for results the retired exec runtime stored
-  // (issues #253 and #262). No current path assigns this value.
-  // The app-server projection sets interrupted or
-  // error_during_execution instead.
-  error_rollout_corrupted: "セッション破損 (再開不可)",
-};
-
+/** Human-readable label, in the UI language, for a wrapper's error_subtype
+ *  (issue #123). Falls back to null for absent / unknown subtypes so the
+ *  caller can either omit the label or default to the plain "ended with an
+ *  error" wording. Kept co-located with ResultPayload so #124 (retry button)
+ *  can share the same error-classification path. `error_rollout_corrupted` is
+ *  a historical label for results the retired exec runtime stored (issues
+ *  #253 and #262); no current path assigns it. */
 export function errorSubtypeLabel(subtype: string | undefined): string | null {
   if (typeof subtype !== "string" || subtype === "") return null;
-  return ERROR_SUBTYPE_LABELS[subtype] ?? null;
+  const labels: Record<string, string> = msg().protocol.errorSubtype;
+  return labels[subtype] ?? null;
 }
 
 /** Narrows a log envelope's payload, or null for any other envelope. */
@@ -3050,7 +3043,7 @@ export function describeResetRequester(
       ? "director"
       : `director ${nameOf(payload.requested_by.id)}`;
   const work = payload.work_id === undefined ? "" : ` (work ${payload.work_id})`;
-  return `${who}${work} が要求`;
+  return msg().protocol.resetRequestedBy({ requester: `${who}${work}` });
 }
 
 export interface SessionResetCompletedPayload {

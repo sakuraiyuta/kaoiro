@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { TasklistSnapshot } from "./protocol";
+  import { msg } from "./i18n/index.svelte";
 
   let {
     agentId,
@@ -37,14 +38,7 @@
   const visible = $derived(total > 0);
 
   function statusLabel(status: TasklistSnapshot["items"][number]["status"]): string {
-    switch (status) {
-      case "pending":
-        return "未着手";
-      case "in_progress":
-        return "進行中";
-      case "completed":
-        return "完了";
-    }
+    return msg().tasklistFloat.status[status];
   }
 
   function toggle(): void {
@@ -53,7 +47,7 @@
 </script>
 
 {#if tasklist && visible}
-  <section class="tasklist-float" aria-label="現在の todo リスト">
+  <section class="tasklist-float" aria-label={msg().tasklistFloat.listAria}>
     <button
       type="button"
       class="tasklist-toggle"
@@ -63,10 +57,10 @@
     >
       <span class="tasklist-label">TODO</span>
       <span class="tasklist-progress">[{completed}/{total}]</span>
-      <span class="tasklist-action">{expanded ? "折りたたむ" : "詳細"}</span>
+      <span class="tasklist-action">{expanded ? msg().tasklistFloat.collapse : msg().tasklistFloat.expand}</span>
     </button>
     {#if expanded}
-      <ul id="tasklist-detail" class="tasklist-items" aria-label="todo の詳細">
+      <ul id="tasklist-detail" class="tasklist-items" aria-label={msg().tasklistFloat.detailAria}>
         {#each tasklist.items as item, index (`${index}:${item.text}`)}
           <li class="tasklist-item" data-status={item.status}>
             <span class="item-status" aria-hidden="true"></span>
@@ -76,7 +70,10 @@
         {/each}
         {#if tasklist.omitted}
           <li class="tasklist-omitted">
-            以下 {tasklist.omitted.count} 件省略 (うち完了 {tasklist.omitted.completed} 件)
+            {msg().tasklistFloat.omitted({
+              count: tasklist.omitted.count,
+              completed: tasklist.omitted.completed,
+            })}
           </li>
         {/if}
       </ul>

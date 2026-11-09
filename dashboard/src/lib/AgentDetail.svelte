@@ -22,6 +22,7 @@
   import type { StatusLineView } from "./statusLine";
   import TasklistFloat from "./TasklistFloat.svelte";
   import { settings } from "./settings.svelte";
+  import { msg } from "./i18n/index.svelte";
   import { randomUUID } from "./uuid";
   import { formatBuildIdentity } from "./buildIdentity";
   import {
@@ -387,7 +388,7 @@
    *  marker so "empty → workspace-write" reads differently from
    *  "read-only → workspace-write". */
   function fmtDriftValue(v: unknown): string {
-    if (v === undefined || v === null) return "(未設定)";
+    if (v === undefined || v === null) return msg().agentDetail.driftUnset;
     if (typeof v === "boolean") return v ? "true" : "false";
     return String(v);
   }
@@ -412,13 +413,17 @@
     });
   }
 
-  const RATE_LABELS: Record<string, string> = {
+  // null: the label is a translated string, read in rateLabel().
+  const RATE_LABELS: Record<string, string | null> = {
     five_hour: "5h",
     seven_day: "7day",
     seven_day_opus: "7day Opus",
     seven_day_sonnet: "7day Sonnet",
-    overage: "追加",
+    overage: null,
   };
+  function rateLabel(key: string): string {
+    return RATE_LABELS[key] ?? msg().agentDetail.rateOverage;
+  }
   // Browser/Node timers clamp a delay above signed int32 to 1ms. Keep a long
   // reset as finite slices instead; every wake re-evaluates the raw deadline.
   const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -464,7 +469,7 @@
         if (key === "seven_day") {
           rows.push({
             key,
-            label: RATE_LABELS[key],
+            label: rateLabel(key),
             pct: null,
             reset: null,
             status: undefined,
@@ -481,7 +486,7 @@
       const resetComplete = resetsAt !== null && resetsAt < now;
       rows.push({
         key,
-        label: RATE_LABELS[key],
+        label: rateLabel(key),
         pct: resetComplete ? 0 : pctNorm(win.utilization),
         reset: resetComplete ? null : fmtReset(win.resets_at),
         status: resetComplete
@@ -500,10 +505,10 @@
    *  either/or fallback, or the reset time a heavy user needs disappears
    *  whenever pct is available. */
   function rateValueLabel(row: RateRow): string {
-    if (row.resetComplete) return "リセット済み";
+    if (row.resetComplete) return msg().agentDetail.rateResetDone;
     const parts: string[] = [];
     if (row.pct !== null) parts.push(`${row.pct}%`);
-    if (row.reset !== null) parts.push(`リセット ${row.reset}`);
+    if (row.reset !== null) parts.push(msg().agentDetail.rateReset({ at: row.reset }));
     return parts.length > 0 ? parts.join(" ・ ") : "?";
   }
 
@@ -1268,7 +1273,7 @@
       (err) => {
         if (envelope.agent_id === requestedAgentId) {
           resumeError =
-            err instanceof Error ? err.message : "候補を取得できませんでした。";
+            err instanceof Error ? err.message : msg().agentDetail.resumeCandidatesFailed;
         }
       },
     );
@@ -1448,7 +1453,7 @@
       pendingEffort = null;
       switchNotice = {
         tone: "info",
-        text: "新モデルで元の effort が使えないため既定へ戻しました",
+        text: msg().agentDetail.effortResetNotice,
       };
     }
     sawEffortReset = reset;
@@ -1473,7 +1478,7 @@
     if (modelsError && !sawModelsError) {
       switchNotice = {
         tone: "error",
-        text: "セッション中のモデル一覧更新に繰り返し失敗しています。切替 button 隣の ↻ から再取得を試みてください",
+        text: msg().agentDetail.modelsRefreshFailingNotice,
       };
     }
     sawModelsError = modelsError;
@@ -1609,7 +1614,9 @@
         if (!result.ok) {
           switchNotice = {
             tone: "error",
-            text: `モデル一覧の再取得に失敗: ${result.reason ?? "unknown"}`,
+            text: msg().agentDetail.modelsRefreshFailed({
+              reason: result.reason ?? "unknown",
+            }),
           };
         }
       } catch (error) {
@@ -1617,7 +1624,9 @@
         // client-side timeout — surfaced the same as an ok=false result.
         switchNotice = {
           tone: "error",
-          text: `モデル一覧の再取得に失敗: ${error instanceof Error ? error.message : String(error)}`,
+          text: msg().agentDetail.modelsRefreshFailed({
+            reason: error instanceof Error ? error.message : String(error),
+          }),
         };
       } finally {
         refreshingModels = false;
@@ -1686,7 +1695,7 @@
       ) {
         switchNotice = {
           tone: "info",
-          text: "現在のモデルの effort カタログがないため、切替をローカルで止めました。カタログを更新 (↻) するか、初回 turn の後に切り替えてください",
+          text: msg().agentDetail.effortCatalogUnavailableNotice,
         };
       } else if (
         failure.kind === "effort" &&
@@ -1694,12 +1703,16 @@
       ) {
         switchNotice = {
           tone: "info",
-          text: `現在のモデルのカタログに ${failure.requested} がないため、切替をローカルで止めました`,
+          text: msg().agentDetail.effortLevelUnsupportedNotice({
+            requested: failure.requested,
+          }),
         };
       } else if (failure.reason === "persist_alias_unknown") {
         switchNotice = {
           tone: "info",
-          text: `保存されていた ${failure.requested} は現在の catalog にないので default で開始しました`,
+          text: msg().agentDetail.persistAliasUnknownNotice({
+            requested: failure.requested,
+          }),
         };
       } else if (failure.reason === "sdk_fallback") {
         // issue #363: not an operator-initiated switch — the engine's
@@ -1707,7 +1720,10 @@
         // for relaunch; the operator decides whether to switch back now.
         switchNotice = {
           tone: "info",
-          text: `安全機構により ${failure.requested} から ${failure.rolled_back_to ?? "別の model"} に退避しました。設定 ${failure.requested} は保持され再起動で復帰します。今すぐ戻すなら切替から選び直してください`,
+          text: msg().agentDetail.sdkFallbackNotice({
+            requested: failure.requested,
+            rolledBackTo: failure.rolled_back_to,
+          }),
         };
       } else {
         const rollbackTarget =
@@ -1715,7 +1731,12 @@
           (failure.kind === "model" ? ccModel : effectiveEffort);
         switchNotice = {
           tone: "error",
-          text: `${failure.kind === "model" ? "モデル" : "effort"}切替に失敗: ${failure.requested} は実効に反映されていません (reason: ${failure.reason})。${rollbackTarget ? `旧値 ${rollbackTarget} に` : "最後に成功した値に"}戻しました`,
+          text: msg().agentDetail.switchFailedNotice({
+            kind: failure.kind,
+            requested: failure.requested,
+            reason: failure.reason,
+            rollbackTarget,
+          }),
         };
       }
     }
@@ -1730,9 +1751,7 @@
     // rejects mid-session bypass — that surfaces as the usual run() error
     // path, no special handling here.
     if (value === "bypassPermissions") {
-      const ok = window.confirm(
-        "bypassPermissions: 全ツール許可を即時バイパスします。続行しますか?",
-      );
+      const ok = window.confirm(msg().agentDetail.bypassConfirm);
       if (!ok) return;
     }
     pendingPerm = value;
@@ -1743,32 +1762,13 @@
   // execution, so a request while a turn runs is accepted rather than
   // blocked, and nothing here promotes an effective badge — the observed
   // values keep arriving through ext.permission / ext.effective.
-  const PERMISSION_STATUS_LABELS: Record<PermissionControlStatus, string> = {
-    pending: "要求済み (次の turn から適用)",
-    applying: "適用中 (次の実行が取得済み)",
-    applied: "適用済み",
-    failed: "失敗",
-    unknown: "未確認",
-  };
   // The closed SetPermissionErrorReason vocabulary. A reason outside it is
   // rendered raw rather than swallowed: an unmapped value means the server
   // grew a rejection this client has not been taught, and hiding it would
   // leave the operator with a control that silently does nothing.
-  const PERMISSION_ERROR_TEXTS: Record<string, string> = lookupTable<string>({
-    forbidden: "権限がありません (operator のみ実行できます)",
-    invalid_payload: "送信内容が不正です",
-    unknown_agent: "対象の agent が見つかりません",
-    agent_unavailable: "agent が接続していません",
-    unsupported_permission_switch: "この engine は権限切替に未対応です",
-    permission_not_ready: "権限情報の準備待ちです",
-    session_reset_pending: "session reset の完了待ちです",
-    revision_exhausted: "revision を使い切りました",
-    persistence_failed: "サーバ側の保存に失敗しました",
-    // Defense-in-depth: every picker mirrors its advertised ceiling, but the
-    // server remains authoritative and may reject stale or forged requests.
-    // Kept axis-agnostic because the error does not identify the failed axis.
-    exceeds_launch_ceiling: "要求値が起動時の上限を超えています",
-  });
+  function permissionErrorText(reason: string): string {
+    return lookupTable<string>(msg().agentDetail.permissionError)[reason] ?? reason;
+  }
   // How far a revision has progressed. The contract lets a state update
   // move a revision forward but never back: "Client ack/state updates
   // cannot reduce the latest known revision or restore pending after that
@@ -1944,8 +1944,6 @@
     "policy_mismatch",
     "approval_policy_mismatch",
   ]);
-  const CODEX_APPROVAL_CONFIG_RECOVERY =
-    'wrapper は要求した approval (既定は never) を明示しています。観測値が異なる場合は、host の $CODEX_HOME/config.toml（既定 ~/.codex/config.toml）の approvals_reviewer と Codex CLI のバージョンを確認してください。原因を直す前に再適用しても、次の turn で再びブロックされる可能性があります。修正後に同じ権限値を一度だけ再適用して新しい revision を割り当て、キャンセルされた指示を再送してください。';
   function needsPermissionGateRecovery(view: PermRequestView): boolean {
     return (
       view.status === "unknown" ||
@@ -1985,21 +1983,38 @@
     canReselect: boolean,
   ): string {
     if (gate.reason === "observation_unavailable") {
-      return `rev ${gate.revision} の結果を確認できませんでした。${canReselect ? "権限を選び直すと再開します。" : ""}`;
+      return msg().agentDetail.gateObservationUnavailable({
+        revision: gate.revision,
+        canReselect,
+      });
     }
     if (gate.step === "next_over_ceiling") {
-      return `サーバの選択 (rev ${gate.revision}) は、再起動後の起動設定の上限を超えています。${canReselect ? "上限内の権限を選ぶと再開します。" : ""}同じ組み合わせは、サーバの clamp と wrapper の最終 gate の両方で拒否されるため、選べません。`;
+      return msg().agentDetail.gateNextOverCeiling({
+        revision: gate.revision,
+        canReselect,
+      });
     }
     const step = gate.step === undefined ? "" : ` (${gate.step})`;
-    return `wrapper は rev ${gate.revision}${step} を適用する前に止まっています。サーバの fallback では何も実行されていません。${canReselect ? "権限を選び直すと再開します（同じ組み合わせでも可）。" : ""}キャンセルされた指示は再送されません。`;
+    return msg().agentDetail.gateBlocked({
+      revision: gate.revision,
+      step,
+      canReselect,
+    });
   }
   // While a gate is present, a rolled_back_to is the server's fallback, not an
   // applied rollback, and the requested permission is unknown.
-  const rolledBackLabel = $derived(
-    permissionGate === null
-      ? "適用前に戻した設定"
-      : "サーバの fallback（未適用）",
-  );
+  function rolledBackText(to: PermissionConfiguration): string {
+    return permissionGate === null
+      ? msg().agentDetail.rolledBackApplied(axesOf(to))
+      : msg().agentDetail.rolledBackFallback(axesOf(to));
+  }
+  function axesOf(config: PermissionConfiguration) {
+    return {
+      sandbox: config.sandbox,
+      network: config.network_access,
+      approval: config.approval,
+    };
+  }
 
   // Handle lamp for the status sheet (phase-31 31-6): while the sheet is
   // open the in-flow permission/question docks sit behind it, so the
@@ -2040,7 +2055,7 @@
       } catch (error) {
         if (envelope.agent_id !== forAgent) return;
         const reason = error instanceof Error ? error.message : String(error);
-        permActionError = PERMISSION_ERROR_TEXTS[reason] ?? reason;
+        permActionError = permissionErrorText(reason);
       }
     })();
   }
@@ -2468,7 +2483,7 @@
     // capability.
     const reservedMode: SessionResetMode | null = reservedSessionResetMode(text);
     if (reservedMode !== null && stagedFiles.length > 0) {
-      actionError = "session の操作コマンドは添付付きでは使えません";
+      actionError = msg().agentDetail.resetWithAttachments;
       return;
     }
     const resetTarget =
@@ -2487,7 +2502,7 @@
     // rejects such a first token with the raw `reserved_session_command`
     // reason (agents_channel.ex), which would otherwise surface verbatim.
     if (reservedMode !== null) {
-      actionError = `このセッションでは ${text} は使えません`;
+      actionError = msg().agentDetail.resetUnavailable({ command: text });
       return;
     }
     const entries = stagedFiles;
@@ -2550,7 +2565,7 @@
     // the message when the operator actually tried to stage something.
     if (!attachmentsSupported) {
       if (picked.length > 0) {
-        actionError = "このセッションでは添付は未対応です";
+        actionError = msg().agentDetail.attachmentsUnsupported;
       }
       return;
     }
@@ -2561,8 +2576,8 @@
     const rejectedByType = picked.length - accepted.length;
     if (rejectedByType > 0) {
       actionError = imagesOnlyAttachments
-        ? "このセッションでは画像のみ添付できます"
-        : "このセッションではこの種類の添付は未対応です";
+        ? msg().agentDetail.attachmentsImagesOnly
+        : msg().agentDetail.attachmentTypeUnsupported;
     }
     const next: StagedEntry[] = [...stagedFiles];
     let dropped = 0;
@@ -2575,7 +2590,10 @@
     }
     stagedFiles = next;
     if (dropped > 0) {
-      actionError = `添付は ${MAX_STAGED} 件まで(${dropped} 件は無視されました)`;
+      actionError = msg().agentDetail.attachmentLimit({
+        max: MAX_STAGED,
+        dropped,
+      });
     }
   }
 
@@ -2835,11 +2853,7 @@
   // detail falls back to the grid as its selected agent vanishes.
   function deleteAgent(): void {
     if (!connection || deleting) return;
-    const ok = window.confirm(
-      `オフラインのエージェント「${name}」を完全に削除します。` +
-        `保存された persona / session ポインタ / permission_mode も破棄され、` +
-        `以後この agent_id は復元できなくなります。よろしいですか?`,
-    );
+    const ok = window.confirm(msg().agentDetail.deleteConfirm({ name }));
     if (!ok) return;
     void run(async () => {
       deleting = true;
@@ -2862,7 +2876,7 @@
       // stale state in the warning.
       const liveLabel = expressionFor(envelope.state).label;
       const ok = window.confirm(
-        `「${name}」は${liveLabel}です。終了すると進行中の作業は失われる可能性があります。終了しますか?`,
+        msg().agentDetail.terminateConfirm({ name, state: liveLabel }),
       );
       if (!ok) return;
     }
@@ -2903,7 +2917,7 @@
     ) {
       const liveLabel = expressionFor(envelope.state).label;
       const ok = window.confirm(
-        `「${name}」は${liveLabel}です。セッションを切り替えると進行中の作業は失われる可能性があります。続行しますか?`,
+        msg().agentDetail.resumeConfirm({ name, state: liveLabel }),
       );
       if (!ok) return;
     }
@@ -2923,9 +2937,7 @@
   // disabled then); the server keeps only that session's lines.
   function clearHistory(): void {
     if (!connection || !envelope.session_id) return;
-    const ok = window.confirm(
-      "現在のセッション以外の返答ログを消去します。元に戻せません。よろしいですか?",
-    );
+    const ok = window.confirm(msg().agentDetail.clearHistoryConfirm);
     if (!ok) return;
     void run(() => connection.clearHistory(envelope.agent_id));
   }
@@ -2933,15 +2945,15 @@
 
 <section class="detail" data-state={expression.variant} in:expandFrom={{ origin }}>
   <div class="bar">
-    <button class="back" onclick={onClose}>グリッドへ戻る</button>
+    <button class="back" onclick={onClose}>{msg().agentDetail.backToGrid}</button>
     {#if attention.length > 0}
       <button
         class="blindspot"
         data-tone={attentionTone}
         onclick={onClose}
-        title="一覧へ戻って対応する"
+        title={msg().agentDetail.attentionTitle}
       >
-        他に {attention.length} 体が要対応(クリックで一覧へ)
+        {msg().agentDetail.attentionOthers({ count: attention.length })}
       </button>
     {/if}
   </div>
@@ -2955,7 +2967,7 @@
          最小に保つ — .status-scroll 導入時と同じ扱い)。 -->
     <BottomSheet
       mode="tablet"
-      label="ステータス"
+      label={msg().agentDetail.statusSheetLabel}
       attentionCount={attention.length}
       {attentionTone}
       onAttention={onClose}
@@ -2977,7 +2989,7 @@
               ? () => onOpenPersonaDetail(personaId)
               : undefined}
             disabled={!personaId || !onOpenPersonaDetail}
-            aria-label="{name} のペルソナ詳細を表示"
+            aria-label={msg().agentDetail.personaDetailAria({ name })}
           >
             {#key display.shown}
               <PersonaFace
@@ -3069,8 +3081,8 @@
                   class="cc-switch rename-switch"
                   aria-haspopup="true"
                   aria-expanded={renameMenuOpen}
-                  title="表示名を変更"
-                  aria-label="{name} の表示名を変更"
+                  title={msg().agentDetail.renameTitle}
+                  aria-label={msg().agentDetail.renameAria({ name })}
                   onclick={toggleRenameMenu}
                 >✎</button>
                 {#if renameMenuOpen}
@@ -3078,11 +3090,11 @@
                     <input
                       type="text"
                       bind:value={renameDraft}
-                      aria-label="{name} の新しい表示名"
+                      aria-label={msg().agentDetail.renameInputAria({ name })}
                       disabled={renaming}
                     />
                     <button type="submit" disabled={renaming}>
-                      {renaming ? "変更中…" : "変更"}
+                      {renaming ? msg().agentDetail.renaming : msg().agentDetail.rename}
                     </button>
                   </form>
                 {/if}
@@ -3107,7 +3119,7 @@
            original indentation to keep this a 2-line structural wrap.) -->
       <div class="status-scroll">
       {#if onOpenSessionLifecycle}
-        <button type="button" class="session-lifecycle-open" onclick={() => onOpenSessionLifecycle?.(envelope.agent_id)}>セッション履歴</button>
+        <button type="button" class="session-lifecycle-open" onclick={() => onOpenSessionLifecycle?.(envelope.agent_id)}>{msg().agentDetail.sessionHistory}</button>
       {/if}
       {#if policyStore}
         <DeliveryPolicyControl agentId={envelope.agent_id} view={policyStore.views[envelope.agent_id]}
@@ -3134,7 +3146,7 @@
               <dd>
                 <div class="cc-switchbox">
                   <span class="cc-model">
-                    {#if pendingModel}pending:{" "}{/if}{#if modelPrimary}{modelPrimary}{#if resolvedModel && resolvedModel !== modelPrimary}<span class="cc-model-resolved">{resolvedModel}</span>{/if}{:else if isAccountDefault}アカウント既定{:else}<span class="cc-pending">確認待ち</span>{/if}
+                    {#if pendingModel}pending:{" "}{/if}{#if modelPrimary}{modelPrimary}{#if resolvedModel && resolvedModel !== modelPrimary}<span class="cc-model-resolved">{resolvedModel}</span>{/if}{:else if isAccountDefault}{msg().agentDetail.accountDefault}{:else}<span class="cc-pending">{msg().agentDetail.modelPending}</span>{/if}
                   </span>
                   {#if connection && modelSwitchSupported && models.length > 0}
                     <button
@@ -3142,19 +3154,19 @@
                       class="cc-switch"
                       aria-haspopup="listbox"
                       aria-expanded={modelMenuOpen}
-                      title="モデルを切替"
+                      title={msg().agentDetail.modelSwitchTitle}
                       onclick={toggleModelMenu}
-                    >切替</button>
+                    >{msg().agentDetail.switchButton}</button>
                   {/if}
                   {#if connection && agentEngine === "claude-code"}
                     <button
                       type="button"
                       class="cc-refresh"
                       class:cc-refresh-error={modelsError}
-                      aria-label="モデル一覧を再取得"
+                      aria-label={msg().agentDetail.modelsRefreshAria}
                       title={modelsError
-                        ? "モデル一覧の取得に失敗中。クリックで再取得"
-                        : "モデル一覧を再取得"}
+                        ? msg().agentDetail.modelsRefreshFailingTitle
+                        : msg().agentDetail.modelsRefreshTitle}
                       disabled={refreshingModels}
                       onclick={refreshModels}
                     >↻</button>
@@ -3163,7 +3175,7 @@
                     <ul
                       class="switch-menu"
                       role="listbox"
-                      aria-label="モデル候補"
+                      aria-label={msg().agentDetail.modelMenuAria}
                     >
                       {#each models as m (m.value)}
                         <li>
@@ -3180,7 +3192,7 @@
                   {/if}
                 </div>
                 {#if isFallbackModel}
-                  <span class="axes-hint">安全機構による退避 (設定は保持、再起動で復帰)</span>
+                  <span class="axes-hint">{msg().agentDetail.fallbackModelHint}</span>
                 {/if}
               </dd>
             </div>
@@ -3196,7 +3208,7 @@
               <dd>
                 <div class="cc-switchbox">
                   <span class="cc-model">
-                    {pendingEffort ? `pending: ${pendingEffort}` : selectedEffort ?? effectiveEffort ?? "既定"}
+                    {pendingEffort ? `pending: ${pendingEffort}` : selectedEffort ?? effectiveEffort ?? msg().agentDetail.effortDefault}
                   </span>
                   {#if connection && effortSwitchSupported && effortLevels.length > 0}
                     <button
@@ -3204,15 +3216,15 @@
                       class="cc-switch"
                       aria-haspopup="listbox"
                       aria-expanded={effortMenuOpen}
-                      title="effort を切替"
+                      title={msg().agentDetail.effortSwitchTitle}
                       onclick={toggleEffortMenu}
-                    >切替</button>
+                    >{msg().agentDetail.switchButton}</button>
                   {/if}
                   {#if effortMenuOpen}
                     <ul
                       class="switch-menu"
                       role="listbox"
-                      aria-label="effort 候補"
+                      aria-label={msg().agentDetail.effortMenuAria}
                     >
                       {#each effortLevels as level (level)}
                         <li>
@@ -3228,7 +3240,7 @@
                   {/if}
                 </div>
                 {#if connection && effortCatalogUnavailable}
-                  <span class="axes-hint">カタログを更新 (↻) するか、初回 turn の後に effort を切り替えてください</span>
+                  <span class="axes-hint">{msg().agentDetail.effortCatalogHint}</span>
                 {/if}
               </dd>
             </div>
@@ -3279,7 +3291,7 @@
               <dd>
                 <span
                   class="drift-badge"
-                  title="resume 前後で resolved 設定が変わりました"
+                  title={msg().agentDetail.resumeDriftTitle}
                 >
                   {#each resumeDrift as d (d.field)}
                     <span class="drift-entry">
@@ -3300,7 +3312,7 @@
                  dashboard has not been taught about still hides correctly
                  when it is launch-fixed. -->
             <div class="cc-row">
-              <dt>作業意図</dt>
+              <dt>{msg().agentDetail.workIntent}</dt>
               <dd>
                 {#if connection}
                   <div class="cc-switchbox cc-perm-switchbox">
@@ -3311,14 +3323,14 @@
                       aria-expanded={permMenuOpen}
                       onclick={togglePermMenu}
                     >
-                      {permLabel ?? "未確認"}
+                      {permLabel ?? msg().agentDetail.unconfirmed}
                       {#if permLabelAxes}
                         <!-- Pin the two-axis reading on the selected label
                              too, not only on the dropdown candidates
                              (phase-15 D2 / task 15-10). -->
                         <span class="axes-hint">
-                          書込: {permLabelAxes.sandbox} /
-                          承認: {permLabelAxes.approval}
+                          {msg().agentDetail.axisWrite({ sandbox: permLabelAxes.sandbox })} /
+                          {msg().agentDetail.axisApproval({ approval: permLabelAxes.approval })}
                         </span>
                       {/if}
                     </button>
@@ -3326,7 +3338,7 @@
                       <ul
                         class="switch-menu"
                         role="listbox"
-                        aria-label="permission mode 候補"
+                        aria-label={msg().agentDetail.permModeMenuAria}
                       >
                         {#each PERMISSION_MODE_VALUES as mode (mode)}
                           <li>
@@ -3339,8 +3351,8 @@
                               {mode}
                               {#if PERMISSION_MODE_AXES[mode]}
                                 <span class="axes-hint">
-                                  書込: {PERMISSION_MODE_AXES[mode].sandbox} /
-                                  承認: {PERMISSION_MODE_AXES[mode].approval}
+                                  {msg().agentDetail.axisWrite({ sandbox: PERMISSION_MODE_AXES[mode].sandbox })} /
+                                  {msg().agentDetail.axisApproval({ approval: PERMISSION_MODE_AXES[mode].approval })}
                                 </span>
                               {/if}
                             </button>
@@ -3365,16 +3377,16 @@
                  permanent badge sits next to sandbox instead (ADR-0057 F4,
                  phase-34 A12). -->
             <div class="cc-row">
-              <dt>実効書込範囲</dt>
+              <dt>{msg().agentDetail.effectiveWriteScope}</dt>
               <dd>
                 <span class="axes-badge">
-                  書込: {permAxes.sandbox}{#if permAxes.enforcement === "advisory"}<span
+                  {msg().agentDetail.axisWrite({ sandbox: permAxes.sandbox })}{#if permAxes.enforcement === "advisory"}<span
                     class="axes-hostfixed"
-                    title="wrapper が tool 引数を検査するのみで OS 強制ではありません (ADR-0057 F4)"
+                    title={msg().agentDetail.advisoryTitle}
                   > (advisory, wrapper enforced)</span>{/if} /
-                  承認: {permAxes.approval}{#if codexApprovalHostFixed}<span
+                  {msg().agentDetail.axisApproval({ approval: permAxes.approval })}{#if codexApprovalHostFixed}<span
                     class="axes-hostfixed"
-                    title="ホスト設定により固定"
+                    title={msg().agentDetail.hostFixedTitle}
                   > (host-fixed)</span>{/if}
                 </span>
               </dd>
@@ -3388,26 +3400,28 @@
                  to also drop the certain fact that approval is host-fixed
                  to never (ADR-0033 F4). -->
             <div class="cc-row">
-              <dt>実効書込範囲</dt>
+              <dt>{msg().agentDetail.effectiveWriteScope}</dt>
               <dd>
                 <span class="axes-badge">
-                  書込: 未確認 / 承認: {codexApprovalHostFixed
-                    ? permControl.constraints.approval
-                    : (permRequestView?.requested.approval ??
-                      permControl.constraints.approval)}{#if codexApprovalHostFixed}<span
+                  {msg().agentDetail.axisWrite({ sandbox: msg().agentDetail.unconfirmed })} / {msg().agentDetail.axisApproval({
+                    approval: codexApprovalHostFixed
+                      ? permControl.constraints.approval
+                      : (permRequestView?.requested.approval ??
+                        permControl.constraints.approval),
+                  })}{#if codexApprovalHostFixed}<span
                     class="axes-hostfixed"
-                    title="ホスト設定により固定"
+                    title={msg().agentDetail.hostFixedTitle}
                   > (host-fixed)</span>{/if}
                 </span>
               </dd>
             </div>
             {#if permControl.status === "unknown" && permControl.last_effective}
               <div class="cc-row">
-                <dt>過去の観測</dt>
+                <dt>{msg().agentDetail.pastObservation}</dt>
                 <dd>
-                  rev {permControl.last_effective.revision} — 現在の許可ではありません:
-                  書込: {permControl.last_effective.permission.sandbox} /
-                  承認: {permControl.last_effective.permission.approval} /
+                  {msg().agentDetail.pastObservationNote({ revision: permControl.last_effective.revision })}
+                  {msg().agentDetail.axisWrite({ sandbox: permControl.last_effective.permission.sandbox })} /
+                  {msg().agentDetail.axisApproval({ approval: permControl.last_effective.permission.approval })} /
                   network_access: {permControl.last_effective.network_access}
                 </dd>
               </div>
@@ -3422,7 +3436,7 @@
                  rather than dropping the row. -->
             <div class="cc-row">
               <dt>network_access</dt>
-              <dd>{effectiveNetworkAccess ?? "未確認"}</dd>
+              <dd>{effectiveNetworkAccess ?? msg().agentDetail.unconfirmed}</dd>
             </div>
           {/if}
           {#if permissionPickerVisible}
@@ -3433,7 +3447,7 @@
                  is never moved from here. -->
             {#if sandboxPickerVisible}
               <div class="cc-row">
-                <dt>sandbox 変更</dt>
+                <dt>{msg().agentDetail.sandboxChange}</dt>
                 <dd>
                   <div class="cc-switchbox cc-perm-switchbox">
                     <button
@@ -3443,17 +3457,18 @@
                       aria-expanded={sandboxMenuOpen}
                       onclick={() => (sandboxMenuOpen = !sandboxMenuOpen)}
                     >
-                      {permRequestView?.requested.sandbox ?? "未確認"}
+                      {permRequestView?.requested.sandbox ?? msg().agentDetail.unconfirmed}
                       <span class="axes-hint"
-                        >{#if sandboxCeiling !== null}上限 {sandboxCeiling}・{/if}次の
-                        turn から適用</span
+                        >{sandboxCeiling !== null
+                          ? msg().agentDetail.ceilingNextTurn({ ceiling: sandboxCeiling })
+                          : msg().agentDetail.nextTurn}</span
                       >
                     </button>
                     {#if sandboxMenuOpen}
                       <ul
                         class="switch-menu"
                         role="listbox"
-                        aria-label="sandbox 候補"
+                        aria-label={msg().agentDetail.sandboxMenuAria}
                       >
                         {#each SELECTABLE_SANDBOX_VALUES as value (value)}
                           <li>
@@ -3467,7 +3482,7 @@
                               onclick={() => sendPermission({ sandbox: value })}
                             >
                               {value}{#if sandboxOverCeiling(value)}<span
-                                  class="axes-hint">上限超</span
+                                  class="axes-hint">{msg().agentDetail.overCeiling}</span
                                 >{/if}
                             </button>
                           </li>
@@ -3483,7 +3498,7 @@
                    workspace-write (ADR-0033 F3 addendum), so no control is
                    offered for the other sandboxes. -->
               <div class="cc-row">
-                <dt>network 変更</dt>
+                <dt>{msg().agentDetail.networkChange}</dt>
                 <dd>
                   <button
                     type="button"
@@ -3497,13 +3512,13 @@
                       })}
                   >
                     {permRequestView.requested.network_access
-                      ? "無効にする"
-                      : "有効にする"}{#if networkToggleOverCeiling}<span
-                        class="axes-hint">上限超</span
+                      ? msg().agentDetail.networkDisable
+                      : msg().agentDetail.networkEnable}{#if networkToggleOverCeiling}<span
+                        class="axes-hint">{msg().agentDetail.overCeiling}</span
                       >{/if}
                   </button>
                   {#if networkCeiling !== null}<span class="axes-hint"
-                      >上限 {networkCeiling ? "有効" : "無効"}</span
+                      >{msg().agentDetail.networkCeiling({ enabled: networkCeiling })}</span
                     >{/if}
                 </dd>
               </div>
@@ -3515,7 +3530,7 @@
                    is SELECTABLE_APPROVAL_VALUES, kept in sync with the server's
                    @approval_values so the UI clamp and the server clamp agree. -->
               <div class="cc-row">
-                <dt>承認 変更</dt>
+                <dt>{msg().agentDetail.approvalChange}</dt>
                 <dd>
                   <div class="cc-switchbox cc-perm-switchbox">
                     <button
@@ -3525,16 +3540,16 @@
                       aria-expanded={approvalMenuOpen}
                       onclick={() => (approvalMenuOpen = !approvalMenuOpen)}
                     >
-                      {permRequestView?.requested.approval ?? "未確認"}
+                      {permRequestView?.requested.approval ?? msg().agentDetail.unconfirmed}
                       <span class="axes-hint"
-                        >上限 {approvalCeiling}・次の turn から適用</span
+                        >{msg().agentDetail.ceilingNextTurn({ ceiling: approvalCeiling ?? "" })}</span
                       >
                     </button>
                     {#if approvalMenuOpen}
                       <ul
                         class="switch-menu"
                         role="listbox"
-                        aria-label="承認 候補"
+                        aria-label={msg().agentDetail.approvalMenuAria}
                       >
                         {#each approvalChoices as value (value)}
                           <li>
@@ -3548,7 +3563,7 @@
                               onclick={() => sendPermission({ approval: value })}
                             >
                               {value}{#if approvalOverCeiling(value)}<span
-                                  class="axes-hint">上限超</span
+                                  class="axes-hint">{msg().agentDetail.overCeiling}</span
                                 >{/if}
                             </button>
                           </li>
@@ -3561,36 +3576,29 @@
             {/if}
             {#if permRequestView !== null}
               <div class="cc-row">
-                <dt>権限要求</dt>
+                <dt>{msg().agentDetail.permissionRequest}</dt>
                 <dd>
-                  rev {permRequestView.revision} — {PERMISSION_STATUS_LABELS[
+                  rev {permRequestView.revision} — {msg().agentDetail.permissionStatus[
                     permRequestView.status
                   ]}
                   <span class="axes-hint">
                     {#if permissionGate === null}
-                      要求: 書込 {permRequestView.requested.sandbox} / network
-                      {permRequestView.requested.network_access}{#if permRequestView
-                        .requested.approval} / 承認 {permRequestView.requested
-                        .approval}{/if}
+                      {msg().agentDetail.permissionRequested(axesOf(permRequestView.requested))}
                     {:else}
-                      要求: 不明（サーバの選択は未確定）
+                      {msg().agentDetail.permissionRequestedUnknown}
                     {/if}
                   </span>
                   {#if permRequestView.reason}
-                    <span class="axes-hint">理由: {permRequestView.reason}</span>
+                    <span class="axes-hint">{msg().agentDetail.permissionReason({ reason: permRequestView.reason })}</span>
                     {#if permRequestView.reason === "approval_policy_mismatch"}
-                      <span class="axes-hint">{CODEX_APPROVAL_CONFIG_RECOVERY}</span>
+                      <span class="axes-hint">{msg().agentDetail.codexApprovalConfigRecovery}</span>
                     {:else if permRequestView.status === "unknown" || permRequestView.reason === "policy_mismatch"}
-                      <span class="axes-hint">同じ権限値を再適用すると新しい revision になります。適用後、キャンセルされた指示を再送してください。</span>
+                      <span class="axes-hint">{msg().agentDetail.reapplyHint}</span>
                     {/if}
                   {/if}
                   {#if permRequestView.rolledBackTo}
                     <span class="axes-hint">
-                      {rolledBackLabel}: 書込 {permRequestView.rolledBackTo
-                        .sandbox} / network {permRequestView.rolledBackTo
-                        .network_access}{#if permRequestView.rolledBackTo
-                        .approval} / 承認 {permRequestView.rolledBackTo
-                        .approval}{/if}
+                      {rolledBackText(permRequestView.rolledBackTo)}
                     </span>
                   {/if}
                 </dd>
@@ -3598,7 +3606,7 @@
             {/if}
             {#if permActionError !== null}
               <div class="cc-row">
-                <dt>権限要求エラー</dt>
+                <dt>{msg().agentDetail.permissionRequestError}</dt>
                 <dd>{permActionError}</dd>
               </div>
             {/if}
@@ -3616,14 +3624,14 @@
               <dt>ctx</dt>
               <dd>
                 {#if ctxPct === null}
-                  <span class="cc-pending">取得中</span>
+                  <span class="cc-pending">{msg().agentDetail.ctxLoading}</span>
                 {:else}
                   <div class="meter">
                     <div class="meter-fill" style:width="{ctxPct}%"></div>
                   </div>
                   <span class="meter-val">
                     <span class="ctx-meter-line">
-                      生窓 {ctxPct}%
+                      {msg().agentDetail.ctxWindow({ pct: ctxPct })}
                       {#if ctxUsed !== null && ctxMax !== null}
                         <span class="meter-abs"
                           >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
@@ -3631,7 +3639,7 @@
                     </span>
                     {#if ctxUsed !== null && ctxBudgetPct !== null && ctxBudgetTokens !== null}
                       <span class="ctx-meter-line">
-                        作業予算 {ctxBudgetPct}%
+                        {msg().agentDetail.ctxBudget({ pct: ctxBudgetPct })}
                         <span class="meter-abs"
                           >({fmtTokens(ctxUsed)}/{fmtTokens(ctxBudgetTokens)})</span>
                       </span>
@@ -3647,7 +3655,7 @@
             <div class="cc-row">
               <dt>ctx</dt>
               <dd>
-                <span class="cc-pending">未対応</span>
+                <span class="cc-pending">{msg().agentDetail.ctxUnsupported}</span>
               </dd>
             </div>
           {/if}
@@ -3657,20 +3665,20 @@
 
           {#if deliveryStatus}
             <div class="cc-row" data-testid="inter-agent-delivery-status">
-              <dt>IA 配送</dt>
+              <dt>{msg().agentDetail.iaDelivery}</dt>
               <dd>
                 {deliveryStatus.acked_seq}/{deliveryStatus.issued_seq}
                 {#if deliveryStatus.issued_seq > deliveryStatus.acked_seq}
                   <span class="cc-pending" title={deliveryStatus.pending_since}>
-                    未 dispatch
+                    {msg().agentDetail.notDispatched}
                   </span>
                 {/if}
                 {#if deliveryStatus.lost_count !== undefined}
-                  <span>喪失 {deliveryStatus.lost_count}</span>
+                  <span>{msg().agentDetail.deliveryLost({ count: deliveryStatus.lost_count })}</span>
                 {/if}
                 {#if deliveryStatus.uncertain_count !== undefined}
                   <span title={deliveryStatus.last_uncertain ? `seq ${deliveryStatus.last_uncertain.delivery_seq}: ${deliveryStatus.last_uncertain.reason}` : undefined}>
-                    未確定 {deliveryStatus.uncertain_count}
+                    {msg().agentDetail.deliveryUncertain({ count: deliveryStatus.uncertain_count })}
                   </span>
                 {/if}
               </dd>
@@ -3682,12 +3690,12 @@
               <dt>{r.label}</dt>
               <dd>
                 {#if r.key === "seven_day" && r.pct === null && r.reset === null}
-                  <span class="cc-pending">まだ情報がありません</span>
+                  <span class="cc-pending">{msg().agentDetail.rateNoData}</span>
                 {:else}
                   <div
                     class="meter"
                     data-status={r.status}
-                    title={r.reset ? "リセット " + r.reset : undefined}
+                    title={r.reset ? msg().agentDetail.rateReset({ at: r.reset }) : undefined}
                   >
                     <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
                   </div>
@@ -3715,11 +3723,11 @@
           class="clear-history"
           disabled={!envelope.session_id}
           title={envelope.session_id
-            ? "現在のセッション以外の返答ログを消去します"
-            : "現在のセッションが不明なため消去できません"}
+            ? msg().agentDetail.clearHistoryTitle
+            : msg().agentDetail.clearHistoryDisabledTitle}
           onclick={clearHistory}
         >
-          過去セッションのログを消去
+          {msg().agentDetail.clearHistory}
         </button>
       {/if}
 
@@ -3736,19 +3744,19 @@
             disabled={resuming}
             aria-haspopup="listbox"
             aria-expanded={resumePickerOpen}
-            title="このエージェントを別のセッションから再開する"
+            title={msg().agentDetail.resumeSwapTitle}
             onclick={() => (resumePickerOpen = !resumePickerOpen)}
           >
-            {resuming ? "切替中…" : "別のセッションから再開…"}
+            {resuming ? msg().agentDetail.resumeSwapping : msg().agentDetail.resumeSwap}
           </button>
           {#if resumePickerOpen}
-            <ul class="resume-menu" role="listbox" aria-label="セッション候補">
+            <ul class="resume-menu" role="listbox" aria-label={msg().agentDetail.resumeMenuAria}>
               {#if resumeError}
                 <li class="empty" role="alert">
-                  候補を取得できませんでした ({resumeError})
+                  {msg().agentDetail.resumeCandidatesFailedWith({ reason: resumeError })}
                 </li>
               {:else if resumeCandidates.length === 0}
-                <li class="empty">この cwd に再開可能なセッションはありません。</li>
+                <li class="empty">{msg().agentDetail.resumeNoCandidates}</li>
               {:else}
                 {#each resumeCandidates as s (s.session_id)}
                   <li>
@@ -3778,10 +3786,10 @@
           type="button"
           class="terminate"
           disabled={stopping}
-          title="エージェント(wrapper)を終了する"
+          title={msg().agentDetail.terminateTitle}
           onclick={stopAgent}
         >
-          {stopping ? "終了中…" : "エージェントを終了"}
+          {stopping ? msg().agentDetail.terminating : msg().agentDetail.terminate}
         </button>
       {:else if connection && canRestore}
         <!-- Restore a disconnected agent (#22, ADR-0014): same slot as the
@@ -3791,10 +3799,10 @@
           type="button"
           class="restore"
           disabled={restoring}
-          title="セッションを再開してエージェントを復帰させる"
+          title={msg().agentDetail.restoreTitle}
           onclick={restoreAgent}
         >
-          {restoring ? "復帰中…" : "エージェントを復帰"}
+          {restoring ? msg().agentDetail.restoring : msg().agentDetail.restore}
         </button>
       {/if}
       </div>
@@ -3810,12 +3818,12 @@
         style={`--timeline-scroll-tail: ${timelineScrollTailPx}px`}
       >
         {#if logs.length === 0}
-          <p class="empty">まだ返答はありません。</p>
+          <p class="empty">{msg().agentDetail.logEmpty}</p>
         {/if}
         {#if hiddenLogCount > 0}
           <!-- #174: render window — only the tail is DOM'd by default. -->
           <button type="button" class="load-earlier" onclick={showEarlierLogs}>
-            以前のログを表示 ({hiddenLogCount} 件)
+            {msg().agentDetail.showEarlier({ count: hiddenLogCount })}
           </button>
         {/if}
         {#each visibleLogs as { env, absoluteIndex }, i (env.ts + ":" + (env.seq ?? absoluteIndex))}
@@ -3853,8 +3861,8 @@
             <div class="session-boundary">
               <span class="label"
                 >── {bpayload.mode === "clear"
-                  ? "セッションを消去して新規開始"
-                  : "新セッション開始"} ──</span>
+                  ? msg().agentDetail.sessionBoundaryClear
+                  : msg().agentDetail.sessionBoundaryNew} ──</span>
               {#if bpayload.request_id}
                 <span
                   class="marker-ids"
@@ -3903,7 +3911,7 @@
                   <button
                     type="button"
                     class="peer-link"
-                    title="{peer} の詳細を開く"
+                    title={msg().agentDetail.openPeerDetailTitle({ peer })}
                     onclick={() => onSelectAgent?.(peer)}
                   >
                     <span
@@ -3981,18 +3989,18 @@
               onmouseleave={() => (hoveredTool = null)}
             >
               <summary
-                >ツール呼び出し: {log.tool_name}
+                >{msg().agentDetail.toolCall({ name: log.tool_name ?? "" })}
                 {#if tuid}
                   <button
                     type="button"
                     class="tlink"
-                    title="対応する結果へ"
+                    title={msg().agentDetail.toolResultLinkTitle}
                     onclick={(e) => jumpToTool(e, tuid, "tool_use")}
                     >🔗{tuid.slice(-4)}</button>
                 {/if}
                 <time class="ts" datetime={env.ts}>{time}</time></summary>
               <pre>{JSON.stringify(log.input ?? {}, null, 2)}{log.truncated
-                  ? "\n…(入力が大きいため省略)"
+                  ? msg().agentDetail.toolInputTruncated
                   : ""}</pre>
             </details>
           {:else if log?.kind === "tool_result"}
@@ -4006,17 +4014,17 @@
               onmouseleave={() => (hoveredTool = null)}
             >
               <summary
-                >結果: {log.tool_name ?? "tool"}
+                >{msg().agentDetail.toolResult({ name: log.tool_name ?? "tool" })}
                 {#if tuid}
                   <button
                     type="button"
                     class="tlink"
-                    title="対応する呼び出しへ"
+                    title={msg().agentDetail.toolCallLinkTitle}
                     onclick={(e) => jumpToTool(e, tuid, "tool_result")}
                     >🔗{tuid.slice(-4)}</button>
                 {/if}
                 <time class="ts" datetime={env.ts}>{time}</time></summary>
-              <pre>{log.output ?? ""}{log.truncated ? "\n…(省略)" : ""}</pre>
+              <pre>{log.output ?? ""}{log.truncated ? msg().agentDetail.toolOutputTruncated : ""}</pre>
             </details>
           {:else if res}
             {@const cost = costUsd(env)}
@@ -4037,16 +4045,16 @@
             <p class="turn-end" class:error={res.is_error}>
               {res.is_error
                 ? res.error_summary
-                  ? `エラーで終了 (${res.error_summary})`
+                  ? msg().agentDetail.turnEndError({ detail: res.error_summary })
                   : errLabel
-                    ? `エラーで終了 (${errLabel})`
-                    : "エラーで終了"
-                : "応答完了"}
+                    ? msg().agentDetail.turnEndError({ detail: errLabel })
+                    : msg().agentDetail.turnEndErrorPlain
+                : msg().agentDetail.turnEndDone}
               {#if cost !== null}
                 <span
                   class="cost"
-                  title="API 標準単価での推定値。Claude サブスク利用時は実課金額ではありません(従量 API キー利用時のみ実コストに近い)。セッション開始からの累計。"
-                  >累計 ~${cost.toFixed(4)}</span>
+                  title={msg().agentDetail.costTitle}
+                  >{msg().agentDetail.costTotal({ amount: cost.toFixed(4) })}</span>
               {/if}
               {#if res.is_error && retryText !== null && !retryText.startsWith("/") && connection}
                 {@const entryKey = conversationEntryKey(env)}
@@ -4055,10 +4063,10 @@
                   type="button"
                   class="retry"
                   disabled={isRetrying}
-                  title="このプロンプトを新規 instruction として再送します (テキストのみ。元の添付ファイルは含まれません)"
+                  title={msg().agentDetail.retryTitle}
                   onclick={() => {
                     void retryPrompt(entryKey, env.agent_id, retryText);
-                  }}>{isRetrying ? "再送中…" : "再送"}</button>
+                  }}>{isRetrying ? msg().agentDetail.retrying : msg().agentDetail.retry}</button>
               {/if}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
@@ -4073,7 +4081,7 @@
                    the primary line, per protocol.md's display-priority
                    note. -->
               <details class="turn-end-detail">
-                <summary>詳細</summary>
+                <summary>{msg().agentDetail.errorDetail}</summary>
                 <p>{res.error_detail}</p>
               </details>
             {/if}
@@ -4091,10 +4099,10 @@
             class="interrupt"
             onclick={interrupt}
             disabled={interrupting}
-            title="現在のターンを中断 (ESC 相当)"
+            title={msg().agentDetail.interruptTitle}
           >
             <span class="interrupt-icon" aria-hidden="true">■</span>
-            {interrupting ? "中断中…" : "中断"}
+            {interrupting ? msg().agentDetail.interrupting : msg().agentDetail.interrupt}
           </button>
         {:else if canDelete}
           <!-- Delete a disconnected agent (#14): sits in the interrupt
@@ -4104,10 +4112,10 @@
             class="remove"
             onclick={deleteAgent}
             disabled={deleting}
-            title="オフラインエージェントを台帳ごと削除"
+            title={msg().agentDetail.deleteTitle}
           >
             <span class="remove-icon" aria-hidden="true">✕</span>
-            {deleting ? "削除中…" : "削除"}
+            {deleting ? msg().agentDetail.deleting : msg().agentDetail.delete}
           </button>
         {/if}
 
@@ -4120,11 +4128,11 @@
             <button
               type="button"
               class="dock-bar dock-bar-perm"
-              title="許可ダイアログを展開"
+              title={msg().agentDetail.permissionExpandTitle}
               onclick={() => (permMinimized = false)}
             >
               <span class="dock-bar-lamp"></span>
-              許可待ち(クリックで展開)
+              {msg().agentDetail.permissionWaiting}
             </button>
           {:else}
             <div class="permission-dock">
@@ -4135,18 +4143,21 @@
               <button
                 class="dock-min"
                 type="button"
-                title="最小化"
-                aria-label="許可ダイアログを最小化"
+                title={msg().agentDetail.minimizeTitle}
+                aria-label={msg().agentDetail.permissionMinimizeAria}
                 onclick={() => (permMinimized = true)}></button>
               <div class="permission-scroll">
                 <p class="permission-tool">
-                  <code>{permission.tool_name}</code> の実行許可を求めています
+                  {msg().agentDetail.permissionAskBefore}<code>{permission.tool_name}</code>{msg().agentDetail.permissionAskAfter}
                 </p>
                 {#if permission.tool_name.startsWith("codex:")}
                   <p class="permission-note">
-                    拒否の理由は Codex に届きません (decline のみ送信)。{#if typeof permission.input?.inactivity_limit_ms === "number"}応答がないまま
-                      {Math.round(permission.input.inactivity_limit_ms / 60_000)} 分
-                      無活動が続くと、turn の watchdog がこの要求ごと turn を中断します。{/if}
+                    {msg().agentDetail.codexDenyNote({
+                      minutes:
+                        typeof permission.input?.inactivity_limit_ms === "number"
+                          ? Math.round(permission.input.inactivity_limit_ms / 60_000)
+                          : null,
+                    })}
                   </p>
                 {/if}
                 {#if permission.input}
@@ -4158,11 +4169,11 @@
                     <pre>{JSON.stringify(permission.input, null, 2)}</pre>
                   </details>
                 {:else if permission.truncated}
-                  <p class="permission-note">(input は大きすぎるため省略)</p>
+                  <p class="permission-note">{msg().agentDetail.permissionInputTruncated}</p>
                 {/if}
                 <div class="permission-actions">
-                  <button class="allow" onclick={() => decide(true)}>許可</button>
-                  <button class="deny" onclick={() => decide(false)}>拒否</button>
+                  <button class="allow" onclick={() => decide(true)}>{msg().agentDetail.allow}</button>
+                  <button class="deny" onclick={() => decide(false)}>{msg().agentDetail.deny}</button>
                 </div>
               </div>
             </div>
@@ -4172,37 +4183,37 @@
             <button
               type="button"
               class="dock-bar dock-bar-perm"
-              title="Codex 権限復旧プロンプトを展開"
+              title={msg().agentDetail.codexRecoveryExpandTitle}
               onclick={() => (permMinimized = false)}
             >
               <span class="dock-bar-lamp"></span>
-              権限復旧待ち(クリックで展開)
+              {msg().agentDetail.codexRecoveryWaiting}
             </button>
           {:else}
             <div class="permission-dock">
               <button
                 class="dock-min"
                 type="button"
-                title="最小化"
-                aria-label="Codex 権限復旧プロンプトを最小化"
+                title={msg().agentDetail.minimizeTitle}
+                aria-label={msg().agentDetail.codexRecoveryMinimizeAria}
                 onclick={() => (permMinimized = true)}></button>
               <div class="permission-scroll">
                 <p class="permission-tool">
-                  Codex の権限確認が止まっています
+                  {msg().agentDetail.codexGateStopped}
                 </p>
                 <p class="permission-note">
                   rev {codexPermissionGateRecovery.revision}: {codexPermissionGateRecovery.reason ?? "permission_gate_blocked"}
                 </p>
                 <p class="permission-note">
                   {#if codexPermissionGateRecovery.reason === "approval_policy_mismatch"}
-                    {CODEX_APPROVAL_CONFIG_RECOVERY}
+                    {msg().agentDetail.codexApprovalConfigRecovery}
                   {:else}
-                    同じ sandbox / network を再適用して新しい revision を作ると、次の turn で復旧できます。キャンセルされた指示は再送してください。
+                    {msg().agentDetail.codexGateReapplyHint}
                   {/if}
                 </p>
                 <div class="permission-actions">
                   <button class="allow" onclick={retryPermissionGate}>
-                    同じ権限値を再適用
+                    {msg().agentDetail.reapplySame}
                   </button>
                 </div>
               </div>
@@ -4210,7 +4221,7 @@
           {/if}
         {:else if permissionGateRecovery}
           <div class="permission-dock permission-gate-dock">
-            <p class="permission-tool">権限の確認で止まっています</p>
+            <p class="permission-tool">{msg().agentDetail.gateStopped}</p>
             <p class="permission-note">
               rev {permissionGateRecovery.revision}: {permissionGateRecovery.reason}{permissionGateRecovery.step === undefined ? "" : ` (${permissionGateRecovery.step})`}
             </p>
@@ -4236,11 +4247,11 @@
             <button
               type="button"
               class="dock-bar dock-bar-question"
-              title="質問ダイアログを展開"
+              title={msg().agentDetail.questionExpandTitle}
               onclick={() => (questionMinimized = false)}
             >
               <span class="dock-bar-lamp"></span>
-              回答待ち(クリックで展開)
+              {msg().agentDetail.questionWaiting}
             </button>
           {:else}
             <div class="question-dock">
@@ -4250,11 +4261,11 @@
               <button
                 class="dock-min"
                 type="button"
-                title="最小化"
-                aria-label="質問ダイアログを最小化"
+                title={msg().agentDetail.minimizeTitle}
+                aria-label={msg().agentDetail.questionMinimizeAria}
                 onclick={() => (questionMinimized = true)}></button>
               <div class="question-scroll">
-                <p class="question-title">回答を選んでください</p>
+                <p class="question-title">{msg().agentDetail.questionTitle}</p>
                 {#each question.questions as q, i (i)}
                   <fieldset class="question-item">
                     <legend>{q.header}</legend>
@@ -4287,7 +4298,7 @@
                       <span>Other</span>
                       <input
                         type="text"
-                        placeholder="自由記述"
+                        placeholder={msg().agentDetail.questionOtherPlaceholder}
                         value={qOther[i] ?? ""}
                         oninput={(e) => (qOther[i] = e.currentTarget.value)}
                       />
@@ -4296,9 +4307,9 @@
                 {/each}
                 <div class="question-actions">
                   <button class="answer" disabled={!questionReady} onclick={answerQuestion}>
-                    回答
+                    {msg().agentDetail.answer}
                   </button>
-                  <button class="cancel" onclick={cancelQuestion}>キャンセル</button>
+                  <button class="cancel" onclick={cancelQuestion}>{msg().agentDetail.cancel}</button>
                 </div>
               </div>
             </div>
@@ -4312,14 +4323,13 @@
                advertise unconditional true so this stays inert; wired for
                D5 (Free/Go plan) future without another UI rewrite. -->
           <p class="caps-hint">
-            現在の作業意図では質問に応答できません
-            (session_capabilities.user_input_modes)
+            {msg().agentDetail.dialogModeHint}
           </p>
         {/if}
         <div
           class="composer"
           role="region"
-          aria-label="指示入力 + 添付"
+          aria-label={msg().agentDetail.composerAria}
           class:drop-active={dropActive}
           ondragenter={onDragEnter}
           ondragleave={onDragLeave}
@@ -4328,7 +4338,7 @@
           {#if showSlash}
             <!-- Slash command completion (#34): pick with click or
                  arrows + Tab/Enter; Escape dismisses. -->
-            <ul class="slash-menu" role="listbox" aria-label="スラッシュコマンド候補">
+            <ul class="slash-menu" role="listbox" aria-label={msg().agentDetail.slashMenuAria}>
               {#each slashMatches as cmd, i (cmd)}
                 <li>
                   <button
@@ -4346,17 +4356,15 @@
           {/if}
           {#if resetMode}
             <p class="reset-progress" role="status" aria-live="polite">
-              新しいsessionを開始中…(mode: {resetMode}{resetRequester
-                ? ` / ${resetRequester}`
-                : ""})
+              {msg().agentDetail.resetProgress({ mode: resetMode, requester: resetRequester })}
             </p>
           {/if}
           <form class="instruct" onsubmit={sendInstruction}>
             <textarea
               class:sending={display.shown === "sending"}
               placeholder={resetMode
-                ? "session reset 中は入力できません"
-                : "指示を送る…(Ctrl+Enter で送信、/ でコマンド候補、ドラッグドロップ・ペーストで画像等ファイル送信)"}
+                ? msg().agentDetail.composerResetPlaceholder
+                : msg().agentDetail.composerPlaceholder}
               bind:value={instruction}
               bind:this={slashTextarea}
               onkeydown={onInstructionKeydown}
@@ -4373,8 +4381,8 @@
               class="attach"
               class:attach-disabled={!attachmentsSupported}
               title={attachmentsSupported
-                ? (imagesOnlyAttachments ? "画像を添付(複数可)" : "ファイル添付(画像 / テキスト / コード / PDF / Office、複数可)")
-                : "このセッションでは未対応"}
+                ? (imagesOnlyAttachments ? msg().agentDetail.attachImagesTitle : msg().agentDetail.attachFilesTitle)
+                : msg().agentDetail.attachUnsupportedTitle}
             >
               <input
                 type="file"
@@ -4391,13 +4399,13 @@
               disabled={uploading ||
                 resetMode !== null ||
                 (instruction.trim() === "" && stagedFiles.length === 0)}
-              >{uploading ? "送信中…" : "送信"}</button
+              >{uploading ? msg().agentDetail.sending : msg().agentDetail.send}</button
             >
           </form>
 
           {#if stagedFiles.length > 0}
             <div class="tray">
-              <span class="tray-count">添付 {stagedFiles.length}/{MAX_STAGED}</span>
+              <span class="tray-count">{msg().agentDetail.trayCount({ count: stagedFiles.length, max: MAX_STAGED })}</span>
               <ul class="tray-list">
                 {#each stagedFiles as entry, i (entry.id)}
                   <li class="staged">
@@ -4409,12 +4417,12 @@
                     <button
                       type="button"
                       onclick={() => removeStagedFile(i)}
-                      aria-label="添付を解除">✕</button>
+                      aria-label={msg().agentDetail.removeAttachmentAria}>✕</button>
                     {#if entry.progress > 0}
                       <div
                         class="staged-bar"
                         role="progressbar"
-                        aria-label="アップロード進捗"
+                        aria-label={msg().agentDetail.uploadProgressAria}
                         aria-valuenow={Math.round(entry.progress * 100)}
                         aria-valuemin="0"
                         aria-valuemax="100">
@@ -4430,7 +4438,7 @@
           {/if}
 
           {#if display.shown === "sending"}
-            <p class="sending-note">送信中… 応答待ち</p>
+            <p class="sending-note">{msg().agentDetail.sendingNote}</p>
           {/if}
 
           {#if actionError}
