@@ -38,6 +38,8 @@ export default defineConfig({
     // their own runner (`pnpm exec playwright test`).
     include: ["test/**/*.test.ts"],
     setupFiles: ["test/isolation.setup.ts", "test/locale.setup.ts"],
+    // Listed order: the isolation guard loads before the locale pin.
+    sequence: { setupFiles: "list" },
   },
   build: {
     outDir: "../server/priv/static",
