@@ -401,42 +401,63 @@ the call's `description` when it has one, otherwise the command itself.
 Measured in the remote heavy-test slot, with no network and no real model, by
 running the committed `bash-idle` case of
 `monitor_notification_advice_native.test.ts` with its command, its description
-or both changed inside the run (the committed file was not changed):
+or both changed inside the run (the committed file was not changed). Label
+lengths are in characters before XML escaping:
 
-| Pin | Label | Summary in the block | Summary in the SDK report | Outcome |
-|---|---|---:|---:|---|
-| 0.3.319 | description, 15 characters; command padded by 1,200 | 60 | — | bound; the report was sent |
-| 0.3.319 | no description; command padded by 1,200 | 1390 | — | bound; the report was sent |
-| 0.3.321 | description, 15 characters; command padded by 1,200 | 60 | — | bound; the report was sent |
-| 0.3.321 | no description; command padded by 700 | 890 | — | bound; the report was sent |
-| 0.3.321 | no description; command padded by 760 | 950 | — | bound; the report was sent |
-| 0.3.321 | no description; command padded by 1,200 | **844** | **1384** | **refused**: `native_completion_unproved` |
-| 0.3.321 | description of 1,200 characters; short command | **838** | **1245** | **refused**: `native_completion_unproved` |
-| 0.3.321 | Monitor with a description; command padded by 1,200 | 104 | — | bound; the report was sent |
+| Pin | Label | Outcome |
+|---|---|---|
+| 0.3.319 | description of 15; command of 1,339 behind it | bound; the report was sent |
+| 0.3.319 | no description; command of 1,339 | bound; the report was sent |
+| 0.3.321 | description of 15; command of 1,339 behind it | bound; the report was sent |
+| 0.3.321 | no description; command of 839 | bound; the report was sent |
+| 0.3.321 | no description; command of 899 | bound; the report was sent |
+| 0.3.321 | no description; command of 1,339 | **refused**: `native_completion_unproved` |
+| 0.3.321 | description of 1,000, 1,001 or 1,200; short command | **refused**: `native_completion_unproved` |
+| 0.3.321 | Monitor with a description; command padded by 1,200 | bound; the report was sent |
 
-The SDK-side length was read only where the proof refused, by a line added to
-the built proof inside the run. In both refused cases the first 200 and the
-last 200 characters of the two summaries are equal, so the block is the
-shortened one. The unchanged case passes on both pins.
+The unchanged case passes on both pins.
 
-What a refusal does: the turn the notification starts is not bound to the
-launch, so a kaoiro tool call in it is rejected. In the run the scripted
-`send_to_agent` came back as `unbound_tool_call` and no message was sent. This
-fails closed. The peer keeps running and later turns are unaffected.
+The shortened form, read from the block and, where the proof refused, from
+the SDK's report through a line added to the built proof inside the run: the
+block keeps the first 480 and the last 275 characters of the label and puts
+`\n\n... [N characters truncated] ...\n\n` between them, where N is the label
+length minus 755 (445 for a label of 1,200, 245 for 1,000, 246 for 1,001, 584
+for the command of 1,339). The SDK's report keeps the whole label. For the
+1,339-character command the block's summary is 844 characters and the
+report's 1,384. A label of 899 characters was not shortened and one of 1,000
+was, so the threshold lies between them; the entry's "over 1,000" does not
+describe the 1,000-character case. The exact threshold was not measured.
 
-What triggers it: a Bash call run in the background whose label is longer than
-1,000 characters — a command that long with no `description`, or a
-`description` that long. A short description hides a long command, and kaoiro's
-registry only accepts a Monitor call that carries one
-(`continuation_registry.ts:108`). How often a model omits the description was not measured.
+What a refusal does, as far as it was observed: the turn the notification
+starts is not bound to the launch, so a kaoiro tool call in it is rejected. In
+the run the scripted `send_to_agent` came back as `unbound_tool_call` and no
+message was sent, where the control with a short description sent one. The
+notification's turn still ended in a result that is not an error, the wrapper
+process stayed up, and an inter-agent input sent afterwards started a turn
+that also ended in a result that is not an error. The wrapper's output held
+the one line `native continuation refused: native_completion_unproved` and no
+line asking for a restart or reporting stopped admission. That is one
+scripted scene; the server's journal and a production peer were not observed.
+
+What triggers it: a Bash call run in the background whose label is about
+1,000 characters or longer — a command that long with no `description`, or a
+`description` that long. A short description hides a long command, and
+kaoiro's registry only accepts a Monitor call that carries one
+(`continuation_registry.ts:108`). How often a model omits the description was
+not measured.
 
 kaoiro's code is not changed by this bump, so the regression ships with the
-pin. Teaching the proof the shortened form needs the shortening rule measured
-first; this record measured only its effect on length and on the two ends.
+pin. The way around it is to give a background Bash call a short description.
+Teaching the proof the shortened form is a change to the continuation proof
+and is left to a separate issue.
 
-Runs: `kohaku-edb7cbe-longcmdnew-1110063127-40cd.3094e34cc5337a95`,
-`kohaku-6bdc901-longcmdold-1110063127-e24e.3141c60342b67430` and
-`kohaku-edb7cbe-longcmd2-1110063347-e366.31cb6d19b7f00275`.
+Runs, the first three on `edb7cbe0` or `6bdc9015` and the last two on the
+record's own commit, whose source is the same as `edb7cbe0`:
+`kohaku-edb7cbe-longcmdnew-1110063127-40cd.3094e34cc5337a95`,
+`kohaku-6bdc901-longcmdold-1110063127-e24e.3141c60342b67430`,
+`kohaku-edb7cbe-longcmd2-1110063347-e366.31cb6d19b7f00275`,
+`kohaku-77fc9cd-longcmd3-1110064237-47ff.b97831f750016c81` and
+`kohaku-77fc9cd-longcmd5-1110064358-3070.5bd53947721db69d`.
 
 ## Step 4: re-measurement of the input-folding premises E1 to E4
 
@@ -605,10 +626,12 @@ kaoiro makes:
   $8/$40 per Mtok with $0.20/Mtok cache reads. A peer that must stay on 5.1
   sets `claude-fable-5-1`, which the new CLI honours (turn T2).
 - **Long background-command labels.** A background Bash call whose
-  description, or whose command when it has no description, is longer than
-  1,000 characters completes into a turn that cannot call kaoiro tools:
-  `send_to_agent` and the others return `unbound_tool_call`. Give such a call
-  a short description.
+  description, or whose command when it has no description, is about 1,000
+  characters or longer completes into a turn that cannot call kaoiro tools:
+  `send_to_agent` and the others return `unbound_tool_call`. The previous pin
+  does not do this. In the one scene observed the peer was not stopped and
+  its next input ran normally. Give a background Bash call a short
+  description to avoid it.
 - **Auto mode.** Reports from background subagents that wait together are
   answered in one model call; all but the last arrive as a result with an
   empty text.
@@ -627,10 +650,14 @@ kaoiro makes:
   so their contents are unread and unclassified.
 - The categories record what was checked, not what applies. The 21 "not
   checked" placements are the absence of a check.
+- The new pin ships a measured regression: a background Bash call whose label
+  is about 1,000 characters or longer completes into a turn kaoiro refuses to
+  bind, so that turn cannot call kaoiro tools. It fails closed, and the
+  previous pin does not do it. Its exact length threshold, what the server's
+  journal records, and its behaviour on a production peer were not observed.
 - Not measured: the auto-mode shared report call, the AskUserQuestion round
   trip, a mod's tool call against the PreToolUse callback, the CLI's migration
-  of saved Fable 5.1 picks, an account without a `claude-fable-5-1` row, and
-  the exact rule by which a long label is shortened.
+  of saved Fable 5.1 picks, and an account without a `claude-fable-5-1` row.
 - The real-model turns show the SDK, the CLI and the account working for
   three model strings on one account on one day. A kaoiro peer's turn on the
   new pin is confirmed at the release, with `whoami` and a short turn for a
