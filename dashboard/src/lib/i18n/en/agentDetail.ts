@@ -87,6 +87,10 @@ export const agentDetail = {
   attentionOthers: ({ count }) =>
     `${plural(count, "other agent needs", "other agents need")} attention (click for the list)`,
   statusSheetLabel: "Status",
+  pinnedLabel: "Gauges and status line",
+  pinnedDisclosure: "Gauges and status",
+  pinnedShowAll: "Show all",
+  pinnedShowLess: "Show less",
   personaDetailAria: ({ name }) => `Show the persona details of ${name}`,
   renameTitle: "Change the display name",
   renameAria: ({ name }) => `Change the display name of ${name}`,

@@ -2,7 +2,7 @@
 title: Responsive reachability-path inventory
 description: Exhaustive display conditions, size-specific reachability paths, and scroll owners for each UI element.
 status: provisional
-last_updated: 2026-10-09
+last_updated: 2026-11-10
 related: [responsive-layout, design]
 ---
 
@@ -88,7 +88,8 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 | Blind-spot indicator (`button.blindspot`) | Another agent has a live waiting/error state or valid pending permission / question record; excludes the selected agent | Always | Always | Always (below) |
 | Previous/next agent switch | Two or more agents | Always | Always | Always |
 | Status (model / effort / permission mode) | Always | Always (left sidebar) | handle → sheet | handle → sheet |
-| Context / rate-limit meter | Capability exists | Always (left sidebar) | Within sheet | Within sheet |
+| Pinned area: context / rate-limit meters and status line ([#1074](https://github.com/sakuraiyuta/kaoiro/issues/1074)) | Each item as before: meters while the status meta panel is open (ctx by capability), status line while one is set or cleared | Always (under the agent ID) | Always (above the log) | Disclosure above the log, collapsed by default |
+| Pinned status line expand / collapse | The drawn head overflows three lines, or is expanded | Within pinned area | Within pinned area | Within pinned area (after opening) |
 | Resume (session resume) | Connected | Always (left sidebar) | Within sheet | Within sheet |
 | Stop / restore | Connected + mutually exclusive by agent state | Always (left sidebar) | Within sheet | Within sheet |
 | Clear history | Connected | Always (left sidebar) | Within sheet | Within sheet |
@@ -145,12 +146,13 @@ same layer as the element that opened it.
 | Screen | desktop | tablet | smartphone |
 |---|---|---|---|
 | Lobby | Grid and timeline independently | Same | Grid only (timeline is within sheet) |
-| AgentDetail | Status and log independently | Log only (status is within sheet) | Same as tablet |
+| AgentDetail | Status and log independently | Log only (status is within sheet; the pinned area above the log does not scroll) | Same as tablet |
 | Sheet open | — | Sheet only (background fixed) | Sheet only (background fixed) |
 
 What is prohibited is **nesting the page's principal vertical scrolling areas**.
 Local scrolling with a height limit, such as tool-output `pre`, anchor menus,
-and scrolling within `question-dock`, is not covered.
+scrolling within `question-dock`, and an expanded pinned status line, is not
+covered.
 
 For a sheet itself, only either wrapper or content is the vertical scroll owner.
 If both own it, the scroll immediately duplicates.

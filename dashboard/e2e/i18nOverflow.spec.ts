@@ -134,9 +134,10 @@ for (const width of [375, 1920]) {
   });
 }
 
-for (const width of [844, 1920]) {
+for (const width of [844, 1198, 1920]) {
   test(`detail in en at ${width}px`, async ({ browser, page }) => {
-    // Below the sidebar breakpoint the status column lives in a sheet.
+    // Below the sidebar breakpoint the status column lives in a sheet; at
+    // 1198px the pinned gauges sit side by side above the log (issue 1074).
     const prepare: Prepare = async (p) => {
       await expect(p.locator("form.instruct")).toBeVisible();
       const toggle = p.locator(".sheet .handle .toggle");

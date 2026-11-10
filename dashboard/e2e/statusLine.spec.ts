@@ -349,7 +349,19 @@ test.describe("a hostile status line on the agent card (issue 514)", () => {
 });
 
 test.describe("a hostile status line in the member detail view (issue 514)", () => {
-  const panel = (page: Page) => page.locator(".status-scroll .status-line-panel");
+  // The default 1280x720 viewport shows the pinned copy under the agent ID
+  // (issue 1074).
+  const panel = (page: Page) => page.locator('[data-placement="head"] .status-line-panel');
+
+  // Positive control for the helper: the zero-count assertions below are only
+  // meaningful while panel() finds a drawn panel.
+  test("the panel helper finds the one drawn panel", async ({ page }) => {
+    await page.goto(DETAIL);
+
+    await expect(panel(page)).toHaveCount(1);
+    await expect(panel(page)).toBeVisible();
+    await expect(panel(page).locator(".body")).not.toHaveText("");
+  });
 
   test("draws the head with real http(s) links only and loads nothing", async ({ page }) => {
     const requested = await watchRequests(page);
@@ -449,6 +461,7 @@ test.describe("a hostile status line in the member detail view (issue 514)", () 
 
     await page.goto("/e2e/harness/index.html?view=detail");
     await expect(page.locator(".status-scroll")).toBeVisible();
+    await expect(page.locator('[data-placement="head"]')).toBeVisible();
     await expect(panel(page)).toHaveCount(0);
   });
 });

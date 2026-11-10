@@ -19,6 +19,7 @@ import type {
   SetPermissionAck,
   SetPermissionPatch,
 } from "../src/lib/protocol";
+import type { StatusLineView } from "../src/lib/statusLine";
 
 export interface ReactiveAgentDetailProps {
   envelope: Envelope;
@@ -27,6 +28,8 @@ export interface ReactiveAgentDetailProps {
   /** issue #187 段階3 unit B: optional so existing callers (model/effort
    *  switch harness) are unaffected. */
   onRename?: (name: string) => Promise<void>;
+  /** issue 1074: optional so existing callers are unaffected. */
+  statusLine?: StatusLineView;
 }
 
 export function makeReactiveAgentDetailProps(

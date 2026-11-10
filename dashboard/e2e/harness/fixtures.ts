@@ -43,6 +43,8 @@ function claudeExt(extra?: Record<string, unknown>): Record<string, unknown> {
     session_capabilities: {
       supports_attachments: true,
       supports_user_input_dialog: true,
+      // Claude Code wrappers stamp it; without it the ctx row is hidden.
+      supports_context_usage: true,
     },
     ...extra,
   };

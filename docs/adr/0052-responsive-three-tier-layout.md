@@ -138,3 +138,23 @@ software keyboard is visible.
 | Fix approval UI in front of the sheet | Since a sheet opens only by explicit action, it overrides the immediately preceding intent. Make the indicator MUST instead |
 | Move the lobby timeline to a sheet for `short` | With the width lower bound at 940px, short devices (844×390, etc.) are already in the smartphone band based on width. At desktop/tablet widths, short layouts work side by side, and moving the timeline would instead narrow it to at most 300px (500×60%) |
 | Replace the blind-spot indicator with a badge only | ADR-0012 F8 decided the click action that returns to the list too; merely announcing its existence does not satisfy the decision |
+
+## Amendment (2026-11-10, AgentDetail pinned area)
+
+[Issue #1074](https://github.com/sakuraiyuta/kaoiro/issues/1074) pins the ctx
+and rate-limit gauges and the status line: under the agent ID at desktop width,
+above the log outside the status sheet at tablet width, and above the log behind
+a disclosure at smartphone width (operator decisions Q40 and Q41, 2026-11-10).
+This amendment applies to that pinned area only.
+
+- The pinned area is mounted at both places at every size, and CSS media queries
+  show exactly one. F6's common DOM and media-query layout are unchanged.
+- Two user-toggled states of the pinned area may be held in Svelte state besides
+  the sheet open flag: the status line expanded in place, and the smartphone
+  disclosure. A click sets them; viewport size never sets or changes their
+  value, initially or later. Whether the disclosure exists, and whether the open
+  flag hides anything, is decided by media queries alone.
+- Precedent: F8 already keeps the in-flow docks' user-collapsed state and rules
+  out only an initial state derived from the viewport, as a violation of F6.
+
+This adds no rule for other areas.
