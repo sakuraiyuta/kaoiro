@@ -90,10 +90,13 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [0063](adr/0063-layered-delivery-authority-and-continuations.md) | Layered inter-agent delivery, authority and continuation admission | accepted |
 | [0064](adr/0064-codex-app-server-approval-requests.md) | Codex approval requests over the app-server transport | accepted |
 | [0065](adr/0065-footer-changes-on-resumed-sessions.md) | Footer changes do not reach resumed sessions, by design | accepted |
-| [0066](adr/0066-tag-derived-lockstep-build-identity.md) | Derive lockstep build identity from immutable landing tags | accepted |
+| [0066](adr/0066-tag-derived-lockstep-build-identity.md) | Derive lockstep build identity from immutable landing tags | partly superseded |
 | [0067](adr/0067-grok-resident-acp-host.md) | Grok Build as a resident ACP engine | accepted |
 | [0068](adr/0068-director-requested-peer-session-reset.md) | Director-requested session reset of an assigned peer | accepted |
+| [0069](adr/0069-reduce-release-publication-and-native-state-protection.md) | Reduce release publication and native Codex state protection to what releases and wrapper start/resume need | accepted |
+| [0070](adr/0070-device-authorization-grant.md) | Device authorization grant for native clients | accepted |
 | [0071](adr/0071-dashboard-i18n.md) | Dashboard UI language — typed in-repo string tables, switch without reload | accepted |
+| [0072](adr/0072-rooms-single-membership-send-boundary.md) | Rooms with single membership and a server-side send boundary | accepted |
 <!-- adr-index:end -->
 
 Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh docs` (the script lives in the skill, not in this repository). Do not edit inside the markers manually.
