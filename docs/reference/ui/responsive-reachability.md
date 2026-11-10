@@ -154,9 +154,9 @@ Local scrolling with a height limit, such as tool-output `pre`, anchor menus,
 scrolling within `question-dock`, and an expanded pinned status line, is not
 covered.
 
-On a landscape screen lower than 320px, the log can shrink to zero height while
-the pinned status line is expanded below 1199px wide; collapsing it gives the
-height back.
+On a landscape screen 390px high or lower, the log can shrink to zero height
+while the pinned area is open with its status line expanded; collapsing it gives
+the height back.
 
 For a sheet itself, only either wrapper or content is the vertical scroll owner.
 If both own it, the scroll immediately duplicates.
