@@ -14,6 +14,7 @@ import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import { INTER_AGENT_TOOL_FQN } from "@kaoiro/agent-common";
 import type { WrapperConfig } from "@kaoiro/agent-common";
+import { completionSummary } from "./fixtures/completion_summaries.js";
 
 const config: WrapperConfig = {
   agent_id: "test.agent",
@@ -459,6 +460,32 @@ describe("AgentHost — escaped notification text", () => {
       prompt: notePrompt(task, { summary: "Background command \"a<b\" completed (exit code 0)" }),
     });
     expectRejected(outcome);
+  });
+});
+
+describe("AgentHost — completion summaries the CLI shortens", () => {
+  // The pair was captured from a Bash completion; the Workflow rows apply the
+  // same derived form to the Workflow comparison, which was not measured.
+  const { sdk, shown } = completionSummary("bash-1001");
+  const bash: Task = { ...BASH, summary: sdk };
+  const workflow: Task = { ...WORKFLOW, summary: sdk };
+  const miscounted = shown.replace("[201 characters", "[202 characters");
+
+  it.each([
+    { name: "a Bash summary in the shortened form", summary: shown, admitted: true },
+    { name: "a Bash summary shortened with another count", summary: miscounted, admitted: false },
+  ])("judges $name", async ({ summary, admitted }) => {
+    expect(summary).not.toBe(escape(sdk));
+    const outcome = await admit({ mode: "fold", frames: [bashStarted(bash, true), notified(bash)], prompt: notePrompt(bash, { summary }) });
+    if (admitted) expectAdmitted(outcome, "fold"); else expectRejected(outcome);
+  });
+
+  it.each([
+    { name: "a Workflow summary in the shortened form", summary: shown, admitted: true },
+    { name: "a Workflow summary shortened with another count", summary: miscounted, admitted: false },
+  ])("judges $name", async ({ summary, admitted }) => {
+    const outcome = await admit({ mode: "idle", frames: workflowLaunch(workflow), late: workflowDone(workflow), prompt: notePrompt(workflow, { summary, result: "{}" }) });
+    if (admitted) expectAdmitted(outcome, "idle"); else expectRejected(outcome);
   });
 });
 

@@ -43,7 +43,6 @@ import {
   setDefaultImageDownsizer,
 } from "../src/upload.js";
 import { buildChunkPayload } from "./helpers.js";
-import { completionSummary } from "./fixtures/completion_summaries.js";
 
 // Native results carry a run-wide delivery sequence; a live interval only
 // accepts a result whose index advanced.
@@ -5228,34 +5227,6 @@ describe("AgentHost — SDK notification reply origin", () => {
     host.close();
     expect(starts).toHaveLength(admitted ? 2 : 1);
     expect((await bound as { token?: string } | undefined)?.token).toBe(admitted ? starts[1] : undefined);
-  });
-
-  it.each([
-    { shape: "the CLI's shortened form", forge: (shown: string) => shown, admitted: true },
-    { shape: "a shortened form with another count", forge: (shown: string) => shown.replace("[201 characters", "[202 characters"), admitted: false },
-  ])("matches a long Bash notification summary shown as $shape", async ({ forge, admitted }) => {
-    const { sdk, shown } = completionSummary("bash-1001");
-    const starts: string[] = [];
-    const signal = { signal: new AbortController().signal };
-    const queryFn = makeQueryFn(({ prompt, options }) => {
-      async function* gen(): AsyncGenerator<SDKMessage, void> {
-        await prompt[Symbol.asyncIterator]().next();
-        yield msg({ type: "system", subtype: "init", session_id: "s1" });
-        yield msg({ type: "system", subtype: "task_started", session_id: "s1", task_id: "task-1", task_type: "local_bash", is_backgrounded: true });
-        yield result("success", { result: "WAITING" });
-        yield msg({ type: "system", subtype: "task_notification", session_id: "s1", task_id: "task-1", tool_use_id: "parent-1", status: "completed", output_file: "/tmp/task-1", summary: sdk });
-        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
-          hook_event_name: "UserPromptSubmit", session_id: "s1", prompt_id: "notification",
-          prompt: `<task-notification><task-id>task-1</task-id><tool-use-id>parent-1</tool-use-id><output-file>/tmp/task-1</output-file><status>completed</status><summary>${forge(shown)}</summary></task-notification>`,
-        } as never, undefined, signal);
-        yield result("success", { result: "done", origin: { kind: "task-notification" } });
-      }
-      return asQuery(gen());
-    });
-    const host = new AgentHost(config, { onState: () => {}, queryFn, onTurnStart: ({ turnToken }) => starts.push(turnToken) });
-    await host.run("launch");
-    host.close();
-    expect(starts).toHaveLength(admitted ? 2 : 1);
   });
 
   it("does not let a late notification result retire an already yielded wrapper input", async () => {
