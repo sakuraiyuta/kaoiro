@@ -2,7 +2,7 @@
 title: Responsive reachability-path inventory
 description: Exhaustive display conditions, size-specific reachability paths, and scroll owners for each UI element.
 status: provisional
-last_updated: 2026-11-10
+last_updated: 2026-11-11
 related: [responsive-layout, design]
 ---
 
@@ -90,21 +90,31 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 | Status (model / effort / permission mode) | Always | Always (left sidebar) | handle → sheet | handle → sheet |
 | Pinned area: context / rate-limit meters and status line ([#1074](https://github.com/sakuraiyuta/kaoiro/issues/1074)) | Each item as before: meters while the status meta panel is open (ctx by capability), status line while one is set or cleared | Always (under the agent ID; above the log when 699px high or less) | Always (above the log) | Disclosure above the log, collapsed by default |
 | Pinned status line expand / collapse | The drawn head overflows three lines, or is expanded | Within pinned area | Within pinned area | Within pinned area (after opening) |
-| Resume (session resume) | Connected | Always (left sidebar) | Within sheet | Within sheet |
-| Stop / restore | Connected + mutually exclusive by agent state | Always (left sidebar) | Within sheet | Within sheet |
-| Clear history | Connected | Always (left sidebar) | Within sheet | Within sheet |
+| Detail tabs: engine / kaoiro ([#1075](https://github.com/sakuraiyuta/kaoiro/issues/1075)) | Connected; the last opened tab is one global setting (engine by default). Without a connection there is no tab bar and both panels are shown | Top of the left sidebar below the pinned area | Top of the sheet | Top of the sheet |
+| Engine tab: status rows (model, effort, switch notice, cwd, engine, grok policy, resume drift, work intent, write scope, permission switches and requests, fast) | Each row as before | Engine tab (left sidebar) | Engine tab (sheet) | Engine tab (sheet) |
+| Kaoiro tab: session history, delivery policy, wrapper build, inter-agent delivery | Each item as before | Kaoiro tab (left sidebar) | Kaoiro tab (sheet) | Kaoiro tab (sheet) |
+| Resume (session resume) | Connected | Engine tab (left sidebar) | Engine tab (sheet) | Engine tab (sheet) |
+| Stop / restore | Connected + mutually exclusive by agent state | Engine tab (left sidebar) | Engine tab (sheet) | Engine tab (sheet) |
+| Delete | Connected + disconnected agent | Engine tab (left sidebar), below restore | Engine tab (sheet) | Engine tab (sheet) |
+| Clear history | Connected | Kaoiro tab (left sidebar) | Kaoiro tab (sheet) | Kaoiro tab (sheet) |
 | Resume-session candidates (`ul.resume-menu`) | During resume operation | Within sidebar | Within sheet | Within sheet |
 | Conversation log | Always | Always | Always | Always |
 | In-log disclosure / load earlier / retry | Relevant entry exists | Within log | Same | Same |
-| Interrupt / delete | Connected + mutually exclusive by agent state | Between log and composer | Same | Same |
+| Interrupt | Connected + running agent | Between log and composer | Same | Same |
 | Composer | Always | Always (fixed to bottom) | Always | Always |
 | Attachment / slash menu | From composer | On composer | Same | Same |
 | Permission dock / question dock | Pending | Between log and composer | Same | Same |
 | Tasklist float | After [#178](https://github.com/sakuraiyuta/kaoiro/issues/178) is implemented | Upper right of log | Same | Same |
 
-`interrupt` / `delete` and the two docks are **in-flow elements** placed between
-the log and composer within `.main`, not floating layers. A sheet is in front of
-them, so they are covered while it is open.
+`interrupt` and the two docks are **in-flow elements** placed between the log
+and composer within `.main`, not floating layers. A sheet is in front of them,
+so they are covered while it is open.
+
+Both detail tab panels stay in the DOM and the inactive one is `hidden`, so it
+is neither displayed nor reachable with Tab. A notice in the hidden tab (switch
+notice, resume drift, permission request error in the engine tab; lost or
+uncertain deliveries in the kaoiro tab) is read by opening that tab; the tab
+itself carries no mark.
 
 Because the Tasklist float remains unimplemented in #178, its row is a
 conditional target that applies after that issue is implemented and is not part
