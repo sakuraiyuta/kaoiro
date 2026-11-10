@@ -5,6 +5,13 @@ defmodule KaoiroServer.PeerSessionResetReplyReasons do
   path adds authorization and conversation refusals that the agent-self
   path never produces; folding them into the self vocabulary would let a
   self reset reply with a reason that cannot apply to it.
+
+  `room_mismatch` and `rooms_unavailable` carry the same-room boundary
+  ([issue #1078](https://github.com/sakuraiyuta/kaoiro/issues/1078)); they
+  are the words the send path already answers, so a director reads one
+  meaning for both refusals. They are not authority failures: the work
+  grant stays valid, which is why they are separate from
+  `reset_not_authorized` (ADR-0068 D1).
   """
 
   @reasons %{
@@ -15,7 +22,9 @@ defmodule KaoiroServer.PeerSessionResetReplyReasons do
     agent_in_conversation: "agent_in_conversation",
     agent_busy: "agent_busy",
     session_reset_pending: "session_reset_pending",
-    runner_unavailable: "runner_unavailable"
+    runner_unavailable: "runner_unavailable",
+    room_mismatch: "room_mismatch",
+    rooms_unavailable: "rooms_unavailable"
   }
 
   @type value :: String.t()

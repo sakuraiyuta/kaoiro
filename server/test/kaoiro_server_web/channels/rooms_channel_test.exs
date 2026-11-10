@@ -13,11 +13,13 @@ defmodule KaoiroServerWeb.RoomsChannelTest do
     DeliveryStates,
     PlannedDisconnects,
     Rooms,
+    SessionLifecycleEvents,
+    SessionResets,
     TestTimeouts,
     WorkStore
   }
 
-  alias KaoiroServerWeb.{AgentsChannel, WrapperChannel}
+  alias KaoiroServerWeb.{AgentId, AgentsChannel, WrapperChannel}
 
   @operator %{"kind" => "user", "id" => "operator"}
   @management ~w(create_room rename_room delete_room move_agent preview_room_move preview_room_delete)
@@ -805,6 +807,153 @@ defmodule KaoiroServerWeb.RoomsChannelTest do
       File.rm!(path)
       blue = create_room(operator, "Blue")
       assert {:ok, %{rooms: %{^blue => "Blue"}}} = Rooms.snapshot()
+    end
+  end
+
+  # The same-room rule on `peer_session_reset_request` (issue #1078). Every
+  # case shares one setup that subscribes to both topics the reset reaches, so
+  # an absence assertion cannot pass for want of a subscription, and the
+  # same-room control asserts presence at the same four observation points.
+  describe "peer session reset across rooms" do
+    defp reset_target(agent_id) do
+      socket = peer(agent_id)
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        SessionResets.delete(agent_id)
+      end)
+
+      ref =
+        push(
+          socket,
+          "envelope",
+          frame(agent_id, "state_change", %{}, %{
+            "session_capabilities" => %{
+              "supports_session_reset" => true,
+              "session_reset_modes" => ["new", "clear"]
+            }
+          })
+          |> Map.put("session_id", "sess-prev")
+        )
+
+      assert_reply ref, :ok
+      socket
+    end
+
+    defp reset_setup(ctx) do
+      director = peer(ctx.a)
+      _target = reset_target(ctx.b)
+      operator = client(:operator)
+      @endpoint.subscribe("agents:lobby")
+      @endpoint.subscribe("runner:#{AgentId.host_id_from(ctx.b)}")
+      %{director: director, operator: operator}
+    end
+
+    defp grant(director_id, assignee_id) do
+      assert {:ok, %{work: work}} =
+               WorkStore.apply(
+                 @operator,
+                 %{
+                   "op" => "assign",
+                   "operation_id" => opid(),
+                   "title" => "issue 1078",
+                   "assignee" => assignee_id,
+                   "director" => %{"kind" => "agent", "id" => director_id},
+                   "requires_verdict" => false
+                 },
+                 %{operator: true}
+               )
+
+      work
+    end
+
+    defp request_reset(socket, target_id, work, overrides \\ %{}) do
+      push(
+        socket,
+        "peer_session_reset_request",
+        Map.merge(
+          %{
+            "version" => "0",
+            "agent_id" => target_id,
+            "mode" => "new",
+            "work_id" => work.work_id,
+            "expected_authority_epoch" => work.authority_epoch
+          },
+          overrides
+        )
+      )
+    end
+
+    defp assert_reset_observed(target_id) do
+      assert_broadcast "session_reset_started", %{"agent_id" => ^target_id}
+      assert_broadcast "reset_session", %{"agent_id" => ^target_id}
+      assert [%{kind: "session_reset_started"}] = SessionLifecycleEvents.list_for_agent(target_id)
+      assert SessionResets.pending?(target_id)
+    end
+
+    defp refute_reset_observed(target_id) do
+      refute_broadcast "session_reset_started", _
+      refute_broadcast "reset_session", _
+      assert SessionLifecycleEvents.list_for_agent(target_id) == []
+      refute SessionResets.pending?(target_id)
+    end
+
+    test "a same-room reset succeeds and is observed at every point", ctx do
+      %{director: director} = reset_setup(ctx)
+      work = grant(ctx.a, ctx.b)
+
+      ref = request_reset(director, ctx.b, work)
+      assert_reply ref, :ok, %{request_id: request_id}
+      assert is_binary(request_id)
+      assert_reset_observed(ctx.b)
+    end
+
+    test "a target moved before the grant is refused with room_mismatch", ctx do
+      %{director: director, operator: operator} = reset_setup(ctx)
+      move(operator, ctx.b, create_room(operator, "Away"))
+      work = grant(ctx.a, ctx.b)
+
+      ref = request_reset(director, ctx.b, work)
+      assert_reply ref, :error, %{reason: "room_mismatch"}
+      refute_reset_observed(ctx.b)
+    end
+
+    test "a director moved after the grant is refused with room_mismatch", ctx do
+      %{director: director, operator: operator} = reset_setup(ctx)
+      work = grant(ctx.a, ctx.b)
+      move(operator, ctx.a, create_room(operator, "Away"))
+
+      ref = request_reset(director, ctx.b, work)
+      assert_reply ref, :error, %{reason: "room_mismatch"}
+      refute_reset_observed(ctx.b)
+      # The move leaves the grant active, so this is not an authority failure.
+      assert %{state: "active"} = WorkStore.all()[work.work_id]
+    end
+
+    test "authority is decided before rooms", ctx do
+      %{director: director, operator: operator} = reset_setup(ctx)
+      work = grant(ctx.a, ctx.b)
+      move(operator, ctx.b, create_room(operator, "Away"))
+
+      ref =
+        request_reset(director, ctx.b, work, %{
+          "expected_authority_epoch" => work.authority_epoch + 1
+        })
+
+      assert_reply ref, :error, %{reason: "reset_not_authorized"}
+      refute_reset_observed(ctx.b)
+    end
+
+    test "an unreadable rooms store refuses with rooms_unavailable", ctx do
+      %{director: director} = reset_setup(ctx)
+      work = grant(ctx.a, ctx.b)
+      rooms = Process.whereis(Rooms)
+      :sys.suspend(rooms)
+
+      ref = request_reset(director, ctx.b, work)
+      assert_reply ref, :error, %{reason: "rooms_unavailable"}, slow()
+      :sys.resume(rooms)
+      refute_reset_observed(ctx.b)
     end
   end
 end

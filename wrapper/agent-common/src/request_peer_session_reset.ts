@@ -32,7 +32,7 @@ export const REQUEST_PEER_SESSION_RESET_TOOL_FQN =
 const PEER_SESSION_RESET_MODES = ["new", "clear"] as const;
 
 const REQUEST_PEER_SESSION_RESET_DESCRIPTION =
-  "As the DIRECTOR of an active work item, start a peer's session over from empty, at once. REQUIRED arguments: `agent_id` (the assignee of that work), `mode` (\"new\" keeps the operator's visible transcript and begins a fresh session below it; \"clear\" also blanks the pane), `work_id` and `expected_authority_epoch`. Take `work_id` and `expected_authority_epoch` from the result of YOUR OWN work operations (`work_control_result` / `work_status`), never from `list_agents` or from memory; the server accepts the request only while you are the director of that work, `agent_id` is its assignee, the work is active, and the epoch still matches (a transfer or override changes it). Every authority failure comes back as the single word `reset_not_authorized`. Before calling: the target must already have written down what it needs (a file, WORKLOG, an issue), because the new session starts with NO memory of its conversation; put the context it needs into your NEXT request to it; its status line survives the reset. The target must be idle: a busy target is refused with `agent_busy` (nothing is interrupted or queued), so use yield on its running work first and retry once it is idle. A target in an open conversation with a third agent is refused with `agent_in_conversation`, and one whose engine cannot reset with `unsupported_session_reset`. By default (`wait: true`) the call blocks for up to about 70 seconds until the reset has completed or failed and returns `{ request_id, agent_id, mode, work_id, outcome: \"completed\" | \"failed\" | \"timeout\", reason?, to_session_id? }`; `timeout` means no result arrived in time and the reset may still finish. With `wait: false` it returns `outcome: \"accepted\"` right away. A result that arrives after the call has returned is delivered to you as a message starting `Peer session reset completed:` or `Peer session reset failed:`. Optional `reason`: one sentence on why, shown to the operator.";
+  "As the DIRECTOR of an active work item, start a peer's session over from empty, at once. REQUIRED arguments: `agent_id` (the assignee of that work), `mode` (\"new\" keeps the operator's visible transcript and begins a fresh session below it; \"clear\" also blanks the pane), `work_id` and `expected_authority_epoch`. Take `work_id` and `expected_authority_epoch` from the result of YOUR OWN work operations (`work_control_result` / `work_status`), never from `list_agents` or from memory; the server accepts the request only while you are the director of that work, `agent_id` is its assignee, the work is active, and the epoch still matches (a transfer or override changes it). Every authority failure comes back as the single word `reset_not_authorized`. Before calling: the target must already have written down what it needs (a file, WORKLOG, an issue), because the new session starts with NO memory of its conversation; put the context it needs into your NEXT request to it; its status line survives the reset. The target must be idle: a busy target is refused with `agent_busy` (nothing is interrupted or queued), so use yield on its running work first and retry once it is idle. A target in an open conversation with a third agent is refused with `agent_in_conversation`, and one whose engine cannot reset with `unsupported_session_reset`. The target must also be in YOUR room: a cross-room request is refused with `room_mismatch` and changes nothing, and only an operator moves agents. By default (`wait: true`) the call blocks for up to about 70 seconds until the reset has completed or failed and returns `{ request_id, agent_id, mode, work_id, outcome: \"completed\" | \"failed\" | \"timeout\", reason?, to_session_id? }`; `timeout` means no result arrived in time and the reset may still finish. With `wait: false` it returns `outcome: \"accepted\"` right away. A result that arrives after the call has returned is delivered to you as a message starting `Peer session reset completed:` or `Peer session reset failed:`. Optional `reason`: one sentence on why, shown to the operator.";
 
 const REQUEST_PEER_SESSION_RESET_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -157,8 +157,8 @@ export function validateRequestPeerSessionResetInput(
 }
 
 /** What each closed reply reason tells the model to do next. Only the
- *  server's eight words plus the transport's own collapse are listed; any
- *  other message is a transport failure and gets no hint. */
+ *  server's closed vocabulary plus the transport's own collapse are listed;
+ *  any other message is a transport failure and gets no hint. */
 const REFUSAL_HINTS: Readonly<Record<string, string>> = {
   reset_not_authorized:
     "The work grant does not allow this request. Re-read the work with work_status and check that you direct it, the target is its assignee, it is active, and the epoch is current.",
@@ -174,6 +174,10 @@ const REFUSAL_HINTS: Readonly<Record<string, string>> = {
   session_reset_pending:
     "The target already has a reset in progress, and this call was not accepted. Do not request another; check the target's state (for example with list_agents). Only the original requester is told how that reset ends, not this call.",
   runner_unavailable: "The target's runner is not reachable. Nothing was changed.",
+  room_mismatch:
+    "The target is in a different room. Nothing was changed. Only an operator moves agents, so ask the operator instead of retrying; the work grant itself is still valid.",
+  rooms_unavailable:
+    "The server could not read the rooms for this one request. Nothing was changed; it may be retried.",
   unknown_error: "The server's answer was not understood. Do not assume anything happened.",
 };
 

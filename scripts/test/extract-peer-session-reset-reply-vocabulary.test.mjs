@@ -47,6 +47,8 @@ test("extracts the transport peer session reset reply vocabulary", () => {
     "agent_busy",
     "agent_in_conversation",
     "reset_not_authorized",
+    "room_mismatch",
+    "rooms_unavailable",
     "runner_unavailable",
     "session_reset_pending",
     "unknown_agent",

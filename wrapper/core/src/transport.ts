@@ -523,6 +523,8 @@ const PEER_SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set([
   "agent_busy",
   "session_reset_pending",
   "runner_unavailable",
+  "room_mismatch",
+  "rooms_unavailable",
 ]);
 
 /** Upper bound on how long `requestPeerSessionReset(wait)` waits for the

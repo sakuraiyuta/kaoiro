@@ -1411,6 +1411,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- require_reset_capability(envelope, mode),
          :ok <- require_no_third_party_conversation(target, requester["id"]),
          {:ok, state} <- fetch_kaoiro_state(envelope),
+         # Rooms after the authority reads and immediately before the first
+         # side effect: ADR-0068 D1 keeps every authority failure on
+         # `reset_not_authorized`, and a move in flight is already saved by
+         # the `ConversationStates` read above (ADR-0072 amendment).
+         :ok <- Rooms.same_room(requester["id"], target),
          {:ok, request_id, prev_sid} <-
            AgentAcceptance.run(target, :peer_session_reset, fn ->
              SessionResets.check_and_acquire(

@@ -1586,6 +1586,8 @@ describe("ServerLink — requestPeerSessionReset (issue #677)", () => {
     "agent_busy",
     "session_reset_pending",
     "runner_unavailable",
+    "room_mismatch",
+    "rooms_unavailable",
   ])("passes the closed reply reason %s through", async (reason) => {
     const { link } = negotiated();
     const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
@@ -1593,7 +1595,7 @@ describe("ServerLink — requestPeerSessionReset (issue #677)", () => {
     await expect(pending).rejects.toThrow(reason);
   });
 
-  it("collapses a reason outside the eight words to unknown_error", async () => {
+  it("collapses a reason outside the closed vocabulary to unknown_error", async () => {
     for (const payload of [
       { reason: "rm -rf / was executed" },
       { reason: "" },

@@ -947,7 +947,9 @@ export interface PeerSessionResetRequest {
 
 /** Closed reply vocabulary of `peer_session_reset_request`. One word for
  *  every authority failure so the reply never discloses which condition
- *  (grant, director, assignee, epoch) failed. Server source of truth:
+ *  (grant, director, assignee, epoch) failed. `room_mismatch` and
+ *  `rooms_unavailable` carry the same-room boundary instead, which is not
+ *  authority: the grant stays valid. Server source of truth:
  *  `KaoiroServer.PeerSessionResetReplyReasons`. */
 export type PeerSessionResetErrorReason =
   | "reset_not_authorized"
@@ -957,7 +959,9 @@ export type PeerSessionResetErrorReason =
   | "agent_in_conversation"
   | "agent_busy"
   | "session_reset_pending"
-  | "runner_unavailable";
+  | "runner_unavailable"
+  | "room_mismatch"
+  | "rooms_unavailable";
 
 /** server -> wrapper, pushed to the REQUESTER's topic (issue #677) when a
  *  director-origin reset reaches its terminal state, independent of any

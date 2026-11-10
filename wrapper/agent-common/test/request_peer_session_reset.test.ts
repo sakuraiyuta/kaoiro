@@ -102,6 +102,8 @@ describe("request_peer_session_reset descriptor", () => {
     "agent_busy",
     "session_reset_pending",
     "runner_unavailable",
+    "room_mismatch",
+    "rooms_unavailable",
     "unknown_error",
   ])("surfaces the refusal %s as the tool error", async (reason) => {
     const result = await tool(new Error(reason)).descriptor.handler(VALID);
@@ -129,11 +131,35 @@ describe("request_peer_session_reset descriptor", () => {
       "agent_busy",
       "session_reset_pending",
       "runner_unavailable",
+      "room_mismatch",
+      "rooms_unavailable",
       "unknown_error",
     ]) {
       const result = await tool(new Error(reason)).descriptor.handler(VALID);
       expect(result.content[0]!.text, reason).not.toMatch(/reach you/i);
     }
+  });
+
+  it("sends a cross-room refusal to the operator, not to a retry", async () => {
+    const result = await tool(new Error("room_mismatch")).descriptor.handler(VALID);
+    const text = result.content[0]!.text;
+    expect(result.isError).toBe(true);
+    expect(text).toContain("different room");
+    expect(text).toContain("operator");
+    // The grant is still valid, so work_status is not where to look.
+    expect(text).toContain("still valid");
+    // Retrying is named only to rule it out, and yielding does not apply.
+    expect(text).toContain("instead of retrying");
+    expect(text).not.toMatch(/yield/i);
+  });
+
+  it("lets the director retry when the rooms store did not answer", async () => {
+    const result = await tool(new Error("rooms_unavailable")).descriptor.handler(VALID);
+    const text = result.content[0]!.text;
+    expect(result.isError).toBe(true);
+    expect(text).toContain("could not read the rooms");
+    expect(text).toContain("retried");
+    expect(text).not.toMatch(/yield/i);
   });
 
   it("tells the director to yield first when the target is busy", async () => {
@@ -185,6 +211,7 @@ describe("request_peer_session_reset descriptor", () => {
     expect(text).toContain("agent_busy");
     expect(text).toContain("yield");
     expect(text).toContain("70 seconds");
+    expect(text).toContain("room_mismatch");
     expect(descriptor.inputSchema.required).toEqual([
       "agent_id",
       "mode",
