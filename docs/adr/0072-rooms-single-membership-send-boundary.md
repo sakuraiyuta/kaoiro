@@ -6,7 +6,7 @@ opened: 2026-11-10
 supersedes: []
 superseded_by: null
 related_specs: [rooms, conversations, directory]
-related_adrs: [30, 50, 68]
+related_adrs: [30, 50, 68, 73]
 ---
 
 # ADR-0072 — Rooms with single membership and a server-side send boundary
@@ -125,3 +125,14 @@ Three points differ from decision 3.
 
 Decision 7 (rooms and per-pair permissions compose by AND) and the
 consequences above are unchanged.
+
+## Amendment (2026-11-10, the room a new agent starts in)
+
+Room selection at launch, which the Context above places in a later phase,
+is recorded in [ADR-0073](0073-initial-room-at-launch.md)
+([issue #1081](https://github.com/sakuraiyuta/kaoiro/issues/1081)). No
+decision of this record is replaced: decision 1 still makes the absence of a
+membership mean the lobby, and decision 4 still routes every membership change
+through one `ConversationStates` call. What changes is only **when** an
+agent's first membership is written — before its launch reaches the runner,
+rather than by an operator's move afterwards.

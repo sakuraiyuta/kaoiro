@@ -98,7 +98,8 @@ Related security topics: [Security boundaries](../../architecture/security-bound
 ### Rooms
 
 - MUST: Decide the same-room rule on the server, from the server's own
-  membership record. A room named in a payload or `ext` is never read
+  membership record. A room named by a **wrapper** — in a payload or in
+  `ext` — is never read
   ([rooms](../inter-agent/rooms.md#the-same-room-rule)). It governs
   inter-agent messages and the director-requested peer session reset
   ([issue #1078](https://github.com/sakuraiyuta/kaoiro/issues/1078)); for the
@@ -106,7 +107,11 @@ Related security topics: [Security boundaries](../../architecture/security-bound
   states.
 - MUST: Gate room management (`create_room`, `rename_room`, `delete_room`,
   `move_agent` and the two previews) on the operator role at the channel
-  entry.
+  entry, and likewise the `room_id` of a launch — the one request whose room
+  the server does read, because it comes from the operator rather than from
+  an agent ([ADR-0073](../../adr/0073-initial-room-at-launch.md),
+  [issue #1081](https://github.com/sakuraiyuta/kaoiro/issues/1081)). It is
+  consumed by the server and never forwarded to the runner or the wrapper.
 - Rooms prevent a message from reaching the wrong team. They are not a
   boundary against a hostile agent: when the store cannot be read at start,
   every agent is in the lobby.

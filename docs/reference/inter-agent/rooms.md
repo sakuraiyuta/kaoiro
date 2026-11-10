@@ -24,9 +24,11 @@ decision record is [ADR-0072](../../adr/0072-rooms-single-membership-send-bounda
   follows the agent display name rule (at most 64 grapheme clusters and 256
   UTF-8 bytes, no control characters, not blank). Names need not be unique;
   the id identifies a room.
-- An agent with no stored membership is in the lobby. A new agent, and every
-  agent of an installation that has never used rooms, is therefore in the
-  lobby, and with no room in use the server behaves as it did before rooms.
+- An agent with no stored membership is in the lobby. Every agent of an
+  installation that has never used rooms is therefore in the lobby, and with
+  no room in use the server behaves as it did before rooms. A **new** agent
+  starts in the room its launch named ([the room a launch
+  names](#the-room-a-launch-names)).
 - Membership is keyed by `agent_id`. It survives a disconnect, a reconnect, a
   session reset, a restore under the same id, and a server restart.
   `delete_agent` removes it.
@@ -137,6 +139,34 @@ The two preview requests answer how many conversations a move or delete would
 close if it ran now. The number is advisory: the real request decides again,
 and its reply carries the count it closed.
 
+### The room a launch names
+
+A launch (`spawn`) may carry `room_id`, and the new agent starts there
+([ADR-0073](../../adr/0073-initial-room-at-launch.md)). The operator picks it
+in the launch dialog, in both the new and the resume mode: the resume mode
+allocates a new agent id, which has no stored room to keep. A `restore` or a
+`resume_session` of an **existing** agent id carries no room and leaves the
+stored membership untouched; changing it is a move, with its preview.
+
+- An absent `room_id`, or one naming the lobby, reads and writes nothing. The
+  lobby is the absence of a membership, so a launch into it does not depend on
+  the rooms store at all.
+- A `room_id` that is present but not a usable string is refused
+  (`invalid_payload`) rather than quietly placed in the lobby.
+- The room must exist. It is checked before anything is recorded, so a typo
+  leaves nothing behind, and the save decides again under a room deleted in
+  between.
+- The membership is saved, and the `rooms_snapshot` broadcast, **before** the
+  launch reaches the runner. The agent's own first registration therefore
+  never reads the lobby.
+- The reply carries `room_id` as a plain string (`"lobby"` when none was
+  named). A server that does not support this answers no `room_id`, which is
+  how a client can tell its choice was dropped. The bundled dashboard does
+  not compare it: it always runs the same version as its server.
+- While a launch is in flight the identity can exist before its membership, so
+  a dashboard and `list_agents` may briefly show a starting agent in the
+  lobby.
+
 ## Notices
 
 - **Conversation closed.** The existing server notice (`kind: "done"`,
@@ -179,6 +209,9 @@ The same-room rule reads memory only.
 | The file is not a DETS file at start | It is removed and created again, with a warning. |
 | A stored room or membership is malformed, or names a room that does not exist | It is dropped with a warning; that agent is in the lobby. Valid records are kept. |
 | The store does not answer a save within 2,000 ms, the tracker does not answer within 5,000 ms, or a notice fails | The reply is `room_change_unconfirmed`. The change may or may not have been applied. |
+| A launch names a room and the store cannot read or save it | The launch is refused and the runner is never told. The identity is recorded by then, so `delete_agent` clears it along with a membership an unconfirmed save may still write afterwards. |
+| A launch names a room and only the snapshot broadcast fails | The launch continues: the membership is saved and the agent is in the right room. Rejoin for a fresh snapshot. |
+| A launch names no room, or the lobby | No store is read or written, so a stalled store does not refuse it. |
 
 A failed save is not a durable rollback: an insert that reached the file
 before the sync failed is what the next server start reads.
