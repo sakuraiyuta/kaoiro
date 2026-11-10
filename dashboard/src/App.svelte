@@ -882,7 +882,7 @@
   // cards live in a separate collapsed section and are intentionally absent
   // from the ring, matching the existing detail header's live-agent strip.
   const navigableAgentIds = $derived(
-    sorted.map((envelope) => envelope.agent_id),
+    liveGroups.flatMap((group) => group.items.map((envelope) => envelope.agent_id)),
   );
   const previousAgentId = $derived(
     selected === null

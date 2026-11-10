@@ -1,6 +1,7 @@
 // Issue #537 Phase 0: the dashboard's reading of the rooms. The three states of
 // the snapshot (none, complete, incomplete) are the load-bearing part: a client
 // must never show an agent in the lobby when the server did not say so.
+import "./isolation.setup";
 import { describe, expect, it } from "vitest";
 import { setLocale } from "../src/lib/i18n/index.svelte";
 import {

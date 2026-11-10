@@ -37,6 +37,8 @@ export const rooms = {
   previewNote:
     "件数は確認した時点の目安です。実行までに変わることがあります。",
   previewLoading: "閉じる会話の件数を確認しています…",
+  previewFailed: (p: { code: string }) =>
+    `閉じる会話の件数を確認できません (${p.code})。閉じて開き直してください。`,
   reload: "読み直す",
   movedNotice: (p: { name: string; room: string; closed: number }) =>
     `${p.name} を ${p.room} へ移動しました。閉じた会話は ${p.closed} 件です。`,

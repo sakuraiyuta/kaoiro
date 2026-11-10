@@ -122,8 +122,9 @@ describe("move", () => {
     const api = makeApi();
     api.previewRoomMove.mockRejectedValueOnce(new Error("rooms_unavailable"));
     await open(MOVE, api);
-    await vi.waitFor(() => expect(text()).toContain("サーバが部屋の情報を保存または読み取れませんでした"));
+    await vi.waitFor(() => expect(text()).toContain("閉じる会話の件数を確認できません (rooms_unavailable)"));
     expect(button("移動する")!.disabled).toBe(true);
+    expect(button("読み直す")).toBeUndefined();
   });
 });
 

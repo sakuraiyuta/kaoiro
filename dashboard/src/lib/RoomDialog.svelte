@@ -152,7 +152,7 @@
     {#if preview.kind === "loading"}
       <p role="status">{msg().rooms.previewLoading}</p>
     {:else if preview.kind === "error"}
-      <p role="alert" class="error">{roomErrorText(preview.code)}</p>
+      <p role="alert" class="error">{msg().rooms.previewFailed({ code: preview.code })}</p>
     {:else if preview.kind === "ok"}
       {#if request.mode === "delete"}
         <p>{msg().rooms.deleteMembers({ n: preview.members, lobby: lobbyName })}</p>
