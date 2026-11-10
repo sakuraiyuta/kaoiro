@@ -26,7 +26,7 @@ const mask = (block: string) => block.replace(/<(task-id|tool-use-id|output-file
 
 // The built CLI constructs the real Host, transport, SDK and bundled CLI.
 // Only external provider/Phoenix services are fixtures; native text is never injected.
-it.each(["completion-response", "event-inform", "setting-absent", "gate-absent", "bash-idle", "monitor-fold"] as const)(
+it.each(["completion-response", "event-inform", "setting-absent", "gate-absent", "bash-idle", "monitor-fold", "bash-long-label", "monitor-long-label"] as const)(
   "native Monitor advice: %s", async mode => {
     const sdkPath = dirname(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"));
     const sdk = JSON.parse(await readFile(join(sdkPath, "package.json"), "utf8"));
@@ -40,6 +40,10 @@ it.each(["completion-response", "event-inform", "setting-absent", "gate-absent",
       tengu_amber_sentinel: true, ...(mode === "gate-absent" ? {} : { tengu_kairos_push_notifications: true }),
     }, cachedGrowthBookFeaturesAt: Date.now() }));
     const persistent = mode === "event-inform" || mode === "monitor-fold";
+    // The CLI shortens a completion summary over 1,000 characters; 956 is the shortest Bash description that reaches it.
+    const bash = mode === "bash-idle" || mode === "bash-long-label", longLabel = mode === "bash-long-label" || mode === "monitor-long-label";
+    const description = longLabel ? "d".repeat(bash ? 956 : 1200) : "fixture monitor";
+    expect(description).not.toContain("characters truncated");
     let taskIssued = false, ownerIssued = false, sendIssued = false, searched = false, calls = 0, sendCallId = "";
     let taskBarrier: ServerResponse | undefined, ownerBarrier: ServerResponse | undefined;
     const toolResults: unknown[] = [], requests: unknown[] = [];
@@ -71,12 +75,12 @@ it.each(["completion-response", "event-inform", "setting-absent", "gate-absent",
         return shellQuote(process.execPath) + " -e " + shellQuote(code);
       };
       let use: { name: string; input: Record<string, unknown> } | undefined;
-      const source = mode === "bash-idle" ? "Bash" : "Monitor";
+      const source = bash ? "Bash" : "Monitor";
       if (!searched && offered("ToolSearch") && (!offered(source) || !offered("mcp__kaoiro__send_to_agent"))) {
         searched = true; use = { name: "ToolSearch", input: { query: "select:Monitor,mcp__kaoiro__send_to_agent" } };
       } else if (!taskIssued && offered(source) && messages.includes("START-697")) {
         taskIssued = true;
-        use = { name: source, input: { command: command("task", true), description: "fixture monitor",
+        use = { name: source, input: { command: command("task", true), description,
           ...(source === "Monitor" ? { persistent, timeout_ms: 60000 } : { run_in_background: true }) } };
       } else if (mode === "monitor-fold" && taskIssued && !ownerIssued && offered("Bash") && messages.includes("OWNER-697")) {
         ownerIssued = true; use = { name: "Bash", input: { command: command("owner", false), description: "fixture live owner", timeout: 20000 } };
@@ -166,7 +170,8 @@ it.each(["completion-response", "event-inform", "setting-absent", "gate-absent",
         // Second pin on the installed CLI in this file; the one above gates the
         // body, so a bump that only updates that one never reaches this line.
         expect(row.version).toBe("2.1.321");
-        if (mode !== "bash-idle") {
+        if (longLabel) expect(block).toMatch(/<summary>[^<]*\n\n\.\.\. \[\d+ characters truncated\] \.\.\.\n\n[^<]*<\/summary>/);
+        if (!bash) {
           assertMonitorAdvicePosition(block, advice, mode !== "setting-absent" && mode !== "gate-absent");
           expect(block.includes("<status>")).toBe(!persistent);
         }

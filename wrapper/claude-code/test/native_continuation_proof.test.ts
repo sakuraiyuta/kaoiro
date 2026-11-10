@@ -4,17 +4,18 @@ import { describe, expect, it } from "vitest";
 import { ReplyBasis, type DetachedReplyBasis, type Envelope } from "@kaoiro/agent-common";
 import { ContinuationRegistry } from "../src/continuation_registry.js";
 import { ContinuationProofs } from "../src/continuation_proof.js";
-import { marker, escapeNativeScalar } from "../src/continuation_markers.js";
+import { marker, escapeNativeScalar, nativeSummaryShown, shortenNativeSummary, MARKER_PREFIX } from "../src/continuation_markers.js";
 import type { NativeAnchor } from "../src/native_transcript.js";
 import { malformedMonitorAdvice, monitorNotification, monitorNotifications } from "./fixtures/monitor_notifications.js";
+import { completionSummaries, completionSummary, FIXTURE_TOKEN } from "./fixtures/completion_summaries.js";
 
 function rig() {
   const basis = new ReplyBasis(); basis.begin("root", []);
   const snapshot = basis.exportConfirmed({ token: "root" })!;
   const registry = new ContinuationRegistry("s");
   const proofs = new ContinuationProofs(registry, basis);
-  const launch = (id: string, source: "Agent" | "Monitor" | "Bash" | "Workflow", map = snapshot, ws = false) => {
-    const input = source === "Monitor" ? { description: "a & <watch>", ...(ws ? { ws: { url: "ws://example.invalid", headers: { local: "test" } } } : { command: "echo event" }) } :
+  const launch = (id: string, source: "Agent" | "Monitor" | "Bash" | "Workflow", map = snapshot, ws = false, description = "a & <watch>") => {
+    const input = source === "Monitor" ? { description, ...(ws ? { ws: { url: "ws://example.invalid", headers: { local: "test" } } } : { command: "echo event" }) } :
       source === "Agent" ? { prompt: "report", subagent_type: "general-purpose", run_in_background: true } : { command: "echo done", run_in_background: true };
     registry.observeCall(id, source, input);
     const effective = registry.prepare(id, source, input, "parent", map) ?? input;
@@ -413,5 +414,83 @@ describe("peer opener native row binding", () => {
     const row = { ...fixture.row, turnOrigin: "task_notification", origin: r.agentOrigin("task"),
       message: { role: "user", content: fixture.row.message.content.replace(fixture.hook, prompt) } };
     expect(r.proofs.prove({ uuid: "opener", promptId: "return", digest: "test", row }, prompt, r.snapshot)).toHaveProperty("reason", "native_opener_mismatch");
+  });
+});
+
+describe("completion summaries the CLI shortens", () => {
+  const shownAs = (r: ReturnType<typeof rig>, id: string, sdk: string, shown: string) =>
+    r.completion(id, sdk).replace(/<summary>[^<]*<\/summary>/, () => `<summary>${shown}</summary>`);
+  const truncated = /\n\n\.\.\. \[\d+ characters truncated\] \.\.\.\n\n/;
+
+  it.each(completionSummaries)("derives the captured block summary of $id from the SDK summary", ({ sdk, shown }) => {
+    expect(escapeNativeScalar(shortenNativeSummary(sdk))).toBe(shown);
+    expect(nativeSummaryShown(sdk, shown)).toBe(true);
+  });
+
+  it.each(["bash-1001", "bash-xml", "bash-surrogates", "bash-command-label"])("proves the Bash completion %s shortened or whole", id => {
+    const { sdk, shown } = completionSummary(id);
+    expect(shown).toMatch(truncated);
+    for (const block of [shown, escapeNativeScalar(sdk)]) {
+      const r = rig(); r.launch("b", "Bash");
+      expect(r.prove(shownAs(r, "b", sdk, block))).toHaveProperty("proof");
+    }
+  });
+
+  it.each<[string, string, (sdk: string, shown: string) => string]>([
+    ["a count one too high", "bash-1001", (_sdk, shown) => shown.replace("[201 characters", "[202 characters")],
+    ["one unit less at the head", "bash-1001", (_sdk, shown) => shown.replace("d\n\n... [", "\n\n... [")],
+    ["one unit more at the head", "bash-1001", (_sdk, shown) => shown.replace("\n\n... [", "d\n\n... [")],
+    ["one unit less at the tail", "bash-1001", (_sdk, shown) => shown.replace("] ...\n\nd", "] ...\n\n")],
+    ["other marker wording", "bash-1001", (_sdk, shown) => shown.replace("characters truncated", "chars truncated")],
+    ["a filled middle of the same length", "bash-1001", (_sdk, shown) => shown.replace(truncated, found => "d".repeat(found.length))],
+    ["another command of the same shape", "bash-1001", (_sdk, shown) => shown.replace('"d', '"e')],
+    ["another task's shortened block on a summary within the limit", "bash-1000", () => completionSummary("bash-1001").shown],
+    ["text escaped before it was shortened", "bash-xml", sdk => {
+      const escaped = escapeNativeScalar(sdk);
+      return `${escaped.slice(0, 500)}\n\n... [${escaped.length - 800} characters truncated] ...\n\n${escaped.slice(-300)}`;
+    }],
+    ["a split surrogate pair at the head", "bash-surrogates", sdk =>
+      `${sdk.slice(0, 500)}\n\n... [${sdk.length - 799} characters truncated] ...\n\n${sdk.slice(-299)}`],
+  ])("refuses a Bash completion shown with %s", (_name, id, forge) => {
+    const { sdk, shown } = completionSummary(id);
+    const forged = forge(sdk, shown);
+    expect(forged).not.toBe(shown);
+    expect(forged).not.toBe(escapeNativeScalar(sdk));
+    const r = rig(); r.launch("b", "Bash");
+    expect(r.prove(shownAs(r, "b", sdk, forged))).toEqual({ reason: "native_completion_unproved" });
+  });
+
+  const monitor = (r: ReturnType<typeof rig>) => {
+    const { effective } = r.launch("m", "Monitor", r.snapshot, false, "d".repeat(1200));
+    const token = r.registry.byTask("m")!.token;
+    const captured = completionSummary("monitor-1289");
+    const sdk = captured.sdk.replace(FIXTURE_TOKEN, token), shown = captured.shown.replace(FIXTURE_TOKEN, token);
+    const description = (effective as { description: string }).description;
+    expect(sdk).toBe(`Monitor "${description}" stream ended`);
+    return { sdk, shown, description };
+  };
+
+  it("proves a Monitor completion whose shortened summary no longer holds the whole description", () => {
+    for (const whole of [false, true]) {
+      const r = rig(); const { sdk, shown, description } = monitor(r);
+      expect(shown).toContain(MARKER_PREFIX);
+      expect(shown).not.toContain(`"${description}"`);
+      expect(r.prove(shownAs(r, "m", sdk, whole ? escapeNativeScalar(sdk) : shown))).toHaveProperty("proof");
+    }
+  });
+
+  it("refuses a Monitor completion whose SDK summary names another description, shortened or whole", () => {
+    for (const whole of [false, true]) {
+      const r = rig(); const captured = monitor(r);
+      const sdk = captured.sdk.replace('Monitor "d', 'Monitor "e'), shown = captured.shown.replace('Monitor "d', 'Monitor "e');
+      expect(sdk).not.toBe(captured.sdk);
+      expect(r.prove(shownAs(r, "m", sdk, whole ? escapeNativeScalar(sdk) : shown))).toEqual({ reason: "native_monitor_description_mismatch" });
+    }
+  });
+
+  it("refuses a Monitor completion shortened by its label instead of its whole summary", () => {
+    const r = rig(); const { sdk, description } = monitor(r);
+    const forged = `Monitor "${description.slice(0, 480)}\n\n... [${description.length - 755} characters truncated] ...\n\n${description.slice(-275)}" stream ended`;
+    expect(r.prove(shownAs(r, "m", sdk, forged))).toEqual({ reason: "native_completion_unproved" });
   });
 });

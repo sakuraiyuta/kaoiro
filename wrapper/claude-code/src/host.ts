@@ -3,7 +3,7 @@ import type { ReplyBasis, DetachedReplyBasis, ReplyOrigin } from "@kaoiro/agent-
 import { NativeTranscriptReader, type NativeAnchor } from "./native_transcript.js";
 import { ContinuationRegistry } from "./continuation_registry.js";
 import { ContinuationProofs } from "./continuation_proof.js";
-import { parseContinuationBlocks } from "./continuation_markers.js";
+import { parseContinuationBlocks, shortenNativeSummary } from "./continuation_markers.js";
 import { peerReportToken } from "./native_peer_opener.js";
 import { MAX_COALESCED_BYTES, MAX_COALESCED_MESSAGES, ToolOrigins, withAgentMarker } from "@kaoiro/agent-common";
 import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
@@ -820,6 +820,12 @@ function xmlEscape(text: string): string {
  * decoded: it must equal the SDK's raw text or that text escaped once. */
 function notificationTextMatches(trusted: string, shown: string | undefined): boolean {
   return shown !== undefined && (shown === trusted || shown === xmlEscape(trusted));
+}
+
+/** A completion summary may also be shown in the CLI's shortened form, which
+ * is escaped after it is shortened. */
+function notificationSummaryMatches(trusted: string, shown: string | undefined): boolean {
+  return notificationTextMatches(trusted, shown) || shown === xmlEscape(shortenNativeSummary(trusted));
 }
 
 /**
@@ -2575,7 +2581,7 @@ export class AgentHost implements EngineAdapter {
         candidate.taskType === "local_bash"
           ? notifications[index]!.outputFilePresent && candidate.outputFile !== undefined &&
             candidate.outputFile === notifications[index]!.outputFile &&
-            notificationTextMatches(candidate.summary, notifications[index]!.summary) && notifications[index]!.result === undefined
+            notificationSummaryMatches(candidate.summary, notifications[index]!.summary) && notifications[index]!.result === undefined
           : candidate.taskType === "local_agent"
             ? candidate.outputFile !== undefined &&
               (!notifications[index]!.outputFilePresent || candidate.outputFile === notifications[index]!.outputFile) &&
@@ -2584,7 +2590,7 @@ export class AgentHost implements EngineAdapter {
             // counterpart, so it is never compared.
             : candidate.taskType === "local_workflow" &&
               candidate.outputFile !== undefined && candidate.outputFile === notifications[index]!.outputFile &&
-              notificationTextMatches(candidate.summary, notifications[index]!.summary)
+              notificationSummaryMatches(candidate.summary, notifications[index]!.summary)
       ));
     // The one definition of a uniquely recognized wrapper input: every
     // precedence exception and the registration below use it, so a hook that

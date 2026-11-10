@@ -2,6 +2,22 @@ export const MARKER_PREFIX = "[kaoiro-continuation:";
 export const marker = (token: string): string => `${MARKER_PREFIX}${token}]`;
 export const escapeNativeScalar = (text: string): string => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
+/** The form in which the pinned CLI shows a completion summary longer than
+ * 1,000 UTF-16 code units: its first 500 and last 300 code units around a
+ * count of what was dropped, never splitting a surrogate pair. */
+export function shortenNativeSummary(summary: string): string {
+  if (summary.length <= 1000) return summary;
+  let head = summary.slice(0, 500), tail = summary.slice(-300);
+  if (/[\uD800-\uDBFF]$/.test(head)) head = head.slice(0, -1);
+  if (/^[\uDC00-\uDFFF]/.test(tail)) tail = tail.slice(1);
+  return `${head}\n\n... [${summary.length - head.length - tail.length} characters truncated] ...\n\n${tail}`;
+}
+
+/** A shown summary proves nothing unless it is byte-equal to a form derived
+ * from the SDK's own text: escaped whole, or shortened and then escaped. */
+export const nativeSummaryShown = (trusted: string, shown: string): boolean =>
+  shown === escapeNativeScalar(trusted) || shown === escapeNativeScalar(shortenNativeSummary(trusted));
+
 export function reportToken(body: string): string | undefined {
   const candidates = [...body.matchAll(/\[kaoiro-continuation:([^\]\r\n]*)\]/g)];
   if (candidates.length !== 1 || !/^[A-Za-z0-9_-]{43}$/.test(candidates[0]![1]!) ||

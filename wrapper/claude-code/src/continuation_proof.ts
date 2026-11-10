@@ -1,5 +1,5 @@
 import type { DetachedReplyBasis, ReplyBasis } from "@kaoiro/agent-common";
-import { escapeNativeScalar, parseContinuationBlocks, reportToken, MARKER_PREFIX, type NotificationBlock } from "./continuation_markers.js";
+import { escapeNativeScalar, nativeSummaryShown, parseContinuationBlocks, reportToken, MARKER_PREFIX, type NotificationBlock } from "./continuation_markers.js";
 import { ContinuationRegistry, type LaunchCapability } from "./continuation_registry.js";
 import { matchesPeerOpener } from "./native_peer_opener.js";
 import type { NativeAnchor } from "./native_transcript.js";
@@ -92,7 +92,7 @@ export class ContinuationProofs {
               !run.callId || block.toolUseId !== run.callId || terminal.tool_use_id !== run.callId ||
               block.status !== terminal.status || typeof terminal.output_file !== "string" || !terminal.output_file ||
               block.outputFile !== terminal.output_file ||
-              block.summary !== escapeNativeScalar(String(terminal.summary)) || this.#completions.has(completionKey)) return { reason: "native_completion_unproved" };
+              !nativeSummaryShown(String(terminal.summary), block.summary) || this.#completions.has(completionKey)) return { reason: "native_completion_unproved" };
         }
         if (run.source === "Agent") {
           if (!cap || !completed) return { reason: "native_agent_completion_unproved" };
@@ -107,7 +107,9 @@ export class ContinuationProofs {
               block.summary !== `Monitor event: "${description}"` || block.event === undefined)) return { reason: "native_monitor_description_mismatch" };
           // Completion's tuple and native summary are authoritative even without a marker.
           if (completed && block.result !== undefined) return { reason: "native_monitor_completion_mismatch" };
-          if (completed && block.summary.includes(MARKER_PREFIX) && !block.summary.includes(`"${description}"`)) return { reason: "native_monitor_description_mismatch" };
+          // A shortened block no longer holds the whole description, so the SDK's summary, which the block was proved against, is read instead.
+          const reported = String(terminal?.summary);
+          if (completed && reported.includes(MARKER_PREFIX) && !reported.includes(`"${String(cap.effective.description)}"`)) return { reason: "native_monitor_description_mismatch" };
           maps.push(cap.basis);
         } else {
           if (!completed || (run.source !== "Bash" && run.source !== "Workflow") ||
