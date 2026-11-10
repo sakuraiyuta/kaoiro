@@ -146,6 +146,16 @@
     overflow-y: auto;
   }
 
+  /* Clamped, a heading or a block margin would take a line's height: the
+     three lines hold three lines of text whatever the markdown. */
+  .body.clamped :global(:is(h1, h2, h3, h4, h5, h6)) {
+    font-size: inherit;
+  }
+
+  .body.clamped :global(:is(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table)) {
+    margin-block: 0;
+  }
+
   .body.clamped > :global(:first-child),
   .body.expanded > :global(:first-child),
   .body.clamped > :global(:first-child > :first-child),

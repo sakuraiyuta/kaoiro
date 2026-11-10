@@ -753,6 +753,8 @@
       // reachable without waiting for the first turn.
       connection !== null,
   );
+  // Nothing pinned to draw: no slot at all, so no empty bordered box.
+  const pinnedVisible = $derived(hasCcStatus || statusLine.kind !== "none");
 
   const transcriptTimeFormatter = new Intl.DateTimeFormat([], {
     hour: "2-digit",
@@ -1292,7 +1294,9 @@
 
   // Pinned area (issue 1074): user-toggled only, never set from the viewport
   // (ADR-0052 amendment 2026-11-10). Both placements share these, so crossing
-  // the 1198/1199 boundary keeps them. Another agent's line starts clamped.
+  // the 1198/1199 boundary keeps them. Another agent's line starts clamped,
+  // but an opened smartphone bar stays open across agents: the operator who
+  // opened it is reading headroom while switching peers.
   let pinnedExpanded = $state(false);
   let pinnedOpen = $state(false);
   let pinnedAgentId = untrack(() => envelope.agent_id);
@@ -3214,9 +3218,11 @@
                は name(id) 表記でクリック可能、 spawn トーストも name(id)。 -->
           <p class="id">{envelope.agent_id}</p>
         </div>
-        <div class="pinned-slot pinned-slot-head">
-          {@render pinnedArea("head")}
-        </div>
+        {#if pinnedVisible}
+          <div class="pinned-slot pinned-slot-head">
+            {@render pinnedArea("head")}
+          </div>
+        {/if}
       </header>
 
       <!-- Everything below the identity header scrolls inside .status-scroll so
@@ -3839,9 +3845,11 @@
     </BottomSheet>
 
     <div class="main">
-      <div class="pinned-slot pinned-slot-main">
-        {@render pinnedArea("main")}
-      </div>
+      {#if pinnedVisible}
+        <div class="pinned-slot pinned-slot-main">
+          {@render pinnedArea("main")}
+        </div>
+      {/if}
       <TasklistFloat agentId={envelope.agent_id} {tasklist} />
       <div
         class="log"
@@ -4853,13 +4861,9 @@
     min-width: 0;
   }
 
-  .pinned-slot:empty {
-    display: none;
-  }
-
-  /* An expanded status line keeps about 6rem for the scroll area beside it
-     (the sidebar's .status-scroll here, the log below 1199px); the overhead
-     is the rest of the head, measured at 1199-1920px wide. */
+  /* Cap of an expanded status line, measured at 1199-1920px wide:
+     40rem = about 7rem above .status (header, bar) + 26rem of the head other
+     than the status-line body + 7rem left for .status-scroll. */
   .pinned-slot-head {
     align-self: stretch;
     text-align: left;
@@ -4877,15 +4881,14 @@
 
     /* A flex item does not shrink below its content (min-height: auto), so
        the log alone gives up height. */
+    /* 30rem = about 7rem above .main + 14rem of .main other than the
+       status-line body (gauges, panel, composer, gaps) + 9rem left for the
+       log, measured at 940-1198px wide. */
     .pinned-slot-main {
       display: block;
       --status-line-expanded-max: max(calc(1.4em * 3), calc(100dvh - 30rem));
       padding-bottom: 0.6rem;
       border-bottom: 1px solid var(--line);
-    }
-
-    .pinned-slot-main:empty {
-      display: none;
     }
   }
 

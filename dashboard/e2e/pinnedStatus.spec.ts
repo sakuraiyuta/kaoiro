@@ -138,6 +138,22 @@ test.describe("status line clamp (expand in place)", () => {
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 
+  test("three lines hold three lines of text when the head opens with a heading", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(`${DETAIL}&statusLine=heading`);
+    const body = head(page).locator(".status-line-panel .body");
+    await expect(body.locator("h2")).toHaveText("Target");
+
+    const fits = await body.evaluate((el) => {
+      const bottom = el.getBoundingClientRect().top + el.clientHeight;
+      const lines = [el.querySelector("h2")!, ...el.querySelectorAll("li")];
+      return lines.map((line) => line.getBoundingClientRect().bottom <= bottom + 1);
+    });
+    // The heading and the first two items are whole; the rest is clamped.
+    expect(fits).toEqual([true, true, true, false, false]);
+    await expect(head(page).locator("button.expand")).toBeVisible();
+  });
+
   test("a one-line status line has no toggle", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto(SHORT);

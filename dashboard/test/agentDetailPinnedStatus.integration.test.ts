@@ -190,6 +190,8 @@ describe("AgentDetail pinned area (issue 1074)", () => {
     const { target } = await render({ ext: {}, withConnection: false });
 
     expect(copies(target)).toHaveLength(0);
+    // No slot either: the bar's padding and divider must not draw an empty box.
+    expect(target.querySelectorAll(".pinned-slot")).toHaveLength(0);
     expect(target.querySelector("dl.cc")).toBeNull();
   });
 
