@@ -264,7 +264,9 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
   // all viewport heights.
   test.describe("垂直スクロールと下部コントロールの到達性 (issue #507)", () => {
     const VIEWPORTS = [
-      { name: "Desktop 1024x768", width: 1024, height: 768 },
+      // With tabs one panel no longer fills a 768px drawer, so the desktop
+      // case uses a height at which the Operations panel overflows.
+      { name: "Desktop 1024x480", width: 1024, height: 480 },
       { name: "Phone (iPhone SE) 375x667", width: 375, height: 667 },
     ];
 
@@ -313,7 +315,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     test("mouse.wheel で drawer のみスクロールし背景は動かない (overscroll-behavior: contain)", async ({
       page,
     }) => {
-      await page.setViewportSize({ width: 1024, height: 768 });
+      await page.setViewportSize({ width: 1024, height: 480 });
       await page.goto(DRAWER);
       await page.locator("#drawer-trigger").click();
       await expect(page.locator("dialog")).toBeVisible();
@@ -364,7 +366,8 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       await expect(logout).toBeFocused();
       const logoutRect = (await logout.boundingBox())!;
       expect(logoutRect.y).toBeGreaterThanOrEqual(0);
-      expect(logoutRect.y + logoutRect.height).toBeLessThanOrEqual(667);
+      // scrollTop is an integer, so a focus scroll can leave a fractional pixel.
+      expect(logoutRect.y + logoutRect.height).toBeLessThanOrEqual(667 + 1);
 
       // Next Tab wraps around to the first control (close button)
       await page.keyboard.press("Tab");

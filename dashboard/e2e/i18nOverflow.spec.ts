@@ -154,18 +154,25 @@ for (const width of [844, 1920]) {
   });
 }
 
+const DRAWER_OPERATOR =
+  "/e2e/harness/index.html?view=overlay&overlay=drawer-triggered&workState=ready";
+
 // The settings drawer shows one tab at a time and only the visible tab is
-// measured, so each of its four tabs gets its own case (issue 1076).
+// measured, so each tab of the operator drawer gets its own case (issue 1076).
+// The viewer drawer (DRAWER) has two tabs and opens at once; the operator
+// drawer opens from its trigger.
 for (const [name, url, content, tab] of [
   ["launch dialog", DIALOG, ".launch-dialog-content", null],
-  ["settings drawer, tab 1", DRAWER, ".settings-drawer-content", 0],
-  ["settings drawer, tab 2", DRAWER, ".settings-drawer-content", 1],
-  ["settings drawer, tab 3", DRAWER, ".settings-drawer-content", 2],
-  ["settings drawer, tab 4", DRAWER, ".settings-drawer-content", 3],
+  ["settings drawer", DRAWER, ".settings-drawer-content", null],
+  ["settings drawer, tab 1", DRAWER_OPERATOR, ".settings-drawer-content", 0],
+  ["settings drawer, tab 2", DRAWER_OPERATOR, ".settings-drawer-content", 1],
+  ["settings drawer, tab 3", DRAWER_OPERATOR, ".settings-drawer-content", 2],
+  ["settings drawer, tab 4", DRAWER_OPERATOR, ".settings-drawer-content", 3],
 ] as const) {
   for (const width of [375, 1024]) {
     test(`${name} in en at ${width}px`, async ({ browser, page }) => {
       const prepare: Prepare = async (p) => {
+        if (url === DRAWER_OPERATOR) await p.locator("#drawer-trigger").click();
         await expect(p.locator(content)).toBeVisible();
         if (tab !== null) {
           await p.getByRole("tab").nth(tab).click();
