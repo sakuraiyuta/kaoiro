@@ -274,6 +274,21 @@ describe("SettingsDrawer tabs: fallback of the active tab (issue 1076)", () => {
   });
 });
 
+describe("SettingsDrawer tabs: fallback is not undone (issue 1076)", () => {
+  it("fallback-sticks: after Administration disappears and returns, the selection stays on Display", async () => {
+    const connection = makeConnection();
+    const { target, props } = await render({ ...operatorProps(), connection });
+    await select(target, t.tabAdministration);
+    props.connection = undefined;
+    await tick();
+    props.connection = connection;
+    await tick();
+    expect(tab(target, t.tabAdministration)).toBeDefined();
+    expect(tab(target, t.tabDisplay).getAttribute("aria-selected")).toBe("true");
+    expect(tab(target, t.tabAdministration).getAttribute("aria-selected")).toBe("false");
+  });
+});
+
 describe("SettingsDrawer tabs: state and structure (issue 1076)", () => {
   it("child-state-survives-tab-switch: an unsaved work-capacity edit survives leaving and returning", async () => {
     const { target } = await render(operatorProps());
