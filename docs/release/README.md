@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-10
 ---
 
 # Release notes
@@ -66,6 +66,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.10.1](v2026.11.10.1.md) | 2026-11-10 | v2026.11.08.1 | Claude Code peers on Agent SDK 0.3.321 (Claude Code 2.1.321) with the alias `fable` on Claude Fable 5.2, the dashboard in Japanese or English, and a known regression on long background-command labels. |
 | [v2026.11.08.1](v2026.11.08.1.md) | 2026-11-08 | v2026.11.07.1 | Claude Code peers on Agent SDK 0.3.319 (Claude Code 2.1.319), an omitted `done` follows `kind=done`, a directory store failure answers `directory_unavailable` instead of dropping the wrapper channel, and exec-era Codex helpers are removed. |
 | [v2026.11.07.1](v2026.11.07.1.md) | 2026-11-07 | v2026.11.06.2 | The Codex exec backend is retired, wrappers recover through launch-owned checkpoints, retired delivery inputs are removed, and dashboard notifications reach Android. |
 | [v2026.11.06.2](v2026.11.06.2.md) | 2026-11-06 | v2026.11.06.1 | An Antigravity input written after agy exits on its own is delivered on one new epoch, and an unconfirmed write is reported as `receipt_unknown`. |
