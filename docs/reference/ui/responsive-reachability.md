@@ -87,7 +87,7 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 | Back to grid (`button.back`) | Always | Always | Always | Always |
 | Blind-spot indicator (`button.blindspot`) | Another agent has a live waiting/error state or valid pending permission / question record; excludes the selected agent | Always | Always | Always (below) |
 | Previous/next agent switch | Two or more agents | Always | Always | Always |
-| Status (model / effort / permission mode) | Always | Always (left sidebar) | handle → sheet | handle → sheet |
+| Status panel (left sidebar / sheet) | Always | Always (left sidebar) | handle → sheet | handle → sheet |
 | Pinned area: context / rate-limit meters and status line ([#1074](https://github.com/sakuraiyuta/kaoiro/issues/1074)) | Each item as before: meters while the status meta panel is open (ctx by capability), status line while one is set or cleared | Always (under the agent ID; above the log when 699px high or less) | Always (above the log) | Disclosure above the log, collapsed by default |
 | Pinned status line expand / collapse | The drawn head overflows three lines, or is expanded | Within pinned area | Within pinned area | Within pinned area (after opening) |
 | Detail tabs: engine / kaoiro ([#1075](https://github.com/sakuraiyuta/kaoiro/issues/1075)) | Connected; the last opened tab is one global setting (engine by default). Without a connection there is no tab bar and both panels are shown | Top of the left sidebar below the pinned area | Top of the sheet | Top of the sheet |

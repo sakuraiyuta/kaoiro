@@ -17,18 +17,35 @@ the derived dashboard e2e image.
 ## Method
 
 - Inputs: `dashboard/test/fixtures/agentDetailTabInputs.ts`. Both sides used
-  the same file (sha256 `0d916ae9…7d6d`), which differs from the committed one
-  only in a stub method of the fake connection that the collector never calls.
+  the same version of that file (sha256 `0d916ae9…7d6d`). The committed file
+  differs from it in four places, none of which changes how an input renders:
+  the first import loads the package's isolation setup; the fake connection
+  stubs `enumerateAgentSessions` instead of `enumerateSessions` (only the
+  resume picker calls it; the collector never opens it); input I3d was added
+  later for a unit test and is not part of this measurement; and the
+  collector's two helpers below were removed from it.
   I0 has a connection and nothing else; I1c is a connected Claude Code agent
   with every kaoiro item; I1r is I1c while running; I1x is a Codex agent with
   the sandbox axes, the three permission switches and a rejected request; I1u
   has the permission-control form with an unknown observation; I1g is a Grok
   agent; I2 is I1c disconnected; I3 is I1c without a connection.
 - Collector: a scratch vitest file (not committed) mounts AgentDetail for each
-  input and records every `dt` text and every marker item (`.session-lifecycle-open`,
-  `.delivery-policy`, `.clear-history`, `.resume-swap`, `.terminate`, `.restore`,
-  `.interrupt`, `.remove`) in the whole component, as a multiset. For I1x it
-  first opens the sandbox switch and picks a value, which the fake rejects.
+  input in the order I0, I1c, I1r, I1x, I1u, I1g, I2, I3 and records, in the
+  whole component, every `dt` text and every marker item, as a multiset. For
+  I1x it first opens the sandbox switch and picks a value, which the fake
+  rejects. The recorded list per input was:
+
+  ```ts
+  const dts = [...target.querySelectorAll("dt")].map((dt) => `dt:${dt.textContent?.trim() ?? ""}`);
+  const items = ITEM_SELECTORS.flatMap((sel) =>
+    [...target.querySelectorAll(sel)].map(() => `item:${sel}`),
+  );
+  return [...dts, ...items];
+  ```
+
+  with `ITEM_SELECTORS` as exported by the fixture
+  (`.session-lifecycle-open`, `.delivery-policy`, `.clear-history`,
+  `.resume-swap`, `.terminate`, `.restore`, `.interrupt`, `.remove`).
 - Base: `239577e1`. Candidate: `61872767`. The two multisets are compared per
   input.
 
@@ -37,7 +54,10 @@ the derived dashboard e2e image.
 Before the comparison the base run had to show all 19 row kinds of the status
 panel and both forms of the effective write scope (I1x has `ext.permission`,
 I1u only the permission control and shows the past observation that only that
-form renders). `7day` is the pinned rate-limit gauge and is not counted.
+form renders). `7day` is the pinned rate-limit gauge: it is not one of the 19
+kinds and is left out of the Rows column, but each input's list holds it twice
+(one per copy of the pinned area), so every Count below is the listed rows and
+items plus 2.
 
 | Input | Rows (`dt`) | Items outside `dl.cc` | Count |
 |---|---|---|---|

@@ -8,9 +8,7 @@ import AgentDetail from "../../src/lib/AgentDetail.svelte";
 import { DeliveryPolicyStore } from "../../src/lib/deliveryPolicyStore.svelte";
 import type { Envelope, KaoiroConnection } from "../../src/lib/protocol";
 
-export type InputName = "I0" | "I1c" | "I1r" | "I1x" | "I1u" | "I1g" | "I2" | "I3";
-
-export const INPUT_NAMES: InputName[] = ["I0", "I1c", "I1r", "I1x", "I1u", "I1g", "I2", "I3"];
+export type InputName = "I0" | "I1c" | "I1r" | "I1x" | "I1u" | "I1g" | "I2" | "I3" | "I3d";
 
 export function connection(): KaoiroConnection {
   return {
@@ -205,6 +203,13 @@ export function inputProps(name: InputName): Record<string, unknown> {
         envelope: envelope(CLAUDE_EXT),
         connection: null,
       };
+    case "I3d":
+      return {
+        ...base,
+        ...kaoiroExtras(),
+        envelope: envelope(CLAUDE_EXT, "disconnected"),
+        connection: null,
+      };
   }
 }
 
@@ -262,11 +267,3 @@ export const ITEM_SELECTORS = [
   ".remove",
 ] as const;
 
-/** Every `dt` text and every marker item, in document order. */
-export function itemSet(target: HTMLElement): string[] {
-  const dts = [...target.querySelectorAll("dt")].map((dt) => `dt:${dt.textContent?.trim() ?? ""}`);
-  const items = ITEM_SELECTORS.flatMap((sel) =>
-    [...target.querySelectorAll(sel)].map(() => `item:${sel}`),
-  );
-  return [...dts, ...items];
-}
