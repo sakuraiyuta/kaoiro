@@ -265,8 +265,9 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
   test.describe("垂直スクロールと下部コントロールの到達性 (issue #507)", () => {
     const VIEWPORTS = [
       // With tabs one panel no longer fills a 768px drawer, so the desktop
-      // case uses a height at which the Operations panel overflows.
-      { name: "Desktop 1024x480", width: 1024, height: 480 },
+      // case uses a height at which the Operations panel overflows but that
+      // stays outside the short band (ADR-0052 F8).
+      { name: "Desktop 1024x560", width: 1024, height: 560 },
       { name: "Phone (iPhone SE) 375x667", width: 375, height: 667 },
     ];
 
@@ -315,7 +316,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     test("mouse.wheel で drawer のみスクロールし背景は動かない (overscroll-behavior: contain)", async ({
       page,
     }) => {
-      await page.setViewportSize({ width: 1024, height: 480 });
+      await page.setViewportSize({ width: 1024, height: 560 });
       await page.goto(DRAWER);
       await page.locator("#drawer-trigger").click();
       await expect(page.locator("dialog")).toBeVisible();
@@ -346,7 +347,9 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       page,
     }) => {
       await page.setViewportSize({ width: 375, height: 667 });
-      await page.goto(DRAWER);
+      // workState=ready adds the work-capacity block, so Operations overflows
+      // by far more than a rounding error.
+      await page.goto(`${DRAWER}&workState=ready`);
       await page.locator("#drawer-trigger").click();
       await expect(page.locator("dialog")).toBeVisible();
       await page.waitForTimeout(250);
@@ -355,6 +358,11 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
 
       const logout = page.locator(".logout");
       const closeBtn = page.locator("dialog button.close");
+
+      // Precondition: logout starts outside the viewport, so the Tab below
+      // must scroll it in.
+      const before = (await logout.boundingBox())!;
+      expect(before.y).toBeGreaterThan(667);
 
       // Tab until logout button is reached
       for (let i = 0; i < 40; i++) {
