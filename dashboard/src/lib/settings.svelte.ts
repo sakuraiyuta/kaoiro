@@ -25,9 +25,14 @@ export interface Settings {
   /** UI language: "auto" follows the browser's language list (see
    *  i18n/index.svelte.ts); "ja" / "en" is an explicit choice. */
   locale: LocaleSetting;
+  /** The AgentDetail tab last opened, one value for every agent (issue
+   *  1075). Only a click or a key on the tab bar changes it. */
+  detailTab: DetailTab;
 }
 
 export type GridSort = "name" | "recent";
+
+export type DetailTab = "engine" | "kaoiro";
 
 export const SETTINGS_STORAGE_KEY = "kaoiro:settings:v1";
 
@@ -38,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hideNonMessageLogEntries: false,
   gridSort: "name",
   locale: "auto",
+  detailTab: "engine",
 };
 
 function clampVolume(value: number): number {
@@ -76,6 +82,10 @@ export function loadSettings(): Settings {
       parsed.locale === "auto" || parsed.locale === "ja" || parsed.locale === "en"
         ? parsed.locale
         : DEFAULT_SETTINGS.locale;
+    const detailTab =
+      parsed.detailTab === "engine" || parsed.detailTab === "kaoiro"
+        ? parsed.detailTab
+        : DEFAULT_SETTINGS.detailTab;
     return {
       notificationSoundEnabled: enabled,
       notificationSoundVolume: volume,
@@ -83,6 +93,7 @@ export function loadSettings(): Settings {
       hideNonMessageLogEntries,
       gridSort,
       locale,
+      detailTab,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -122,6 +133,9 @@ export function updateSettings(patch: Partial<Settings>): void {
   }
   if (patch.locale !== undefined) {
     settings.locale = patch.locale;
+  }
+  if (patch.detailTab !== undefined) {
+    settings.detailTab = patch.detailTab;
   }
   saveSettings(settings);
 }

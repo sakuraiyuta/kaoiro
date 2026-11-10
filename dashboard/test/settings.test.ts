@@ -26,6 +26,7 @@ describe("loadSettings", () => {
       hideNonMessageLogEntries: true,
       gridSort: "recent",
       locale: "en",
+      detailTab: "kaoiro",
     });
     expect(loadSettings()).toEqual({
       notificationSoundEnabled: false,
@@ -34,6 +35,7 @@ describe("loadSettings", () => {
       hideNonMessageLogEntries: true,
       gridSort: "recent",
       locale: "en",
+      detailTab: "kaoiro",
     });
   });
 
@@ -43,6 +45,15 @@ describe("loadSettings", () => {
       JSON.stringify({ gridSort: "random" }),
     );
     expect(loadSettings().gridSort).toBe("name");
+  });
+
+  it("loads an unknown or missing detailTab as engine (issue 1075)", () => {
+    for (const detailTab of ["claude", "", 1, null, "KAOIRO"]) {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ detailTab }));
+      expect(loadSettings().detailTab).toBe("engine");
+    }
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ gridSort: "recent" }));
+    expect(loadSettings().detailTab).toBe("engine");
   });
 
   it("locale の不正値と locale の無い保存値は default の auto に戻す (issue #269)", () => {
@@ -152,6 +163,7 @@ describe("updateSettings", () => {
       gridSort: "name",
       // The shared test setup pins the UI language to ja.
       locale: "ja",
+      detailTab: "engine",
     });
   });
 

@@ -438,6 +438,8 @@ test("session history uses the type scale and sidebar button has spacing", async
   expect(await row.locator("time").evaluate((e) => getComputedStyle(e).fontSize)).toBe("12px");
   await page.goto("/e2e/harness/index.html?view=detail&deliveryPolicy=1");
   const policy = page.getByRole("region", { name: "実行中の割込配送" });
+  // Both sit in the kaoiro tab of the detail (issue 1075).
+  await page.locator("#agent-detail-tab-kaoiro").click();
   await expect(policy).toContainText("on（確認済み）");
   const button = page.locator(".session-lifecycle-open");
   await expect(button).toBeVisible();
