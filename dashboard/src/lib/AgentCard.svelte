@@ -38,6 +38,7 @@
     onStop,
     onRestore,
     onDelete,
+    onMove,
     statusLine = { kind: "none" },
     onOpenStatusLineHistory,
   }: {
@@ -85,6 +86,9 @@
     /** Remove a disconnected agent (#14); pass undefined to hide the
      *  button (e.g. no connection / viewer). */
     onDelete?: (() => Promise<void>) | undefined;
+    /** Opens the room dialog for this agent (issue #537); pass undefined to
+     *  hide the button (viewer, or no snapshot of the rooms). */
+    onMove?: (() => void) | undefined;
     /** What the card says about the agent's self-written status line (issue
      *  482). `none` draws no row; `unset` says so; `set` shows the head the
      *  server cut, as plain text. */
@@ -667,6 +671,11 @@
       {/if}
     </button>
   {/if}
+  {#if onMove !== undefined}
+    <button type="button" class="move" onclick={onMove} aria-label={msg().rooms.moveAria({ name })}>
+      {msg().rooms.moveButton}
+    </button>
+  {/if}
   {#if canStop}
     <button
       type="button"
@@ -995,6 +1004,26 @@
   .terminate:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* Room button (#537): in the normal flow under the status line, because
+     both bottom corners already hold a chip. */
+  .move {
+    display: block;
+    margin: 0.4rem auto 0;
+    padding: 0.18rem 0.45rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    color: var(--fg-dim);
+    font: inherit;
+    font-size: var(--fs-caption);
+    cursor: pointer;
+  }
+
+  .move:hover {
+    color: var(--fg);
+    border-color: var(--fg-dim);
   }
 
   /* Restore button (#22): bottom-LEFT chip (same slot as terminate, which is

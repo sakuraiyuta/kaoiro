@@ -3,6 +3,7 @@
 // dashboard-strings.md).
 export const common = {
   close: "閉じる",
+  cancel: "キャンセル",
   loading: "読み込み中…",
   noHistory: "履歴はありません",
   historyFetchFailed: (p: { reason: string }) =>

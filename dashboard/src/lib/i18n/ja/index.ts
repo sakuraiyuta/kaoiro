@@ -11,6 +11,7 @@ import { launchDialog } from "./launchDialog";
 import { personaDetailDialog } from "./personaDetailDialog";
 import { protocol } from "./protocol";
 import { responseTimeline } from "./responseTimeline";
+import { rooms } from "./rooms";
 import { sessionLifecycleDialog } from "./sessionLifecycleDialog";
 import { settingsDrawer } from "./settingsDrawer";
 import { statusLine } from "./statusLine";
@@ -36,6 +37,7 @@ export const ja = {
   personaDetailDialog,
   protocol,
   responseTimeline,
+  rooms,
   sessionLifecycleDialog,
   settingsDrawer,
   statusLine,

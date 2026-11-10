@@ -20,6 +20,10 @@
   import SessionLifecycleDialog from "./lib/SessionLifecycleDialog.svelte";
   import type { StatusLineSettings } from "./lib/statusLine";
   import { StatusLines } from "./lib/statusLines.svelte";
+  import { RoomsStore } from "./lib/roomsStore.svelte";
+  import RoomDialog from "./lib/RoomDialog.svelte";
+  import RoomSeparator from "./lib/RoomSeparator.svelte";
+  import { LOBBY_ID, type RoomRequest } from "./lib/rooms";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import {
     conversationEntryKey,
@@ -413,6 +417,26 @@
   let statusHistoryAgentId = $state<string | null>(null);
   let sessionLifecycleAgentId = $state<string | null>(null);
   let sessionLifecycleRefreshSeq = $state(0);
+
+  // Rooms (issue #537). The snapshot is pushed after the join and after each
+  // change; until one arrives (an older server, or rooms the server could not
+  // read) the grid stays flat and no room control is offered.
+  const rooms = new RoomsStore();
+  let roomRequest = $state<RoomRequest | null>(null);
+  const canManageRooms = $derived(
+    isOperator && connection !== null && status === "connected" && rooms.view.kind === "loaded",
+  );
+  const roomList = $derived(rooms.view.kind === "loaded" ? rooms.view.rooms : []);
+
+  function openRoomMove(agentId: string): void {
+    const ref = rooms.roomOf(agentId);
+    roomRequest = {
+      mode: "move",
+      agentId,
+      label: agentDisplayName(agentId),
+      currentRoomId: ref?.kind === "room" ? ref.id : null,
+    };
+  }
   // issue #273: review-quagmire notices. Deliberately NOT the 6-second
   // spawn-notice toast — the whole point is that nobody was watching, so a
   // notice that expires on its own reproduces the problem it reports. One
@@ -687,6 +711,10 @@
         })),
     ].sort((a, b) => a.id.localeCompare(b.id)),
   );
+  // The live grid keeps an empty room (the operator manages it there); the
+  // offline section lists only rooms that hold a tile.
+  const liveGroups = $derived(rooms.group(sorted, (envelope) => envelope.agent_id, true));
+  const offlineGroups = $derived(rooms.group(offlineEntries, (tile) => tile.id, false));
 
   // AgentDirectory is the authoritative display_name SoT (issue #187
   // 段階3, ふじ MF-3 レビュー指摘, wire field revised issue #209 D19):
@@ -976,6 +1004,10 @@
           // to it, and a downgraded role must not keep the operator's setting.
           statusLines.reset();
           statusLineSettings = null;
+          // issue #537: the snapshot, and any dialog opened on it, belong to
+          // the connection that is gone.
+          rooms.reset();
+          roomRequest = null;
           // issue #218 round 2 MF-4: every (re)join can follow a server
           // redeploy, so the health snapshot fetched at mount may already
           // be stale by the time this fires.
@@ -995,6 +1027,7 @@
         onStatusLineSnapshot: (rows, incomplete) => statusLines.applySnapshot(rows, incomplete),
         onStatusLine: (agentId, row) => statusLines.applyLive(agentId, row),
         onStatusLineSettings: (next) => (statusLineSettings = next),
+        onRoomsSnapshot: (snapshot) => rooms.apply(snapshot),
         onDeliverySnapshot: (next) => { deliveries = next; resolveDeliveryNotices(next); },
         onDeliverySnapshotIncomplete: (incomplete) => (deliverySnapshotIncomplete = incomplete),
         onDeliveryStatus: (agentId, delivery) => {
@@ -1647,6 +1680,8 @@
     statusHistoryAgentId = null;
     sessionLifecycleAgentId = null;
     sessionLifecycleRefreshSeq = 0;
+    rooms.reset();
+    roomRequest = null;
   }
 
   // Bulk restore of every offline entry (ADR-0030 D5). Confirms once, then
@@ -2176,6 +2211,20 @@
   {/key}
 {/if}
 
+{#if roomRequest !== null && canManageRooms && connection !== null}
+  <RoomDialog
+    request={roomRequest}
+    rooms={roomList}
+    api={connection}
+    onClose={() => (roomRequest = null)}
+    onDone={(notice) => {
+      roomRequest = null;
+      if (notice !== null) showNotice(notice);
+    }}
+    onReload={() => connection?.reconnect()}
+  />
+{/if}
+
 {#if statusHistoryAgentId !== null && connection !== null}
   <StatusLineHistoryDialog
     agentId={statusHistoryAgentId}
@@ -2335,41 +2384,64 @@
             selected = entry.detailAgentId;
           }}
         >
-          {#each sorted as envelope, index (envelope.agent_id)}
-            <li style:--stagger="{index * 60}ms">
-              <AgentCard
-                {envelope}
-                {manifest}
-                activeTaskCount={activeTaskCountByAgent[envelope.agent_id] ?? 0}
-                spawnError={spawnErrors[envelope.agent_id] ?? null}
-                hasUnackedError={unackedErrorKey[envelope.agent_id] !== undefined}
-                onSelect={(o) => {
-                  origin = o ?? null;
-                  timelineScrollTarget = null;
-                  selected = envelope.agent_id;
-                }}
-                onInterrupt={connection
-                  ? () => connection!.sendInterrupt(envelope.agent_id)
-                  : undefined}
-                onStop={connection
-                  ? () =>
-                      connection!
-                        .stop(envelope.agent_id)
-                        .catch((e) => notifyActionError("terminate", e))
-                  : undefined}
-                onRestore={connection
-                  ? () =>
-                      connection!
-                        .restore(envelope.agent_id)
-                        .catch((e) => notifyActionError("restore", e))
-                  : undefined}
-                onDelete={connection
-                  ? () => connection!.deleteAgent(envelope.agent_id)
-                  : undefined}
-                statusLine={statusLines.view(envelope.agent_id)}
-                onOpenStatusLineHistory={(id) => (statusHistoryAgentId = id)}
-              />
+          {#if canManageRooms}
+            <li class="rooms-toolbar">
+              <button type="button" onclick={() => (roomRequest = { mode: "create" })}>
+                {msg().rooms.createButton}
+              </button>
             </li>
+          {/if}
+          {#each liveGroups as group (group.key)}
+            {@const room = group.room}
+            {#if room !== null}
+              <RoomSeparator
+                {room}
+                count={group.items.length}
+                onRename={canManageRooms && room !== "unknown"
+                  ? () => (roomRequest = { mode: "rename", room })
+                  : undefined}
+                onDelete={canManageRooms && room !== "unknown" && room.id !== LOBBY_ID
+                  ? () => (roomRequest = { mode: "delete", room })
+                  : undefined}
+              />
+            {/if}
+            {#each group.items as envelope, index (envelope.agent_id)}
+              <li style:--stagger="{index * 60}ms">
+                <AgentCard
+                  {envelope}
+                  {manifest}
+                  activeTaskCount={activeTaskCountByAgent[envelope.agent_id] ?? 0}
+                  spawnError={spawnErrors[envelope.agent_id] ?? null}
+                  hasUnackedError={unackedErrorKey[envelope.agent_id] !== undefined}
+                  onSelect={(o) => {
+                    origin = o ?? null;
+                    timelineScrollTarget = null;
+                    selected = envelope.agent_id;
+                  }}
+                  onInterrupt={connection
+                    ? () => connection!.sendInterrupt(envelope.agent_id)
+                    : undefined}
+                  onStop={connection
+                    ? () =>
+                        connection!
+                          .stop(envelope.agent_id)
+                          .catch((e) => notifyActionError("terminate", e))
+                    : undefined}
+                  onRestore={connection
+                    ? () =>
+                        connection!
+                          .restore(envelope.agent_id)
+                          .catch((e) => notifyActionError("restore", e))
+                    : undefined}
+                  onDelete={connection
+                    ? () => connection!.deleteAgent(envelope.agent_id)
+                    : undefined}
+                  onMove={canManageRooms ? () => openRoomMove(envelope.agent_id) : undefined}
+                  statusLine={statusLines.view(envelope.agent_id)}
+                  onOpenStatusLineHistory={(id) => (statusHistoryAgentId = id)}
+                />
+              </li>
+            {/each}
           {/each}
         </AgentGridShell>
       </div>
@@ -2411,33 +2483,39 @@
             {/if}
           </summary>
           <ul class="agents">
-            {#each offlineEntries as tile, index (tile.id)}
-              <li style:--stagger="{index * 60}ms">
-                <AgentCard
-                  envelope={tile.envelope}
-                  {manifest}
-                  directoryOnly={tile.directoryOnly}
-                  spawnError={spawnErrors[tile.id] ?? null}
-                  onSelect={tile.directoryOnly
-                    ? undefined
-                    : (o) => {
-                        origin = o ?? null;
-                        timelineScrollTarget = null;
-                        selected = tile.id;
-                      }}
-                  onRestore={connection
-                    ? () =>
-                        connection!
-                          .restore(tile.id)
-                          .catch((e) => notifyActionError("restore", e))
-                    : undefined}
-                  onDelete={connection
-                    ? () => connection!.deleteAgent(tile.id)
-                    : undefined}
-                  statusLine={statusLines.view(tile.id)}
-                  onOpenStatusLineHistory={(id) => (statusHistoryAgentId = id)}
-                />
-              </li>
+            {#each offlineGroups as group (group.key)}
+              {#if group.room !== null}
+                <RoomSeparator room={group.room} count={group.items.length} />
+              {/if}
+              {#each group.items as tile, index (tile.id)}
+                <li style:--stagger="{index * 60}ms">
+                  <AgentCard
+                    envelope={tile.envelope}
+                    {manifest}
+                    directoryOnly={tile.directoryOnly}
+                    spawnError={spawnErrors[tile.id] ?? null}
+                    onSelect={tile.directoryOnly
+                      ? undefined
+                      : (o) => {
+                          origin = o ?? null;
+                          timelineScrollTarget = null;
+                          selected = tile.id;
+                        }}
+                    onRestore={connection
+                      ? () =>
+                          connection!
+                            .restore(tile.id)
+                            .catch((e) => notifyActionError("restore", e))
+                      : undefined}
+                    onDelete={connection
+                      ? () => connection!.deleteAgent(tile.id)
+                      : undefined}
+                    onMove={canManageRooms ? () => openRoomMove(tile.id) : undefined}
+                    statusLine={statusLines.view(tile.id)}
+                    onOpenStatusLineHistory={(id) => (statusHistoryAgentId = id)}
+                  />
+                </li>
+              {/each}
             {/each}
           </ul>
         </details>
@@ -2780,6 +2858,26 @@
     flex: 1 1 0;
     min-block-size: 0;
     overflow: hidden;
+  }
+
+  /* issue #537: the create-room button is the first full-width row of the grid. */
+  .rooms-toolbar {
+    grid-column: 1 / -1;
+  }
+
+  .rooms-toolbar button {
+    font-size: var(--fs-body-sm);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.25rem 0.8rem;
+    cursor: pointer;
+    color: var(--fg-dim);
+  }
+
+  .rooms-toolbar button:hover {
+    color: var(--fg);
+    border-color: var(--fg-dim);
   }
 
   /* Offline section (ADR-0030): collapsed by default; the restore button

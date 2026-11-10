@@ -192,6 +192,7 @@ const SERVER_EVENT_PAYLOADS: Record<keyof typeof CLIENT_EVENT_VERSION_POLICY, Re
   },
   status_line: { agent_id: "a", seq: 1, head: "h", truncated: false, bytes: 1, updated_at: "t" },
   status_line_settings: { retention: 20, source: "default", min: 1, max: 100 },
+  rooms_snapshot: { rooms: [{ id: "lobby", name: null }], memberships: {} },
 };
 
 const AGENT_ID = "hostA.abc123";
@@ -337,6 +338,12 @@ const PUSH_CASES: ReadonlyArray<{
     event: "close_conversation",
     fire: (c) => void c.closeConversation("cid-1").catch(() => {}),
   },
+  { method: "createRoom", event: "create_room", fire: (c) => void c.createRoom("Review").catch(() => {}) },
+  { method: "renameRoom", event: "rename_room", fire: (c) => void c.renameRoom("r-1", "Review").catch(() => {}) },
+  { method: "deleteRoom", event: "delete_room", fire: (c) => void c.deleteRoom("r-1").catch(() => {}) },
+  { method: "moveAgent", event: "move_agent", fire: (c) => void c.moveAgent(AGENT_ID, "r-1").catch(() => {}) },
+  { method: "previewRoomMove", event: "preview_room_move", fire: (c) => void c.previewRoomMove(AGENT_ID, "r-1").catch(() => {}) },
+  { method: "previewRoomDelete", event: "preview_room_delete", fire: (c) => void c.previewRoomDelete("r-1").catch(() => {}) },
   {
     method: "listUsers",
     event: "list_users",
