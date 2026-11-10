@@ -143,9 +143,10 @@ software keyboard is visible.
 
 [Issue #1074](https://github.com/sakuraiyuta/kaoiro/issues/1074) pins the ctx
 and rate-limit gauges and the status line: under the agent ID at desktop width,
-above the log outside the status sheet at tablet width, and above the log behind
-a disclosure at smartphone width (operator decisions Q40 and Q41, 2026-11-10).
-This amendment applies to that pinned area only.
+above the log at tablet width and on a desktop window 699px high or less, and
+above the log behind a disclosure at smartphone width (operator decisions Q40,
+Q41 and Q42, 2026-11-10). Above the log it is outside the status sheet. This
+amendment applies to that pinned area only.
 
 - The pinned area is mounted at both places at every size, and CSS media queries
   show exactly one. F6's common DOM and media-query layout are unchanged.
