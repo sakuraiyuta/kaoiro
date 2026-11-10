@@ -2,8 +2,8 @@
 title: kaoiro design principles
 description: Visual design specification for the dashboard/UI. Written in DESIGN.md format (YAML tokens + prose), affirming the existing implementation (dashboard/src/) as the canonical source.
 status: accepted
-last_updated: 2026-11-04
-related: [overview, personas, protocol, responsive-layout, responsive-reachability]
+last_updated: 2026-11-10
+related: [overview, personas, protocol, responsive-layout, responsive-reachability, rooms]
 format: stitch-design-md
 version: alpha
 name: kaoiro Dashboard
@@ -316,6 +316,33 @@ centered at `max-width: 72rem`, preventing stretched lines on wide screens.
 
 See [responsive-layout.md](responsive-layout.md) for canonical per-size columns
 and pane placement.
+
+### Rooms in the grid
+
+Contract: [rooms](../inter-agent/rooms.md). Once a `rooms_snapshot` has arrived,
+the grid is split by full-width separator rows: a rule, the room name, how many
+tiles it holds and, for an operator, the controls of that room. The lobby comes
+first, then the other rooms in the server's order. The live grid keeps a room
+with no tile; the operator-only offline section lists only rooms that hold one.
+A separator row spans the whole grid at every width, so its controls are reachable
+on a smartphone.
+
+- Without a snapshot (an older server, or rooms the server could not read) the
+  grid stays flat and no room control is shown. An agent is placed in the lobby
+  only when a complete snapshot omits it (a new agent); an incomplete snapshot's
+  omission, or a room the snapshot does not list, puts it in a last group, "room
+  not confirmed".
+- An operator sees "Create room" as the grid's first row, rename and delete on a
+  separator (never delete on the lobby), and "Change room" on each tile. A viewer
+  sees the separators and no control.
+- A move and a delete open one dialog that shows how many conversations the change
+  would close, marked as an estimate from the moment it was checked. The confirm
+  button waits for that count; cancelling sends nothing.
+- A refusal is shown by its server code in the UI language; an unknown code is shown
+  as it is. After an unconfirmed change the dialog offers "Reload", which rejoins the
+  channel to read the rooms again; the dashboard never rejoins by itself.
+- Room names and agent names are shown as the operator typed them. All other text is
+  in the i18n area `rooms`.
 
 ### Responsive
 

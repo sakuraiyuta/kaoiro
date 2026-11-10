@@ -63,7 +63,6 @@
         (failure: unknown) => { if (current()) preview = { kind: "error", code: codeOf(failure) }; },
       );
     });
-    return () => { previewSeq++; };
   });
 
   const title = $derived.by(() => {
