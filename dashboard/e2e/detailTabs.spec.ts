@@ -42,16 +42,18 @@ for (const [width, height] of [
     await expect(page.locator(".terminate")).toBeVisible();
     await expect(page.locator(".clear-history")).toBeHidden();
     await expect(page.locator(".session-lifecycle-open")).toBeHidden();
+    // Clear history is disabled in the harness (no session id), so the
+    // session history button stands for the kaoiro panel's Tab stops.
     const engineStops = await tabStops(page, "engine");
     expect(has(engineStops, "terminate")).toBe(true);
-    expect(has(engineStops, "clear-history")).toBe(false);
+    expect(has(engineStops, "session-lifecycle-open")).toBe(false);
 
     await tab(page, "kaoiro").click();
     await expect(tab(page, "kaoiro")).toHaveAttribute("aria-selected", "true");
     await expect(page.locator(".session-lifecycle-open")).toBeVisible();
     await expect(page.locator(".terminate")).toBeHidden();
     const kaoiroStops = await tabStops(page, "kaoiro");
-    expect(has(kaoiroStops, "clear-history")).toBe(true);
+    expect(has(kaoiroStops, "session-lifecycle-open")).toBe(true);
     expect(has(kaoiroStops, "terminate")).toBe(false);
   });
 }

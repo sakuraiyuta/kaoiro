@@ -41,8 +41,12 @@ for (const [width, height] of [
       await expect(target).toBeVisible();
       await expectInViewport(page, target);
     }
-    // Each detail tab (issue 1075) must overflow .status-scroll, or the
-    // scroll below proves nothing.
+    // With the detail tabs (issue 1075) neither panel overflows at this
+    // size, so the scroll check runs 800px high, still under the agent ID,
+    // with the kaoiro items turned on: each tab must overflow, or the scroll
+    // below proves nothing.
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto(`${LONG}&deliveryPolicy=1&wrapperBuild=1`);
     const before = await top(ctxRow(head(page)));
     for (const tab of ["engine", "kaoiro"]) {
       await page.locator(`#agent-detail-tab-${tab}`).click();
