@@ -4856,7 +4856,8 @@
   }
 
   /* Pinned area (issue 1074), mounted twice; CSS shows exactly one copy:
-     under the agent ID from 1199px, above the log below that. */
+     under the agent ID from 1199px wide and 700px high, above the log
+     otherwise. */
   .pinned-slot {
     min-width: 0;
   }
@@ -4874,7 +4875,9 @@
     display: none;
   }
 
-  @media (max-width: 1198px) {
+  /* A short desktop window gets the bar above the log too: under the agent
+     ID the taller head would leave .status-scroll no height (Q42). */
+  @media (max-width: 1198px), (max-height: 699px) {
     .pinned-slot-head {
       display: none;
     }
@@ -5106,7 +5109,7 @@
 
   /* Full width above the log: the gauges sit side by side. After the base
      rules above so it wins. */
-  @media (max-width: 1198px) {
+  @media (max-width: 1198px), (max-height: 699px) {
     .pinned-gauges {
       flex-direction: row;
       flex-wrap: wrap;

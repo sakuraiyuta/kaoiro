@@ -69,7 +69,7 @@ sprite alone, so it does not fit.
 | Lobby grid | Depends on role as below | Same | Same |
 | Response timeline | Side-by-side right pane | Side-by-side right pane | Bottom sheet |
 | AgentDetail status | Left sidebar | Bottom sheet | Bottom sheet |
-| AgentDetail pinned area (ctx / rate-limit gauges, status line) | Under the agent ID | Above the log, always open | Above the log, collapsed until opened |
+| AgentDetail pinned area (ctx / rate-limit gauges, status line) | Under the agent ID; above the log when 699px high or less | Above the log, always open | Above the log, collapsed until opened |
 | In-flow docks / Tasklist float | Unchanged | Same | Same |
 
 Lobby-grid columns depend on role and timeline placement. **Fix columns only

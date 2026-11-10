@@ -112,6 +112,46 @@ for (const [width, height] of [
   });
 }
 
+// Q42: a desktop window 699px high or less gets the bar above the log, so the
+// sidebar keeps the height it had before the pinned area (base c0a2fdef:
+// 162-288px at these sizes).
+for (const [width, height] of [
+  [1366, 650],
+  [1280, 600],
+  [1199, 560],
+  [1440, 500],
+  [1920, 500],
+] as const) {
+  test(`${width}x${height}: short desktop, above the log, sidebar keeps its room`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await page.goto(LONG);
+
+    await expect(page.locator("aside.status")).toBeVisible();
+    await expect(head(page)).toBeHidden();
+    await expect(main(page)).toBeVisible();
+    for (const target of [ctxRow(main(page)), rateRow(main(page)), main(page).locator(".status-line-panel")]) {
+      await expect(target).toBeVisible();
+      await expectInViewport(page, target);
+    }
+    const room = await page.locator(".status-scroll").evaluate((el) => el.clientHeight);
+    expect(room).toBeGreaterThanOrEqual(150);
+  });
+}
+
+for (const [width, height] of [
+  [1199, 700],
+  [1366, 700],
+] as const) {
+  test(`${width}x${height}: 700px high keeps the bar under the agent ID`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await page.goto(LONG);
+
+    await expect(head(page)).toBeVisible();
+    await expect(main(page)).toBeHidden();
+    await expectInViewport(page, ctxRow(head(page)));
+  });
+}
+
 test.describe("status line clamp (expand in place)", () => {
   test("a long line shows three lines and expands in place", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
