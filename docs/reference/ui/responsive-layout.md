@@ -2,7 +2,7 @@
 title: Responsive layout specification
 description: Breakpoint definitions, area-specific layout rules, sheet mechanism, and safe-area handling that make the dashboard equally viable at PC, tablet, and smartphone sizes.
 status: provisional
-last_updated: 2026-10-04
+last_updated: 2026-11-10
 related: [design, protocol, responsive-reachability]
 ---
 
@@ -69,6 +69,7 @@ sprite alone, so it does not fit.
 | Lobby grid | Depends on role as below | Same | Same |
 | Response timeline | Side-by-side right pane | Side-by-side right pane | Bottom sheet |
 | AgentDetail status | Left sidebar | Bottom sheet | Bottom sheet |
+| AgentDetail pinned area (ctx / rate-limit gauges, status line) | Under the agent ID | Above the log, always open | Above the log, collapsed until opened |
 | In-flow docks / Tasklist float | Unchanged | Same | Same |
 
 Lobby-grid columns depend on role and timeline placement. **Fix columns only
@@ -170,7 +171,8 @@ outside the spacing scale for other elements. CSS `env()` also requires
   differently by size, because remounting on rotation loses in-progress composer
   text and log scroll position (ADR-0052 F6).
 - **MUST**: Switch layout with CSS media queries. The only Svelte state is sheet
-  open/close.
+  open/close. Exception: the AgentDetail pinned area, see
+  [ADR-0052 Amendment 2026-11-10](../../adr/0052-responsive-three-tier-layout.md#amendment-2026-11-10-agentdetail-pinned-area).
 - **MUST**: All functionality and information are reachable from all sizes. The
   exhaustive table is [responsive-reachability.md](responsive-reachability.md).
 - **MUST**: On smartphones, viewing, sending instructions, and approving

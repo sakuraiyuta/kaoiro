@@ -18,7 +18,7 @@
   import PersonaFace from "./PersonaFace.svelte";
   import { personaForAgent } from "./personaName";
   import TaskRing from "./TaskRing.svelte";
-  import StatusLinePanel from "./StatusLinePanel.svelte";
+  import AgentPinnedStatus from "./AgentPinnedStatus.svelte";
   import type { StatusLineView } from "./statusLine";
   import TasklistFloat from "./TasklistFloat.svelte";
   import { settings } from "./settings.svelte";
@@ -1287,6 +1287,19 @@
       resumePickerOpen = false;
       resumeReplyAgentId = null;
       resumeError = null;
+    }
+  });
+
+  // Pinned area (issue 1074): user-toggled only, never set from the viewport
+  // (ADR-0052 amendment 2026-11-10). Both placements share these, so crossing
+  // the 1198/1199 boundary keeps them. Another agent's line starts clamped.
+  let pinnedExpanded = $state(false);
+  let pinnedOpen = $state(false);
+  let pinnedAgentId = untrack(() => envelope.agent_id);
+  $effect(() => {
+    if (envelope.agent_id !== pinnedAgentId) {
+      pinnedAgentId = envelope.agent_id;
+      pinnedExpanded = false;
     }
   });
 
@@ -2943,6 +2956,97 @@
   }
 </script>
 
+{#snippet pinnedArea(placement: "head" | "main")}
+  <AgentPinnedStatus
+    {placement}
+    gauges={hasCcStatus ? pinnedGauges : undefined}
+    {statusLine}
+    onOpenHistory={onOpenStatusLineHistory
+      ? () => onOpenStatusLineHistory(envelope.agent_id)
+      : undefined}
+    expanded={pinnedExpanded}
+    onToggleExpanded={() => (pinnedExpanded = !pinnedExpanded)}
+    open={pinnedOpen}
+    onToggleOpen={() => (pinnedOpen = !pinnedOpen)}
+  />
+{/snippet}
+
+{#snippet pinnedGauges()}
+  <dl class="pinned-gauges">
+    {#if contextUsageSupport === true}
+      <!-- capability=true: adapter が stamp する意思あり。値到着で
+           meter、未到着で「取得中」placeholder (ADR-0040 phase-21) -->
+      <div class="cc-row">
+        <dt>ctx</dt>
+        <dd>
+          {#if ctxPct === null}
+            <span class="cc-pending">{msg().agentDetail.ctxLoading}</span>
+          {:else}
+            <div class="meter">
+              <div class="meter-fill" style:width="{ctxPct}%"></div>
+            </div>
+            <span class="meter-val">
+              <span class="ctx-meter-line">
+                {msg().agentDetail.ctxWindow({ pct: ctxPct })}
+                {#if ctxUsed !== null && ctxMax !== null}
+                  <span class="meter-abs"
+                    >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
+                {/if}
+              </span>
+              {#if ctxUsed !== null && ctxBudgetPct !== null && ctxBudgetTokens !== null}
+                <span class="ctx-meter-line">
+                  {msg().agentDetail.ctxBudget({ pct: ctxBudgetPct })}
+                  <span class="meter-abs"
+                    >({fmtTokens(ctxUsed)}/{fmtTokens(ctxBudgetTokens)})</span>
+                </span>
+              {/if}
+            </span>
+          {/if}
+        </dd>
+      </div>
+    {:else if contextUsageSupport === false}
+      <!-- capability=false: adapter が非対応を宣言 (現状 Codex)。
+           UI は engine 名を見ずこの capability だけで判定
+           (ADR-0034 F3、ADR-0040) -->
+      <div class="cc-row">
+        <dt>ctx</dt>
+        <dd>
+          <span class="cc-pending">{msg().agentDetail.ctxUnsupported}</span>
+        </dd>
+      </div>
+    {/if}
+    <!-- undefined (absent field/caps): 旧 wrapper の rolling upgrade。
+         ctx 行そのものを非表示にする — absent を「未対応」扱いにすると
+         capability を知らない旧 wrapper で誤誘導になる (M-B) -->
+    {#each ccRateRows as r (r.key)}
+      <div class="cc-row">
+        <dt>{r.label}</dt>
+        <dd>
+          {#if r.key === "seven_day" && r.pct === null && r.reset === null}
+            <span class="cc-pending">{msg().agentDetail.rateNoData}</span>
+          {:else}
+            <div
+              class="meter"
+              data-status={r.status}
+              title={r.reset ? msg().agentDetail.rateReset({ at: r.reset }) : undefined}
+            >
+              <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
+            </div>
+            <!-- Claude API は status="allowed" (安全圏) では utilization を
+                 送らず reset 時刻と status のみを push することがある。
+                 ヘビーユーザは reset 時刻を見て次の枠再開を計画するので、
+                 hover tooltip ではなく inline に表示する。#154 で /usage
+                 から utilization を補完するようになり pct が常時入るように
+                 なったため、pct と reset は排他ではなく併記する(pct も
+                 reset も無い真の未受信状態のみ "?" にフォールバック)。 -->
+            <span class="meter-val">{rateValueLabel(r)}</span>
+          {/if}
+        </dd>
+      </div>
+    {/each}
+  </dl>
+{/snippet}
+
 <section class="detail" data-state={expression.variant} in:expandFrom={{ origin }}>
   <div class="bar">
     <button class="back" onclick={onClose}>{msg().agentDetail.backToGrid}</button>
@@ -3110,6 +3214,9 @@
                は name(id) 表記でクリック可能、 spawn トーストも name(id)。 -->
           <p class="id">{envelope.agent_id}</p>
         </div>
+        <div class="pinned-slot pinned-slot-head">
+          {@render pinnedArea("head")}
+        </div>
       </header>
 
       <!-- Everything below the identity header scrolls inside .status-scroll so
@@ -3130,12 +3237,6 @@
           onChange={onDeliveryPolicyChange ? (policy) => onDeliveryPolicyChange?.(envelope.agent_id, policy) : undefined}
           onRefresh={onDeliveryPolicyRefresh ? () => onDeliveryPolicyRefresh?.(envelope.agent_id) : undefined} />
       {/if}
-      <StatusLinePanel
-        view={statusLine}
-        onOpenHistory={onOpenStatusLineHistory
-          ? () => onOpenStatusLineHistory(envelope.agent_id)
-          : undefined}
-      />
       {#if hasCcStatus}
         <!-- Claude Code status meta (#16): mirrors the local statusline's
              model / ctx / 5h / 7d segments for this agent. -->
@@ -3617,51 +3718,6 @@
               <dd>{ccFastMode}</dd>
             </div>
           {/if}
-          {#if contextUsageSupport === true}
-            <!-- capability=true: adapter が stamp する意思あり。値到着で
-                 meter、未到着で「取得中」placeholder (ADR-0040 phase-21) -->
-            <div class="cc-row">
-              <dt>ctx</dt>
-              <dd>
-                {#if ctxPct === null}
-                  <span class="cc-pending">{msg().agentDetail.ctxLoading}</span>
-                {:else}
-                  <div class="meter">
-                    <div class="meter-fill" style:width="{ctxPct}%"></div>
-                  </div>
-                  <span class="meter-val">
-                    <span class="ctx-meter-line">
-                      {msg().agentDetail.ctxWindow({ pct: ctxPct })}
-                      {#if ctxUsed !== null && ctxMax !== null}
-                        <span class="meter-abs"
-                          >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
-                      {/if}
-                    </span>
-                    {#if ctxUsed !== null && ctxBudgetPct !== null && ctxBudgetTokens !== null}
-                      <span class="ctx-meter-line">
-                        {msg().agentDetail.ctxBudget({ pct: ctxBudgetPct })}
-                        <span class="meter-abs"
-                          >({fmtTokens(ctxUsed)}/{fmtTokens(ctxBudgetTokens)})</span>
-                      </span>
-                    {/if}
-                  </span>
-                {/if}
-              </dd>
-            </div>
-          {:else if contextUsageSupport === false}
-            <!-- capability=false: adapter が非対応を宣言 (現状 Codex)。
-                 UI は engine 名を見ずこの capability だけで判定
-                 (ADR-0034 F3、ADR-0040) -->
-            <div class="cc-row">
-              <dt>ctx</dt>
-              <dd>
-                <span class="cc-pending">{msg().agentDetail.ctxUnsupported}</span>
-              </dd>
-            </div>
-          {/if}
-          <!-- undefined (absent field/caps): 旧 wrapper の rolling upgrade。
-               ctx 行そのものを非表示にする — absent を「未対応」扱いにすると
-               capability を知らない旧 wrapper で誤誘導になる (M-B) -->
 
           {#if deliveryStatus}
             <div class="cc-row" data-testid="inter-agent-delivery-status">
@@ -3684,33 +3740,6 @@
               </dd>
             </div>
           {/if}
-
-          {#each ccRateRows as r (r.key)}
-            <div class="cc-row">
-              <dt>{r.label}</dt>
-              <dd>
-                {#if r.key === "seven_day" && r.pct === null && r.reset === null}
-                  <span class="cc-pending">{msg().agentDetail.rateNoData}</span>
-                {:else}
-                  <div
-                    class="meter"
-                    data-status={r.status}
-                    title={r.reset ? msg().agentDetail.rateReset({ at: r.reset }) : undefined}
-                  >
-                    <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
-                  </div>
-                  <!-- Claude API は status="allowed" (安全圏) では utilization を
-                       送らず reset 時刻と status のみを push することがある。
-                       ヘビーユーザは reset 時刻を見て次の枠再開を計画するので、
-                       hover tooltip ではなく inline に表示する。#154 で /usage
-                       から utilization を補完するようになり pct が常時入るように
-                       なったため、pct と reset は排他ではなく併記する(pct も
-                       reset も無い真の未受信状態のみ "?" にフォールバック)。 -->
-                  <span class="meter-val">{rateValueLabel(r)}</span>
-                {/if}
-              </dd>
-            </div>
-          {/each}
         </dl>
       {/if}
 
@@ -3810,6 +3839,9 @@
     </BottomSheet>
 
     <div class="main">
+      <div class="pinned-slot pinned-slot-main">
+        {@render pinnedArea("main")}
+      </div>
       <TasklistFloat agentId={envelope.agent_id} {tasklist} />
       <div
         class="log"
@@ -4815,6 +4847,48 @@
     50% { opacity: 0.45; }
   }
 
+  /* Pinned area (issue 1074), mounted twice; CSS shows exactly one copy:
+     under the agent ID from 1199px, above the log below that. */
+  .pinned-slot {
+    min-width: 0;
+  }
+
+  .pinned-slot:empty {
+    display: none;
+  }
+
+  /* An expanded status line keeps about 6rem for the scroll area beside it
+     (the sidebar's .status-scroll here, the log below 1199px); the overhead
+     is the rest of the head, measured at 1199-1920px wide. */
+  .pinned-slot-head {
+    align-self: stretch;
+    text-align: left;
+    --status-line-expanded-max: max(calc(1.4em * 3), calc(100dvh - 40rem));
+  }
+
+  .pinned-slot-main {
+    display: none;
+  }
+
+  @media (max-width: 1198px) {
+    .pinned-slot-head {
+      display: none;
+    }
+
+    /* flex: none keeps it out of the log's share, so it never scrolls. */
+    .pinned-slot-main {
+      display: block;
+      flex: none;
+      --status-line-expanded-max: max(calc(1.4em * 3), calc(100dvh - 30rem));
+      padding-bottom: 0.6rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .pinned-slot-main:empty {
+      display: none;
+    }
+  }
+
   .head {
     /* Pinned: does not shrink, so only .status-scroll below it scrolls. */
     flex: 0 0 auto;
@@ -5005,18 +5079,51 @@
     font-size: var(--fs-metadata);
   }
 
+  /* The ctx and rate rows moved to the pinned area (issue 1074); a panel
+     opened only by their conditions would be an empty shell. */
+  .cc:not(:has(.cc-row)) {
+    display: none;
+  }
+
+  /* Pinned area gauges (issue 1074): the same rows as .cc, without the
+     panel's top spacing. */
+  .pinned-gauges {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    font-size: var(--fs-metadata);
+  }
+
   .cc-row {
     display: flex;
     flex-direction: column;
     gap: 0.2rem;
   }
 
-  .cc dt {
+  /* Full width above the log: the gauges sit side by side. After the base
+     rules above so it wins. */
+  @media (max-width: 1198px) {
+    .pinned-gauges {
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 0.4rem 1.2rem;
+    }
+
+    .pinned-gauges .cc-row {
+      flex: 1 1 10rem;
+      min-width: 0;
+    }
+  }
+
+  .cc dt,
+  .pinned-gauges dt {
     color: var(--fg-dim);
     letter-spacing: 0.05em;
   }
 
-  .cc dd {
+  .cc dd,
+  .pinned-gauges dd {
     margin: 0;
     display: flex;
     flex-direction: column;

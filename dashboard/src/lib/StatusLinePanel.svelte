@@ -14,10 +14,21 @@
   let {
     view,
     onOpenHistory,
+    clamp = false,
+    expanded = false,
+    bodyId,
+    bodyEl = $bindable(null),
   }: {
     view: StatusLineView;
     /** Opens the change log of this agent. Undefined hides the button. */
     onOpenHistory?: (() => void) | undefined;
+    /** Limit the drawn head to three lines unless `expanded`. */
+    clamp?: boolean;
+    expanded?: boolean;
+    /** id of the drawn head, for a toggle outside the panel to point at. */
+    bodyId?: string | undefined;
+    /** The drawn head element, or null while nothing is drawn. */
+    bodyEl?: HTMLDivElement | null;
   } = $props();
 
   const more = $derived(
@@ -50,7 +61,13 @@
       {#if headOmitted(view)}
         <p class="omitted">{headOmittedText()}</p>
       {:else}
-        <div class="body"><UntrustedMarkdown text={view.head} /></div>
+        <div
+          class="body"
+          class:clamped={clamp && !expanded}
+          class:expanded={clamp && expanded}
+          id={bodyId}
+          bind:this={bodyEl}
+        ><UntrustedMarkdown text={view.head} /></div>
       {/if}
       {#if more !== null}
         <p class="more">{more}</p>
@@ -108,6 +125,32 @@
 
   .more {
     margin: 0.3rem 0 0;
+  }
+
+  /* Three lines of the panel's own line height. The first block's top margin
+     would otherwise eat into them. */
+  .body.clamped,
+  .body.expanded {
+    line-height: 1.4;
+  }
+
+  .body.clamped {
+    max-height: calc(1.4em * 3);
+    overflow: hidden;
+  }
+
+  /* The caller sets the cap from its own layout; past it the head scrolls
+     in place. */
+  .body.expanded {
+    max-height: var(--status-line-expanded-max, 40vh);
+    overflow-y: auto;
+  }
+
+  .body.clamped > :global(:first-child),
+  .body.expanded > :global(:first-child),
+  .body.clamped > :global(:first-child > :first-child),
+  .body.expanded > :global(:first-child > :first-child) {
+    margin-top: 0;
   }
 
   .unset {

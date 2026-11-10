@@ -87,6 +87,10 @@ export const agentDetail = {
   attentionOthers: (p: { count: number }) =>
     `他に ${p.count} 体が要対応(クリックで一覧へ)`,
   statusSheetLabel: "ステータス",
+  pinnedLabel: "ゲージと状況表示",
+  pinnedDisclosure: "ゲージと状況",
+  pinnedShowAll: "全文を表示",
+  pinnedShowLess: "折りたたむ",
   personaDetailAria: (p: { name: string }) => `${p.name} のペルソナ詳細を表示`,
   renameTitle: "表示名を変更",
   renameAria: (p: { name: string }) => `${p.name} の表示名を変更`,
