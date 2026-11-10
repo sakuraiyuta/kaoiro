@@ -1,3 +1,4 @@
+import "../isolation.setup";
 // Inputs for the AgentDetail engine / kaoiro tab tests (issue 1075). Each
 // connected input is built so that, together, they render every one of the
 // 19 `dl.cc` row kinds; the rows are engine-exclusive, so no single input can.
