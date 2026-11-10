@@ -1,7 +1,7 @@
 defmodule KaoiroServer.Rooms do
   @moduledoc """
   Rooms and the single room each agent belongs to (issue #537 Phase 0,
-  ADR-0071, docs/reference/inter-agent/rooms.md).
+  ADR-0072, docs/reference/inter-agent/rooms.md).
 
   The lobby (`"lobby"`) always exists and cannot be deleted; its name is `nil`
   until an operator renames it. An agent with no stored membership is in the

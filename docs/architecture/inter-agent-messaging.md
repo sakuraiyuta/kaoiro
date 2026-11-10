@@ -68,7 +68,7 @@ receiver, batching, and synchronous-wait contracts.
 - [Coordination monitoring and display](../reference/inter-agent/coordination-monitoring.md).
 - [Peer directory and companion tools](../reference/inter-agent/directory.md).
 - [Rooms](../reference/inter-agent/rooms.md): sending is limited to agents in
-  the same room ([ADR-0071](../adr/0071-rooms-single-membership-send-boundary.md)).
+  the same room ([ADR-0072](../adr/0072-rooms-single-membership-send-boundary.md)).
 - [protocol](../reference/protocol/envelope.md) (common envelope foundation),
   [tasks](../reference/protocol/tasks.md) (similar reserved-type patterns),
   [extensions](extensions.md) (future filter insertion point), and

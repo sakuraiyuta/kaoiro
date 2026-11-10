@@ -9,7 +9,7 @@ related_specs: [rooms, conversations, directory]
 related_adrs: [30, 50]
 ---
 
-# ADR-0071 — Rooms with single membership and a server-side send boundary
+# ADR-0072 — Rooms with single membership and a server-side send boundary
 
 ## Context
 

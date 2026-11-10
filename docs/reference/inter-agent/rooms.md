@@ -12,7 +12,7 @@ A room is a group of agents. An agent is in exactly one room, and the server
 accepts `send_to_agent` only between agents in the same room. Rooms keep a
 message from reaching the wrong team; they are not a permission system
 ([enforcement boundaries](../security/enforcement-boundaries.md#rooms)). The
-decision record is [ADR-0071](../../adr/0071-rooms-single-membership-send-boundary.md)
+decision record is [ADR-0072](../../adr/0072-rooms-single-membership-send-boundary.md)
 ([issue #537](https://github.com/sakuraiyuta/kaoiro/issues/537), Phase 0).
 
 ## Rooms and membership
@@ -153,9 +153,11 @@ before the sync failed is what the next server start reads.
 
 ### After `room_change_unconfirmed`
 
-Read `rooms_snapshot` and `list_conversations` again. When the save inside
-the server timed out and completed later, the membership has changed but the
-conversations it split are still open. The same-room rule already refuses
+Rejoin the channel to receive a fresh `rooms_snapshot`, and read
+`list_conversations` again. If a timed-out save completes later, no room
+change broadcast is sent and the dashboard remains stale until it rejoins.
+When the save inside the server timed out and completed later, the membership
+has changed but the conversations it split are still open. The same-room rule already refuses
 every further message on them. Close such a conversation with the operator's
 `close_conversation`. Repeating the move or the delete is not a repair: a
 move to the room the agent is now in changes nothing, and a deleted room no
