@@ -152,6 +152,12 @@ describe("the grid", () => {
     expect(document.querySelector('[data-room="unknown"] h3')?.textContent).toBe("部屋を確認できていません");
   });
 
+  it("does not read a viewer's omission as the lobby: its snapshot does not list every agent", async () => {
+    await mountApp("viewer", { ...RAW, memberships: { "h.b": "r1" } });
+
+    expect(kinds()).toEqual(["header:lobby", "header:r1", "card:h.b", "header:r2", "header:unknown", "card:h.a"]);
+  });
+
   it("goes back to flat when the connection rejoins, until the new snapshot arrives", async () => {
     const h = await mountApp("operator");
     expect(kinds()).toContain("header:r1");

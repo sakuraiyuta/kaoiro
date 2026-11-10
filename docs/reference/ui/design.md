@@ -328,10 +328,11 @@ A separator row spans the whole grid at every width, so its controls are reachab
 on a smartphone.
 
 - Without a snapshot (an older server, or rooms the server could not read) the
-  grid stays flat and no room control is shown. An agent is placed in the lobby
-  only when a complete snapshot omits it (a new agent); an incomplete snapshot's
-  omission, or a room the snapshot does not list, puts it in a last group, "room
-  not confirmed".
+  grid stays flat and no room control is shown. For an operator an agent is placed
+  in the lobby only when a complete snapshot omits it (a new agent). A viewer's
+  snapshot does not list every agent the server holds, so for a viewer an omitted
+  agent, like an incomplete snapshot's omission or a room the snapshot does not
+  list, goes to a last group, "room not confirmed".
 - An operator sees "Create room" as the grid's first row, rename and delete on a
   separator (never delete on the lobby), and "Change room" on each tile. A viewer
   sees the separators and no control.

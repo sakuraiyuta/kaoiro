@@ -34,7 +34,9 @@
   );
   const lobbyName = $derived(roomName(rooms.find((room) => room.id === LOBBY_ID) ?? { id: LOBBY_ID, name: null }));
 
-  let name = $state(untrack(() => (request.mode === "rename" ? roomName(request.room) : "")));
+  // An unrenamed lobby (`name: null`) starts empty with its default name as the
+  // placeholder: pre-filling the translated default would save it as a fixed name.
+  let name = $state(untrack(() => (request.mode === "rename" ? (request.room.name ?? "") : "")));
   let destination = $state(untrack(() => destinations[0]?.id ?? ""));
   let preview = $state<Preview>({ kind: "idle" });
   let busy = $state(false);
@@ -80,8 +82,12 @@
       : msg().rooms.deleteConfirm,
   );
   const needsName = $derived(request.mode === "create" || request.mode === "rename");
+  const namePlaceholder = $derived(
+    request.mode === "rename" && request.room.name === null ? roomName(request.room) : msg().rooms.namePlaceholder,
+  );
+  // After an unconfirmed answer the change may already be applied: read first.
   const canConfirm = $derived(
-    !busy && (needsName ? name.trim() !== "" : preview.kind === "ok"),
+    !busy && (error === null || !isUnconfirmed(error)) && (needsName ? name.trim() !== "" : preview.kind === "ok"),
   );
 
   async function confirm(): Promise<void> {
@@ -128,7 +134,7 @@
         <!-- svelte-ignore a11y_autofocus -- inside a native <dialog> opened
              with showModal() (Modal.svelte), autofocus is the sanctioned
              initial-focus mechanism. -->
-        <input type="text" bind:value={name} placeholder={msg().rooms.namePlaceholder} autofocus />
+        <input type="text" bind:value={name} placeholder={namePlaceholder} autofocus />
       </label>
     {:else if request.mode === "move"}
       <p>{msg().rooms.moveCurrentRoom({

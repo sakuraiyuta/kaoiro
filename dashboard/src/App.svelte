@@ -421,7 +421,7 @@
   // Rooms (issue #537). The snapshot is pushed after the join and after each
   // change; until one arrives (an older server, or rooms the server could not
   // read) the grid stays flat and no room control is offered.
-  const rooms = new RoomsStore();
+  const rooms = new RoomsStore(() => isOperator);
   let roomRequest = $state<RoomRequest | null>(null);
   const canManageRooms = $derived(
     isOperator && connection !== null && status === "connected" && rooms.view.kind === "loaded",

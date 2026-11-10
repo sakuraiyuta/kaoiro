@@ -51,7 +51,7 @@ function count(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-export function parseRoom(raw: unknown): Room | null {
+function parseRoom(raw: unknown): Room | null {
   if (!isRecord(raw) || typeof raw.id !== "string" || raw.id === "") return null;
   if (raw.name !== null && typeof raw.name !== "string") return null;
   return { id: raw.id, name: raw.name };
@@ -99,9 +99,9 @@ export function parseRoomChange(raw: unknown): RoomChangeResult | null {
 }
 
 /** Where an agent is. Null when there is no snapshot. An agent the snapshot
- *  does not list is in the lobby only when the snapshot is complete: the
- *  server lists every agent it holds, so a missing one was created after the
- *  snapshot, and a new agent is in the lobby. */
+ *  does not list is in the lobby only when the snapshot is complete and names
+ *  every agent the server holds (an operator's does): a missing one was then
+ *  created after the snapshot, and a new agent is in the lobby. */
 export function roomOf(view: RoomsView, agentId: string): RoomRef | null {
   if (view.kind === "none") return null;
   const roomId = view.memberships.get(agentId);

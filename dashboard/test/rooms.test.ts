@@ -5,7 +5,6 @@ import "./isolation.setup";
 import { describe, expect, it } from "vitest";
 import { setLocale } from "../src/lib/i18n/index.svelte";
 import {
-  groupByRoom,
   isUnconfirmed,
   parseRoomChange,
   parseRoomPreview,
@@ -89,38 +88,6 @@ describe("roomOf: the three states", () => {
   it.each([false, true])("treats a room the snapshot does not list as unknown (incomplete: %s)", (incomplete) => {
     const view = loaded({ ...RAW, memberships: { "h.a": "gone" }, snapshot_incomplete: incomplete });
     expect(roomOf(view, "h.a")).toEqual({ kind: "unknown" });
-  });
-});
-
-describe("groupByRoom", () => {
-  const ids = ["h.a", "h.b", "h.c"];
-  const idOf = (id: string): string => id;
-
-  it("is one flat group without a snapshot", () => {
-    expect(groupByRoom({ kind: "none" }, ids, idOf, true)).toEqual([{ key: "flat", room: null, items: ids }]);
-  });
-
-  it("lists the lobby first, then the other rooms in order, an empty one included on request", () => {
-    const groups = groupByRoom(loaded({ ...RAW, memberships: { "h.a": "r1", "h.b": "lobby", "h.c": "r1" } }), ids, idOf, true);
-    expect(groups.map((group) => [group.key, group.items])).toEqual([
-      ["room:lobby", ["h.b"]],
-      ["room:r1", ["h.a", "h.c"]],
-      ["room:r2", []],
-    ]);
-  });
-
-  it("leaves an empty room out when asked", () => {
-    const groups = groupByRoom(loaded(RAW), ids, idOf, false);
-    expect(groups.map((group) => group.key)).toEqual(["room:lobby", "room:r1"]);
-  });
-
-  it("puts agents whose room is not confirmed last", () => {
-    const groups = groupByRoom(loaded({ ...RAW, snapshot_incomplete: true }), ids, idOf, false);
-    expect(groups.map((group) => [group.key, group.items])).toEqual([
-      ["room:lobby", ["h.a"]],
-      ["room:r1", ["h.b"]],
-      ["unknown", ["h.c"]],
-    ]);
   });
 });
 
