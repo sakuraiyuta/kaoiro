@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#14141d">
   <title>kaoiro deployment examples</title>
-  <meta name="description" content="Example kaoiro layouts: several on-premises hosts, everything on one machine, and an offline intranet setup that is a future concept.">
+  <meta name="description" content="Example kaoiro layouts: several hosts, everything on one machine, and a planned fully offline setup designed with information security in mind.">
   <link rel="alternate" hreflang="ja" href="ja/deployments.html">
   <link rel="stylesheet" href="style.css">
   <script src="site.js" defer></script>
@@ -34,21 +34,21 @@
     <header class="wrap page-head">
       <p class="eyebrow"><a href="./">kaoiro</a> / Deployments</p>
       <h1>Deployments</h1>
-      <p class="lead">Three example layouts. Host names are placeholders, and the offline example is a future concept, not something you can run today.</p>
+      <p class="lead">Three example layouts, for different purposes.</p>
     </header>
 
     <section class="wrap block" aria-labelledby="multi-host">
       <p class="eyebrow"><span>01</span> / Example A</p>
-      <h2 id="multi-host">Several on-premises hosts, split by role</h2>
-      <p class="intro">The layout the author uses every day, with host names replaced by placeholders. The server, the agents and heavy tests each have a machine of their own.</p>
+      <h2 id="multi-host">Machines split by role</h2>
+      <p class="intro">The layout the author uses every day.<br>The server, the agents and the test environment each have a host of their own.</p>
       <ul class="cards">
         <li><h3>server-host</h3><p>One Linux machine. The kaoiro server runs under Docker Compose behind an HTTPS reverse proxy and is reachable from the Internet.</p></li>
         <li><h3>agent-host</h3><p>One Linux machine. The runner stays resident as a systemd user unit and supervises about a dozen agents on this host: roughly 6 Claude Code, 4 Codex, 2 Antigravity and 1 Grok Build.</p></li>
-        <li><h3>test-host</h3><p>A separate machine that runs heavy tests in isolated containers. This is the author's own arrangement, not a kaoiro feature.</p></li>
-        <li><h3>Clients and files</h3><p>The operator uses the dashboard in a browser on a PC and on a phone. Files for the operator to read are passed through a self-hosted Nextcloud, also outside kaoiro.</p></li>
+        <li><h3>test-host</h3><p>A separate machine that runs heavy tests in isolated containers. It is the author's own environment, set up apart from kaoiro.</p></li>
+        <li><h3>Clients and files</h3><p>The operator uses the dashboard in a browser (PWA) on a PC and on a phone. The agents' deliverables are passed through a self-hosted Nextcloud cloud storage.</p></li>
       </ul>
       <figure class="diagram stack">
-        <svg viewBox="0 0 400 560" role="img" aria-label="Example A. A PC browser and a phone browser reach server-host over HTTPS through the Internet. On server-host an HTTPS reverse proxy forwards to the kaoiro server running under Docker Compose. On agent-host a runner, running as a systemd user unit, supervises about 6 Claude Code, 4 Codex, 2 Antigravity and 1 Grok Build agents, which connect to the server for data while the runner connects separately for control. A test-host with isolated containers and a Nextcloud file share sit outside kaoiro.">
+        <svg viewBox="0 0 400 560" role="img" aria-label="Example A. A PC browser and a phone browser reach server-host over HTTPS through the Internet. On server-host an HTTPS reverse proxy forwards to the kaoiro server running under Docker Compose. On agent-host a runner, running as a systemd user unit, supervises about 6 Claude Code, 4 Codex, 2 Antigravity and 1 Grok Build agents, which connect to the server for data while the runner connects separately for control. A test-host with isolated containers and a Nextcloud file share are the author's own environment.">
           <rect class="d-box" x="20" y="8" width="170" height="52" rx="8"/>
           <text class="d-t d-b" x="105" y="30" text-anchor="middle" font-size="14">PC browser</text>
           <text class="d-m" x="105" y="49" text-anchor="middle" font-size="12">dashboard</text>
@@ -94,7 +94,7 @@
           <text class="d-t d-b" x="295" y="524" text-anchor="middle" font-size="13">file share</text>
           <text class="d-m" x="295" y="543" text-anchor="middle" font-size="11">Nextcloud</text>
         </svg>
-        <figcaption>Example A with placeholder host names. Solid lines carry data and dashed lines are the runner&#39;s control path. The dashed boxes at the bottom are outside kaoiro.</figcaption>
+        <figcaption>Example A. Solid lines carry data and dashed lines are the runner&#39;s control path. The dashed boxes at the bottom are the author&#39;s own environment.</figcaption>
       </figure>
       <p class="note">Each engine needs an account with its vendor; see <a href="getting-started.html#accounts">Getting started</a>. An operator credential lets its holder run commands on agent-host, so read <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> before you expose a server.</p>
     </section>
@@ -138,15 +138,15 @@
     </section>
     <section class="wrap block" aria-labelledby="offline">
       <p class="eyebrow"><span>03</span> / Example C</p>
-      <h2 id="offline">Offline, inside an intranet: a future concept</h2>
-      <p class="notice future"><strong>Not possible today.</strong> kaoiro does not support local AI agents yet. This section describes how it could work if that support arrives. Do not plan a deployment around it.</p>
-      <p class="intro">Claude Code, Codex, Antigravity and Grok Build all rely on their vendors&#39; cloud services, so kaoiro cannot run cut off from the Internet today.</p>
+      <h2 id="offline">Offline, inside an intranet (future concept)</h2>
+      <p class="notice future">As of 2026-11-10, kaoiro does not support local AI agents yet. This section describes how it could work if that support arrives.</p>
+      <p class="intro">Claude Code, Codex, Antigravity and Grok Build all rely on their vendors&#39; cloud services. Once kaoiro supports an engine that uses a local model, it can run in a fully offline environment designed with information security in mind.</p>
       <ul class="cards">
-        <li><h3>What would have to change</h3><p>An engine that runs a model on your own hardware. <a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">Issue 1043</a> proposes making engines pluggable, so that an external engine could connect over a public protocol instead of being added to the source. It is an open proposal with no release date.</p></li>
-        <li><h3>What could stay inside</h3><p>The server, the runners and the dashboard already run on your own machines. With such an engine, the whole set could in principle stay inside the intranet.</p></li>
+        <li><h3>What would have to change</h3><p>An engine that runs a model on your own hardware. <a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">Issue 1043</a> proposes making engines pluggable, so that an external engine could connect over a public protocol instead of being added to the source.</p></li>
+        <li><h3>What could stay inside</h3><p>The server, the runners and the dashboard run on your own machines. With such an engine supported, the whole set could in principle stay inside the intranet.</p></li>
       </ul>
       <figure class="diagram stack">
-        <svg viewBox="0 0 400 350" role="img" aria-label="Example C, a future concept that does not work today. Inside an intranet, a browser reaches the kaoiro server, and a runner on agent-host would start an external engine that uses a local model. The external engine and the local model do not exist yet.">
+        <svg viewBox="0 0 400 350" role="img" aria-label="Example C, a future concept. Inside an intranet, a browser reaches the kaoiro server, and a runner on agent-host would start an external engine that uses a local model. The external engine and the local model are planned.">
           <rect class="d-future" x="8" y="8" width="384" height="300" rx="8"/>
           <text class="d-k" x="22" y="30" text-anchor="start" font-size="12">intranet (future concept)</text>
           <rect class="d-box" x="40" y="44" width="320" height="40" rx="8"/>
@@ -165,9 +165,8 @@
           <rect class="d-future-chip" x="166" y="222" width="178" height="36" rx="8"/>
           <text class="d-t" x="255" y="245" text-anchor="middle" font-size="13">local model</text>
           <text class="d-t d-b" x="54" y="282" text-anchor="start" font-size="13">agent-host</text>
-          <text class="d-k" x="200" y="336" text-anchor="middle" font-size="12">Not possible today. Concept only.</text>
+          <text class="d-k" x="200" y="336" text-anchor="middle" font-size="12">An envisioned layout.</text>
         </svg>
-        <figcaption>A concept sketch, not a supported layout. The parts drawn with dashed purple lines do not exist yet.</figcaption>
       </figure>
     </section>
     <section class="wrap block" aria-labelledby="compare">
@@ -177,10 +176,10 @@
         <table class="wide">
           <thead><tr><th scope="col"></th><th scope="col">A: several hosts</th><th scope="col">B: one host</th><th scope="col">C: offline (future)</th></tr></thead>
           <tbody>
-          <tr><th scope="row">Status</th><td>In daily use</td><td>Possible today</td><td>Concept only</td></tr>
+          <tr><th scope="row">Status</th><td>In daily use</td><td>Possible today</td><td>Planned</td></tr>
           <tr><th scope="row">Hosts</th><td>Server, agents and tests on separate machines</td><td>One</td><td>One or more, inside the intranet</td></tr>
           <tr><th scope="row">Reached from</th><td>The Internet, through HTTPS</td><td>The same machine, or through a reverse proxy or a VPN</td><td>The intranet only</td></tr>
-          <tr><th scope="row">Engines</th><td>All four, on vendor cloud services</td><td>Any of the four</td><td>An external engine with a local model, which does not exist yet</td></tr>
+          <tr><th scope="row">Engines</th><td>All four, on vendor cloud services</td><td>Any of the four</td><td>An external engine with a local model (planned)</td></tr>
           <tr><th scope="row">Start with</th><td><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">Production manual</a></td><td><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">Production manual</a> or <a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></td><td><a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">Issue 1043</a></td></tr>
           </tbody>
         </table>

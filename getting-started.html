@@ -70,10 +70,10 @@
     <section class="wrap block" aria-labelledby="hosts">
       <p class="eyebrow"><span>03</span> / Hosts</p>
       <h2 id="hosts">Prepare the hosts</h2>
-      <p class="intro">Decide which machine runs the server and which run agents. They can be the same machine (<a href="deployments.html#single-host">example B</a>).</p>
+      <p class="intro">Decide which machine runs the server and which run agents.<br>They can be the same machine (<a href="deployments.html#single-host">example B</a>).</p>
       <ul class="cards">
         <li><h3>Server host</h3><p>Docker Engine with the Docker Compose plugin, Elixir <code>~&gt; 1.15</code> with Phoenix, and Node.js 22 or later for the deploy CLI.</p></li>
-        <li><h3>Agent hosts</h3><p>Node.js 22 or later, and the CLI of each engine you will run there. Linux runs the runner as a systemd user unit; orchestration on macOS is <a href="https://github.com/sakuraiyuta/kaoiro/issues/242">not yet verified</a>.</p></li>
+        <li><h3>Agent hosts</h3><p>Node.js 22 or later, and the CLI of each engine you will run there. Linux runs the runner as a systemd user unit.</p></li>
         <li><h3>How the server is reached</h3><p>Choose before writing <code>.env</code>: the default is <code>127.0.0.1</code> behind an nginx reverse proxy, and a direct address inside a VPN is the alternative.</p></li>
         <li><h3>Access</h3><p>SSH access to the server host and every runner host, with each host key already known.</p></li>
       </ul>
