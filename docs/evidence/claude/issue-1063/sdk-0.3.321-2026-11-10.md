@@ -428,6 +428,11 @@ SDK's report were not read for the refused one. That the long description is
 shortened in the same form as a Bash label is therefore an inference from
 the shared comparison and from the row above it, not an observation.
 
+Correction (2026-11-10): the CLI shortens the whole summary, not the label.
+The label figures in the next paragraph hold only for a successful Bash
+completion, and the threshold is a summary longer than 1,000 characters; see
+the [issue 1068 record](../issue-1068/shortened-completion-summary-2026-11-10.md).
+
 The shortened form, read from the block and, where the proof refused, from
 the SDK's report through a line added to the built proof inside the run: the
 block keeps the first 480 and the last 275 characters of the label and puts

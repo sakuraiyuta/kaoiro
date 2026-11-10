@@ -2,7 +2,7 @@
 title: Layered inter-agent delivery, authority and continuation admission
 description: Separate early delivery, causal reply basis and mutation authority; two-level interruption with accepted-assignment grants; revision-checked consequential actions; native-lifecycle admission of engine continuations gated by a bounded pilot.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-10
 date: 2026-09-28
 opened: 2026-09-28
 supersedes: []
@@ -596,3 +596,42 @@ This retention is for v1 compatibility, not rollback. The server rollback
 restores the pre-update archive with its corresponding image and does not
 depend on these keys; see
 [server update and rollback](../operations/server-update-and-rollback.md).
+
+## Amendment (2026-11-10, shortened completion summaries)
+
+Decided in [issue #1068](https://github.com/sakuraiyuta/kaoiro/issues/1068).
+CLI 2.1.321 began to show the model a completion summary over 1,000
+characters in a shortened form while the SDK frame kept the whole text, and
+the exact comparison of the two refused every such completion. The refusal
+was the comparison working as designed; the decision here is what to accept
+instead.
+
+A non-Agent completion summary is accepted when it is byte-equal to one of
+two forms derived from the SDK frame's summary alone: the whole text escaped
+once, or the CLI's shortened form of it escaped once. The matcher used when
+native continuations are off accepts the same shortened form. Because both
+forms are computed from the trusted text, the acceptance set does not depend
+on how the CLI behaves: a CLI that shortens differently produces a block
+equal to neither and is refused. The middle of an over-limit summary is no
+longer compared, and it is also not shown, so no unverified byte reaches the
+model. Task identity never rested on the summary; the task, call, output
+file and status tuple and the one-use completion key carry it.
+
+A Monitor completion's registered description is now checked in the SDK
+frame's summary instead of the block's. The block summary is proved against
+that frame first, and a shortened block cannot hold the whole description.
+
+Rejected: matching only the head, the tail and the length relation (it leaves
+the middle and the cut positions unconstrained, so a changed CLI would pass
+silently); dropping the summary comparison (it loses the escaping check and
+the Monitor description check); asking for other evidence such as the output
+file (paths stay inert and are never opened); and switching on the CLI
+version (the equality already refuses an unknown rule).
+
+The shortening rule was measured for successful Bash completions and Monitor
+completions. Workflow, failed and stopped completions were not measured; a
+different form from them is refused. The rule, the measurements and their
+limits are in the
+[dated record](../evidence/claude/issue-1068/shortened-completion-summary-2026-11-10.md),
+and the current contract is in
+[Claude events](../reference/engines/claude-events.md#shortened-completion-summaries).

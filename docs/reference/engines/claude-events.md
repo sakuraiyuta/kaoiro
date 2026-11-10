@@ -2,7 +2,7 @@
 title: Claude events
 description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
-last_updated: 2026-10-09
+last_updated: 2026-11-10
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -144,11 +144,38 @@ in `<summary>` and in the Agent `<result>`, but not in the IDs, status or
 result must equal the SDK text or that text escaped once, and the IDs,
 status and output file need exact equality
 ([evidence](../../evidence/claude/background-notification-admission-2026-10-14.md)).
+A Bash or Workflow `<summary>` may instead equal the
+[shortened form](#shortened-completion-summaries) of the SDK text.
 If a different notification prompt is rejected while a wrapper turn is live,
 an originless result cannot prove which prompt ended. The host stops admission
 and revokes inter-agent send authority while keeping the wrapper owner until
 stream teardown. The wrapper reports `state=error` and stderr contains
 `notification result ownership ambiguous` and `notification result fail-stop`.
+
+#### Shortened completion summaries
+
+CLI 2.1.321 shows the model a completion summary longer than 1,000 UTF-16
+code units in a shortened form, while the SDK frame keeps the whole text. The
+shortened form is the first 500 and the last 300 code units of the SDK
+summary around `\n\n... [N characters truncated] ...\n\n`, where N is the
+number of code units dropped. A cut never splits a surrogate pair: the head
+or the tail is then one unit shorter and N one higher. The text is escaped
+after it is shortened.
+
+A completion `<summary>` is accepted when it is byte-equal to the SDK summary
+escaped once or to this shortened form escaped once, and rejected otherwise.
+Both forms are derived from the SDK text alone, so a CLI that shortens in any
+other way is rejected rather than trusted. This applies to the Bash and
+Workflow summary above and to every non-Agent completion in
+[native continuation mode](#native-continuation-ownership). An Agent
+`<result>` is compared whole.
+
+The rule is measured for successful Bash completions and for Monitor
+completions
+([evidence](../../evidence/claude/issue-1068/shortened-completion-summary-2026-11-10.md)).
+Workflow, failed and stopped completions were not measured; if the CLI
+shortens one of them differently, that notification is rejected. A Monitor
+event summary is not shortened and is still compared whole.
 
 #### Foreign root intervals
 
@@ -706,8 +733,11 @@ One prompt may contain
 1–16 complete independently proved blocks; invalid siblings and incompatible
 reply snapshots refuse the whole batch without partial consumption. Workflow
 metadata is allowed only for Workflow; ordinary Bash still requires its exact
-native output path and summary, and Workflow retains the root implicit-background
-rule. Unknown `local_bash` tasks cannot be inferred to be Bash instead of Monitor.
+native output path and its summary, whole or in the
+[shortened form](#shortened-completion-summaries), and Workflow retains the root
+implicit-background rule. A Monitor completion's registered description is
+checked in the SDK frame's summary, which the block summary was proved
+against, because a shortened block no longer holds the whole description. Unknown `local_bash` tasks cannot be inferred to be Bash instead of Monitor.
 Agent's note, numeric usage, fixed relayed-Artifact warning and optional worktree
 fields have a separate strict grammar. Available native metadata must agree;
 paths are inert and never opened to obtain a report. A known completion output
