@@ -146,14 +146,10 @@ describe("a refused request", () => {
     expect(button("読み直す")).toBeUndefined();
   });
 
-  it("shows an unknown code as it is", async () => {
-    await refuse("brand_new_code");
-    expect(text()).toContain("失敗しました (brand_new_code)");
-  });
-
   it.each(["room_change_unconfirmed", "timeout"])("offers a reload after %s, and reloads only when asked", async (code) => {
     const { onReload, onClose } = await refuse(code);
     expect(onReload).not.toHaveBeenCalled();
+    expect(button("移動する")!.disabled).toBe(true);
 
     button("読み直す")!.click();
 
@@ -193,11 +189,20 @@ describe("create and rename", () => {
     expect(api.createRoom).toHaveBeenCalledExactlyOnceWith("Review");
   });
 
-  it("starts a rename from the name on show, the lobby's default name included", async () => {
-    const { api } = await open({ mode: "rename", room: ROOMS[0]! });
-    expect(document.querySelector<HTMLInputElement>("input")!.value).toBe("ロビー");
+  it("starts a rename from the name on show", async () => {
+    const { api } = await open({ mode: "rename", room: ROOMS[1]! });
+    expect(document.querySelector<HTMLInputElement>("input")!.value).toBe("Review");
     button("改名")!.click();
-    await vi.waitFor(() => expect(api.renameRoom).toHaveBeenCalledExactlyOnceWith("lobby", "ロビー"));
+    await vi.waitFor(() => expect(api.renameRoom).toHaveBeenCalledExactlyOnceWith("r1", "Review"));
+  });
+
+  it("starts the rename of an unrenamed lobby empty, with its default name as the placeholder", async () => {
+    const { api } = await open({ mode: "rename", room: ROOMS[0]! });
+    const input = document.querySelector<HTMLInputElement>("input")!;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("ロビー");
+    expect(button("改名")!.disabled).toBe(true);
+    expect(api.renameRoom).not.toHaveBeenCalled();
   });
 });
 

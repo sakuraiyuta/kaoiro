@@ -5,9 +5,24 @@ import { groupByRoom, roomOf, type RoomGroup, type RoomRef, type RoomsSnapshot, 
 
 export class RoomsStore {
   #view = $state<RoomsView>({ kind: "none" });
+  readonly #listsEveryAgent: () => boolean;
+
+  /** `listsEveryAgent`: the snapshot names every agent the server holds only for
+   *  an operator. A viewer's omits agents the server has not (re)registered, so
+   *  for a viewer an omission is never read as "in the lobby". */
+  constructor(listsEveryAgent: () => boolean) {
+    this.#listsEveryAgent = listsEveryAgent;
+  }
 
   get view(): RoomsView {
     return this.#view;
+  }
+
+  #placement(): RoomsView {
+    const view = this.#view;
+    return view.kind === "loaded" && !view.incomplete && !this.#listsEveryAgent()
+      ? { ...view, incomplete: true }
+      : view;
   }
 
   /** Replaces everything: each snapshot is the whole state. */
@@ -21,10 +36,10 @@ export class RoomsStore {
   }
 
   roomOf(agentId: string): RoomRef | null {
-    return roomOf(this.#view, agentId);
+    return roomOf(this.#placement(), agentId);
   }
 
   group<T>(items: T[], idOf: (item: T) => string, includeEmpty: boolean): RoomGroup<T>[] {
-    return groupByRoom(this.#view, items, idOf, includeEmpty);
+    return groupByRoom(this.#placement(), items, idOf, includeEmpty);
   }
 }
