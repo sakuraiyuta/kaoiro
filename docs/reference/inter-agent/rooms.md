@@ -105,6 +105,13 @@ Three things differ from a send.
   a valid grant no longer implies the reset is possible. The director asks the
   operator to move one of the two.
 
+Checking after authority has one accepted cost: when a cross-room target is
+also unknown, unable to reset, or in a third party's conversation, that reason
+comes back first and the room mismatch only after it is resolved. Nothing is
+changed in the meantime. The gates inside the acceptance lock (state,
+cooldown, pending reset) run after the room check instead, so a target that is
+both busy and in another room answers `room_mismatch`.
+
 ## Managing rooms
 
 Only an operator or admin manages rooms, through the dashboard channel

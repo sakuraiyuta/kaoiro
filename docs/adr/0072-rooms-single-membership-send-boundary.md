@@ -105,7 +105,13 @@ Three points differ from decision 3.
 1. **Checked once, not twice.** A send's second check happens at the record
    inside `ConversationStates`; a reset has no equivalent record. The reset's
    single check sits immediately before the acceptance lock, its first side
-   effect.
+   effect. That position also puts it after the handler's own
+   `ConversationStates` read (`require_no_third_party_conversation`), so a
+   move already queued ahead of the request has been saved by the time rooms
+   are read, and that move stops the reset. Measured with a throwaway test
+   during the implementation review (not committed): with the check in this
+   position a queued move refuses the reset, and with the check moved to just
+   after the authority read the same situation lets the reset through.
 2. **After authority.** ADR-0068 D1 keeps every authority failure on
    `reset_not_authorized`. Deciding rooms first would answer `room_mismatch`
    to a requester that does not direct the work, which D1 forbids and which

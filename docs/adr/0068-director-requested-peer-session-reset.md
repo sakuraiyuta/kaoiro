@@ -184,8 +184,11 @@ and two words, alongside the amendment of the same date in
 [ADR-0072](0072-rooms-single-membership-send-boundary.md).
 
 - **D2** now reads "the operator reset's gates plus `agent_in_conversation`
-  plus the same-room rule". Rooms are checked last — after authority and
-  immediately before the acceptance lock, which is the first side effect.
+  plus the same-room rule". Rooms are checked after authority and immediately
+  before the acceptance lock, which is the first side effect. They are the
+  last check before that lock, not the last check overall: the lock's own
+  state, cooldown and pending-reset gates run inside it, after the room
+  check.
 - **D3**'s closed vocabulary is no longer eight words. `room_mismatch` and
   `rooms_unavailable` join it in the server's `PeerSessionResetReplyReasons`,
   in the wrapper's own copy (`wrapper/core/src/transport.ts`, which collapses

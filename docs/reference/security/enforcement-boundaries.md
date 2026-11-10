@@ -148,8 +148,10 @@ boundary ([ADR-0036](../../adr/0036-session-lifecycle-commands.md)).
   failure is the single word `reset_not_authorized`), and then runs the same
   capability / state / cooldown / pending-lock gates as the operator path
   through the same per-agent `AgentAcceptance` choke point, plus
-  `agent_in_conversation`, plus the same-room rule. Rooms are checked last,
-  after authority and immediately before the acceptance lock, and answer
+  `agent_in_conversation`, plus the same-room rule. Rooms are checked after
+  authority and immediately before the acceptance lock, so the state /
+  cooldown / pending-reset gates inside that lock run after them: a target
+  that is both busy and in another room answers `room_mismatch`. They answer
   `room_mismatch` or `rooms_unavailable` - never `reset_not_authorized`,
   because the grant is still valid
   ([rooms](../inter-agent/rooms.md#the-director-requested-peer-session-reset),
