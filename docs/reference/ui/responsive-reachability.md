@@ -111,10 +111,14 @@ and composer within `.main`, not floating layers. A sheet is in front of them,
 so they are covered while it is open.
 
 Both detail tab panels stay in the DOM and the inactive one is `hidden`, so it
-is neither displayed nor reachable with Tab. A notice in the hidden tab (switch
-notice, resume drift, permission request error in the engine tab; lost or
-uncertain deliveries in the kaoiro tab) is read by opening that tab; the tab
-itself carries no mark.
+is neither displayed nor reachable with Tab. While a notice is shown in the
+hidden panel, its tab label carries a mark (a dot, named "has notices" for
+assistive technology): the switch notice, resume drift and a permission request
+error for the engine tab; lost or uncertain deliveries and a delivery policy
+notice for the kaoiro tab. The mark follows the notice and is not cleared by
+opening the tab, so a standing notice (resume drift for the whole session, a
+non-zero lost or uncertain count) marks its tab every time the other tab is
+shown, and a second event of the same kind does not change the mark.
 
 Because the Tasklist float remains unimplemented in #178, its row is a
 conditional target that applies after that issue is implemented and is not part

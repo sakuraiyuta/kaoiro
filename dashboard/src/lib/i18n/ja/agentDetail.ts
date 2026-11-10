@@ -94,6 +94,7 @@ export const agentDetail = {
   detailTabsLabel: "詳細の表示",
   detailTabEngine: "engine",
   detailTabKaoiro: "kaoiro",
+  detailTabNotice: "通知あり",
   personaDetailAria: (p: { name: string }) => `${p.name} のペルソナ詳細を表示`,
   renameTitle: "表示名を変更",
   renameAria: (p: { name: string }) => `${p.name} の表示名を変更`,

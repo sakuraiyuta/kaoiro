@@ -13,3 +13,12 @@ export function deliveryPolicyLabel(view: DeliveryPolicyView, ownerConnected: bo
   if (!view.wrapper_support) return t.switchUnsupported;
   return view.confirmed && view.applied_revision === view.revision ? t.onConfirmed : t.awaitingConfirmation;
 }
+
+/** The store's notice as the control shows it: not while saving, and only
+ *  when there is one. The detail tab's mark reads the same value. */
+export function deliveryPolicyNotice(
+  saving: boolean | undefined,
+  notice: string | undefined,
+): string | null {
+  return !saving && notice ? notice : null;
+}
