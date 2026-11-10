@@ -146,8 +146,9 @@ server or runner (`register` / `heartbeat` / `sessions` / `spawn` / `spawn_resul
 at assembly. In pass-through routes where the server strips only `host_id` from client
 payload (`enumerate_sessions` / `refresh_engine_catalog` / `stop` / `restart`),
 `relay_to_runner/4` warns about the client value and normalizes `version` to `"0"`.
-Dashboard pushes also all carry `version` through the single `pushVersioned` funnel (issue
-# 208 onward). Runners warn on mismatch, including omission, and accept best-effort (ADR-0015).
+Dashboard pushes also all carry `version` through the single `pushVersioned` funnel
+(issue #208 onward). Runners warn on mismatch, including omission, and accept
+best-effort (ADR-0015).
 
 `restart` still lacks a dashboard push producer, but implementation will use the funnel above
 and therefore stamp `version` automatically. See
