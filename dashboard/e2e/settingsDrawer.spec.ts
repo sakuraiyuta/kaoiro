@@ -346,7 +346,8 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     test("Tab 移動で画面外の項目へ自動スクロールインし、循環後も先頭へスクロールバックする", async ({
       page,
     }) => {
-      await page.setViewportSize({ width: 375, height: 667 });
+      const PHONE_H = 667;
+      await page.setViewportSize({ width: 375, height: PHONE_H });
       // workState=ready adds the work-capacity block, so Operations overflows
       // by far more than a rounding error.
       await page.goto(`${DRAWER}&workState=ready`);
@@ -362,7 +363,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       // Precondition: logout starts outside the viewport, so the Tab below
       // must scroll it in.
       const before = (await logout.boundingBox())!;
-      expect(before.y).toBeGreaterThan(667);
+      expect(before.y).toBeGreaterThan(PHONE_H);
 
       // Tab until logout button is reached
       for (let i = 0; i < 40; i++) {
@@ -375,7 +376,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       const logoutRect = (await logout.boundingBox())!;
       expect(logoutRect.y).toBeGreaterThanOrEqual(0);
       // scrollTop is an integer, so a focus scroll can leave a fractional pixel.
-      expect(logoutRect.y + logoutRect.height).toBeLessThanOrEqual(667 + 1);
+      expect(logoutRect.y + logoutRect.height).toBeLessThanOrEqual(PHONE_H + 1);
 
       // Next Tab wraps around to the first control (close button)
       await page.keyboard.press("Tab");
@@ -384,7 +385,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       // Scrolled back into view
       const closeRect = (await closeBtn.boundingBox())!;
       expect(closeRect.y).toBeGreaterThanOrEqual(0);
-      expect(closeRect.y + closeRect.height).toBeLessThanOrEqual(667);
+      expect(closeRect.y + closeRect.height).toBeLessThanOrEqual(PHONE_H);
     });
   });
 });
