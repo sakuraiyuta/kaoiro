@@ -38,6 +38,7 @@ export const launchDialog = {
   persona: "ペルソナ",
   cwd: "作業ディレクトリ",
   engine: "エンジン",
+  room: "部屋",
   model: "モデル",
   defaultOption: "既定",
   resolvedModelBefore: "取得時点の解決先:",

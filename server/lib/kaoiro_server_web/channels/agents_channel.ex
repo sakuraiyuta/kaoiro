@@ -1332,6 +1332,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
          :ok <- validate_antigravity_approval(engine, payload),
          :ok <- validate_launch_policy(payload),
          {:ok, agent_id} <- allocate_agent_id(host_id),
+         {:ok, launch_room} <- fetch_launch_room(payload),
+         :ok <- require_known_room(launch_room),
          request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
            build_spawn_payload(
@@ -1363,29 +1365,43 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # own doc.
       AgentDirectory.record(agent_id, persona["id"], display_name)
 
-      explicit =
-        case payload["delivery_policy"] do
-          "on" -> :on
-          "off" -> :off
-          _ -> nil
-        end
-
-      seed =
-        KaoiroServer.DeliveryPolicies.State.seed(
-          explicit,
-          Map.get(host, :in_flight_defaults, %{}),
-          engine || "claude-code"
-        )
-
-      case KaoiroServer.DeliveryPolicies.ensure(agent_id, seed) do
-        {:ok, _} ->
-          KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
-          SessionPointers.record(agent_id, nil, cwd, engine || "claude-code")
-          {:reply, {:ok, %{"agent_id" => agent_id}}, socket}
-
+      # The room is stored before the launch is broadcast, so the wrapper's
+      # own first registration never reads the lobby (issue #1081, ADR-0073).
+      # The identity above is recorded first: a membership whose agent_id has
+      # no identity is in no list and cannot be removed, while `delete_agent`
+      # clears both.
+      case place_in_room(agent_id, launch_room) do
         {:error, reason} ->
           _ = AgentActivity.resolve_transition(agent_id, request_id, false)
-          {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
+          {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+
+        :ok ->
+          explicit =
+            case payload["delivery_policy"] do
+              "on" -> :on
+              "off" -> :off
+              _ -> nil
+            end
+
+          seed =
+            KaoiroServer.DeliveryPolicies.State.seed(
+              explicit,
+              Map.get(host, :in_flight_defaults, %{}),
+              engine || "claude-code"
+            )
+
+          case KaoiroServer.DeliveryPolicies.ensure(agent_id, seed) do
+            {:ok, _} ->
+              KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
+              SessionPointers.record(agent_id, nil, cwd, engine || "claude-code")
+
+              {:reply, {:ok, %{"agent_id" => agent_id, "room_id" => launch_room_id(launch_room)}},
+               socket}
+
+            {:error, reason} ->
+              _ = AgentActivity.resolve_transition(agent_id, request_id, false)
+              {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
+          end
       end
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -2307,6 +2323,61 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: {:ok, room_id}
 
   defp fetch_room_id(_payload), do: {:error, :missing_room_id}
+
+  # A launch either names its room or omits the key for the lobby. A key that
+  # is present but unusable is refused rather than quietly placing the agent
+  # somewhere the operator did not choose (issue #1081).
+  defp fetch_launch_room(payload) do
+    case payload do
+      %{"room_id" => room_id} when is_binary(room_id) and room_id != "" ->
+        if room_id == Rooms.lobby_id(), do: {:ok, :lobby}, else: {:ok, room_id}
+
+      %{"room_id" => _unusable} ->
+        {:error, :invalid_payload}
+
+      _absent ->
+        {:ok, :lobby}
+    end
+  end
+
+  # Checked before any side effect, so a typo leaves no identity behind. The
+  # save decides again under a room deleted in between, the way a send's
+  # record does (ADR-0072 decision 3).
+  defp require_known_room(:lobby), do: :ok
+
+  defp require_known_room(room_id) do
+    case Rooms.snapshot() do
+      {:ok, %{rooms: rooms}} ->
+        if Map.has_key?(rooms, room_id), do: :ok, else: {:error, :unknown_room}
+
+      :unavailable ->
+        {:error, :rooms_unavailable}
+    end
+  end
+
+  # The lobby is the absence of a membership, so it reaches no store at all: a
+  # stalled store must not refuse launches where no room is in use (ADR-0072
+  # decision 1).
+  defp place_in_room(_agent_id, :lobby), do: :ok
+
+  defp place_in_room(agent_id, room_id) do
+    command = {:move, agent_id, room_id}
+
+    with {:ok, change} <- ConversationStates.apply_room_change(command) do
+      # A saved membership reaches no dashboard on its own: a client updates
+      # its copy from `rooms_snapshot` only. A failed notice is logged and the
+      # launch continues, because the membership is saved and a stale copy is
+      # repaired by rejoining.
+      with {:error, reason} <- announce_room_change(change) do
+        Logger.warning("spawn: the room of #{agent_id} was not announced (#{reason})")
+      end
+
+      :ok
+    end
+  end
+
+  defp launch_room_id(:lobby), do: Rooms.lobby_id()
+  defp launch_room_id(room_id), do: room_id
 
   # The same rule as an agent's display name (`validate_agent_rename_name/1`).
   defp fetch_room_name(%{"name" => name}) when is_binary(name) do
