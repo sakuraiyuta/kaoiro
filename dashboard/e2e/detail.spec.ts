@@ -7,6 +7,8 @@ const DETAIL = "/e2e/harness/index.html?view=detail";
 test("detail shows the connected wrapper build identity", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto(`${DETAIL}&wrapperBuild=1`);
+  // The build identity sits in the kaoiro tab (issue 1075).
+  await page.locator("#agent-detail-tab-kaoiro").click();
   await expect(
     page.locator('[data-testid="wrapper-build-info"] dd'),
   ).toHaveText("v2026.9.0 / unknown / 0123456");
@@ -100,7 +102,10 @@ for (const [width, height] of [
     // The scroll owner must retain a usable viewport of its own…
     const clientHeight = await status.evaluate((el) => el.clientHeight);
     expect(clientHeight).toBeGreaterThanOrEqual(80);
-    // …and scrolling to the end must expose the pane-bottom controls.
+    // …and scrolling to the end must expose the pane-bottom controls. The
+    // engine tab (shown first, holds terminate) must overflow, or the scroll
+    // below proves nothing.
+    expect(await status.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
     await status.evaluate((el) => el.scrollTo(0, el.scrollHeight));
     const action = page.locator(".terminate");
     await expect(action).toBeVisible();

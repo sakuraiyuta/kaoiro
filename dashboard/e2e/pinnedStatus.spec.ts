@@ -41,11 +41,22 @@ for (const [width, height] of [
       await expect(target).toBeVisible();
       await expectInViewport(page, target);
     }
+    // Each detail tab (issue 1075) must overflow .status-scroll, or the
+    // scroll below proves nothing.
     const before = await top(ctxRow(head(page)));
-    await page.locator(".status-scroll").evaluate((el) => {
-      el.scrollTop = el.scrollHeight;
-    });
-    expect(await top(ctxRow(head(page)))).toBe(before);
+    for (const tab of ["engine", "kaoiro"]) {
+      await page.locator(`#agent-detail-tab-${tab}`).click();
+      const scroll = page.locator(".status-scroll");
+      await scroll.evaluate((el) => {
+        el.scrollTop = 0;
+      });
+      expect(await scroll.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+      await scroll.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+      });
+      expect(await scroll.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+      expect(await top(ctxRow(head(page)))).toBe(before);
+    }
     await expect(page.locator(".status-scroll dt", { hasText: /^ctx$/ })).toHaveCount(0);
   });
 }
@@ -70,6 +81,9 @@ for (const [width, height] of [
 
     // The log scrolls; the bar does not move with it.
     const before = await top(ctxRow(main(page)));
+    expect(
+      await page.locator(".log").evaluate((el) => el.scrollHeight - el.clientHeight),
+    ).toBeGreaterThan(0);
     await page.locator(".log").evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });

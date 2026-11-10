@@ -101,6 +101,8 @@ export interface DetailScenario {
   wrapperBuildInfo?: boolean;
   /** issue 514: the agent's status line as the dashboard holds it. */
   statusLine?: StatusLineView;
+  /** issue 1075: a disconnected agent, which offers restore and delete. */
+  disconnected?: boolean;
 }
 
 /** Manifest with a resolved sprite for the "ao" persona, covering every
@@ -294,6 +296,7 @@ export function detailEnvelope(scenario: DetailScenario): Envelope {
       ],
     };
   }
+  if (scenario.disconnected) state = "disconnected";
   return agent("host.ao", "ao", "ao", state, claudeExt(extra));
 }
 

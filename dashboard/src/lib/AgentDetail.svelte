@@ -21,7 +21,7 @@
   import AgentPinnedStatus from "./AgentPinnedStatus.svelte";
   import type { StatusLineView } from "./statusLine";
   import TasklistFloat from "./TasklistFloat.svelte";
-  import { settings } from "./settings.svelte";
+  import { settings, updateSettings, type DetailTab } from "./settings.svelte";
   import { msg } from "./i18n/index.svelte";
   import { randomUUID } from "./uuid";
   import { formatBuildIdentity } from "./buildIdentity";
@@ -756,6 +756,33 @@
   // Nothing pinned to draw: no slot at all, so no empty bordered box.
   const pinnedVisible = $derived(hasCcStatus || statusLine.kind !== "none");
 
+  // Detail tabs (issue 1075). With a connection each panel always has an
+  // item (engine: model, resume and terminate / restore; kaoiro: clear
+  // history), so the bar is shown exactly then. Which tab is shown is one
+  // global setting, changed only from the bar.
+  const DETAIL_TABS: readonly DetailTab[] = ["engine", "kaoiro"];
+  const detailTabsShown = $derived(connection !== null);
+  const shownDetailTab = $derived(settings.detailTab);
+
+  function selectDetailTab(tab: DetailTab): void {
+    updateSettings({ detailTab: tab });
+  }
+
+  function onDetailTabKeydown(event: KeyboardEvent): void {
+    const index = DETAIL_TABS.indexOf(shownDetailTab);
+    let next: number;
+    if (event.key === "ArrowRight") next = (index + 1) % DETAIL_TABS.length;
+    else if (event.key === "ArrowLeft")
+      next = (index - 1 + DETAIL_TABS.length) % DETAIL_TABS.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = DETAIL_TABS.length - 1;
+    else return;
+    event.preventDefault();
+    const tab = DETAIL_TABS[next];
+    selectDetailTab(tab);
+    document.getElementById(`agent-detail-tab-${tab}`)?.focus();
+  }
+
   const transcriptTimeFormatter = new Intl.DateTimeFormat([], {
     hour: "2-digit",
     minute: "2-digit",
@@ -1181,9 +1208,8 @@
   // surfaces gate the interrupt button on the same set.
   const canInterrupt = $derived(RUNNING_STATES.has(envelope.state));
 
-  // Delete is offered only for a disconnected agent (#14); the interrupt
-  // button is hidden then (disconnected is not a running state), so the
-  // delete button takes its place in the same action slot below it.
+  // Delete is offered only for a disconnected agent (#14), next to restore
+  // in the engine tab (issue 1075).
   const canDelete = $derived(envelope.state === "disconnected");
   let deleting = $state(false);
 
@@ -3231,18 +3257,36 @@
            above stays pinned. (Inner content is intentionally left at its
            original indentation to keep this a 2-line structural wrap.) -->
       <div class="status-scroll">
-      {#if onOpenSessionLifecycle}
-        <button type="button" class="session-lifecycle-open" onclick={() => onOpenSessionLifecycle?.(envelope.agent_id)}>{msg().agentDetail.sessionHistory}</button>
+      {#if detailTabsShown}
+        <div class="detail-tabs" role="tablist" aria-label={msg().agentDetail.detailTabsLabel}>
+          {#each DETAIL_TABS as tab (tab)}
+            <button
+              type="button"
+              role="tab"
+              class="detail-tab"
+              id={`agent-detail-tab-${tab}`}
+              aria-selected={shownDetailTab === tab}
+              aria-controls={`agent-detail-panel-${tab}`}
+              tabindex={shownDetailTab === tab ? 0 : -1}
+              onclick={() => selectDetailTab(tab)}
+              onkeydown={onDetailTabKeydown}
+            >
+              {tab === "engine" ? msg().agentDetail.detailTabEngine : msg().agentDetail.detailTabKaoiro}
+            </button>
+          {/each}
+        </div>
       {/if}
-      {#if policyStore}
-        <DeliveryPolicyControl agentId={envelope.agent_id} view={policyStore.views[envelope.agent_id]}
-          connected={policyConnected && envelope.state !== "disconnected"}
-          available={policyStore.available} saving={policyStore.saving[envelope.agent_id]}
-          reading={policyStore.reading[envelope.agent_id]} notice={policyStore.notices[envelope.agent_id]}
-          generation={policyStore.generation}
-          onChange={onDeliveryPolicyChange ? (policy) => onDeliveryPolicyChange?.(envelope.agent_id, policy) : undefined}
-          onRefresh={onDeliveryPolicyRefresh ? () => onDeliveryPolicyRefresh?.(envelope.agent_id) : undefined} />
-      {/if}
+      <!-- Both panels stay mounted and the inactive one is hidden, so open
+           pickers and popovers keep their state across a tab switch. Without
+           a connection there is no tab bar and both are shown. (Moved markup
+           keeps its original indentation.) -->
+      <div
+        class="detail-panel"
+        id="agent-detail-panel-engine"
+        role={detailTabsShown ? "tabpanel" : undefined}
+        aria-labelledby={detailTabsShown ? "agent-detail-tab-engine" : undefined}
+        hidden={detailTabsShown && shownDetailTab !== "engine"}
+      >
       {#if hasCcStatus}
         <!-- Claude Code status meta (#16): mirrors the local statusline's
              model / ctx / 5h / 7d segments for this agent. -->
@@ -3368,19 +3412,6 @@
             <div class="cc-row">
               <dt>engine</dt>
               <dd>{agentEngine}</dd>
-            </div>
-          {/if}
-          {#if wrapperBuildInfo}
-            <div class="cc-row" data-testid="wrapper-build-info">
-              <dt>wrapper</dt>
-              <dd>
-                {formatBuildIdentity("wrapper", {
-                  version: wrapperBuildInfo.build_version,
-                  channel: wrapperBuildInfo.build_channel,
-                  revision: wrapperBuildInfo.build_revision,
-                  branch: wrapperBuildInfo.build_branch ?? "unknown",
-                })}
-              </dd>
             </div>
           {/if}
           {#if envelope.ext?.permission_policy}
@@ -3724,46 +3755,7 @@
               <dd>{ccFastMode}</dd>
             </div>
           {/if}
-
-          {#if deliveryStatus}
-            <div class="cc-row" data-testid="inter-agent-delivery-status">
-              <dt>{msg().agentDetail.iaDelivery}</dt>
-              <dd>
-                {deliveryStatus.acked_seq}/{deliveryStatus.issued_seq}
-                {#if deliveryStatus.issued_seq > deliveryStatus.acked_seq}
-                  <span class="cc-pending" title={deliveryStatus.pending_since}>
-                    {msg().agentDetail.notDispatched}
-                  </span>
-                {/if}
-                {#if deliveryStatus.lost_count !== undefined}
-                  <span>{msg().agentDetail.deliveryLost({ count: deliveryStatus.lost_count })}</span>
-                {/if}
-                {#if deliveryStatus.uncertain_count !== undefined}
-                  <span title={deliveryStatus.last_uncertain ? `seq ${deliveryStatus.last_uncertain.delivery_seq}: ${deliveryStatus.last_uncertain.reason}` : undefined}>
-                    {msg().agentDetail.deliveryUncertain({ count: deliveryStatus.uncertain_count })}
-                  </span>
-                {/if}
-              </dd>
-            </div>
-          {/if}
         </dl>
-      {/if}
-
-      {#if connection}
-        <!-- Destructive (#48): purge the server-side reply log of past
-             sessions, keeping only the current one. Disabled until the
-             current session_id is known (nothing to scope the purge to). -->
-        <button
-          type="button"
-          class="clear-history"
-          disabled={!envelope.session_id}
-          title={envelope.session_id
-            ? msg().agentDetail.clearHistoryTitle
-            : msg().agentDetail.clearHistoryDisabledTitle}
-          onclick={clearHistory}
-        >
-          {msg().agentDetail.clearHistory}
-        </button>
       {/if}
 
       {#if connection && canResumeSession}
@@ -3840,6 +3832,96 @@
           {restoring ? msg().agentDetail.restoring : msg().agentDetail.restore}
         </button>
       {/if}
+      {#if connection && canDelete}
+        <!-- Delete a disconnected agent (#14): next to restore, the other
+             action on a disconnected agent (issue 1075). -->
+        <button
+          type="button"
+          class="remove"
+          onclick={deleteAgent}
+          disabled={deleting}
+          title={msg().agentDetail.deleteTitle}
+        >
+          <span class="remove-icon" aria-hidden="true">✕</span>
+          {deleting ? msg().agentDetail.deleting : msg().agentDetail.delete}
+        </button>
+      {/if}
+      </div>
+      <div
+        class="detail-panel"
+        id="agent-detail-panel-kaoiro"
+        role={detailTabsShown ? "tabpanel" : undefined}
+        aria-labelledby={detailTabsShown ? "agent-detail-tab-kaoiro" : undefined}
+        hidden={detailTabsShown && shownDetailTab !== "kaoiro"}
+      >
+      {#if onOpenSessionLifecycle}
+        <button type="button" class="session-lifecycle-open" onclick={() => onOpenSessionLifecycle?.(envelope.agent_id)}>{msg().agentDetail.sessionHistory}</button>
+      {/if}
+      {#if policyStore}
+        <DeliveryPolicyControl agentId={envelope.agent_id} view={policyStore.views[envelope.agent_id]}
+          connected={policyConnected && envelope.state !== "disconnected"}
+          available={policyStore.available} saving={policyStore.saving[envelope.agent_id]}
+          reading={policyStore.reading[envelope.agent_id]} notice={policyStore.notices[envelope.agent_id]}
+          generation={policyStore.generation}
+          onChange={onDeliveryPolicyChange ? (policy) => onDeliveryPolicyChange?.(envelope.agent_id, policy) : undefined}
+          onRefresh={onDeliveryPolicyRefresh ? () => onDeliveryPolicyRefresh?.(envelope.agent_id) : undefined} />
+      {/if}
+      {#if hasCcStatus}
+        <dl class="cc">
+          {#if wrapperBuildInfo}
+            <div class="cc-row" data-testid="wrapper-build-info">
+              <dt>wrapper</dt>
+              <dd>
+                {formatBuildIdentity("wrapper", {
+                  version: wrapperBuildInfo.build_version,
+                  channel: wrapperBuildInfo.build_channel,
+                  revision: wrapperBuildInfo.build_revision,
+                  branch: wrapperBuildInfo.build_branch ?? "unknown",
+                })}
+              </dd>
+            </div>
+          {/if}
+          {#if deliveryStatus}
+            <div class="cc-row" data-testid="inter-agent-delivery-status">
+              <dt>{msg().agentDetail.iaDelivery}</dt>
+              <dd>
+                {deliveryStatus.acked_seq}/{deliveryStatus.issued_seq}
+                {#if deliveryStatus.issued_seq > deliveryStatus.acked_seq}
+                  <span class="cc-pending" title={deliveryStatus.pending_since}>
+                    {msg().agentDetail.notDispatched}
+                  </span>
+                {/if}
+                {#if deliveryStatus.lost_count !== undefined}
+                  <span>{msg().agentDetail.deliveryLost({ count: deliveryStatus.lost_count })}</span>
+                {/if}
+                {#if deliveryStatus.uncertain_count !== undefined}
+                  <span title={deliveryStatus.last_uncertain ? `seq ${deliveryStatus.last_uncertain.delivery_seq}: ${deliveryStatus.last_uncertain.reason}` : undefined}>
+                    {msg().agentDetail.deliveryUncertain({ count: deliveryStatus.uncertain_count })}
+                  </span>
+                {/if}
+              </dd>
+            </div>
+          {/if}
+        </dl>
+      {/if}
+
+      {#if connection}
+        <!-- Destructive (#48): purge the server-side reply log of past
+             sessions, keeping only the current one. Disabled until the
+             current session_id is known (nothing to scope the purge to). -->
+        <button
+          type="button"
+          class="clear-history"
+          disabled={!envelope.session_id}
+          title={envelope.session_id
+            ? msg().agentDetail.clearHistoryTitle
+            : msg().agentDetail.clearHistoryDisabledTitle}
+          onclick={clearHistory}
+        >
+          {msg().agentDetail.clearHistory}
+        </button>
+      {/if}
+      </div>
       </div>
     </aside>
     </BottomSheet>
@@ -4143,19 +4225,6 @@
           >
             <span class="interrupt-icon" aria-hidden="true">■</span>
             {interrupting ? msg().agentDetail.interrupting : msg().agentDetail.interrupt}
-          </button>
-        {:else if canDelete}
-          <!-- Delete a disconnected agent (#14): sits in the interrupt
-               button's slot (the two never show at once). -->
-          <button
-            type="button"
-            class="remove"
-            onclick={deleteAgent}
-            disabled={deleting}
-            title={msg().agentDetail.deleteTitle}
-          >
-            <span class="remove-icon" aria-hidden="true">✕</span>
-            {deleting ? msg().agentDetail.deleting : msg().agentDetail.delete}
           </button>
         {/if}
 
@@ -4543,6 +4612,37 @@
     overflow-y: auto;
     /* Stop the inner scroll from chaining to the page once it bottoms out. */
     overscroll-behavior: contain;
+  }
+
+  /* Detail tabs (issue 1075): not sticky; they scroll with the panels. */
+  .detail-tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .detail-tab {
+    flex: 1 1 0;
+    padding: 0.4rem 0.5rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--fs-body-sm);
+    opacity: 0.7;
+    cursor: pointer;
+  }
+
+  .detail-tab[aria-selected="true"] {
+    border-bottom-color: var(--fg);
+    font-weight: 600;
+    opacity: 1;
+  }
+
+  .detail-tab:hover,
+  .detail-tab:focus-visible {
+    opacity: 1;
   }
 
   .clear-history {
@@ -6126,12 +6226,14 @@
     line-height: 1;
   }
 
-  /* Delete a disconnected agent (#14): occupies the interrupt button's slot
-     (mutually exclusive states), styled as a muted destructive action. */
+  /* Delete a disconnected agent (#14): below restore in the engine tab
+     (issue 1075), full width like it, styled as a muted destructive action. */
   .remove {
-    align-self: flex-end;
-    display: inline-flex;
+    margin-top: 0.5rem;
+    width: 100%;
+    display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.4rem;
     padding: 0.4rem 0.8rem;
     border: 1px solid var(--c-error);
