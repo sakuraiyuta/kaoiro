@@ -122,6 +122,7 @@ for (const [width, height] of [
   [1199, 560],
   [1440, 500],
   [1920, 500],
+  [1366, 699],
 ] as const) {
   test(`${width}x${height}: short desktop, above the log, sidebar keeps its room`, async ({ page }) => {
     await page.setViewportSize({ width, height });
