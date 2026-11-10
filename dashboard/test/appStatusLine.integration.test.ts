@@ -326,8 +326,9 @@ describe("the member detail view", () => {
     h.onStatusLineSnapshot?.({ "a.one": set(1, "2026-10-03T12:00:00.000001Z", "**first**") }, false);
     await tick();
     expect(panel()?.querySelector(".body strong")?.textContent).toBe("first");
-    // Below the pinned identity header, inside the scrolling column.
-    expect(panel()?.closest(".status-scroll")).not.toBeNull();
+    // Pinned under the agent ID, outside the scrolling column (issue 1074).
+    expect(panel()?.closest('[data-placement="head"]')?.closest("header.head")).not.toBeNull();
+    expect(panel()?.closest(".status-scroll")).toBeNull();
 
     h.onStatusLine?.("a.one", set(2, "2026-10-03T12:00:09.000000Z", "second"));
     await tick();
