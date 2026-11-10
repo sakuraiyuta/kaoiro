@@ -2163,6 +2163,7 @@
     {connection}
     {ingestWarnings}
     sessions={runnerSessions}
+    rooms={roomList}
     serverBuildRevision={serverHealth?.build_revision ?? null}
     serverBuildDirty={serverHealth?.build_dirty ?? null}
     onClose={() => (showLaunch = false)}

@@ -2701,6 +2701,11 @@ export interface SpawnRequest {
    *  deliberately excluded: this engine rejects it at spawn. Omitted =
    *  "on-request". */
   approval?: "untrusted" | "on-request" | "local" | "never";
+  /** The room the new agent starts in (issue #1081). Omitted for the lobby,
+   *  which is the absence of a membership; a present but unusable value is
+   *  refused rather than quietly placed in the lobby. Resume paths keep the
+   *  stored room and never carry this. */
+  room_id?: string;
 }
 
 /** Outcome of a spawn, forwarded from the runner (operator-only). */
@@ -3252,7 +3257,12 @@ export interface KaoiroConnection {
    * agent_id. Rejects like sendInstruction (forbidden / unknown_host /
    * unknown_persona / cwd_not_allowed). The eventual launch outcome
    * arrives separately via onSpawnResult. */
-  spawn: (request: SpawnRequest) => Promise<{ agentId: string }>;
+  /** `roomId` is the room the server placed the agent in — `"lobby"` when
+   *  none was named. It is ABSENT from a server that ignores `room_id`,
+   *  which is how a client detects that its choice was dropped (issue
+   *  #1081). The bundled dashboard does not compare it: it always runs the
+   *  same version as its server, so the field is there for other clients. */
+  spawn: (request: SpawnRequest) => Promise<{ agentId: string; roomId?: string }>;
   /** LaunchDialog persona-scoped effort default (issue #88): resolves with
    *  a `persona_id => effort` map computed server-side from a read-time
    *  join of AgentDirectory and SessionPointers (no new store). Entries are
@@ -5746,9 +5756,12 @@ export function connectKaoiro(
     spawn: (request) =>
       new Promise((resolve, reject) => {
         pushVersioned(channel, "spawn", { ...request })
-          .receive("ok", (resp: { agent_id?: unknown }) =>
+          .receive("ok", (resp: { agent_id?: unknown; room_id?: unknown }) =>
             typeof resp?.agent_id === "string"
-              ? resolve({ agentId: resp.agent_id })
+              ? resolve({
+                  agentId: resp.agent_id,
+                  ...(typeof resp.room_id === "string" ? { roomId: resp.room_id } : {}),
+                })
               : reject(new Error("error")),
           )
           .receive("error", (reason: { reason?: string } | undefined) =>

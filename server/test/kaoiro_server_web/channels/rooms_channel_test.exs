@@ -11,6 +11,7 @@ defmodule KaoiroServerWeb.RoomsChannelTest do
     AgentStates,
     ConversationStates,
     DeliveryStates,
+    HostRegistry,
     PlannedDisconnects,
     Rooms,
     SessionLifecycleEvents,
@@ -954,6 +955,241 @@ defmodule KaoiroServerWeb.RoomsChannelTest do
       assert_reply ref, :error, %{reason: "rooms_unavailable"}, slow()
       :sys.resume(rooms)
       refute_reset_observed(ctx.b)
+    end
+  end
+
+  # The room a new agent starts in (issue #1081 Phase 1-1, ADR-0073). Each
+  # test below is one claim of the design, so one mutation turns exactly one
+  # of them red.
+  describe "the room a launch names" do
+    setup do
+      host_id = "launch#{System.unique_integer([:positive])}"
+
+      :ok =
+        HostRegistry.register(
+          host_id,
+          %{policy: :accept_all, cwd_allowlist: ["/work/proj"], capabilities: ["claude-code"]},
+          self()
+        )
+
+      @endpoint.subscribe("runner:" <> host_id)
+      %{host_id: host_id, operator: client(:operator)}
+    end
+
+    test "T1 the membership is saved before the runner is told", ctx do
+      room_id = create_room(ctx.operator, "Ordering")
+      tracker = Process.whereis(ConversationStates)
+      :ok = :sys.suspend(tracker)
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => room_id})
+      await_queued(ConversationStates, :room_change)
+
+      refute_broadcast "spawn", _held, 0
+
+      :sys.resume(tracker)
+      assert_reply ref, :ok, %{"agent_id" => agent_id}, slow()
+
+      # The same subscription receives it once the save completes, so the
+      # refutation above is not a dead assertion.
+      assert_broadcast "spawn", %{"agent_id" => ^agent_id}
+      assert Map.get(members(), agent_id) == room_id
+    end
+
+    test "T2 the placement reaches every dashboard as a snapshot", ctx do
+      room_id = create_room(ctx.operator, "Broadcast")
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => room_id})
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_broadcast "spawn", _payload
+
+      # The `create_room` push arrives first; this is the launch's own, and
+      # without it no dashboard would show the agent in its room.
+      assert_push "rooms_snapshot", %{"memberships" => %{^agent_id => ^room_id}}
+    end
+
+    test "T3 a launch with no room reaches no store", ctx do
+      tracker = Process.whereis(ConversationStates)
+      rooms = Process.whereis(Rooms)
+      :ok = :sys.suspend(tracker)
+      :ok = :sys.suspend(rooms)
+
+      ref = launch(ctx.operator, ctx.host_id)
+      assert_reply ref, :ok, %{"agent_id" => agent_id, "room_id" => "lobby"}
+      assert_broadcast "spawn", %{"agent_id" => ^agent_id}
+
+      :sys.resume(rooms)
+      :sys.resume(tracker)
+      refute Map.has_key?(members(), agent_id)
+    end
+
+    test "T4 an unknown room leaves nothing behind", ctx do
+      before = members()
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => "no-such-room"})
+      assert_reply ref, :error, %{reason: "unknown_room"}
+      refute_broadcast "spawn", _held, 0
+      assert members() == before
+      assert recorded_of(ctx.host_id) == []
+    end
+
+    test "T4b an unreadable rooms store refuses before any side effect", ctx do
+      before = members()
+      rooms = Process.whereis(Rooms)
+      :ok = :sys.suspend(rooms)
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => "any-room"})
+      assert_reply ref, :error, %{reason: "rooms_unavailable"}, slow()
+      refute_broadcast "spawn", _held, 0
+      :sys.resume(rooms)
+
+      # The pre-check runs before the identity is recorded, so an unreadable
+      # store leaves nothing at all — unlike a failed save below.
+      assert members() == before
+      assert recorded_of(ctx.host_id) == []
+    end
+
+    test "T5a a save that cannot complete refuses the launch", ctx do
+      room_id = create_room(ctx.operator, "Refusal")
+      rooms = hold_save(ctx, room_id)
+      refute_broadcast "spawn", _held, 0
+      :sys.resume(rooms)
+    end
+
+    test "T5b the refused launch keeps its identity", ctx do
+      room_id = create_room(ctx.operator, "Residue")
+      rooms = hold_save(ctx, room_id)
+      :sys.resume(rooms)
+
+      # The identity is what makes a membership clearable at all, so a
+      # refusal must not discard it.
+      assert [_one] = recorded_of(ctx.host_id)
+    end
+
+    test "T5c a save that completes after the refusal is still clearable", ctx do
+      room_id = create_room(ctx.operator, "Late save")
+      rooms = hold_save(ctx, room_id)
+
+      # Observed, not assumed: the save the server gave up on lands anyway.
+      :sys.resume(rooms)
+      agent_id = await_member(room_id)
+      assert [{^agent_id, _entry}] = recorded_of(ctx.host_id)
+
+      ref = push(ctx.operator, "delete_agent", %{"version" => "0", "agent_id" => agent_id})
+      assert_reply ref, :ok, %{}, TestTimeouts.purge_reply()
+      refute Map.has_key?(members(), agent_id)
+    end
+
+    test "T6 a restore does not write the room", ctx do
+      room_id = create_room(ctx.operator, "Resume")
+      elsewhere = create_room(ctx.operator, "Elsewhere")
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => room_id})
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_broadcast "spawn", _payload
+
+      # A restore reuses the agent id and names no room; one in its payload
+      # changes nothing.
+      ref =
+        push(ctx.operator, "restore", %{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "room_id" => elsewhere
+        })
+
+      assert_reply ref, :ok, _reply, slow()
+      assert Map.get(members(), agent_id) == room_id
+    end
+
+    test "T7 the reply carries the room id it placed the agent in", ctx do
+      room_id = create_room(ctx.operator, "Reply")
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => room_id})
+      assert_reply ref, :ok, %{"room_id" => ^room_id}
+      assert_broadcast "spawn", _payload
+
+      ref = launch(ctx.operator, ctx.host_id)
+      assert_reply ref, :ok, %{"room_id" => "lobby"}
+    end
+
+    test "T8 a room_id that is present but unusable is refused", ctx do
+      for unusable <- [123, "", nil, %{"id" => "x"}] do
+        ref = launch(ctx.operator, ctx.host_id, %{"room_id" => unusable})
+        assert_reply ref, :error, %{reason: "invalid_payload"}
+        refute_broadcast "spawn", _held, 0
+      end
+
+      # The absent key is the lobby, not a refusal.
+      ref = launch(ctx.operator, ctx.host_id)
+      assert_reply ref, :ok, %{"room_id" => "lobby"}
+    end
+
+    test "T9 the room never reaches the runner", ctx do
+      room_id = create_room(ctx.operator, "Server side")
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => room_id})
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_broadcast "spawn", payload
+      assert payload["agent_id"] == agent_id
+      refute Map.has_key?(payload, "room_id")
+    end
+
+    test "T10 placing a fresh agent closes nothing and notifies nobody", ctx do
+      room_id = create_room(ctx.operator, "Side effects")
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => room_id})
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_broadcast "spawn", _payload
+      assert Map.get(members(), agent_id) == room_id
+
+      # No conversation to split, and the agent is not connected yet.
+      refute_broadcast "envelope", _held, 0
+    end
+
+    defp launch(operator, host_id, extra \\ %{}) do
+      payload =
+        Map.merge(
+          %{
+            "version" => "0",
+            "host_id" => host_id,
+            "persona" => "default",
+            "cwd" => "/work/proj"
+          },
+          extra
+        )
+
+      push(operator, "spawn", payload)
+    end
+
+    # A refusal that comes from the SAVE rather than the pre-check: the
+    # snapshot read is already done when `Rooms` stops, so the launch has
+    # reached the save and the identity is already recorded. Returns the held
+    # store for the caller to resume.
+    defp hold_save(ctx, room_id) do
+      tracker = Process.whereis(ConversationStates)
+      rooms = Process.whereis(Rooms)
+      :ok = :sys.suspend(tracker)
+      ref = launch(ctx.operator, ctx.host_id, %{"room_id" => room_id})
+      await_queued(ConversationStates, :room_change)
+      :ok = :sys.suspend(rooms)
+      :sys.resume(tracker)
+      assert_reply ref, :error, %{reason: "room_change_unconfirmed"}, slow()
+      rooms
+    end
+
+    defp members do
+      {:ok, %{members: members}} = Rooms.snapshot()
+      members
+    end
+
+    # Directory entries allocated under one host, so a refusal can be checked
+    # without an agent_id (an error reply carries none).
+    defp recorded_of(host_id) do
+      AgentDirectory.all()
+      |> Enum.filter(fn {id, _entry} -> String.starts_with?(id, host_id <> ".") end)
+    end
+
+    defp await_member(room_id) do
+      found = fn ->
+        Enum.find_value(members(), fn {agent_id, held} ->
+          if held == room_id, do: agent_id
+        end)
+      end
+
+      agent_id = Enum.find_value(1..300, fn _ -> found.() || (Process.sleep(10) && false) end)
+      assert is_binary(agent_id)
+      agent_id
     end
   end
 end

@@ -15,6 +15,7 @@
   } from "./protocol";
   import { formatRunnerHostLabel } from "./buildIdentity";
   import { msg } from "./i18n/index.svelte";
+  import { LOBBY_ID, roomErrorText, roomName, type Room } from "./rooms";
   import Modal from "./Modal.svelte";
   import { hasDeliveryMechanism, launchDeliveryDefault, parseLaunchDeliveryPolicy, type DeliveryPolicy } from "./deliveryPolicy";
 
@@ -23,6 +24,7 @@
     ingestWarnings = null,
     connection,
     sessions,
+    rooms = [],
     serverBuildRevision = null,
     serverBuildDirty = null,
     deliveryPolicyAvailable = false,
@@ -32,6 +34,11 @@
     deliveryPolicyAvailable?: boolean;
     canOperate?: () => boolean;
     hosts: HostInfo[];
+    /** The rooms of the last `rooms_snapshot` (issue #1081). Empty means the
+     *  connection carries no snapshot — an older server, or rooms the server
+     *  cannot read — and no room control is shown, as the grid already does
+     *  for that state. A loaded snapshot always lists the lobby. */
+    rooms?: Room[];
     ingestWarnings?: string[] | null;
     connection: KaoiroConnection;
     sessions: RunnerSessions | null;
@@ -86,6 +93,17 @@
   let engine = $state("claude-code");
   let model = $state("");
   let effort = $state("");
+  // The room the new agent starts in (issue #1081). The lobby is the default
+  // and is sent as an omitted key, so a launch that picks it reaches no room
+  // store at all. A room deleted while this dialog is open falls back to the
+  // lobby rather than launching into an id the server would refuse.
+  let roomId = $state(LOBBY_ID);
+  // Launch refusals that have their own wording in the room vocabulary.
+  const ROOM_REFUSALS = new Set([
+    "unknown_room",
+    "rooms_unavailable",
+    "room_change_unconfirmed",
+  ]);
   // Persona-scoped "last chosen effort" (issue #88): `persona_id => effort`
   // fetched once per dialog open (see the $effect below), joined against
   // the current model's effort_levels wherever `effort` is (re)computed.
@@ -144,6 +162,15 @@
     const target = `${hostId}:${engine}`;
     if (deliveryTarget !== target) { deliveryTarget = target; deliveryManual = false; }
     if (!deliveryManual) deliveryChoice = deliveryDefault.policy;
+  });
+
+  // A room deleted while this dialog is open — or a snapshot that stopped
+  // listing it — must not stay selected: the server refuses an unknown room
+  // and the operator would only learn at launch (issue #1081).
+  $effect(() => {
+    if (roomId !== LOBBY_ID && !rooms.some((room) => room.id === roomId)) {
+      roomId = LOBBY_ID;
+    }
   });
 
 
@@ -523,6 +550,11 @@
         ...(showPermissionMode && permissionMode !== ""
           ? { permission_mode: permissionMode }
           : {}),
+        // The lobby rides as an omitted key, so a lobby launch reaches no
+        // room store at all (issue #1081). It rides in BOTH modes: the
+        // resume mode allocates a new agent id, which has no stored room to
+        // keep (operator decision Q43 = A, 2026-11-10).
+        ...(roomId === LOBBY_ID ? {} : { room_id: roomId }),
         ...(mode === "resume"
           ? { resume_session_id: sessionId }
           : trimmed === ""
@@ -533,7 +565,14 @@
       // returns the operator to the grid where the new agent will appear.
       onClose();
     } catch (e) {
-      error = e instanceof Error ? e.message : msg().launchDialog.launchFailed;
+      // A room refusal gets the room vocabulary's own wording (issue #1081);
+      // every other reason keeps the server code it already showed.
+      error =
+        e instanceof Error
+          ? ROOM_REFUSALS.has(e.message)
+            ? roomErrorText(e.message)
+            : e.message
+          : msg().launchDialog.launchFailed;
     } finally {
       busy = false;
     }
@@ -644,6 +683,21 @@
           <select bind:value={engine}>
             {#each engines as e (e)}
               <option value={e}>{e === "grok" ? "Grok Build" : e}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      <!-- The room a new agent starts in (issue #1081). Shown only when the
+           connection carries a rooms snapshot, which is how the grid treats
+           that state too. Offered in both modes: the resume mode allocates a
+           new agent id, so it has no stored room to keep (Q43 = A). -->
+      {#if rooms.length > 0}
+        <label>
+          {msg().launchDialog.room}
+          <select bind:value={roomId}>
+            {#each rooms as room (room.id)}
+              <option value={room.id}>{roomName(room)}</option>
             {/each}
           </select>
         </label>

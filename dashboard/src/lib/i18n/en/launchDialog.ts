@@ -42,6 +42,7 @@ export const launchDialog = {
   persona: "Persona",
   cwd: "Working directory",
   engine: "Engine",
+  room: "Room",
   model: "Model",
   defaultOption: "Default",
   resolvedModelBefore: "Resolved when fetched:",
