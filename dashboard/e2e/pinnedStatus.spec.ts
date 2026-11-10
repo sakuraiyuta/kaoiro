@@ -225,7 +225,6 @@ for (const [width, height, scroller] of [
   [1198, 700, ".log"],
   [940, 600, ".log"],
   [1198, 480, ".log"],
-  [844, 390, ".log"],
 ] as const) {
   test(`${width}x${height}: ${scroller} keeps room with the line expanded`, async ({ page }) => {
     await page.setViewportSize({ width, height });
@@ -239,3 +238,23 @@ for (const [width, height, scroller] of [
     expect(room).toBeGreaterThan(0);
   });
 }
+
+// On a landscape phone the opened, expanded bar can take the whole log height
+// (docs/reference/ui/responsive-reachability.md); closing it gives it back.
+test("844x390: closing the bar gives the log its height back", async ({ page }) => {
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.goto(LONG);
+  const disclosure = main(page).locator("button.disclosure");
+  const log = page.locator(".log");
+  await disclosure.click();
+  await main(page).locator("button.expand").click();
+  await expect(main(page).locator("button.expand")).toHaveAttribute("aria-expanded", "true");
+  const open = await log.evaluate((el) => el.clientHeight);
+  const bodyHeight = await main(page).locator(".pinned-body").evaluate((el) => el.offsetHeight);
+
+  await disclosure.click();
+  await expect(main(page).locator(".pinned-body")).toBeHidden();
+  const closed = await log.evaluate((el) => el.clientHeight);
+  expect(closed).toBeGreaterThan(0);
+  expect(closed).toBeGreaterThanOrEqual(open + bodyHeight - 1);
+});
