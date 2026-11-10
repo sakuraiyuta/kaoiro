@@ -66,6 +66,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.10.2](v2026.11.10.2.md) | 2026-11-10 | v2026.11.10.1 | Rooms: agents message only within their room and the operator manages rooms on the dashboard (new server store), and a long background-command label keeps the Claude Code continuation proof. |
 | [v2026.11.10.1](v2026.11.10.1.md) | 2026-11-10 | v2026.11.08.1 | Claude Code peers on Agent SDK 0.3.321 (Claude Code 2.1.321) with the alias `fable` on Claude Fable 5.2, the dashboard in Japanese or English, and a known regression on long background-command labels. |
 | [v2026.11.08.1](v2026.11.08.1.md) | 2026-11-08 | v2026.11.07.1 | Claude Code peers on Agent SDK 0.3.319 (Claude Code 2.1.319), an omitted `done` follows `kind=done`, a directory store failure answers `directory_unavailable` instead of dropping the wrapper channel, and exec-era Codex helpers are removed. |
 | [v2026.11.07.1](v2026.11.07.1.md) | 2026-11-07 | v2026.11.06.2 | The Codex exec backend is retired, wrappers recover through launch-owned checkpoints, retired delivery inputs are removed, and dashboard notifications reach Android. |
