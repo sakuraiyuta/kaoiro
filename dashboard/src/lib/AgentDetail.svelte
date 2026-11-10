@@ -4875,10 +4875,10 @@
       display: none;
     }
 
-    /* flex: none keeps it out of the log's share, so it never scrolls. */
+    /* A flex item does not shrink below its content (min-height: auto), so
+       the log alone gives up height. */
     .pinned-slot-main {
       display: block;
-      flex: none;
       --status-line-expanded-max: max(calc(1.4em * 3), calc(100dvh - 30rem));
       padding-bottom: 0.6rem;
       border-bottom: 1px solid var(--line);
