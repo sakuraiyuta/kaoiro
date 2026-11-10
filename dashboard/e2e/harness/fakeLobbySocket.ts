@@ -9,6 +9,26 @@ export interface LobbyScenario {
   offline: number;
   /** Agents with a live envelope: the live grid's cards. */
   live?: number;
+  /** Push a complete rooms_snapshot that spreads the live agents over four
+   *  rooms (one of them empty, one with a long name). */
+  rooms?: boolean;
+}
+
+function roomsSnapshot(live: number): unknown {
+  const placed = ["lobby", "r-review", "r-long"];
+  const memberships: Record<string, string> = {};
+  for (let index = 0; index < live; index += 1) {
+    memberships[`e2e-host.live-${index}`] = placed[index % placed.length]!;
+  }
+  return {
+    rooms: [
+      { id: "lobby", name: null },
+      { id: "r-review", name: "Review" },
+      { id: "r-long", name: "Release coordination for the autumn deployment window" },
+      { id: "r-empty", name: "Empty" },
+    ],
+    memberships,
+  };
 }
 
 function persona() {
@@ -83,12 +103,13 @@ export function installFakeLobbySocket(scenario: LobbyScenario): void {
         string,
         string,
       ];
+      const preview = event === "preview_room_move" || event === "preview_room_delete";
       this.deliver([
         joinRef,
         ref,
         frameTopic,
         "phx_reply",
-        { status: "ok", response: {} },
+        { status: "ok", response: preview ? { closing_count: 2, member_count: 1 } : {} },
       ]);
       if (event !== "phx_join" || frameTopic !== topic) return;
       this.push("hosts", {
@@ -99,6 +120,7 @@ export function installFakeLobbySocket(scenario: LobbyScenario): void {
         entries: directoryEntries(scenario.offline),
         directory_incomplete: false,
       });
+      if (scenario.rooms) this.push("rooms_snapshot", roomsSnapshot(scenario.live ?? 0));
     }
 
     close(): void {
