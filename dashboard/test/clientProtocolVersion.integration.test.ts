@@ -491,7 +491,7 @@ describe("server -> dashboard event bindings carry version checks (issue #260)",
   const events = (): Array<keyof typeof CLIENT_EVENT_VERSION_POLICY> =>
     Object.keys(CLIENT_EVENT_VERSION_POLICY).sort() as Array<keyof typeof CLIENT_EVENT_VERSION_POLICY>;
 
-  it("T3-1: policy の27種すべてで欠落をwarnし、受信を継続する", async () => {
+  it("T3-1: policy の28種すべてで欠落をwarnし、受信を継続する", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -501,14 +501,14 @@ describe("server -> dashboard event bindings carry version checks (issue #260)",
       injectServerPush(ws, event, withoutVersion);
     }
 
-    expect(warn).toHaveBeenCalledTimes(27);
+    expect(warn).toHaveBeenCalledTimes(28);
     for (const event of events()) {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${event}: server declared protocol version (absent)`));
     }
     warn.mockRestore();
   });
 
-  it("T3-2: policy の27種すべてで一致versionは無警告", async () => {
+  it("T3-2: policy の28種すべてで一致versionは無警告", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -520,7 +520,7 @@ describe("server -> dashboard event bindings carry version checks (issue #260)",
     warn.mockRestore();
   });
 
-  it("T3-3: policy の27種すべてで不一致versionをwarnし、受信を継続する", async () => {
+  it("T3-3: policy の28種すべてで不一致versionをwarnし、受信を継続する", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -528,14 +528,14 @@ describe("server -> dashboard event bindings carry version checks (issue #260)",
       injectServerPush(ws, event, { ...SERVER_EVENT_PAYLOADS[event], version: "9" });
     }
 
-    expect(warn).toHaveBeenCalledTimes(27);
+    expect(warn).toHaveBeenCalledTimes(28);
     for (const event of events()) {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${event}: server declared protocol version "9"`));
     }
     warn.mockRestore();
   });
 
-  it("T3-4: policy の27種すべてを一回ずつだけ bind する", async () => {
+  it("T3-4: policy の28種すべてを一回ずつだけ bind する", async () => {
     const on = vi.spyOn(Channel.prototype, "on");
     const { conn } = await connectAndJoin();
     const registrations = on.mock.calls
