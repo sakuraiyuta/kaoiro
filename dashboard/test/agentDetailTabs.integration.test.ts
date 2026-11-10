@@ -82,7 +82,7 @@ function items(root: Element): string[] {
 const ENGINE_CLAUDE = ["model", "effort", "switch", "cwd", "engine", "resume", "作業意図", "fast"];
 const KAOIRO_FULL = ["wrapper", "IA 配送", ".session-lifecycle-open", ".delivery-policy"];
 const EXPECTED: Record<
-  Exclude<InputName, "I1r">,
+  Exclude<InputName, "I1r" | "I3d">,
   { engine: string[]; kaoiro: string[] }
 > = {
   I0: { engine: ["model", "effort", ".resume-swap", ".terminate"], kaoiro: [".clear-history"] },
