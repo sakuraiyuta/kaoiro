@@ -154,14 +154,23 @@ for (const width of [844, 1920]) {
   });
 }
 
-for (const [name, url, content] of [
-  ["launch dialog", DIALOG, ".launch-dialog-content"],
-  ["settings drawer", DRAWER, ".settings-drawer-content"],
+// The settings drawer shows one tab at a time and only the visible tab is
+// measured, so each of its four tabs gets its own case (issue 1076).
+for (const [name, url, content, tab] of [
+  ["launch dialog", DIALOG, ".launch-dialog-content", null],
+  ["settings drawer, tab 1", DRAWER, ".settings-drawer-content", 0],
+  ["settings drawer, tab 2", DRAWER, ".settings-drawer-content", 1],
+  ["settings drawer, tab 3", DRAWER, ".settings-drawer-content", 2],
+  ["settings drawer, tab 4", DRAWER, ".settings-drawer-content", 3],
 ] as const) {
   for (const width of [375, 1024]) {
     test(`${name} in en at ${width}px`, async ({ browser, page }) => {
       const prepare: Prepare = async (p) => {
         await expect(p.locator(content)).toBeVisible();
+        if (tab !== null) {
+          await p.getByRole("tab").nth(tab).click();
+          await expect(p.getByRole("tab").nth(tab)).toHaveAttribute("aria-selected", "true");
+        }
       };
       await page.setViewportSize({ width, height: 700 });
       await page.goto(url);

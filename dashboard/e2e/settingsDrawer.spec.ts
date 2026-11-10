@@ -6,10 +6,17 @@
 // a Modal.svelte extension. jsdom cannot simulate
 // HTMLDialogElement.showModal(), so the actual a11y properties need a
 // real browser -- mirrors modal.spec.ts / launchDialog.spec.ts.
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const DRAWER =
   "/e2e/harness/index.html?view=overlay&overlay=drawer-triggered";
+
+// issue 1076: the drawer groups its items into tabs; tab order is Display,
+// Notifications, Operations, Administration (nth is language-independent).
+const TAB = { operations: 2, administration: 3 } as const;
+async function openTab(page: Page, index: number): Promise<void> {
+  await page.getByRole("tab").nth(index).click();
+}
 
 test.describe("SettingsDrawer a11y (issue #277)", () => {
   test("開くと閉じるボタンに初期フォーカスが当たる", async ({ page }) => {
@@ -151,6 +158,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     }) => {
       await page.goto(DRAWER);
       await page.locator("#drawer-trigger").click();
+      await openTab(page, TAB.administration);
       await page.locator(".conv-close").click();
 
       await expect(
@@ -163,6 +171,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     }) => {
       await page.goto(DRAWER);
       await page.locator("#drawer-trigger").click();
+      await openTab(page, TAB.administration);
       await page.locator(".conv-close").click();
       await expect(
         page.locator('dialog[aria-label="会話を閉じる確認"]'),
@@ -185,6 +194,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     }) => {
       await page.goto(DRAWER);
       await page.locator("#drawer-trigger").click();
+      await openTab(page, TAB.administration);
       await page.locator(".conv-close").click();
       await expect(
         page.locator('dialog[aria-label="会話を閉じる確認"]'),
@@ -209,6 +219,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     }) => {
       await page.goto(DRAWER);
       await page.locator("#drawer-trigger").click();
+      await openTab(page, TAB.administration);
       await page.locator(".conv-close").click();
       await expect(
         page.locator('dialog[aria-label="会話を閉じる確認"]'),
@@ -236,6 +247,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     }) => {
       await page.goto(DRAWER);
       await page.locator("#drawer-trigger").click();
+      await openTab(page, TAB.administration);
       await page.locator(".conv-close").click();
       await expect(
         page.locator('dialog[aria-label="会話を閉じる確認"]'),
@@ -265,6 +277,8 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
         await page.locator("#drawer-trigger").click();
         await expect(page.locator("dialog")).toBeVisible();
         await page.waitForTimeout(250); // wait for slide-in animation
+        // Operations is the tallest panel, so the overflow below still holds.
+        await openTab(page, TAB.operations);
 
         // S3 precondition: assert content actually overflows before checking scrolling
         const overflowCheck = await page.evaluate(() => {
@@ -304,6 +318,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       await page.locator("#drawer-trigger").click();
       await expect(page.locator("dialog")).toBeVisible();
       await page.waitForTimeout(250);
+      await openTab(page, TAB.operations);
 
       const drawer = page.locator(".settings-drawer-content");
       const box = (await drawer.boundingBox())!;
@@ -333,12 +348,14 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       await page.locator("#drawer-trigger").click();
       await expect(page.locator("dialog")).toBeVisible();
       await page.waitForTimeout(250);
+      await openTab(page, TAB.operations);
+      await page.locator("dialog button.close").focus();
 
       const logout = page.locator(".logout");
       const closeBtn = page.locator("dialog button.close");
 
       // Tab until logout button is reached
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 40; i++) {
         await page.keyboard.press("Tab");
         const isLogoutFocused = await logout.evaluate((el) => el === document.activeElement);
         if (isLogoutFocused) break;
@@ -365,6 +382,7 @@ test("operator controls follow the dashboard baseline and grid sort fits", async
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto(`${DRAWER}&workState=ready`);
   await page.locator("#drawer-trigger").click();
+  await openTab(page, TAB.operations);
   const work = page.locator('section[aria-label="Work admission settings"]');
   const input = work.locator("input").first();
   const button = work.locator("button").first();
@@ -377,6 +395,7 @@ test("operator controls follow the dashboard baseline and grid sort fits", async
   expect(await button.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe("rgb(27, 27, 39)");
   expect(await link.evaluate((e) => getComputedStyle(e).color)).toBe("rgb(127, 212, 232)");
   expect(await link.evaluate((e) => getComputedStyle(e).fontSize)).toBe("12px");
+  await page.getByRole("tab").nth(0).click();
   const layout = await page.locator("label").filter({ hasText: "グリッドの並び順" }).evaluate((label) => {
     const select = label.querySelector("select")!;
     const drawer = label.closest(".settings-drawer-content")!;
@@ -413,4 +432,20 @@ test("session history uses the type scale and sidebar button has spacing", async
   const button = page.locator(".session-lifecycle-open");
   await expect(button).toBeVisible();
   expect(await button.evaluate((e) => parseFloat(getComputedStyle(e).marginTop))).toBeGreaterThan(0);
+});
+
+test("tabs show one panel at a time and switch by click and arrow key (issue 1076)", async ({ page }) => {
+  await page.goto(DRAWER);
+  await page.locator("#drawer-trigger").click();
+  await expect(page.getByRole("tab")).toHaveCount(4);
+  await expect(page.locator("#settings-panel-display")).toBeVisible();
+  for (const id of ["notifications", "operations", "administration"]) {
+    await expect(page.locator(`#settings-panel-${id}`)).toBeHidden();
+  }
+  await page.getByRole("tab").nth(1).click();
+  await expect(page.locator("#settings-panel-notifications")).toBeVisible();
+  await expect(page.locator("#settings-panel-display")).toBeHidden();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab").nth(2)).toBeFocused();
+  await expect(page.locator("#settings-panel-operations")).toBeVisible();
 });

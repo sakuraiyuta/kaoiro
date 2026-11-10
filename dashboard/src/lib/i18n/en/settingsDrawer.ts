@@ -3,6 +3,11 @@ import { plural } from "./plural";
 
 export const settingsDrawer = {
   title: "Settings",
+  tabsAria: "Settings sections",
+  tabDisplay: "Display",
+  tabNotifications: "Notifications",
+  tabOperations: "Operations",
+  tabAdministration: "Administration",
   sourceFetching: "fetching",
   sourceStored: "stored",
   sourceEnv: "environment variable",

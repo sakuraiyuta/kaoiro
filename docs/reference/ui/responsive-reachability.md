@@ -2,7 +2,7 @@
 title: Responsive reachability-path inventory
 description: Exhaustive display conditions, size-specific reachability paths, and scroll owners for each UI element.
 status: provisional
-last_updated: 2026-10-09
+last_updated: 2026-11-10
 related: [responsive-layout, design]
 ---
 
@@ -50,8 +50,8 @@ marker, current owner and supported mechanisms additionally gate activation.
 | Connection state (`p.conn`) | Authenticated | Always | Always (may reduce to a dot only) |
 | Settings (`button.settings-toggle`) | Authenticated | Always | Always |
 | Launch (`button.launch`) | Authenticated, operator, and connected | Always | Always |
-| Bulk close + session reset | Authenticated, operator, and connected; within SettingsDrawer | Always in drawer | Always in drawer |
-| Logout (`button.logout`) | Authenticated | Always | May move into SettingsDrawer |
+| Bulk close + session reset | Authenticated, operator, and connected; within the Operations tab of SettingsDrawer | Always in drawer | Always in drawer |
+| Logout (`button.logout`) | Authenticated | Always | May move into SettingsDrawer (below the tab panels, outside every tab) |
 | Spawn notice (`p.spawn-notice`) | Authenticated and a notice exists | Always | Always |
 | Login screen | Unauthenticated | Always | Always (one vertical column) |
 

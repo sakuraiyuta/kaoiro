@@ -90,6 +90,63 @@
     statusLineSettings?: StatusLineSettings | null;
   } = $props();
 
+  type TabId = "display" | "notifications" | "operations" | "administration";
+  const TAB_ORDER: readonly TabId[] = [
+    "display",
+    "notifications",
+    "operations",
+    "administration",
+  ];
+  // A tab exists only while one of its items passes its own gate, so the
+  // tab bar and the panels read the same flags: Operations holds the
+  // isOperator item (work capacity) and the connection items, Administration
+  // holds connection items only.
+  const tabVisible = $derived<Record<TabId, boolean>>({
+    display: true,
+    notifications: true,
+    operations: isOperator || !!connection,
+    administration: !!connection,
+  });
+  const visibleTabs = $derived(TAB_ORDER.filter((id) => tabVisible[id]));
+  let selectedTab = $state<TabId>("display");
+  const activeTab = $derived(
+    visibleTabs.includes(selectedTab) ? selectedTab : visibleTabs[0],
+  );
+  // Write the fallback back so a tab that comes back later (reconnect) does
+  // not pull the selection away from where the operator now is.
+  $effect(() => {
+    if (selectedTab !== activeTab) selectedTab = activeTab;
+  });
+
+  function tabLabel(id: TabId): string {
+    const t = msg().settingsDrawer;
+    switch (id) {
+      case "display":
+        return t.tabDisplay;
+      case "notifications":
+        return t.tabNotifications;
+      case "operations":
+        return t.tabOperations;
+      case "administration":
+        return t.tabAdministration;
+    }
+  }
+
+  function onTabKeydown(event: KeyboardEvent): void {
+    const index = visibleTabs.indexOf(activeTab);
+    let next: number;
+    if (event.key === "ArrowRight") next = (index + 1) % visibleTabs.length;
+    else if (event.key === "ArrowLeft")
+      next = (index - 1 + visibleTabs.length) % visibleTabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = visibleTabs.length - 1;
+    else return;
+    event.preventDefault();
+    selectedTab = visibleTabs[next];
+    const buttons = event.currentTarget as HTMLElement;
+    buttons.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
+  }
+
   let retentionError = $state<string | null>(null);
   let lifecycleAgentId = $state("");
 
@@ -743,334 +800,396 @@
     </button>
   </div>
 
-  <LanguageSelect />
-
-  <label class="row">
-    <input
-      type="checkbox"
-      checked={settings.notificationSoundEnabled}
-      onchange={(e) =>
-        updateSettings({
-          notificationSoundEnabled: e.currentTarget.checked,
-        })}
-    />
-    {msg().settingsDrawer.notificationSound}
-  </label>
-
-  <label>
-    {msg().settingsDrawer.volume}
-    <input
-      type="range"
-      min="0"
-      max="1"
-      step="0.05"
-      value={settings.notificationSoundVolume}
-      disabled={!settings.notificationSoundEnabled}
-      oninput={(e) =>
-        updateSettings({
-          notificationSoundVolume: Number(e.currentTarget.value),
-        })}
-    />
-    <span class="value"
-      >{Math.round(settings.notificationSoundVolume * 100)}%</span
-    >
-  </label>
-
-  <label class="row">
-    <input
-      type="checkbox"
-      checked={settings.agentCardStatsEnabled}
-      onchange={(e) =>
-        updateSettings({
-          agentCardStatsEnabled: e.currentTarget.checked,
-        })}
-    />
-    {msg().settingsDrawer.statsToggle}
-  </label>
-
-  <label class="row">
-    <input
-      type="checkbox"
-      checked={settings.hideNonMessageLogEntries}
-      onchange={(e) =>
-        updateSettings({
-          hideNonMessageLogEntries: e.currentTarget.checked,
-        })}
-    />
-    {msg().settingsDrawer.hideNonMessage}
-  </label>
-
-  {#if isOperator}
-    <WorkCapacitySettings {connection} generation={appConnectionGeneration} snapshot={workSettings} onSnapshot={onWorkSettings} />
-  {/if}
-
-  <label class="grid-sort">
-    {msg().settingsDrawer.gridSort}
-    <select
-      value={settings.gridSort}
-      onchange={(e) =>
-        updateSettings({
-          gridSort: e.currentTarget.value === "recent" ? "recent" : "name",
-        })}
-    >
-      <option value="name">{msg().settingsDrawer.sortName}</option>
-      <option value="recent">{msg().settingsDrawer.sortRecent}</option>
-    </select>
-  </label>
-
-  {#if connection}
-    {#if onOpenSessionLifecycle}
-      <section class="session-lifecycle">
-        <h3>{msg().settingsDrawer.sessionHistory}</h3>
-        <form onsubmit={openSessionLifecycle}>
-          <label for="lifecycle-agent-id">{msg().settingsDrawer.agentId}</label>
-          <input id="lifecycle-agent-id" bind:value={lifecycleAgentId} list="lifecycle-agent-ids" placeholder="host-a.agent-1" />
-          <datalist id="lifecycle-agent-ids">
-            {#each [...new Set([...Object.keys(agents), ...Object.keys(directory)])].sort() as id}
-              <option value={id}></option>
-            {/each}
-          </datalist>
-          <button type="submit" disabled={lifecycleAgentId.trim() === ""}>{msg().settingsDrawer.showHistory}</button>
-        </form>
-        <p>{msg().settingsDrawer.deletedAgentsHint}</p>
-      </section>
-    {/if}
-    <section class="quagmire">
-      <h3>{msg().settingsDrawer.quagmireTitle}</h3>
-      <p class="hint">
-        {msg().settingsDrawer.quagmireHint({ source: rallySourceLabel })}
-      </p>
-
-      <label class="row">
-        <input
-          type="checkbox"
-          checked={rallyOff}
-          onchange={(e) =>
-            commitRallyTurns(
-              e.currentTarget.checked ? null : lastNumericRallyTurns,
-            )}
-        />
-        {msg().settingsDrawer.neverDetect}
-      </label>
-
-      <label>
-        {msg().settingsDrawer.threshold}
-        <input
-          type="range"
-          min="4"
-          max="64"
-          step="1"
-          value={quagmireSettings?.rallyTurns ?? lastNumericRallyTurns}
-          disabled={rallyOff}
-          onchange={(e) => commitRallyTurns(Number(e.currentTarget.value))}
-        />
-        <span class="value"
-          >{rallyOff
-            ? "∞"
-            : msg().settingsDrawer.turnsCount({ n: quagmireSettings?.rallyTurns ?? lastNumericRallyTurns })}</span
-        >
-      </label>
-
-      <label>
-        {msg().settingsDrawer.directInput({ max: MAX_RALLY_TURNS })}
-        <input
-          type="number"
-          min="1"
-          max={MAX_RALLY_TURNS}
-          value={quagmireSettings?.rallyTurns ?? lastNumericRallyTurns}
-          disabled={rallyOff}
-          onchange={(e) => commitTypedRallyTurns(e.currentTarget.value)}
-        />
-      </label>
-
-      {#if quagmireError}
-        <p class="error">{msg().settingsDrawer.thresholdError({ reason: quagmireError })}</p>
-      {/if}
-    </section>
-
-    <section class="status-retention">
-      <h3>{msg().settingsDrawer.retentionTitle}</h3>
-      <p class="hint">
-        {msg().settingsDrawer.retentionHint({ source: retentionSourceLabel })}
-      </p>
-      <label>
-        {statusLineSettings
-          ? msg().settingsDrawer.retentionLabelRange({ min: statusLineSettings.min, max: statusLineSettings.max })
-          : msg().settingsDrawer.retentionLabel}
-        <input
-          type="number"
-          min={statusLineSettings?.min ?? 1}
-          max={statusLineSettings?.max ?? 100}
-          value={statusLineSettings?.retention ?? ""}
-          disabled={statusLineSettings === null}
-          onchange={(e) => commitRetention(e.currentTarget.value)}
-        />
-      </label>
-      {#if retentionError}
-        <p class="error">{msg().settingsDrawer.retentionError({ reason: retentionError })}</p>
-      {/if}
-    </section>
-
-    <section class="bulk-reset">
-      <h3>{msg().settingsDrawer.bulkTitle}</h3>
-      <p class="hint">{msg().settingsDrawer.bulkHint}</p>
+  <!-- svelte-ignore a11y_interactive_supports_focus -- the handler only
+       receives keydown bubbled from the focusable tabs inside; the tablist
+       itself is not a tab stop. -->
+  <div
+    class="tabs"
+    role="tablist"
+    aria-label={msg().settingsDrawer.tabsAria}
+    onkeydown={onTabKeydown}
+  >
+    {#each visibleTabs as id (id)}
       <button
         type="button"
-        class="danger"
-        onclick={prepareBulkReset}
-        disabled={!agentSnapshotComplete || bulkResetRunning || bulkResetPreparing}
+        role="tab"
+        id="settings-tab-{id}"
+        class:active={activeTab === id}
+        aria-selected={activeTab === id}
+        aria-controls="settings-panel-{id}"
+        tabindex={activeTab === id ? 0 : -1}
+        onclick={() => (selectedTab = id)}
       >
-        {bulkResetPreparing ? msg().settingsDrawer.bulkChecking : msg().settingsDrawer.bulkButton}
+        {tabLabel(id)}
       </button>
-      {#if bulkResetError}
-        <p class="conv-status" role="status">{msg().settingsDrawer.bulkPrepareFailed({ reason: bulkResetError })}</p>
-      {/if}
-    </section>
+    {/each}
+  </div>
 
-    <section class="conversations">
-      <div class="conversations-header">
-        <h3>{msg().settingsDrawer.conversationsTitle}</h3>
-        <button
-          type="button"
-          class="refresh"
-          onclick={refreshConversations}
-          aria-label={msg().settingsDrawer.refreshConversationsAria}
-        >
-          {msg().settingsDrawer.refresh}
-        </button>
-      </div>
-      <div class="conversation-filters">
-        <label class="conversation-toggle">
-          <input type="checkbox" bind:checked={showClosedConversations} />
-          {msg().settingsDrawer.showClosed}
-        </label>
-        {#if !showClosedConversations && hiddenClosedCount > 0}
-          <span class="conv-status">{msg().settingsDrawer.hiddenClosed({ n: hiddenClosedCount })}</span>
-        {/if}
-      </div>
-      {#if conversationsError}
-        <p class="conv-status">{msg().settingsDrawer.fetchFailed({ reason: conversationsError })}</p>
-      {:else}
-        {#if conversationsIncomplete}
-          <p class="conv-status">{msg().settingsDrawer.partialConversations}</p>
-        {/if}
+  <div
+    role="tabpanel"
+    class="panel"
+    id="settings-panel-display"
+    aria-labelledby="settings-tab-display"
+    hidden={activeTab !== "display"}
+  >
+    <LanguageSelect />
+
+    <label class="row">
+      <input
+        type="checkbox"
+        checked={settings.agentCardStatsEnabled}
+        onchange={(e) =>
+          updateSettings({
+            agentCardStatsEnabled: e.currentTarget.checked,
+          })}
+      />
+      {msg().settingsDrawer.statsToggle}
+    </label>
+
+    <label class="row">
+      <input
+        type="checkbox"
+        checked={settings.hideNonMessageLogEntries}
+        onchange={(e) =>
+          updateSettings({
+            hideNonMessageLogEntries: e.currentTarget.checked,
+          })}
+      />
+      {msg().settingsDrawer.hideNonMessage}
+    </label>
+
+    <label class="grid-sort">
+      {msg().settingsDrawer.gridSort}
+      <select
+        value={settings.gridSort}
+        onchange={(e) =>
+          updateSettings({
+            gridSort: e.currentTarget.value === "recent" ? "recent" : "name",
+          })}
+      >
+        <option value="name">{msg().settingsDrawer.sortName}</option>
+        <option value="recent">{msg().settingsDrawer.sortRecent}</option>
+      </select>
+    </label>
+  </div>
+
+  <div
+    role="tabpanel"
+    class="panel"
+    id="settings-panel-notifications"
+    aria-labelledby="settings-tab-notifications"
+    hidden={activeTab !== "notifications"}
+  >
+    <label class="row">
+      <input
+        type="checkbox"
+        checked={settings.notificationSoundEnabled}
+        onchange={(e) =>
+          updateSettings({
+            notificationSoundEnabled: e.currentTarget.checked,
+          })}
+      />
+      {msg().settingsDrawer.notificationSound}
+    </label>
+
+    <label>
+      {msg().settingsDrawer.volume}
+      <input
+        type="range"
+        min="0"
+        max="1"
+        step="0.05"
+        value={settings.notificationSoundVolume}
+        disabled={!settings.notificationSoundEnabled}
+        oninput={(e) =>
+          updateSettings({
+            notificationSoundVolume: Number(e.currentTarget.value),
+          })}
+      />
+      <span class="value"
+        >{Math.round(settings.notificationSoundVolume * 100)}%</span
+      >
+    </label>
+  </div>
+
+  {#if tabVisible.operations}
+    <div
+      role="tabpanel"
+      class="panel"
+      id="settings-panel-operations"
+      aria-labelledby="settings-tab-operations"
+      hidden={activeTab !== "operations"}
+    >
+      {#if isOperator}
+        <WorkCapacitySettings {connection} generation={appConnectionGeneration} snapshot={workSettings} onSnapshot={onWorkSettings} />
       {/if}
-      {#if !conversationsError && conversations === null}
-        <p class="conv-status">{msg().common.loading}</p>
-      {:else if !conversationsError && conversations && visibleConversations.length === 0}
-        <p class="conv-status">{msg().settingsDrawer.noOpenConversations}</p>
-      {:else if !conversationsError && conversations}
-        <ul class="conv-list">
-          {#each visibleConversations as conv (conv.conversationId)}
-            <li>
-              <span class="conv-participants">
-                {#each conv.participants as agentId, index}
-                  {#if index > 0}<span aria-hidden="true">{" ⇔ "}</span>{/if}
-                  <span title={agentId}>{agentDisplayName(agentId, agents, directory)}</span>
+
+      {#if connection}
+        {#if onOpenSessionLifecycle}
+          <section class="session-lifecycle">
+            <h3>{msg().settingsDrawer.sessionHistory}</h3>
+            <form onsubmit={openSessionLifecycle}>
+              <label for="lifecycle-agent-id">{msg().settingsDrawer.agentId}</label>
+              <input id="lifecycle-agent-id" bind:value={lifecycleAgentId} list="lifecycle-agent-ids" placeholder="host-a.agent-1" />
+              <datalist id="lifecycle-agent-ids">
+                {#each [...new Set([...Object.keys(agents), ...Object.keys(directory)])].sort() as id}
+                  <option value={id}></option>
                 {/each}
-              </span>
-              <span class="conv-cid" title={conv.conversationId}
-                >cid:{conv.conversationId.slice(0, 8)}</span
-              >
-              <span class="conv-meta">
-                {conv.turns} turns / {conv.status}
-                {#if formatStartedAt(conv.startedAt)}
-                  / {formatStartedAt(conv.startedAt)}
-                {/if}
-              </span>
-              {#if conv.quagmire}
-                <span
-                  class="conv-rally"
-                  title="{conv.rallyTurns} messages across {conv.rallyConversations} conversations between these participants (issue #273)"
-                  >rally {conv.rallyTurns}</span
-                >
-              {/if}
-              {#if conv.status === "open"}
-                <button
-                  type="button"
-                  class="conv-close"
-                  onclick={() => (confirmCloseTarget = conv)}
-                >
-                  {msg().settingsDrawer.closeConversation}
-                </button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
+              </datalist>
+              <button type="submit" disabled={lifecycleAgentId.trim() === ""}>{msg().settingsDrawer.showHistory}</button>
+            </form>
+            <p>{msg().settingsDrawer.deletedAgentsHint}</p>
+          </section>
+        {/if}
 
-    <!-- issue #207: distinct classes throughout (not reused from the
-         conversations section above), even though the CSS declarations
-         are shared via combined selectors below -- a section-scoped
-         reuse of e.g. .conv-list would make `.conv-list li` ambiguous
-         between the two sections wherever both have rows. -->
-    <section class="users">
-      <div class="conversations-header">
-        <h3>{msg().settingsDrawer.usersTitle}</h3>
-        <button
-          type="button"
-          class="refresh"
-          onclick={refreshUsers}
-          aria-label={msg().settingsDrawer.refreshUsersAria}
-        >
-          {msg().settingsDrawer.refresh}
-        </button>
-      </div>
-      {#if usersError}
-        <p class="user-status">{msg().settingsDrawer.fetchFailed({ reason: usersError })}</p>
-      {:else if users === null}
-        <p class="user-status">{msg().common.loading}</p>
-      {:else if users.length === 0}
-        <p class="user-status">{msg().settingsDrawer.noUsers}</p>
-      {:else}
-        <ul class="user-list">
-          {#each users as u (u.id)}
-            <li>
-              {#if renamingUserId === u.id}
-                <div class="user-rename-row">
-                  <input
-                    type="text"
-                    bind:value={renameDraft}
-                    disabled={renaming}
-                    aria-label={msg().settingsDrawer.displayNameAria({ id: u.id })}
-                  />
-                  <button
-                    type="button"
-                    onclick={submitRename}
-                    disabled={renaming}
-                  >
-                    {renaming ? msg().settingsDrawer.saving : msg().settingsDrawer.save}
-                  </button>
-                  <button
-                    type="button"
-                    onclick={cancelRename}
-                    disabled={renaming}
-                  >
-                    {msg().settingsDrawer.cancel}
-                  </button>
-                </div>
-                {#if renameError}
-                  <p class="user-status">{msg().settingsDrawer.failed({ reason: renameError })}</p>
-                {/if}
-              {:else}
-                <span class="user-name">{u.displayName}</span>
-                <span class="user-id" title={u.id}>id:{u.id.slice(0, 8)}</span>
-                <span class="user-meta">{u.kind} / {u.role}</span>
-                <button
-                  type="button"
-                  class="user-action"
-                  onclick={() => startRename(u)}
-                  disabled={renaming}
-                >
-                  {msg().settingsDrawer.rename}
-                </button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
+        <section class="quagmire">
+          <h3>{msg().settingsDrawer.quagmireTitle}</h3>
+          <p class="hint">
+            {msg().settingsDrawer.quagmireHint({ source: rallySourceLabel })}
+          </p>
+
+          <label class="row">
+            <input
+              type="checkbox"
+              checked={rallyOff}
+              onchange={(e) =>
+                commitRallyTurns(
+                  e.currentTarget.checked ? null : lastNumericRallyTurns,
+                )}
+            />
+            {msg().settingsDrawer.neverDetect}
+          </label>
+
+          <label>
+            {msg().settingsDrawer.threshold}
+            <input
+              type="range"
+              min="4"
+              max="64"
+              step="1"
+              value={quagmireSettings?.rallyTurns ?? lastNumericRallyTurns}
+              disabled={rallyOff}
+              onchange={(e) => commitRallyTurns(Number(e.currentTarget.value))}
+            />
+            <span class="value"
+              >{rallyOff
+                ? "∞"
+                : msg().settingsDrawer.turnsCount({ n: quagmireSettings?.rallyTurns ?? lastNumericRallyTurns })}</span
+            >
+          </label>
+
+          <label>
+            {msg().settingsDrawer.directInput({ max: MAX_RALLY_TURNS })}
+            <input
+              type="number"
+              min="1"
+              max={MAX_RALLY_TURNS}
+              value={quagmireSettings?.rallyTurns ?? lastNumericRallyTurns}
+              disabled={rallyOff}
+              onchange={(e) => commitTypedRallyTurns(e.currentTarget.value)}
+            />
+          </label>
+
+          {#if quagmireError}
+            <p class="error">{msg().settingsDrawer.thresholdError({ reason: quagmireError })}</p>
+          {/if}
+        </section>
+
+        <section class="status-retention">
+          <h3>{msg().settingsDrawer.retentionTitle}</h3>
+          <p class="hint">
+            {msg().settingsDrawer.retentionHint({ source: retentionSourceLabel })}
+          </p>
+          <label>
+            {statusLineSettings
+              ? msg().settingsDrawer.retentionLabelRange({ min: statusLineSettings.min, max: statusLineSettings.max })
+              : msg().settingsDrawer.retentionLabel}
+            <input
+              type="number"
+              min={statusLineSettings?.min ?? 1}
+              max={statusLineSettings?.max ?? 100}
+              value={statusLineSettings?.retention ?? ""}
+              disabled={statusLineSettings === null}
+              onchange={(e) => commitRetention(e.currentTarget.value)}
+            />
+          </label>
+          {#if retentionError}
+            <p class="error">{msg().settingsDrawer.retentionError({ reason: retentionError })}</p>
+          {/if}
+        </section>
+
+        <section class="bulk-reset">
+          <h3>{msg().settingsDrawer.bulkTitle}</h3>
+          <p class="hint">{msg().settingsDrawer.bulkHint}</p>
+          <button
+            type="button"
+            class="danger"
+            onclick={prepareBulkReset}
+            disabled={!agentSnapshotComplete || bulkResetRunning || bulkResetPreparing}
+          >
+            {bulkResetPreparing ? msg().settingsDrawer.bulkChecking : msg().settingsDrawer.bulkButton}
+          </button>
+          {#if bulkResetError}
+            <p class="conv-status" role="status">{msg().settingsDrawer.bulkPrepareFailed({ reason: bulkResetError })}</p>
+          {/if}
+        </section>
       {/if}
-    </section>
+    </div>
+  {/if}
+
+  {#if tabVisible.administration}
+    <div
+      role="tabpanel"
+      class="panel"
+      id="settings-panel-administration"
+      aria-labelledby="settings-tab-administration"
+      hidden={activeTab !== "administration"}
+    >
+      <section class="conversations">
+        <div class="conversations-header">
+          <h3>{msg().settingsDrawer.conversationsTitle}</h3>
+          <button
+            type="button"
+            class="refresh"
+            onclick={refreshConversations}
+            aria-label={msg().settingsDrawer.refreshConversationsAria}
+          >
+            {msg().settingsDrawer.refresh}
+          </button>
+        </div>
+        <div class="conversation-filters">
+          <label class="conversation-toggle">
+            <input type="checkbox" bind:checked={showClosedConversations} />
+            {msg().settingsDrawer.showClosed}
+          </label>
+          {#if !showClosedConversations && hiddenClosedCount > 0}
+            <span class="conv-status">{msg().settingsDrawer.hiddenClosed({ n: hiddenClosedCount })}</span>
+          {/if}
+        </div>
+        {#if conversationsError}
+          <p class="conv-status">{msg().settingsDrawer.fetchFailed({ reason: conversationsError })}</p>
+        {:else}
+          {#if conversationsIncomplete}
+            <p class="conv-status">{msg().settingsDrawer.partialConversations}</p>
+          {/if}
+        {/if}
+        {#if !conversationsError && conversations === null}
+          <p class="conv-status">{msg().common.loading}</p>
+        {:else if !conversationsError && conversations && visibleConversations.length === 0}
+          <p class="conv-status">{msg().settingsDrawer.noOpenConversations}</p>
+        {:else if !conversationsError && conversations}
+          <ul class="conv-list">
+            {#each visibleConversations as conv (conv.conversationId)}
+              <li>
+                <span class="conv-participants">
+                  {#each conv.participants as agentId, index}
+                    {#if index > 0}<span aria-hidden="true">{" ⇔ "}</span>{/if}
+                    <span title={agentId}>{agentDisplayName(agentId, agents, directory)}</span>
+                  {/each}
+                </span>
+                <span class="conv-cid" title={conv.conversationId}
+                  >cid:{conv.conversationId.slice(0, 8)}</span
+                >
+                <span class="conv-meta">
+                  {conv.turns} turns / {conv.status}
+                  {#if formatStartedAt(conv.startedAt)}
+                    / {formatStartedAt(conv.startedAt)}
+                  {/if}
+                </span>
+                {#if conv.quagmire}
+                  <span
+                    class="conv-rally"
+                    title="{conv.rallyTurns} messages across {conv.rallyConversations} conversations between these participants (issue #273)"
+                    >rally {conv.rallyTurns}</span
+                  >
+                {/if}
+                {#if conv.status === "open"}
+                  <button
+                    type="button"
+                    class="conv-close"
+                    onclick={() => (confirmCloseTarget = conv)}
+                  >
+                    {msg().settingsDrawer.closeConversation}
+                  </button>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+
+      <!-- issue #207: distinct classes throughout (not reused from the
+           conversations section above), even though the CSS declarations
+           are shared via combined selectors below -- a section-scoped
+           reuse of e.g. .conv-list would make `.conv-list li` ambiguous
+           between the two sections wherever both have rows. -->
+      <section class="users">
+        <div class="conversations-header">
+          <h3>{msg().settingsDrawer.usersTitle}</h3>
+          <button
+            type="button"
+            class="refresh"
+            onclick={refreshUsers}
+            aria-label={msg().settingsDrawer.refreshUsersAria}
+          >
+            {msg().settingsDrawer.refresh}
+          </button>
+        </div>
+        {#if usersError}
+          <p class="user-status">{msg().settingsDrawer.fetchFailed({ reason: usersError })}</p>
+        {:else if users === null}
+          <p class="user-status">{msg().common.loading}</p>
+        {:else if users.length === 0}
+          <p class="user-status">{msg().settingsDrawer.noUsers}</p>
+        {:else}
+          <ul class="user-list">
+            {#each users as u (u.id)}
+              <li>
+                {#if renamingUserId === u.id}
+                  <div class="user-rename-row">
+                    <input
+                      type="text"
+                      bind:value={renameDraft}
+                      disabled={renaming}
+                      aria-label={msg().settingsDrawer.displayNameAria({ id: u.id })}
+                    />
+                    <button
+                      type="button"
+                      onclick={submitRename}
+                      disabled={renaming}
+                    >
+                      {renaming ? msg().settingsDrawer.saving : msg().settingsDrawer.save}
+                    </button>
+                    <button
+                      type="button"
+                      onclick={cancelRename}
+                      disabled={renaming}
+                    >
+                      {msg().settingsDrawer.cancel}
+                    </button>
+                  </div>
+                  {#if renameError}
+                    <p class="user-status">{msg().settingsDrawer.failed({ reason: renameError })}</p>
+                  {/if}
+                {:else}
+                  <span class="user-name">{u.displayName}</span>
+                  <span class="user-id" title={u.id}>id:{u.id.slice(0, 8)}</span>
+                  <span class="user-meta">{u.kind} / {u.role}</span>
+                  <button
+                    type="button"
+                    class="user-action"
+                    onclick={() => startRename(u)}
+                    disabled={renaming}
+                  >
+                    {msg().settingsDrawer.rename}
+                  </button>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    </div>
   {/if}
 
   {#if connection && confirmCloseTarget}
@@ -1190,6 +1309,39 @@
 </Modal>
 
 <style>
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .tabs button {
+    flex: 1 1 auto;
+    padding: 0.35rem 0.5rem;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    cursor: pointer;
+  }
+
+  .tabs button.active {
+    color: var(--fg);
+    border-color: var(--fg-dim);
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  /* display:flex above would otherwise beat the UA rule for [hidden]. */
+  .panel[hidden] {
+    display: none;
+  }
+
   .session-lifecycle form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
   .session-lifecycle form label { grid-column: 1 / -1; }
   .session-lifecycle input { min-width: 0; }
