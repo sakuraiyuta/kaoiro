@@ -30,6 +30,16 @@ import { DeliveryPolicyError, parseDeliveryPolicy, parseLaunchDeliveryPolicy, po
 import { randomUUID } from "./uuid";
 import { msg } from "./i18n/index.svelte";
 import {
+  parseRoomChange,
+  parseRoomPreview,
+  parseRoomReply,
+  parseRoomsSnapshot,
+  type Room,
+  type RoomChangeResult,
+  type RoomPreview,
+  type RoomsSnapshot,
+} from "./rooms";
+import {
   parseStatusLine,
   parseStatusLineHistory,
   parseStatusLineSettings,
@@ -2889,6 +2899,10 @@ export interface KaoiroHandlers {
   ) => void;
   /** One agent's line changed (or was cleared, as a stamped row). */
   onStatusLine?: (agentId: string, row: StatusLineRow) => void;
+  /** The rooms and who is in them, pushed after the join and after every
+   *  room change (issue #537). Not pushed at join while the server cannot read
+   *  its rooms, nor by an older server: no call then means unknown. */
+  onRoomsSnapshot?: (snapshot: RoomsSnapshot) => void;
   /** The change-log retention in force. Operator-only. */
   onStatusLineSettings?: (settings: StatusLineSettings) => void;
   /** Current wrapper artifact identities, sent only to operators/admins. */
@@ -3263,6 +3277,17 @@ export interface KaoiroConnection {
    *  caller must re-fetch listConversations() to see the updated status
    *  either way (no separate push). */
   closeConversation: (conversationId: string) => Promise<void>;
+  /** Room management (issue #537), operator-only; the server gates each call.
+   *  A refusal rejects with `Error(<server code>)`, a missing answer with
+   *  `timeout`, an unreadable answer with `invalid_reply`. The new state
+   *  arrives as `rooms_snapshot`, not in the reply. */
+  createRoom: (name: string) => Promise<Room>;
+  renameRoom: (roomId: string, name: string) => Promise<Room>;
+  deleteRoom: (roomId: string) => Promise<RoomChangeResult>;
+  moveAgent: (agentId: string, roomId: string) => Promise<RoomChangeResult>;
+  /** An advisory count of the conversations the change would close now. */
+  previewRoomMove: (agentId: string, roomId: string) => Promise<RoomPreview>;
+  previewRoomDelete: (roomId: string) => Promise<RoomPreview>;
   /** Operator-facing user list (issue #207). Pure read-time query
    *  mirroring listConversations — no push event, the caller re-fetches
    *  on demand. Entries are defensively parsed (a malformed entry is
@@ -4539,6 +4564,7 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   status_line_snapshot: "checked",
   status_line: "checked",
   status_line_settings: "checked",
+  rooms_snapshot: "checked",
   delivery_policy_changed: "checked",
 } as const satisfies Record<string, "checked">;
 
@@ -4609,6 +4635,19 @@ function pushAsyncReply(
       )
       .receive("timeout", () => reject(new Error("timeout")));
   });
+}
+
+/** A room request whose ok reply must parse; an unreadable reply rejects with
+ *  `invalid_reply`, which a caller treats as an unconfirmed change. */
+async function pushRoomReply<T>(
+  channel: Channel,
+  event: string,
+  payload: Record<string, unknown>,
+  parse: (raw: unknown) => T | null,
+): Promise<T> {
+  const parsed = parse(await pushAsyncReply(channel, event, payload));
+  if (parsed === null) throw new Error("invalid_reply");
+  return parsed;
 }
 
 function pushWorkSettings(channel: Channel, event: string, payload: Record<string, unknown>): Promise<WorkSettingsSnapshot> {
@@ -4977,6 +5016,10 @@ export function connectKaoiro(
     bindServerEvent(c, "status_line", (payload: unknown) => {
       const line = parseStatusLine(payload);
       if (line !== null) handlers.onStatusLine?.(line.agentId, line.row);
+    });
+    bindServerEvent(c, "rooms_snapshot", (payload: unknown) => {
+      const snapshot = parseRoomsSnapshot(payload);
+      if (snapshot !== null) handlers.onRoomsSnapshot?.(snapshot);
     });
     bindServerEvent(c, "status_line_settings", (payload: unknown) => {
       const settings = parseStatusLineSettings(payload);
@@ -5746,6 +5789,17 @@ export function connectKaoiro(
       pushAsync(channel, "close_conversation", {
         conversation_id: conversationId,
       }),
+    createRoom: (name) => pushRoomReply(channel, "create_room", { name }, parseRoomReply),
+    renameRoom: (roomId, name) =>
+      pushRoomReply(channel, "rename_room", { room_id: roomId, name }, parseRoomReply),
+    deleteRoom: (roomId) =>
+      pushRoomReply(channel, "delete_room", { room_id: roomId }, parseRoomChange),
+    moveAgent: (agentId, roomId) =>
+      pushRoomReply(channel, "move_agent", { agent_id: agentId, room_id: roomId }, parseRoomChange),
+    previewRoomMove: (agentId, roomId) =>
+      pushRoomReply(channel, "preview_room_move", { agent_id: agentId, room_id: roomId }, parseRoomPreview),
+    previewRoomDelete: (roomId) =>
+      pushRoomReply(channel, "preview_room_delete", { room_id: roomId }, parseRoomPreview),
     listUsers: () =>
       new Promise((resolve, reject) => {
         pushVersioned(channel, "list_users", {})
