@@ -3,10 +3,10 @@
 // data — no Phoenix server, no WebSocket round-trips.
 //
 //   ?view=lobby&role=operator|viewer[&taskRing=N][&sprites=1][&demo=1]
-//     [&statusLine=hostile|unset|cleared|cutlink|omitted]
+//     [&statusLine=hostile|unset|cleared|cutlink|omitted|heading]
 //   ?view=detail[&pending=permission|question][&attention=1]
 //     [&mountDelay=ms][&expandOrigin=1][&taskRing=N]
-//     [&statusLine=hostile|unset|cleared|cutlink|omitted]
+//     [&statusLine=hostile|unset|cleared|cutlink|omitted|heading]
 //   ?view=overlay&overlay=dialog|drawer|persona|dialog-triggered|drawer-triggered
 //     |status-line-history
 //   ?view=app[&offline=N][&live=M][&rooms=1] — real App.svelte behind fetch mocks

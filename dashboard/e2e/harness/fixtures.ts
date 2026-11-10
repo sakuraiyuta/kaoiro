@@ -485,6 +485,11 @@ export function omittedStatusLineView(): StatusLineView {
   return viewOfRow(`https://example.test/${"a".repeat(480)}`, true, 4096);
 }
 
+/** issue 1074: a head that opens with a heading and a list, as agents write. */
+export function headingStatusLineView(): StatusLineView {
+  return viewOfRow("## Target\n- first item\n- second item\n- third item\n- fourth item", false, 60);
+}
+
 export function clearedStatusLineView(): StatusLineView {
   return { kind: "unset", cleared: true };
 }
@@ -502,6 +507,8 @@ export function statusLineViewNamed(name: string | null): StatusLineView | undef
       return clearedStatusLineView();
     case "unset":
       return { kind: "unset", cleared: false };
+    case "heading":
+      return headingStatusLineView();
     default:
       return undefined;
   }
