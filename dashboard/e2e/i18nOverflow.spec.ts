@@ -10,6 +10,7 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
 test.use({ locale: "en-US" });
 
 const LOBBY = "/e2e/harness/index.html?view=lobby&role=operator";
+const ROOMS = "/e2e/harness/index.html?view=app&live=6&offline=2&rooms=1";
 const DETAIL = "/e2e/harness/index.html?view=detail";
 const DIALOG = "/e2e/harness/index.html?view=overlay&overlay=dialog";
 const DRAWER = "/e2e/harness/index.html?view=overlay&overlay=drawer";
@@ -112,6 +113,24 @@ for (const width of [939, 1920]) {
     await prepare(page);
     await expect(page.locator('button[aria-label^="Open details of "]').first()).toBeVisible();
     await expectNoNewOverflow(browser, page, prepare);
+  });
+}
+
+for (const width of [375, 1920]) {
+  test(`rooms in en at ${width}px`, async ({ browser, page }) => {
+    // The room names are the operator's own and stay as typed in both languages.
+    const prepare: Prepare = async (p) => {
+      await expect(p.locator(".live-dashboard .room-header").first()).toBeVisible();
+      await p.locator('button[aria-label$="to another room"], button[aria-label$="を別の部屋へ移動"]').first().click();
+      await expect(p.locator("dialog[open] .note")).toBeVisible();
+    };
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(ROOMS);
+    await expectEnglishBrowser(page);
+    await prepare(page);
+    await expect(page.locator(".live-dashboard .room-header h3").first()).toHaveText("Lobby");
+    await expectNoNewOverflow(browser, page, prepare);
+    await expectButtonsInside(page, width);
   });
 }
 
