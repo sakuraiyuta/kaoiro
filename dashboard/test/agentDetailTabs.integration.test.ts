@@ -250,17 +250,23 @@ describe("AgentDetail detail tabs (issue 1075)", () => {
     expect(tab("kaoiro").tabIndex).toBe(-1);
   });
 
-  it("keeps an open resume picker open across a tab switch", async () => {
+  it("keeps both panels mounted across tab switches", async () => {
     const target = await show("I1c");
     target.querySelector<HTMLElement>(".resume-swap")!.click();
     await tick();
-    expect(target.querySelector(".resume-menu")).not.toBeNull();
+    const menu = target.querySelector(".resume-menu");
+    const policy = target.querySelector(".delivery-policy");
+    expect(menu).not.toBeNull();
+    expect(policy).not.toBeNull();
 
-    target.querySelector<HTMLElement>("#agent-detail-tab-kaoiro")!.click();
-    await tick();
-    target.querySelector<HTMLElement>("#agent-detail-tab-engine")!.click();
-    await tick();
+    for (const name of ["kaoiro", "engine", "kaoiro"]) {
+      target.querySelector<HTMLElement>(`#agent-detail-tab-${name}`)!.click();
+      await tick();
+    }
 
-    expect(target.querySelector(".resume-menu")).not.toBeNull();
+    // The same nodes, not re-created ones: a hidden panel keeps its DOM and
+    // its child components' state.
+    expect(target.querySelector(".resume-menu")).toBe(menu);
+    expect(target.querySelector(".delivery-policy")).toBe(policy);
   });
 });
