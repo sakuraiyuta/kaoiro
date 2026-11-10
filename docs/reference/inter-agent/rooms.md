@@ -209,7 +209,8 @@ The same-room rule reads memory only.
 | The file is not a DETS file at start | It is removed and created again, with a warning. |
 | A stored room or membership is malformed, or names a room that does not exist | It is dropped with a warning; that agent is in the lobby. Valid records are kept. |
 | The store does not answer a save within 2,000 ms, the tracker does not answer within 5,000 ms, or a notice fails | The reply is `room_change_unconfirmed`. The change may or may not have been applied. |
-| A launch names a room and the store cannot read or save it | The launch is refused and the runner is never told. The identity is recorded by then, so `delete_agent` clears it along with a membership an unconfirmed save may still write afterwards. |
+| A launch names a room and the store cannot read it | The launch is refused with `rooms_unavailable` before anything is recorded, so no identity and no membership are left behind. |
+| A launch names a room and its save fails or is unconfirmed | The launch is refused and the runner is never told. The identity is recorded by then, so `delete_agent` clears it along with a membership an unconfirmed save may still write afterwards. |
 | A launch names a room and only the snapshot broadcast fails | The launch continues: the membership is saved and the agent is in the right room. Rejoin for a fresh snapshot. |
 | A launch names no room, or the lobby | No store is read or written, so a stalled store does not refuse it. |
 
