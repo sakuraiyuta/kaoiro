@@ -466,16 +466,18 @@ describe("AgentHost — escaped notification text", () => {
 describe("AgentHost — completion summaries the CLI shortens", () => {
   // The pair was captured from a Bash completion; the Workflow rows apply the
   // same derived form to the Workflow comparison, which was not measured.
-  const { sdk, shown } = completionSummary("bash-1001");
+  const { sdk, shown } = completionSummary("bash-command-label");
   const bash: Task = { ...BASH, summary: sdk };
   const workflow: Task = { ...WORKFLOW, summary: sdk };
-  const miscounted = shown.replace("[201 characters", "[202 characters");
+  const miscounted = shown.replace("[584 characters", "[585 characters");
 
   it.each([
     { name: "a Bash summary in the shortened form", summary: shown, admitted: true },
     { name: "a Bash summary shortened with another count", summary: miscounted, admitted: false },
   ])("judges $name", async ({ summary, admitted }) => {
     expect(summary).not.toBe(escape(sdk));
+    expect(miscounted).not.toBe(shown);
+    expect(shown).toContain("&gt;");
     const outcome = await admit({ mode: "fold", frames: [bashStarted(bash, true), notified(bash)], prompt: notePrompt(bash, { summary }) });
     if (admitted) expectAdmitted(outcome, "fold"); else expectRejected(outcome);
   });

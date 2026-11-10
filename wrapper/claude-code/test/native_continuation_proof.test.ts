@@ -479,6 +479,13 @@ describe("completion summaries the CLI shortens", () => {
     }
   });
 
+  it("reads a Monitor description that needs escaping from the unescaped SDK summary", () => {
+    const r = rig(); const { effective } = r.launch("m", "Monitor");
+    const description = (effective as { description: string }).description;
+    expect(escapeNativeScalar(description)).not.toBe(description);
+    expect(r.prove(r.completion("m", `Monitor "${description}" stream ended`))).toHaveProperty("proof");
+  });
+
   it("refuses a Monitor completion whose SDK summary names another description, shortened or whole", () => {
     for (const whole of [false, true]) {
       const r = rig(); const captured = monitor(r);
