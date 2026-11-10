@@ -142,3 +142,9 @@ Vitest first-import isolation guards and checker acceptance measurements.
 The same-room boundary on the director-requested peer session reset.
 
 - [cross-room-reset-2026-11-10.md](issue-1078/cross-room-reset-2026-11-10.md) — the behaviour before the refusal: a cross-room reset succeeded in either order of the move and the assignment, the work stayed active, and the same-room control succeeded too.
+
+## issue-1075/
+
+The AgentDetail engine / kaoiro tab split.
+
+- [detail-tabs-item-set-2026-11-11.md](issue-1075/detail-tabs-item-set-2026-11-11.md) — the rendered item set per input before and after the split (all 19 status row kinds, equal per input), and the tabs in a viewer session.
