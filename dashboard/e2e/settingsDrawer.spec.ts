@@ -18,6 +18,34 @@ async function openTab(page: Page, index: number): Promise<void> {
   await page.getByRole("tab").nth(index).click();
 }
 
+// Specs that depend on the drawer overflowing open it here. workState=ready
+// adds the work-capacity block, so Operations overflows by far more than a
+// font-metrics difference; the margin is asserted so that a shrinking panel
+// turns the spec red instead of leaving it dependent on the font.
+const OVERFLOWING_DRAWER = `${DRAWER}&workState=ready`;
+const MIN_OVERFLOW_PX = 100;
+async function openOverflowingOperations(
+  page: Page,
+  width: number,
+  height: number,
+): Promise<void> {
+  await page.setViewportSize({ width, height });
+  await page.goto(OVERFLOWING_DRAWER);
+  await page.locator("#drawer-trigger").click();
+  await expect(page.locator("dialog")).toBeVisible();
+  await page.waitForTimeout(250); // wait for slide-in animation
+  await openTab(page, TAB.operations);
+  const drawer = await page.evaluate(() => {
+    const el = document.querySelector(".settings-drawer-content")!;
+    return {
+      overflow: el.scrollHeight - el.clientHeight,
+      overflowY: getComputedStyle(el).overflowY,
+    };
+  });
+  expect(drawer.overflow).toBeGreaterThanOrEqual(MIN_OVERFLOW_PX);
+  expect(drawer.overflowY).toBe("auto");
+}
+
 test.describe("SettingsDrawer a11y (issue #277)", () => {
   test("開くと閉じるボタンに初期フォーカスが当たる", async ({ page }) => {
     await page.goto(DRAWER);
@@ -275,25 +303,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       test(`${vp.name} でスクロールして最下部のボタンに到達・操作できる`, async ({
         page,
       }) => {
-        await page.setViewportSize({ width: vp.width, height: vp.height });
-        await page.goto(DRAWER);
-        await page.locator("#drawer-trigger").click();
-        await expect(page.locator("dialog")).toBeVisible();
-        await page.waitForTimeout(250); // wait for slide-in animation
-        // Operations is the tallest panel, so the overflow below still holds.
-        await openTab(page, TAB.operations);
-
-        // S3 precondition: assert content actually overflows before checking scrolling
-        const overflowCheck = await page.evaluate(() => {
-          const drawer = document.querySelector(".settings-drawer-content")!;
-          return {
-            scrollHeight: drawer.scrollHeight,
-            clientHeight: drawer.clientHeight,
-            overflowY: getComputedStyle(drawer).overflowY,
-          };
-        });
-        expect(overflowCheck.scrollHeight).toBeGreaterThan(overflowCheck.clientHeight);
-        expect(overflowCheck.overflowY).toBe("auto");
+        await openOverflowingOperations(page, vp.width, vp.height);
 
         // Scroll to bottom
         await page.evaluate(() => {
@@ -316,12 +326,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     test("mouse.wheel で drawer のみスクロールし背景は動かない (overscroll-behavior: contain)", async ({
       page,
     }) => {
-      await page.setViewportSize({ width: 1024, height: 560 });
-      await page.goto(DRAWER);
-      await page.locator("#drawer-trigger").click();
-      await expect(page.locator("dialog")).toBeVisible();
-      await page.waitForTimeout(250);
-      await openTab(page, TAB.operations);
+      await openOverflowingOperations(page, 1024, 560);
 
       const drawer = page.locator(".settings-drawer-content");
       const box = (await drawer.boundingBox())!;
@@ -347,14 +352,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       page,
     }) => {
       const PHONE_H = 667;
-      await page.setViewportSize({ width: 375, height: PHONE_H });
-      // workState=ready adds the work-capacity block, so Operations overflows
-      // by far more than a rounding error.
-      await page.goto(`${DRAWER}&workState=ready`);
-      await page.locator("#drawer-trigger").click();
-      await expect(page.locator("dialog")).toBeVisible();
-      await page.waitForTimeout(250);
-      await openTab(page, TAB.operations);
+      await openOverflowingOperations(page, 375, PHONE_H);
       await page.locator("dialog button.close").focus();
 
       const logout = page.locator(".logout");
