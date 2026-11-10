@@ -99,7 +99,11 @@ Related security topics: [Security boundaries](../../architecture/security-bound
 
 - MUST: Decide the same-room rule on the server, from the server's own
   membership record. A room named in a payload or `ext` is never read
-  ([rooms](../inter-agent/rooms.md#the-same-room-rule)).
+  ([rooms](../inter-agent/rooms.md#the-same-room-rule)). It governs
+  inter-agent messages and the director-requested peer session reset
+  ([issue #1078](https://github.com/sakuraiyuta/kaoiro/issues/1078)); for the
+  reset it is checked once, after authority, as the reset paragraph below
+  states.
 - MUST: Gate room management (`create_room`, `rename_room`, `delete_room`,
   `move_agent` and the two previews) on the operator role at the channel
   entry.
@@ -140,10 +144,16 @@ boundary ([ADR-0036](../../adr/0036-session-lifecycle-commands.md)).
   `WrapperChannel.handle_in("peer_session_reset_request", ...)` is accepted
   only on a `work_control` connection, authorized solely from the
   server-owned work record (active grant, requester = director, target =
-  assignee, requester ≠ target, authority epoch match; every failure is the
-  single word `reset_not_authorized`), and then runs the same capability /
-  state / cooldown / pending-lock gates as the operator path through the same
-  per-agent `AgentAcceptance` choke point, plus `agent_in_conversation`. The
+  assignee, requester ≠ target, authority epoch match; every **authority**
+  failure is the single word `reset_not_authorized`), and then runs the same
+  capability / state / cooldown / pending-lock gates as the operator path
+  through the same per-agent `AgentAcceptance` choke point, plus
+  `agent_in_conversation`, plus the same-room rule. Rooms are checked last,
+  after authority and immediately before the acceptance lock, and answer
+  `room_mismatch` or `rooms_unavailable` - never `reset_not_authorized`,
+  because the grant is still valid
+  ([rooms](../inter-agent/rooms.md#the-director-requested-peer-session-reset),
+  [issue #1078](https://github.com/sakuraiyuta/kaoiro/issues/1078)). The
   requester's own tool approval follows the same class as
   `request_session_reset`.
 - **Capability advertisement**: The wrapper adapter stamps

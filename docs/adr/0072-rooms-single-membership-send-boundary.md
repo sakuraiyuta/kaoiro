@@ -6,7 +6,7 @@ opened: 2026-11-10
 supersedes: []
 superseded_by: null
 related_specs: [rooms, conversations, directory]
-related_adrs: [30, 50]
+related_adrs: [30, 50, 68]
 ---
 
 # ADR-0072 — Rooms with single membership and a server-side send boundary
@@ -87,3 +87,35 @@ agent-initiated move requests and room selection at launch are later phases.
   agent.
 - **Per-agent or per-room locks, generations, or a repair journal.** More
   machinery than the mistake-prevention goal needs.
+
+## Amendment (2026-11-10, the director-requested peer session reset)
+
+[Issue #1078](https://github.com/sakuraiyuta/kaoiro/issues/1078) extends the
+same-room boundary from inter-agent messages to one more cross-agent
+operation. `peer_session_reset_request`
+([ADR-0068](0068-director-requested-peer-session-reset.md)) is refused across
+rooms with `room_mismatch`, and with `rooms_unavailable` when the store does
+not answer that one read. Measured before the change: the handler read no
+membership at all, so a director reset an assignee that an operator had moved
+to another room — in either order of the move and the assignment — and the
+work item stayed active with the same epoch.
+
+Three points differ from decision 3.
+
+1. **Checked once, not twice.** A send's second check happens at the record
+   inside `ConversationStates`; a reset has no equivalent record. The reset's
+   single check sits immediately before the acceptance lock, its first side
+   effect.
+2. **After authority.** ADR-0068 D1 keeps every authority failure on
+   `reset_not_authorized`. Deciding rooms first would answer `room_mismatch`
+   to a requester that does not direct the work, which D1 forbids and which
+   private rooms ([#1073](https://github.com/sakuraiyuta/kaoiro/issues/1073))
+   would turn into a probe.
+3. **The remaining window is accepted.** A move landing between the check and
+   the acquisition does not stop that reset. Closing it would move the reset
+   acquisition into the process every send waits on, and the outcome cannot be
+   told apart from a reset acquired just before the move — a distinction this
+   record's mistake-prevention goal does not need.
+
+Decision 7 (rooms and per-pair permissions compose by AND) and the
+consequences above are unchanged.

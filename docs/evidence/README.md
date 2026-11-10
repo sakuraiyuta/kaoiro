@@ -136,3 +136,9 @@ Channel test store isolation and OAuth watcher budgets (issue #554).
 Vitest first-import isolation guards and checker acceptance measurements.
 
 - [2026-10-23-first-import-guard.md](issue-716/2026-10-23-first-import-guard.md) — inventory, negative controls, checker mutations, issue-706 compatibility, and focused per-package measurements.
+
+## issue-1078/
+
+The same-room boundary on the director-requested peer session reset.
+
+- [cross-room-reset-2026-11-10.md](issue-1078/cross-room-reset-2026-11-10.md) — the behaviour before the refusal: a cross-room reset succeeded in either order of the move and the assignment, the work stayed active, and the same-room control succeeded too.

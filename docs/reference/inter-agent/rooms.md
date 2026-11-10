@@ -80,6 +80,31 @@ The boundary is the moment the conversation records the message.
 
 A message already handed to a wrapper or an engine is not recalled.
 
+### The director-requested peer session reset
+
+`request_peer_session_reset` ([session tools](session-tools.md)) is refused
+across rooms as well, with `room_mismatch`
+([issue #1078](https://github.com/sakuraiyuta/kaoiro/issues/1078)). When the
+store does not answer that one read within 500 ms the reply is
+`rooms_unavailable`, and the wrapper may retry it later.
+
+Three things differ from a send.
+
+- **The check runs after the authority check.** A requester that does not
+  direct the work still gets `reset_not_authorized`, which keeps
+  [ADR-0068](../../adr/0068-director-requested-peer-session-reset.md) D1's
+  single word for every authority failure; a cross-room refusal says nothing
+  about rooms to someone without the grant.
+- **It runs once, immediately before the acceptance lock**, not twice. A send
+  has a second boundary - the moment the conversation records the message -
+  and a reset has no equivalent record. A move that lands between the check
+  and the acquisition does not stop that reset, and the outcome cannot be
+  told apart from a reset acquired just before the move.
+- **A move does not revoke the grant.** The work item stays active with the
+  same epoch, as [Managing rooms](#managing-rooms) already states, so holding
+  a valid grant no longer implies the reset is possible. The director asks the
+  operator to move one of the two.
+
 ## Managing rooms
 
 Only an operator or admin manages rooms, through the dashboard channel

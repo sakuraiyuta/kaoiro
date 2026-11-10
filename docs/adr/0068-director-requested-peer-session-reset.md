@@ -2,13 +2,13 @@
 title: Director-requested session reset of an assigned peer
 description: A director holding an active work grant may request the session reset of its assignee through a dedicated wrapper-to-server request; authority comes from the server-owned work record alone, the target passes the operator reset's gates, and the result returns to the requester's own topic.
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-10
 date: 2026-10-17
 opened: 2026-10-17
 supersedes: [43]
 superseded_by: null
 related_specs: [protocol-inter-agent]
-related_adrs: [36, 43, 55, 63]
+related_adrs: [36, 43, 55, 63, 72]
 ---
 
 # ADR-0068 — Director-requested session reset of an assigned peer
@@ -167,7 +167,6 @@ director calls this tool under the same approval class as its own reset.
   server-only kinds through its generic clause; this ADR closes only
   `session_reset_started` and leaves the rest to a follow-up issue.
 
-
 ## Amendment (2026-11-05, basic work operations)
 
 [Issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965) removes transfer
@@ -177,3 +176,22 @@ starts at 1 and no supported operation advances it. An active grant, matching
 director/assignee and matching epoch remain necessary, and terminal work cannot
 authorize a reset. Cancellation followed by a new assignment replaces transfer;
 it does not itself stop the previous assignee's running tools.
+
+## Amendment (2026-11-10, the same-room boundary)
+
+[Issue #1078](https://github.com/sakuraiyuta/kaoiro/issues/1078) adds one gate
+and two words, alongside the amendment of the same date in
+[ADR-0072](0072-rooms-single-membership-send-boundary.md).
+
+- **D2** now reads "the operator reset's gates plus `agent_in_conversation`
+  plus the same-room rule". Rooms are checked last — after authority and
+  immediately before the acceptance lock, which is the first side effect.
+- **D3**'s closed vocabulary is no longer eight words. `room_mismatch` and
+  `rooms_unavailable` join it in the server's `PeerSessionResetReplyReasons`,
+  in the wrapper's own copy (`wrapper/core/src/transport.ts`, which collapses
+  anything outside its set onto `unknown_error`) and in the shared protocol
+  type.
+- **D1 stands unchanged.** Rooms are not authority. A cross-room refusal
+  leaves the work grant valid, which is why it does not answer
+  `reset_not_authorized`: the director's repair is to ask the operator for a
+  move, not to re-read the work.
