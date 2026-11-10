@@ -57,7 +57,7 @@
     <section class="wrap block" aria-labelledby="accounts">
       <p class="eyebrow"><span>02</span> / 契約</p>
       <h2 id="accounts">engine ごとの契約と認証</h2>
-      <p class="intro">各 engine の利用には、各社との契約が要ります。各 engine は、agent の host の上で、それぞれの CLI か SDK で login します。</p>
+      <p class="intro">各 engine の利用には、各社との契約が必要です。各 engine は、agent の host の上で、それぞれの CLI か SDK で login します。</p>
       <p class="notice warn"><strong>各サービスの規約を確認してください。</strong>プランと規約は変わります。kaoiro から engine を使う前に、各社の規約・利用条件を読んでください。</p>
       <ul class="cards">
         <li><h3>Anthropic (Claude Code)</h3><p><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK overview</a><br><a href="https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan">Using Claude Code with your Pro or Max plan</a></p></li>
@@ -70,10 +70,10 @@
     <section class="wrap block" aria-labelledby="hosts">
       <p class="eyebrow"><span>03</span> / host</p>
       <h2 id="hosts">host を用意する</h2>
-      <p class="intro">server を動かす machine と、agent を動かす machine を決めます。同じ machine でも構いません (<a href="deployments.html#single-host">例 B</a>)。</p>
+      <p class="intro">server を動かす machine と、agent を動かす machine を決めます。<br>同じ machine でも構いません (<a href="deployments.html#single-host">例 B</a>)。</p>
       <ul class="cards">
         <li><h3>server の host</h3><p>Docker Engine と Docker Compose plugin、Elixir <code>~&gt; 1.15</code> と Phoenix、deploy CLI 用の Node.js 22 以上。</p></li>
-        <li><h3>agent の host</h3><p>Node.js 22 以上と、そこで動かす各 engine の CLI。Linux では runner を systemd の user unit で動かします。macOS での運用は <a href="https://github.com/sakuraiyuta/kaoiro/issues/242">まだ検証していません</a>。</p></li>
+        <li><h3>agent の host</h3><p>Node.js 22 以上と、そこで動かす各 engine の CLI。Linux では runner を systemd の user unit で動かします。</p></li>
         <li><h3>server への届き方</h3><p><code>.env</code> を書く前に決めます。既定は nginx の reverse proxy の後ろの <code>127.0.0.1</code> で、VPN の中の直接の address も選べます。</p></li>
         <li><h3>SSH</h3><p>server の host と全ての runner の host に SSH で入れ、各 host の鍵を確認済みにしておきます。</p></li>
       </ul>

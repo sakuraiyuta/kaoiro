@@ -34,18 +34,18 @@
     <header class="wrap page-head">
       <p class="eyebrow"><a href="./">kaoiro</a> / 構築事例</p>
       <h1>構築事例</h1>
-      <p class="lead">3 つの構成の例です。host 名は別名で、オフラインの例は今は動かせない将来の構想です。</p>
+      <p class="lead">用途・目的に応じた、3つの構成の例。</p>
     </header>
 
     <section class="wrap block" aria-labelledby="multi-host">
       <p class="eyebrow"><span>01</span> / 例 A</p>
-      <h2 id="multi-host">自前のオンプレで、役割ごとに host を分ける</h2>
-      <p class="intro">作者が毎日使っている構成です。host 名は別名にしてあります。server、agent、重い試験に、それぞれ別の machine を割り当てています。</p>
+      <h2 id="multi-host">役割ごとにマシンを分ける</h2>
+      <p class="intro">作者が毎日使っている構成です。<br>server、agent、テスト環境に、それぞれ別のホストを割り当てています。</p>
       <ul class="cards">
         <li><h3>server-host</h3><p>Linux の 1 台。kaoiro server を Docker Compose で動かし、HTTPS の reverse proxy の後ろに置いて、インターネットから届くようにしています。</p></li>
-        <li><h3>agent-host</h3><p>Linux の 1 台。runner を systemd の user unit で常駐させ、この 1 台で十数人の agent を動かしています。内訳はおよそ Claude Code 6、Codex 4、Antigravity 2、Grok Build 1 です。</p></li>
-        <li><h3>test-host</h3><p>重い試験を隔離した container で回す別の machine です。作者の運用の工夫で、kaoiro の機能ではありません。</p></li>
-        <li><h3>client と file</h3><p>operator は PC と phone の browser で dashboard を使います。operator が読む file は、自前の Nextcloud で受け渡しています。これも kaoiro の外の仕組みです。</p></li>
+        <li><h3>agent-host</h3><p>Linux の 1 台。runner を systemd の user unit で常駐させ、この 1 台で十数人のエージェントを動かしています。内訳はおよそ Claude Code 6、Codex 4、Antigravity 2、Grok Build 1 です。</p></li>
+        <li><h3>test-host</h3><p>重い試験を隔離した container で回す別の端末です。kaoiroとは別に用意した作者独自環境です。</p></li>
+        <li><h3>client と file</h3><p>運用者は PC とスマートフォンのブラウザ(PWA)でダッシュボードを使います。各エージェントの成果物は、自前の Nextcloud クラウドストレージで受け渡しています。</p></li>
       </ul>
       <figure class="diagram stack">
         <svg viewBox="0 0 400 560" role="img" aria-label="例 A。PC と phone の browser が、インターネット越しに HTTPS で server-host に届く。server-host では HTTPS の reverse proxy が、Docker Compose で動く kaoiro server へ転送する。agent-host では systemd の user unit で動く runner が、Claude Code 約 6、Codex 約 4、Antigravity 約 2、Grok Build 約 1 の agent を見守る。agent はデータの経路で server につながり、runner は別に制御の経路でつながる。隔離した container を持つ test-host と Nextcloud の file 共有は kaoiro の外にある。">
@@ -94,9 +94,9 @@
           <text class="d-t d-b" x="295" y="524" text-anchor="middle" font-size="13">file 共有</text>
           <text class="d-m" x="295" y="543" text-anchor="middle" font-size="11">Nextcloud</text>
         </svg>
-        <figcaption>例 A。host 名は別名です。実線はデータ、破線は runner の制御の経路です。下の破線の枠は kaoiro の外にあります。</figcaption>
+        <figcaption>例 A。実線はデータ、破線は runner の制御の経路です。下の破線の枠は作者独自環境です。</figcaption>
       </figure>
-      <p class="note">各 engine の利用には、各社との契約が要ります (<a href="getting-started.html#accounts">はじめかた</a>)。operator の認証情報を持つ人は agent-host で command を実行できます。server を外に出す前に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
+      <p class="note">各 engine の利用には、各社との契約が必要です(<a href="getting-started.html#accounts">はじめかた</a>)。operator の認証情報を持つ人は agent-host で command を実行できます。server を外に出す前に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
     </section>
     <section class="wrap block" aria-labelledby="single-host">
       <p class="eyebrow"><span>02</span> / 例 B</p>
@@ -138,11 +138,11 @@
     </section>
     <section class="wrap block" aria-labelledby="offline">
       <p class="eyebrow"><span>03</span> / 例 C</p>
-      <h2 id="offline">イントラネットだけで動かす: 将来の構想</h2>
-      <p class="notice future"><strong>今は動かせません。</strong>kaoiro はまだローカルの AI エージェントに対応していません。この節は、対応した場合にどう動きうるかの構想です。これを前提に導入を計画しないでください。</p>
+      <h2 id="offline">イントラネットだけで動かす(将来構想)</h2>
+      <p class="notice future">kaoiro は2026/11/10時点で、まだローカル AI エージェントに対応していません。この節は、対応した場合にどう動きうるかの構想です。</p>
       <p class="intro">Claude Code、Codex、Antigravity、Grok Build は、どれも各社のクラウドのサービスを使います。そのため今の kaoiro は、インターネットから切り離しては動きません。</p>
       <ul class="cards">
-        <li><h3>何が変わる必要があるか</h3><p>自分の機材で model を動かす engine です。<a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">issue 1043</a> は engine の pluggable 化を提案しています。source に足すのでなく、公開の protocol で外付けの engine をつなげるようにする案です。open の提案で、出る時期は決まっていません。</p></li>
+        <li><h3>何が変わる必要があるか</h3><p>自分の機材で model を動かす engine です。<a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">issue 1043</a> は engine の pluggable 化を提案しています。source に足すのでなく、公開の protocol で外付けの engine をつなげるようにする案です。</p></li>
         <li><h3>中に閉じられるもの</h3><p>server、runner、dashboard は、今も自分の machine で動きます。そうした engine があれば、原理的には全体をイントラネットの中に閉じられます。</p></li>
       </ul>
       <figure class="diagram stack">
@@ -165,9 +165,8 @@
           <rect class="d-future-chip" x="166" y="222" width="178" height="36" rx="8"/>
           <text class="d-t" x="255" y="245" text-anchor="middle" font-size="13">ローカルの model</text>
           <text class="d-t d-b" x="54" y="282" text-anchor="start" font-size="13">agent-host</text>
-          <text class="d-k" x="200" y="336" text-anchor="middle" font-size="12">今は動かせません。構想だけです。</text>
+          <text class="d-k" x="200" y="336" text-anchor="middle" font-size="12">想定される構成図。</text>
         </svg>
-        <figcaption>構想の図で、対応している構成ではありません。紫の破線の部分はまだ存在しません。</figcaption>
       </figure>
     </section>
     <section class="wrap block" aria-labelledby="compare">
@@ -177,7 +176,7 @@
         <table class="wide">
           <thead><tr><th scope="col"></th><th scope="col">A: 複数 host</th><th scope="col">B: 1 台</th><th scope="col">C: オフライン (将来)</th></tr></thead>
           <tbody>
-          <tr><th scope="row">状態</th><td>毎日使っている</td><td>今できる</td><td>構想だけ</td></tr>
+          <tr><th scope="row">状態</th><td>毎日使っている</td><td>今できる</td><td>対応予定</td></tr>
           <tr><th scope="row">host</th><td>server、agent、試験を別の machine に</td><td>1 台</td><td>イントラネットの中に 1 台以上</td></tr>
           <tr><th scope="row">届く範囲</th><td>インターネットから HTTPS で</td><td>同じ machine、または reverse proxy か VPN で</td><td>イントラネットの中だけ</td></tr>
           <tr><th scope="row">engine</th><td>4 つとも、各社のクラウドを使う</td><td>4 つのどれでも</td><td>ローカルの model を使う外付けの engine (まだ無い)</td></tr>
