@@ -1,5 +1,10 @@
 export const settingsDrawer = {
   title: "設定",
+  tabsAria: "設定の区分",
+  tabDisplay: "表示",
+  tabNotifications: "通知",
+  tabOperations: "運用",
+  tabAdministration: "管理",
   sourceFetching: "取得中",
   sourceStored: "設定済み",
   sourceEnv: "環境変数",
