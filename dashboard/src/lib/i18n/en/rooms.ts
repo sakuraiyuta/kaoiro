@@ -40,6 +40,8 @@ export const rooms = {
   previewNote:
     "The count is an estimate from when it was checked. It may change before the request runs.",
   previewLoading: "Checking how many conversations will close…",
+  previewFailed: ({ code }) =>
+    `Cannot check how many conversations will close (${code}). Close this dialog and open it again.`,
   reload: "Reload",
   movedNotice: ({ name, room, closed }) =>
     `Moved ${name} to ${room}. ${plural(closed, "conversation", "conversations")} closed.`,

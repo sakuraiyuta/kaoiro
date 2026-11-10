@@ -164,6 +164,21 @@ describe("the grid", () => {
   });
 });
 
+describe("detail navigation", () => {
+  it("steps to the next tile in the grid's room order, not in id order", async () => {
+    const h = await mountApp("operator", { ...RAW, memberships: { "h.a": "lobby", "h.b": "r1", "h.c": "lobby" } });
+    h.onSnapshot({ "h.a": envelope("h.a", "Alpha"), "h.b": envelope("h.b", "Bravo"), "h.c": envelope("h.c", "Charlie") });
+    await tick();
+    expect(kinds().filter((k) => k.startsWith("card")).length).toBe(3);
+
+    document.querySelector<HTMLButtonElement>("button[aria-label='Alpha の詳細を開く']")!.click();
+    await tick();
+
+    expect(document.querySelector("button[aria-label='次のエージェント Charlie へ']")).not.toBeNull();
+    expect(document.querySelector("button[aria-label='次のエージェント Bravo へ']")).toBeNull();
+  });
+});
+
 describe("who sees the controls", () => {
   it("shows an operator create, rename, delete (never on the lobby) and a move on each tile", async () => {
     await mountApp("operator");
