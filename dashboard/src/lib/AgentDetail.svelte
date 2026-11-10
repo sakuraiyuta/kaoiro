@@ -25,6 +25,7 @@
   import { msg } from "./i18n/index.svelte";
   import { randomUUID } from "./uuid";
   import { formatBuildIdentity } from "./buildIdentity";
+  import { deliveryPolicyNotice } from "./deliveryPolicyLabel";
   import {
     engineFrom,
     disconnectFrom,
@@ -1939,6 +1940,33 @@
   const approvalPickerVisible = $derived(
     permissionPickerVisible && approvalCeiling !== null,
   );
+
+  // Notices of the detail tabs (issue 1075): one value per notice, read by
+  // both its row and the closed tab's mark, so the two cannot disagree.
+  const shownSwitchNotice = $derived(hasCcStatus ? switchNotice : null);
+  const shownResumeDrift = $derived(
+    hasCcStatus && resumeDrift && resumeDrift.length > 0 ? resumeDrift : null,
+  );
+  const shownPermError = $derived(
+    hasCcStatus && permissionPickerVisible ? permActionError : null,
+  );
+  const shownDelivery = $derived(hasCcStatus ? deliveryStatus : null);
+  const shownPolicyNotice = $derived(
+    policyStore
+      ? deliveryPolicyNotice(
+          policyStore.saving[envelope.agent_id],
+          policyStore.notices[envelope.agent_id],
+        )
+      : null,
+  );
+  const engineAttention = $derived(
+    shownSwitchNotice !== null || shownResumeDrift !== null || shownPermError !== null,
+  );
+  const kaoiroAttention = $derived(
+    (shownDelivery?.lost_count ?? 0) > 0 ||
+      (shownDelivery?.uncertain_count ?? 0) > 0 ||
+      shownPolicyNotice !== null,
+  );
   // ADR-0064: an advertised `values` closes the offered set (Codex offers
   // untrusted / on-request / never); absent keeps every value.
   const approvalChoices = $derived(
@@ -3272,6 +3300,10 @@
               onkeydown={onDetailTabKeydown}
             >
               {tab === "engine" ? msg().agentDetail.detailTabEngine : msg().agentDetail.detailTabKaoiro}
+              {#if shownDetailTab !== tab && (tab === "engine" ? engineAttention : kaoiroAttention)}
+                <span class="detail-tab-mark" aria-hidden="true">●</span>
+                <span class="sr-only">{msg().agentDetail.detailTabNotice}</span>
+              {/if}
             </button>
           {/each}
         </div>
@@ -3396,10 +3428,10 @@
               </dd>
             </div>
           {/if}
-          {#if switchNotice}
-            <div class="cc-row switch-notice" class:error={switchNotice.tone === "error"}>
+          {#if shownSwitchNotice}
+            <div class="cc-row switch-notice" class:error={shownSwitchNotice.tone === "error"}>
               <dt>switch</dt>
-              <dd>{switchNotice.text}</dd>
+              <dd>{shownSwitchNotice.text}</dd>
             </div>
           {/if}
           {#if ccCwd}
@@ -3419,7 +3451,7 @@
               <GrokPermissionPolicy policy={envelope.ext?.permission_policy} />
             </dd></div>
           {/if}
-          {#if resumeDrift && resumeDrift.length > 0}
+          {#if shownResumeDrift}
             <!-- ADR-0014 F1 addendum (phase-15 D8): resume drift warning.
                  Fires only on the resume path (fresh spawn omits the field
                  entirely; empty array means clean resume). One entry per
@@ -3431,7 +3463,7 @@
                   class="drift-badge"
                   title={msg().agentDetail.resumeDriftTitle}
                 >
-                  {#each resumeDrift as d (d.field)}
+                  {#each shownResumeDrift as d (d.field)}
                     <span class="drift-entry">
                       {d.field}: {fmtDriftValue(d.prev)} → {fmtDriftValue(d.now)}
                     </span>
@@ -3742,10 +3774,10 @@
                 </dd>
               </div>
             {/if}
-            {#if permActionError !== null}
+            {#if shownPermError !== null}
               <div class="cc-row">
                 <dt>{msg().agentDetail.permissionRequestError}</dt>
-                <dd>{permActionError}</dd>
+                <dd>{shownPermError}</dd>
               </div>
             {/if}
           {/if}
@@ -3881,22 +3913,22 @@
               </dd>
             </div>
           {/if}
-          {#if deliveryStatus}
+          {#if shownDelivery}
             <div class="cc-row" data-testid="inter-agent-delivery-status">
               <dt>{msg().agentDetail.iaDelivery}</dt>
               <dd>
-                {deliveryStatus.acked_seq}/{deliveryStatus.issued_seq}
-                {#if deliveryStatus.issued_seq > deliveryStatus.acked_seq}
-                  <span class="cc-pending" title={deliveryStatus.pending_since}>
+                {shownDelivery.acked_seq}/{shownDelivery.issued_seq}
+                {#if shownDelivery.issued_seq > shownDelivery.acked_seq}
+                  <span class="cc-pending" title={shownDelivery.pending_since}>
                     {msg().agentDetail.notDispatched}
                   </span>
                 {/if}
-                {#if deliveryStatus.lost_count !== undefined}
-                  <span>{msg().agentDetail.deliveryLost({ count: deliveryStatus.lost_count })}</span>
+                {#if shownDelivery.lost_count !== undefined}
+                  <span>{msg().agentDetail.deliveryLost({ count: shownDelivery.lost_count })}</span>
                 {/if}
-                {#if deliveryStatus.uncertain_count !== undefined}
-                  <span title={deliveryStatus.last_uncertain ? `seq ${deliveryStatus.last_uncertain.delivery_seq}: ${deliveryStatus.last_uncertain.reason}` : undefined}>
-                    {msg().agentDetail.deliveryUncertain({ count: deliveryStatus.uncertain_count })}
+                {#if shownDelivery.uncertain_count !== undefined}
+                  <span title={shownDelivery.last_uncertain ? `seq ${shownDelivery.last_uncertain.delivery_seq}: ${shownDelivery.last_uncertain.reason}` : undefined}>
+                    {msg().agentDetail.deliveryUncertain({ count: shownDelivery.uncertain_count })}
                   </span>
                 {/if}
               </dd>
@@ -4643,6 +4675,24 @@
   .detail-tab:hover,
   .detail-tab:focus-visible {
     opacity: 1;
+  }
+
+  .detail-tab-mark {
+    margin-left: 0.3em;
+    color: var(--c-tool_running);
+    font-size: 0.7em; /* em-relative to the tab label; do not tokenize */
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .clear-history {

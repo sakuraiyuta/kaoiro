@@ -12,16 +12,20 @@ import {
   loadSettings,
   updateSettings,
 } from "../src/lib/settings.svelte";
+import { DeliveryPolicyStore } from "../src/lib/deliveryPolicyStore.svelte";
+import type { InterAgentDeliveryStatus, KaoiroConnection } from "../src/lib/protocol";
 import {
   ITEM_SELECTORS,
   connection,
   envelope,
+  failSandboxRequest,
+  inputProps,
   renderInput,
   unmountAll,
   type InputName,
   type Rendered,
 } from "./fixtures/agentDetailTabInputs";
-import { makeReactiveAgentDetailProps } from "./reactiveProps.svelte";
+import { makeReactiveAgentDetailProps, reactiveProps } from "./reactiveProps.svelte";
 
 const rendered: Rendered[] = [];
 const mounted: object[] = [];
@@ -276,5 +280,143 @@ describe("AgentDetail detail tabs (issue 1075)", () => {
     // its child components' state.
     expect(target.querySelector(".resume-menu")).toBe(menu);
     expect(target.querySelector(".delivery-policy")).toBe(policy);
+  });
+});
+
+describe("AgentDetail detail tab notice mark (issue 1075, Q44)", () => {
+  type Tab = "engine" | "kaoiro";
+
+  async function mountProps(props: Record<string, unknown>, shown: Tab): Promise<HTMLElement> {
+    updateSettings({ detailTab: shown });
+    const target = document.createElement("div");
+    document.body.append(target);
+    mounted.push(mount(AgentDetail, { target, props: props as never }));
+    await tick();
+    flushSync();
+    return target;
+  }
+
+  const tabEl = (target: HTMLElement, name: Tab) =>
+    target.querySelector<HTMLElement>(`#agent-detail-tab-${name}`)!;
+  const marked = (target: HTMLElement, name: Tab) =>
+    tabEl(target, name).querySelector(".detail-tab-mark") !== null;
+
+  const claude = (ext: Record<string, unknown>) => ({
+    onClose: vi.fn(),
+    connection: connection(),
+    envelope: envelope({ engine: "claude-code", ...ext }),
+  });
+  const delivery = (status: InterAgentDeliveryStatus) => ({
+    ...claude({}),
+    deliveryStatus: status,
+  });
+
+  it("marks the closed engine tab for a switch notice", async () => {
+    const target = await mountProps(claude({ models_error: true }), "kaoiro");
+
+    expect(marked(target, "engine")).toBe(true);
+    expect(marked(target, "kaoiro")).toBe(false);
+  });
+
+  it("marks the closed engine tab for resume drift", async () => {
+    const target = await mountProps(
+      claude({ resume_drift: [{ field: "model", prev: "a", now: "b" }] }),
+      "kaoiro",
+    );
+
+    expect(marked(target, "engine")).toBe(true);
+  });
+
+  it("marks the closed engine tab for a rejected permission request", async () => {
+    const target = await mountProps(inputProps("I1x"), "kaoiro");
+    await failSandboxRequest(target);
+
+    expect(marked(target, "engine")).toBe(true);
+  });
+
+  it("stops marking the error once its row is gone", async () => {
+    const props = reactiveProps(inputProps("I1x"));
+    const target = await mountProps(props, "kaoiro");
+    await failSandboxRequest(target);
+    expect(marked(target, "engine")).toBe(true);
+
+    const ext = { ...(props.envelope as { ext: Record<string, unknown> }).ext };
+    ext.session_capabilities = { supports_attachments: false, supports_user_input_dialog: true };
+    props.envelope = envelope(ext);
+    await tick();
+    flushSync();
+
+    expect(target.textContent).not.toContain("権限要求エラー");
+    expect(marked(target, "engine")).toBe(false);
+  });
+
+  it("marks the closed kaoiro tab for lost deliveries", async () => {
+    const target = await mountProps(
+      delivery({ issued_seq: 3, acked_seq: 3, lost_count: 1, uncertain_count: 0 }),
+      "engine",
+    );
+
+    expect(marked(target, "kaoiro")).toBe(true);
+  });
+
+  it("marks the closed kaoiro tab for uncertain deliveries", async () => {
+    const target = await mountProps(
+      delivery({ issued_seq: 3, acked_seq: 3, lost_count: 0, uncertain_count: 1 }),
+      "engine",
+    );
+
+    expect(marked(target, "kaoiro")).toBe(true);
+  });
+
+  it("marks the closed kaoiro tab for a delivery policy notice", async () => {
+    const access = {
+      operator: true,
+      connected: true,
+      connection: { setDeliveryPolicy: vi.fn(), getDeliveryPolicy: vi.fn() } as unknown as KaoiroConnection,
+    };
+    const policyStore = new DeliveryPolicyStore(() => access);
+    policyStore.available = true;
+    policyStore.notices = { "host-a.p": "保存に失敗しました" };
+    const target = await mountProps({ ...claude({}), policyStore, policyConnected: true }, "engine");
+
+    expect(marked(target, "kaoiro")).toBe(true);
+  });
+
+  it("does not mark for zero counts or undelivered messages", async () => {
+    const target = await mountProps(
+      delivery({ issued_seq: 3, acked_seq: 2, lost_count: 0, uncertain_count: 0 }),
+      "engine",
+    );
+
+    expect(marked(target, "kaoiro")).toBe(false);
+    expect(marked(target, "engine")).toBe(false);
+  });
+
+  it("never marks the shown tab", async () => {
+    const target = await mountProps(claude({ models_error: true }), "engine");
+
+    expect(target.textContent).toContain("switch");
+    expect(marked(target, "engine")).toBe(false);
+  });
+
+  it("puts the notice in the tab's text for assistive technology", async () => {
+    const target = await mountProps(
+      delivery({ issued_seq: 3, acked_seq: 3, lost_count: 1, uncertain_count: 0 }),
+      "engine",
+    );
+
+    // jsdom computes no accessible name; the tab's text is what it reads.
+    expect(tabEl(target, "kaoiro").textContent).toContain("通知あり");
+  });
+
+  it("hides the dot from assistive technology", async () => {
+    const target = await mountProps(
+      delivery({ issued_seq: 3, acked_seq: 3, lost_count: 1, uncertain_count: 0 }),
+      "engine",
+    );
+
+    expect(tabEl(target, "kaoiro").querySelector(".detail-tab-mark")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
   });
 });

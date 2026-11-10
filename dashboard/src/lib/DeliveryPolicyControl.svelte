@@ -2,7 +2,7 @@
   import { msg } from "./i18n/index.svelte";
   import { hasDeliveryMechanism, unknownDeliveryPolicy,
     type DeliveryPolicy, type DeliveryPolicyView } from "./deliveryPolicy";
-  import { deliveryPolicyLabel } from "./deliveryPolicyLabel";
+  import { deliveryPolicyLabel, deliveryPolicyNotice } from "./deliveryPolicyLabel";
   let { agentId, view = unknownDeliveryPolicy(), connected, available = false, saving = false,
     reading = false, notice = "", generation = 0, onChange, onRefresh }: {
     agentId: string; view?: DeliveryPolicyView | undefined; connected: boolean; available?: boolean;
@@ -26,7 +26,7 @@
 <section class="delivery-policy" aria-label={msg().deliveryPolicy.title}>
   <strong>{msg().deliveryPolicy.title}</strong>
   <p>{msg().deliveryPolicy.savedPolicy({ policy: view.policy })}</p>
-  <p role="status" aria-live="polite">{saving ? msg().deliveryPolicy.saving : notice || deliveryPolicyLabel(view, connected)}</p>
+  <p role="status" aria-live="polite">{saving ? msg().deliveryPolicy.saving : deliveryPolicyNotice(saving, notice) ?? deliveryPolicyLabel(view, connected)}</p>
   {#if !available}<p>{msg().deliveryPolicy.apiUnconfirmed}</p>{/if}
   {#if view.mechanisms}
     <p>{msg().deliveryPolicy.mechanisms({ operatorEarly: view.mechanisms.operator_early, interAgentEarly: view.mechanisms.inter_agent_early })}</p>

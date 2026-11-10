@@ -221,7 +221,7 @@ function rowByLabel(target: HTMLElement, label: string): HTMLElement | null {
 }
 
 /** I1x: a rejected sandbox request turns the permission request error on. */
-async function failSandboxRequest(target: HTMLElement): Promise<void> {
+export async function failSandboxRequest(target: HTMLElement): Promise<void> {
   const row = rowByLabel(target, "sandbox 変更");
   if (row === null) throw new Error("I1x: no sandbox picker");
   (row.querySelector(".cc-perm-switch") as HTMLButtonElement).click();

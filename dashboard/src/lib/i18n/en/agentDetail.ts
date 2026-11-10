@@ -94,6 +94,7 @@ export const agentDetail = {
   detailTabsLabel: "Details",
   detailTabEngine: "engine",
   detailTabKaoiro: "kaoiro",
+  detailTabNotice: "has notices",
   personaDetailAria: ({ name }) => `Show the persona details of ${name}`,
   renameTitle: "Change the display name",
   renameAria: ({ name }) => `Change the display name of ${name}`,
