@@ -115,7 +115,7 @@
           <circle class="d-node" cx="164" cy="382" r="4"/>
           <path class="d-head" d="M50 382l9 -5v10z"/>
         </svg>
-        <figcaption>メッセージは全て server を通り、2 体は別のエンジンで動かせます。実行中の turn に届くかどうかはエンジンごとに違います。</figcaption>
+        <figcaption>メッセージは全て server を通り、2 体は別のエンジンで動かせます。</figcaption>
       </figure>
     </section>
     <p class="wrap note">エンジンの機能は同じではありません。model や effort の切り替え、権限のモード、ファイルの添付は各エンジンの宣言によります。実行中の turn にメッセージが届くかどうかもエンジンごとに違います。ダッシュボードは宣言された機能に従います。</p>
@@ -131,7 +131,7 @@
         <li class="reveal"><h3>Client</h3><p>各エージェントをキャラクターとして見せます。同梱の Web ダッシュボードは client の 1 つです。</p></li>
       </ul>
       <figure class="diagram">
-        <svg class="wide" viewBox="0 0 960 498" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner は host の登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
+        <svg class="wide" viewBox="0 0 960 498" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner はホストの登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
           <rect class="d-box" x="300" y="6" width="360" height="58" rx="8"/>
           <text class="d-t d-b" x="480" y="30" text-anchor="middle" font-size="17">Client</text>
           <text class="d-m" x="480" y="52" text-anchor="middle" font-size="15">Web ダッシュボードや自作の client</text>
@@ -189,7 +189,7 @@
           <path class="d-dash" d="M520 484L560 484"/>
           <text class="d-m" x="568" y="489" text-anchor="start" font-size="15">制御: ホストの登録、起動</text>
         </svg>
-        <svg class="narrow" viewBox="0 0 328 574" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner は host の登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
+        <svg class="narrow" viewBox="0 0 328 574" role="img" aria-label="構成の例。client は 1 つの server へつながる。ノート PC、ワークステーション、クラウド VM の 3 つのホストに、runner が 1 つずつと wrapper がある。wrapper はデータのために server へ直接つながる。runner はホストの登録と制御のために別に server へつながり、wrapper を起動して監督し、データの経路には入らない。">
           <rect class="d-box" x="0" y="2" width="328" height="52" rx="8"/>
           <text class="d-t d-b" x="164" y="23" text-anchor="middle" font-size="13">Client</text>
           <text class="d-m" x="164" y="43" text-anchor="middle" font-size="12">Web ダッシュボードや自作の client</text>
@@ -240,7 +240,7 @@
           <path class="d-dash" d="M4 562L34 562"/>
           <text class="d-m" x="42" y="566" text-anchor="start" font-size="12">制御: 登録、起動</text>
         </svg>
-        <figcaption>架空のホストによる構成の例です。実線はデータ、破線は runner の制御の経路で、データの経路とは別です。</figcaption>
+        <figcaption>構成の例(ホストは架空)。実線はデータ、破線は runner の制御の経路です。</figcaption>
       </figure>
     </section>
 

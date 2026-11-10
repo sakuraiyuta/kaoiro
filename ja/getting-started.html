@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#14141d">
   <title>kaoiro のはじめかた</title>
-  <meta name="description" content="engine ごとの契約から、kaoiro の server と runner の install、最初の agent の起動、日々の運用まで。">
+  <meta name="description" content="engine ごとの契約から、kaoiro の server と runner の install、最初のエージェントの起動、日々の運用まで。">
   <link rel="alternate" hreflang="en" href="../getting-started.html">
   <link rel="stylesheet" href="../style.css">
   <script src="../site.js" defer></script>
@@ -26,10 +26,10 @@
     <ol>
       <li><a href="#before"><span>全体</span></a></li>
       <li><a href="#accounts"><span>契約</span></a></li>
-      <li><a href="#hosts"><span>host</span></a></li>
+      <li><a href="#hosts"><span>ホスト</span></a></li>
       <li><a href="#server"><span>server</span></a></li>
       <li><a href="#runner"><span>runner</span></a></li>
-      <li><a href="#launch"><span>最初の agent</span></a></li>
+      <li><a href="#launch"><span>最初のエージェント</span></a></li>
       <li><a href="#daily"><span>日々の運用</span></a></li>
     </ol>
   </nav>
@@ -37,19 +37,19 @@
     <header class="wrap page-head">
       <p class="eyebrow"><a href="./">kaoiro</a> / はじめかた</p>
       <h1>はじめかた</h1>
-      <p class="lead">engine ごとの契約から、最初の agent が画面に現れるまでと、その後の運用の流れ。</p>
+      <p class="lead">engine ごとの契約から、最初のエージェントが画面に現れるまでと、その後の運用の流れ。</p>
     </header>
 
     <section class="wrap block" aria-labelledby="before">
       <p class="eyebrow"><span>01</span> / 全体</p>
       <h2 id="before">使い始めるまでの順序</h2>
-      <p class="notice warn"><strong>セキュリティ。</strong>operator の認証情報を持つ人は、agent が動く全ての machine で command を実行できます。それらの host への SSH 鍵と同じように扱い、先に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
+      <p class="notice warn"><strong>セキュリティ。</strong>運用者の認証情報を持つ人は、エージェントが動く全てのマシンで command を実行できます。それらのホストへの SSH 鍵と同じように扱い、先に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
       <ol class="path">
         <li><a href="#accounts">使う engine ごとに契約を用意する</a></li>
-        <li><a href="#hosts">host を用意する</a></li>
+        <li><a href="#hosts">ホストを用意する</a></li>
         <li><a href="#server">server を入れる</a></li>
-        <li><a href="#runner">agent を動かす host ごとに runner を入れる</a></li>
-        <li><a href="#launch">最初の agent を起動する</a></li>
+        <li><a href="#runner">エージェントを動かすホストごとに runner を入れる</a></li>
+        <li><a href="#launch">最初のエージェントを起動する</a></li>
         <li><a href="#daily">日々の運用</a></li>
       </ol>
       <p class="note">このページは地図です。command とその正確な順序は repo の docs (英語) にあり、このページと docs が違うときは docs が正です。<a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">production manual</a> から始めてください。</p>
@@ -57,7 +57,7 @@
     <section class="wrap block" aria-labelledby="accounts">
       <p class="eyebrow"><span>02</span> / 契約</p>
       <h2 id="accounts">engine ごとの契約と認証</h2>
-      <p class="intro">各 engine の利用には、各社との契約が必要です。各 engine は、agent の host の上で、それぞれの CLI か SDK で login します。</p>
+      <p class="intro">各 engine の利用には、各社との契約が必要です。各 engine は、エージェントのホストの上で、それぞれの CLI か SDK で login します。</p>
       <p class="notice warn"><strong>各サービスの規約を確認してください。</strong>プランと規約は変わります。kaoiro から engine を使う前に、各社の規約・利用条件を読んでください。</p>
       <ul class="cards">
         <li><h3>Anthropic (Claude Code)</h3><p><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK overview</a><br><a href="https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan">Using Claude Code with your Pro or Max plan</a></p></li>
@@ -65,17 +65,17 @@
         <li><h3>Google (Antigravity)</h3><p><a href="https://antigravity.google/terms/">Antigravity の追加規約</a><br><a href="https://antigravity.google/docs/plans/">Antigravity のプラン</a></p></li>
         <li><h3>xAI (Grok Build)</h3><p><a href="https://x.ai/legal/terms-of-service">Terms of Service - Consumer</a></p></li>
       </ul>
-      <p class="note">kaoiro 自身は engine の認証情報を保存しません。各 engine は agent の host にある自分の login を読みます。各 engine の詳細は repo の <a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/engines">engine の reference (英語)</a> にあります。</p>
+      <p class="note">kaoiro 自身は engine の認証情報を保存しません。各 engine はエージェントのホストにある自分の login を読みます。各 engine の詳細は repo の <a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/engines">engine の reference (英語)</a> にあります。</p>
     </section>
     <section class="wrap block" aria-labelledby="hosts">
-      <p class="eyebrow"><span>03</span> / host</p>
-      <h2 id="hosts">host を用意する</h2>
-      <p class="intro">server を動かす machine と、agent を動かす machine を決めます。<br>同じ machine でも構いません (<a href="deployments.html#single-host">例 B</a>)。</p>
+      <p class="eyebrow"><span>03</span> / ホスト</p>
+      <h2 id="hosts">ホストを用意する</h2>
+      <p class="intro">server を動かすマシンと、エージェントを動かすマシンを決めます。<br>同じマシンでも構いません (<a href="deployments.html#single-host">例 B</a>)。</p>
       <ul class="cards">
-        <li><h3>server の host</h3><p>Docker Engine と Docker Compose plugin、Elixir <code>~&gt; 1.15</code> と Phoenix、deploy CLI 用の Node.js 22 以上。</p></li>
-        <li><h3>agent の host</h3><p>Node.js 22 以上と、そこで動かす各 engine の CLI。Linux では runner を systemd の user unit で動かします。</p></li>
+        <li><h3>server のホスト</h3><p>Docker Engine と Docker Compose plugin、Elixir <code>~&gt; 1.15</code> と Phoenix、deploy CLI 用の Node.js 22 以上。</p></li>
+        <li><h3>エージェントのホスト</h3><p>Node.js 22 以上と、そこで動かす各 engine の CLI。Linux では runner を systemd の user unit で動かします。</p></li>
         <li><h3>server への届き方</h3><p><code>.env</code> を書く前に決めます。既定は nginx の reverse proxy の後ろの <code>127.0.0.1</code> で、VPN の中の直接の address も選べます。</p></li>
-        <li><h3>SSH</h3><p>server の host と全ての runner の host に SSH で入れ、各 host の鍵を確認済みにしておきます。</p></li>
+        <li><h3>SSH</h3><p>server のホストと全ての runner のホストに SSH で入れ、各ホストの鍵を確認済みにしておきます。</p></li>
       </ul>
       <p class="note">全部の一覧: <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/server-install.md#prerequisites">Server install runbook の Prerequisites</a>。</p>
     </section>
@@ -83,8 +83,8 @@
       <p class="eyebrow"><span>04</span> / server</p>
       <h2 id="server">server を入れる</h2>
       <ol class="path">
-        <li>server の host で、動かす commit を指定して repo を clone します。</li>
-        <li><code>server/</code> で <code>mix kaoiro.env</code> を実行します。<code>.env</code> を書き、<code>SECRET_KEY_BASE</code> と client・runner の token を作り、公開する host 名を尋ねます。表示された runner の token は、runner を入れるときに使います。</li>
+        <li>server のホストで、動かす commit を指定して repo を clone します。</li>
+        <li><code>server/</code> で <code>mix kaoiro.env</code> を実行します。<code>.env</code> を書き、<code>SECRET_KEY_BASE</code> と client・runner の token を作り、公開するホスト名を尋ねます。表示された runner の token は、runner を入れるときに使います。</li>
         <li>checkout の root で <code>node server/deploy/kaoiro-server-deploy.mjs start --initialize</code> を実行して起動します。</li>
         <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/network-and-login.md">network and login runbook</a> に従って reverse proxy か VPN の address を設定します。必要なら Google、GitHub、Nextcloud の login も足せます。</li>
       </ol>
@@ -92,30 +92,30 @@
     </section>
     <section class="wrap block" aria-labelledby="runner">
       <p class="eyebrow"><span>05</span> / runner</p>
-      <h2 id="runner">agent の host ごとに runner を入れる</h2>
+      <h2 id="runner">エージェントのホストごとに runner を入れる</h2>
       <ol class="path">
-        <li>host の OS と CPU に合う runner の tarball を作り、host に写します。</li>
+        <li>ホストの OS と CPU に合う runner の tarball を作り、ホストに写します。</li>
         <li>展開した tarball から <code>kaoiro-runner-bootstrap.sh</code> を実行します。対話は最初の wizard だけで、その後 runner を入れて service として起動します。</li>
         <li>Linux では、login しなくても起動時に runner が動くよう、その user の linger を有効にします。</li>
-        <li>各 engine の CLI を host に入れ、runner を動かす user で login しておきます。本番の Codex は専用の home directory を使います。<a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/codex-home.md">Codex home for production</a> を見てください。</li>
+        <li>各 engine の CLI をホストに入れ、runner を動かす user で login しておきます。本番の Codex は専用の home ディレクトリを使います。<a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/codex-home.md">Codex home for production</a> を見てください。</li>
       </ol>
       <p class="note">詳しくは <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/runner-install.md">Runner install and distribution</a> と <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#2-runner-install-first-time-per-host">production manual の 2 節</a>。結果は <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#3-verify">3 節の Verify</a> で確かめます。</p>
     </section>
     <section class="wrap block" aria-labelledby="launch">
       <p class="eyebrow"><span>06</span> / 起動</p>
-      <h2 id="launch">最初の agent を起動する</h2>
+      <h2 id="launch">最初のエージェントを起動する</h2>
       <ul class="cards three">
-        <li><h3>login</h3><p>dashboard を開き、client の token か、設定した login で入ります。</p></li>
-        <li><h3>起動</h3><p>host、persona、engine、作業 directory、権限のモードを選んで起動します。作業 directory は runner が許可したものに限られます。</p></li>
-        <li><h3>見守って応える</h3><p>agent はキャラクターのカードとして現れます。承認待ちの tool call は browser に届くので、そこで応えます。</p></li>
+        <li><h3>login</h3><p>ダッシュボードを開き、client の token か、設定した login で入ります。</p></li>
+        <li><h3>起動</h3><p>ホスト、ペルソナ、engine、作業ディレクトリ、権限のモードを選んで起動します。作業ディレクトリは runner が許可したものに限られます。</p></li>
+        <li><h3>見守って応える</h3><p>エージェントはキャラクターのカードとして現れます。承認待ちのツール呼び出しはブラウザに届くので、そこで応えます。</p></li>
       </ul>
     </section>
     <section class="wrap block start" aria-labelledby="daily">
       <p class="eyebrow"><span>07</span> / 日々</p>
       <h2 id="daily">日々の運用</h2>
       <ul class="cards">
-        <li><h3>承認と通知</h3><p>agent が操作を返したら、デスクトップ通知と状態ごとの音で知らせます。dashboard は phone の幅まで縮むので、席を離れていても応えられます。</p></li>
-        <li><h3>更新と rollback</h3><p>server と runner の更新には決まった順序があります。<a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#4-update">production manual の 4 節</a> に従い、戻すときは <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#5-rollback">5 節</a> を使います。runner を再起動すると、その下の agent は全部止まります。</p></li>
+        <li><h3>承認と通知</h3><p>エージェントが操作を返したら、デスクトップ通知と状態ごとの音で知らせます。ダッシュボードはスマートフォンの幅まで縮むので、席を離れていても応えられます。</p></li>
+        <li><h3>更新と rollback</h3><p>server と runner の更新には決まった順序があります。<a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#4-update">production manual の 4 節</a> に従い、戻すときは <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#5-rollback">5 節</a> を使います。runner を再起動すると、その下のエージェントは全部止まります。</p></li>
         <li><h3>困ったとき</h3><p><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/deployment-troubleshooting.md">deployment troubleshooting</a> から始めてください。</p></li>
         <li><h3>リリースノート</h3><p>release ごとの変更は <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">リリースノート</a> にあります。</p></li>
       </ul>

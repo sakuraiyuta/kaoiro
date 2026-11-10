@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#14141d">
   <title>kaoiro の構築事例</title>
-  <meta name="description" content="オンプレで複数の host に分ける例、1 台にすべてを載せる例、将来の構想としてのイントラネットだけで動かす例。">
+  <meta name="description" content="複数のホストに分ける例、1 台にすべてを載せる例、情報セキュリティを考慮した完全オフライン環境の例(実装予定)。">
   <link rel="alternate" hreflang="en" href="../deployments.html">
   <link rel="stylesheet" href="../style.css">
   <script src="../site.js" defer></script>
@@ -24,7 +24,7 @@
   </nav>
   <nav class="toc" aria-label="目次">
     <ol>
-      <li><a href="#multi-host"><span>A: 複数 host</span></a></li>
+      <li><a href="#multi-host"><span>A: 複数ホスト</span></a></li>
       <li><a href="#single-host"><span>B: 1 台</span></a></li>
       <li><a href="#offline"><span>C: オフライン (将来)</span></a></li>
       <li><a href="#compare"><span>比較</span></a></li>
@@ -40,7 +40,7 @@
     <section class="wrap block" aria-labelledby="multi-host">
       <p class="eyebrow"><span>01</span> / 例 A</p>
       <h2 id="multi-host">役割ごとにマシンを分ける</h2>
-      <p class="intro">作者が毎日使っている構成です。<br>server、agent、テスト環境に、それぞれ別のホストを割り当てています。</p>
+      <p class="intro">作者が毎日使っている構成です。<br>server、エージェント、テスト環境に、それぞれ別のホストを割り当てています。</p>
       <ul class="cards">
         <li><h3>server-host</h3><p>Linux の 1 台。kaoiro server を Docker Compose で動かし、HTTPS の reverse proxy の後ろに置いて、インターネットから届くようにしています。</p></li>
         <li><h3>agent-host</h3><p>Linux の 1 台。runner を systemd の user unit で常駐させ、この 1 台で十数人のエージェントを動かしています。内訳はおよそ Claude Code 6、Codex 4、Antigravity 2、Grok Build 1 です。</p></li>
@@ -48,13 +48,13 @@
         <li><h3>client と file</h3><p>運用者は PC とスマートフォンのブラウザ(PWA)でダッシュボードを使います。各エージェントの成果物は、自前の Nextcloud クラウドストレージで受け渡しています。</p></li>
       </ul>
       <figure class="diagram stack">
-        <svg viewBox="0 0 400 560" role="img" aria-label="例 A。PC と phone の browser が、インターネット越しに HTTPS で server-host に届く。server-host では HTTPS の reverse proxy が、Docker Compose で動く kaoiro server へ転送する。agent-host では systemd の user unit で動く runner が、Claude Code 約 6、Codex 約 4、Antigravity 約 2、Grok Build 約 1 の agent を見守る。agent はデータの経路で server につながり、runner は別に制御の経路でつながる。隔離した container を持つ test-host と Nextcloud の file 共有は kaoiro の外にある。">
+        <svg viewBox="0 0 400 560" role="img" aria-label="例 A。PC とスマートフォンのブラウザが、インターネット越しに HTTPS で server-host に届く。server-host では HTTPS の reverse proxy が、Docker Compose で動く kaoiro server へ転送する。agent-host では systemd の user unit で動く runner が、Claude Code 約 6、Codex 約 4、Antigravity 約 2、Grok Build 約 1 のエージェントを見守る。エージェントはデータの経路で server につながり、runner は別に制御の経路でつながる。隔離した container を持つ test-host と Nextcloud の file 共有は作者独自環境。">
           <rect class="d-box" x="20" y="8" width="170" height="52" rx="8"/>
-          <text class="d-t d-b" x="105" y="30" text-anchor="middle" font-size="14">PC の browser</text>
-          <text class="d-m" x="105" y="49" text-anchor="middle" font-size="12">dashboard</text>
+          <text class="d-t d-b" x="105" y="30" text-anchor="middle" font-size="14">PC のブラウザ</text>
+          <text class="d-m" x="105" y="49" text-anchor="middle" font-size="12">ダッシュボード</text>
           <rect class="d-box" x="210" y="8" width="170" height="52" rx="8"/>
-          <text class="d-t d-b" x="295" y="30" text-anchor="middle" font-size="14">phone の browser</text>
-          <text class="d-m" x="295" y="49" text-anchor="middle" font-size="12">dashboard</text>
+          <text class="d-t d-b" x="295" y="30" text-anchor="middle" font-size="14">スマートフォンのブラウザ</text>
+          <text class="d-m" x="295" y="49" text-anchor="middle" font-size="12">ダッシュボード</text>
           <path class="d-line" d="M105 60L105 112"/>
           <path class="d-line" d="M295 60L295 112"/>
           <text class="d-k" x="200" y="88" text-anchor="middle" font-size="12">インターネット越しに HTTPS</text>
@@ -96,22 +96,22 @@
         </svg>
         <figcaption>例 A。実線はデータ、破線は runner の制御の経路です。下の破線の枠は作者独自環境です。</figcaption>
       </figure>
-      <p class="note">各 engine の利用には、各社との契約が必要です(<a href="getting-started.html#accounts">はじめかた</a>)。operator の認証情報を持つ人は agent-host で command を実行できます。server を外に出す前に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
+      <p class="note">各 engine の利用には、各社との契約が必要です(<a href="getting-started.html#accounts">はじめかた</a>)。運用者の認証情報を持つ人は agent-host で command を実行できます。server を外に出す前に <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a> を読んでください。</p>
     </section>
     <section class="wrap block" aria-labelledby="single-host">
       <p class="eyebrow"><span>02</span> / 例 B</p>
       <h2 id="single-host">1 台にすべてを載せる</h2>
-      <p class="intro">個人で使うなら、server、runner、agent を 1 台に載せられます。手順は複数 host のときと同じ runbook を、1 台の上でたどります。</p>
+      <p class="intro">個人で使うなら、server、runner、エージェントを 1 台に載せられます。手順は複数ホストのときと同じ runbook を、1 台の上でたどります。</p>
       <ul class="cards">
-        <li><h3>動くもの</h3><p>1 台で、Docker Compose の server、runner、起動した agent が動きます。server は既定で 127.0.0.1:4000 だけに bind し、同じ host の reverse proxy がそこへ届きます。</p></li>
-        <li><h3>phone から応答するなら</h3><p><code>.env</code> を書く前に、server への届き方を決めます。HTTPS の reverse proxy か、VPN の中の直接の address です。VPN の方式は、公開のインターネットに決して出しません。どちらも <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/network-and-login.md">network and login runbook (英語)</a> にあります。</p></li>
+        <li><h3>動くもの</h3><p>1 台で、Docker Compose の server、runner、起動したエージェントが動きます。server は既定で 127.0.0.1:4000 だけに bind し、同じホストの reverse proxy がそこへ届きます。</p></li>
+        <li><h3>スマートフォンから応答するなら</h3><p><code>.env</code> を書く前に、server への届き方を決めます。HTTPS の reverse proxy か、VPN の中の直接の address です。VPN の方式は、公開のインターネットに決して出しません。どちらも <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/network-and-login.md">network and login runbook (英語)</a> にあります。</p></li>
         <li><h3>まず試すなら</h3><p>README の <a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start (英語)</a> は、<code>./scripts/dev.sh</code> で全部の層を 1 台で、hot reload つきで起動します。日々使うなら <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">production manual (英語)</a> に従ってください。</p></li>
-        <li><h3>気をつけること</h3><p>runner を再起動すると、その下の agent は全部止まります。1 台の構成では、動かしている agent が全部その runner の下にいます。</p></li>
+        <li><h3>気をつけること</h3><p>runner を再起動すると、その下のエージェントは全部止まります。1 台の構成では、動かしているエージェントが全部その runner の下にいます。</p></li>
       </ul>
       <figure class="diagram stack">
-        <svg viewBox="0 0 400 330" role="img" aria-label="例 B。browser が 1 台の host に届く。その host では Docker Compose で kaoiro server が動き、runner が Claude Code や Codex などの agent を見守る。agent は同じ machine の server につながる。">
+        <svg viewBox="0 0 400 330" role="img" aria-label="例 B。ブラウザが 1 台のホストに届く。そのホストでは Docker Compose で kaoiro server が動き、runner が Claude Code や Codex などのエージェントを見守る。エージェントは同じマシンの server につながる。">
           <rect class="d-box" x="100" y="8" width="200" height="52" rx="8"/>
-          <text class="d-t d-b" x="200" y="30" text-anchor="middle" font-size="14">browser</text>
+          <text class="d-t d-b" x="200" y="30" text-anchor="middle" font-size="14">ブラウザ</text>
           <text class="d-m" x="200" y="49" text-anchor="middle" font-size="12">同じ PC か別の機器</text>
           <path class="d-line" d="M200 60L200 110"/>
           <rect class="d-host" x="20" y="96" width="360" height="220" rx="8"/>
@@ -131,26 +131,26 @@
           <path class="d-dash" d="M140 202L164 235"/>
           <path class="d-dash" d="M140 202L164 275"/>
           <path class="d-line" d="M262 178L262 158"/>
-          <text class="d-t d-b" x="34" y="306" text-anchor="start" font-size="13">1 台の host</text>
+          <text class="d-t d-b" x="34" y="306" text-anchor="start" font-size="13">1 台のホスト</text>
         </svg>
-        <figcaption>例 B。4 つの engine のどれでも、同じ host で動かせます。</figcaption>
+        <figcaption>例 B。4 つの engine のどれでも、同じホストで動かせます。</figcaption>
       </figure>
     </section>
     <section class="wrap block" aria-labelledby="offline">
       <p class="eyebrow"><span>03</span> / 例 C</p>
       <h2 id="offline">イントラネットだけで動かす(将来構想)</h2>
       <p class="notice future">kaoiro は2026/11/10時点で、まだローカル AI エージェントに対応していません。この節は、対応した場合にどう動きうるかの構想です。</p>
-      <p class="intro">Claude Code、Codex、Antigravity、Grok Build は、どれも各社のクラウドのサービスを使います。そのため今の kaoiro は、インターネットから切り離しては動きません。</p>
+      <p class="intro">Claude Code、Codex、Antigravity、Grok Build は、どれも各社のクラウドのサービスを使います。ローカルの model を使う engine に対応できれば、情報セキュリティを考慮した完全オフライン環境で運用できます。</p>
       <ul class="cards">
         <li><h3>何が変わる必要があるか</h3><p>自分の機材で model を動かす engine です。<a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">issue 1043</a> は engine の pluggable 化を提案しています。source に足すのでなく、公開の protocol で外付けの engine をつなげるようにする案です。</p></li>
-        <li><h3>中に閉じられるもの</h3><p>server、runner、dashboard は、今も自分の machine で動きます。そうした engine があれば、原理的には全体をイントラネットの中に閉じられます。</p></li>
+        <li><h3>中に閉じられるもの</h3><p>server、runner、ダッシュボードは、自分のマシンで動きます。そうした engine に対応すれば、原理的には全体をイントラネットの中に閉じられます。</p></li>
       </ul>
       <figure class="diagram stack">
-        <svg viewBox="0 0 400 350" role="img" aria-label="例 C。今は動かない将来の構想。イントラネットの中で browser が kaoiro server に届き、agent-host の runner が、ローカルの model を使う外付けの engine を起動する。外付けの engine とローカルの model はまだ存在しない。">
+        <svg viewBox="0 0 400 350" role="img" aria-label="例 C。将来構想。イントラネットの中でブラウザが kaoiro server に届き、agent-host の runner が、ローカルの model を使う外付けの engine を起動する。外付けの engine とローカルの model は対応予定。">
           <rect class="d-future" x="8" y="8" width="384" height="300" rx="8"/>
-          <text class="d-k" x="22" y="30" text-anchor="start" font-size="12">イントラネット (将来の構想)</text>
+          <text class="d-k" x="22" y="30" text-anchor="start" font-size="12">イントラネット(将来構想)</text>
           <rect class="d-box" x="40" y="44" width="320" height="40" rx="8"/>
-          <text class="d-t d-b" x="200" y="69" text-anchor="middle" font-size="14">browser</text>
+          <text class="d-t d-b" x="200" y="69" text-anchor="middle" font-size="14">ブラウザ</text>
           <path class="d-line" d="M200 84L200 100"/>
           <rect class="d-chip" x="40" y="100" width="320" height="40" rx="8"/>
           <text class="d-t d-b" x="200" y="125" text-anchor="middle" font-size="14">kaoiro server</text>
@@ -174,12 +174,12 @@
       <h2 id="compare">3 つの例の比較</h2>
       <div class="table-wrap" role="region" aria-label="3 つの例の比較" tabindex="0">
         <table class="wide">
-          <thead><tr><th scope="col"></th><th scope="col">A: 複数 host</th><th scope="col">B: 1 台</th><th scope="col">C: オフライン (将来)</th></tr></thead>
+          <thead><tr><th scope="col"></th><th scope="col">A: 複数ホスト</th><th scope="col">B: 1 台</th><th scope="col">C: オフライン (将来)</th></tr></thead>
           <tbody>
           <tr><th scope="row">状態</th><td>毎日使っている</td><td>今できる</td><td>対応予定</td></tr>
-          <tr><th scope="row">host</th><td>server、agent、試験を別の machine に</td><td>1 台</td><td>イントラネットの中に 1 台以上</td></tr>
-          <tr><th scope="row">届く範囲</th><td>インターネットから HTTPS で</td><td>同じ machine、または reverse proxy か VPN で</td><td>イントラネットの中だけ</td></tr>
-          <tr><th scope="row">engine</th><td>4 つとも、各社のクラウドを使う</td><td>4 つのどれでも</td><td>ローカルの model を使う外付けの engine (まだ無い)</td></tr>
+          <tr><th scope="row">ホスト</th><td>server、エージェント、テスト環境を別のマシンに</td><td>1 台</td><td>イントラネットの中に 1 台以上</td></tr>
+          <tr><th scope="row">届く範囲</th><td>インターネットから HTTPS で</td><td>同じマシン、または reverse proxy か VPN で</td><td>イントラネットの中だけ</td></tr>
+          <tr><th scope="row">engine</th><td>4 つとも、各社のクラウドを使う</td><td>4 つのどれでも</td><td>ローカルの model を使う外付けの engine (対応予定)</td></tr>
           <tr><th scope="row">最初に読むもの</th><td><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">production manual</a></td><td><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md">production manual</a> か <a href="https://github.com/sakuraiyuta/kaoiro#install--quick-start">Quick start</a></td><td><a href="https://github.com/sakuraiyuta/kaoiro/issues/1043">issue 1043</a></td></tr>
           </tbody>
         </table>
