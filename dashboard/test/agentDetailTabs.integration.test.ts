@@ -173,6 +173,14 @@ describe("AgentDetail detail tabs (issue 1075)", () => {
     expect(panel(target, "engine").getAttribute("role")).toBeNull();
   });
 
+  it("offers no delete or restore for a disconnected agent without a connection", async () => {
+    const target = await show("I3d");
+
+    expect(target.querySelector('[role="tab"]')).toBeNull();
+    expect(target.querySelectorAll(".remove")).toHaveLength(0);
+    expect(target.querySelectorAll(".restore")).toHaveLength(0);
+  });
+
   it("shows the engine tab first and hides the other panel", async () => {
     const target = await show("I1c");
     const tabs = [...target.querySelectorAll<HTMLElement>('[role="tab"]')];
