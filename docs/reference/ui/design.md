@@ -342,6 +342,11 @@ on a smartphone.
 - A refusal is shown by its server code in the UI language; an unknown code is shown
   as it is. After an unconfirmed change the dialog offers "Reload", which rejoins the
   channel to read the rooms again; the dashboard never rejoins by itself.
+- In the detail view the agent strip follows the same grouping and order. Once a
+  snapshot has arrived each room's name is printed under its chips (ellipsised to the
+  chips' width, hidden from assistive tech because the group's `aria-label` names the
+  room) and a thin rule divides rooms; a room with no agent is left out. Without a
+  snapshot the strip is flat and carries no label.
 - Room names and agent names are shown as the operator typed them. All other text is
   in the i18n area `rooms`.
 
