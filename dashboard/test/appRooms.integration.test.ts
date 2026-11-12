@@ -185,6 +185,56 @@ describe("detail navigation", () => {
   });
 });
 
+describe("the agent strip in the detail view", () => {
+  const chipNames = (root: ParentNode) =>
+    [...root.querySelectorAll(".chip")].map((el) => (el.getAttribute("title") ?? "").split(" — ")[0]);
+
+  async function openAlphaDetail(h: KaoiroHandlers): Promise<void> {
+    h.onSnapshot({ "h.a": envelope("h.a", "Alpha"), "h.b": envelope("h.b", "Bravo"), "h.c": envelope("h.c", "Charlie") });
+    await tick();
+    document.querySelector<HTMLButtonElement>("button[aria-label='Alpha の詳細を開く']")!.click();
+    await tick();
+  }
+
+  it("groups the chips by room in the grid's order, not in id order", async () => {
+    const h = await mountApp("operator", { ...RAW, memberships: { "h.a": "lobby", "h.b": "r1", "h.c": "lobby" } });
+    await openAlphaDetail(h);
+
+    const groups = [...document.querySelectorAll<HTMLElement>(".agent-strip .strip-group")];
+    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["ロビー", "Review"]);
+    expect(groups.map((g) => chipNames(g))).toEqual([["Alpha", "Charlie"], ["Bravo"]]);
+  });
+
+  it("prints each room's name under its chips and keeps it as the full title", async () => {
+    const h = await mountApp("operator", { ...RAW, memberships: { "h.a": "lobby", "h.b": "r1", "h.c": "lobby" } });
+    await openAlphaDetail(h);
+
+    const groups = [...document.querySelectorAll<HTMLElement>(".agent-strip .strip-group")];
+    expect(groups.map((g) => g.querySelector(".strip-label")?.textContent)).toEqual(["ロビー", "Review"]);
+    expect(groups.map((g) => g.getAttribute("title"))).toEqual(["ロビー", "Review"]);
+    // The label is visual only; the group's aria-label already names the room.
+    expect(groups.every((g) => g.querySelector(".strip-label")?.getAttribute("aria-hidden") === "true")).toBe(true);
+  });
+
+  it("keeps the chips flat, in id order, until a snapshot arrives", async () => {
+    const h = await mountApp("operator", null);
+    await openAlphaDetail(h);
+
+    const strip = document.querySelector(".agent-strip")!;
+    expect(strip.querySelectorAll(".strip-group")).toHaveLength(0);
+    expect(strip.querySelectorAll(".strip-label")).toHaveLength(0);
+    expect(chipNames(strip)).toEqual(["Alpha", "Bravo", "Charlie"]);
+  });
+
+  it("leaves out a room with no agent", async () => {
+    const h = await mountApp("operator", { ...RAW, memberships: { "h.a": "lobby", "h.b": "lobby", "h.c": "lobby" } });
+    await openAlphaDetail(h);
+
+    const groups = [...document.querySelectorAll<HTMLElement>(".agent-strip .strip-group")];
+    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["ロビー"]);
+  });
+});
+
 describe("who sees the controls", () => {
   it("shows an operator create, rename, delete (never on the lobby) and a move on each tile", async () => {
     await mountApp("operator");

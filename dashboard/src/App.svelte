@@ -23,7 +23,7 @@
   import { RoomsStore } from "./lib/roomsStore.svelte";
   import RoomDialog from "./lib/RoomDialog.svelte";
   import RoomSeparator from "./lib/RoomSeparator.svelte";
-  import { LOBBY_ID, type RoomRequest } from "./lib/rooms";
+  import { LOBBY_ID, roomName, type RoomRequest } from "./lib/rooms";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import {
     conversationEntryKey,
@@ -2035,8 +2035,7 @@
     </div>
   </div>
   {#if selectedEnvelope && sorted.length > 1}
-    <nav class="agent-strip" aria-label={msg().app.agentListAria}>
-      {#each sorted as envelope (envelope.agent_id)}
+    {#snippet stripChip(envelope: Envelope)}
         {@const expr = expressionFor(envelope.state)}
         {@const chipFatigued = isFatigued(envelope)}
         {@const sprite = spriteUrlFor(
@@ -2068,6 +2067,29 @@
           />
           <span class="lamp"></span>
         </button>
+    {/snippet}
+    <!-- Chips follow the grid's room grouping. With no rooms snapshot the strip
+         stays flat as it always was; otherwise each group carries its room
+         name under the chips, and a thin rule divides it from the previous
+         group. The visible label is hidden from assistive tech: the group's
+         aria-label already names the room. -->
+    <nav class="agent-strip" aria-label={msg().app.agentListAria}>
+      {#each liveGroups.filter((group) => group.items.length > 0) as group (group.key)}
+        {#if group.room === null}
+          {#each group.items as envelope (envelope.agent_id)}
+            {@render stripChip(envelope)}
+          {/each}
+        {:else}
+          {@const label = group.room === "unknown" ? msg().rooms.unknownGroup : roomName(group.room)}
+          <span class="strip-group" role="group" aria-label={label} title={label}>
+            <span class="strip-chips">
+              {#each group.items as envelope (envelope.agent_id)}
+                {@render stripChip(envelope)}
+              {/each}
+            </span>
+            <span class="strip-label" aria-hidden="true">{label}</span>
+          </span>
+        {/if}
       {/each}
     </nav>
   {/if}
@@ -2633,6 +2655,40 @@
     align-items: center;
     gap: 0.45rem;
     min-width: 0;
+  }
+
+  /* One room: its chips, then its name. A thin rule separates it from the
+     previous room. The label is held to the chips' width (width: 0 plus
+     min-width: 100%) and ellipsised, so a long room name never widens the
+     strip. */
+  .strip-group {
+    display: grid;
+    flex: 0 0 auto;
+    justify-items: center;
+    gap: 0.2rem;
+  }
+
+  .strip-chips {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .strip-label {
+    width: 0;
+    min-width: 100%;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-dim);
+    font-size: var(--fs-body-sm);
+    line-height: 1.2;
+  }
+
+  .strip-group + .strip-group {
+    padding-inline-start: 0.45rem;
+    border-inline-start: 1px solid var(--line);
   }
 
   /* Smartphone header (docs/reference/ui/responsive-reachability.md app chrome): the title
