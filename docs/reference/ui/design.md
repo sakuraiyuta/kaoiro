@@ -342,6 +342,13 @@ on a smartphone.
 - A refusal is shown by its server code in the UI language; an unknown code is shown
   as it is. After an unconfirmed change the dialog offers "Reload", which rejoins the
   channel to read the rooms again; the dashboard never rejoins by itself.
+- Every separator of a confirmed room has an up and a down button (disabled at the
+  ends), for an operator and a viewer alike. They change this browser's display order
+  only: the order is a list of room ids in localStorage (`kaoiro.roomOrder.v1`), never
+  sent to the server and not shared between devices. The grid, the offline section and
+  the detail view's previous and next buttons all follow it. A room the saved list does
+  not name goes last, and an id the server no longer lists is ignored. The lobby can
+  move too. With nothing saved, the order is the server's.
 - Room names and agent names are shown as the operator typed them. All other text is
   in the i18n area `rooms`.
 

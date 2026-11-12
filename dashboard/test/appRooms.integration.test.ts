@@ -10,6 +10,7 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLocale } from "../src/lib/i18n/index.svelte";
 import type { Envelope, KaoiroHandlers } from "../src/lib/protocol";
+import { ROOM_ORDER_STORAGE_KEY } from "../src/lib/roomOrder";
 import { parseRoomsSnapshot } from "../src/lib/rooms";
 
 HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
@@ -117,6 +118,7 @@ afterEach(async () => {
   if (component) await unmount(component);
   component = null;
   document.body.innerHTML = "";
+  localStorage.removeItem(ROOM_ORDER_STORAGE_KEY);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -177,6 +179,68 @@ describe("detail navigation", () => {
     await tick();
     expect(kinds().filter((k) => k.startsWith("card")).length).toBe(3);
 
+    document.querySelector<HTMLButtonElement>("button[aria-label='Alpha の詳細を開く']")!.click();
+    await tick();
+
+    expect(document.querySelector("button[aria-label='次のエージェント Charlie へ']")).not.toBeNull();
+    expect(document.querySelector("button[aria-label='次のエージェント Bravo へ']")).toBeNull();
+  });
+});
+
+describe("the room order", () => {
+  const headerNames = () =>
+    [...document.querySelectorAll(".live-dashboard .room-header h3")].map((h) => h.textContent);
+  const aria = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`)!;
+
+  it("moves a room up with its tiles and keeps the order in this browser", async () => {
+    await mountApp("operator");
+
+    aria("部屋 Review を上へ移動").click();
+    await tick();
+
+    expect(headerNames()).toEqual(["Review", "ロビー", "Docs"]);
+    expect(kinds()).toEqual(["toolbar", "header:r1", "card:h.b", "header:lobby", "card:h.a", "header:r2"]);
+    expect(JSON.parse(localStorage.getItem(ROOM_ORDER_STORAGE_KEY)!)).toEqual(["r1", "lobby", "r2"]);
+  });
+
+  it("disables up on the first room and down on the last", async () => {
+    await mountApp("operator");
+
+    expect(aria("部屋 ロビー を上へ移動").disabled).toBe(true);
+    expect(aria("部屋 ロビー を下へ移動").disabled).toBe(false);
+    expect(aria("部屋 Docs を下へ移動").disabled).toBe(true);
+    expect(aria("部屋 Docs を上へ移動").disabled).toBe(false);
+  });
+
+  it("applies a saved order on load and puts a room it does not name last", async () => {
+    localStorage.setItem(ROOM_ORDER_STORAGE_KEY, JSON.stringify(["r2", "r1"]));
+    await mountApp("operator");
+
+    expect(kinds()).toEqual(["toolbar", "header:r2", "header:r1", "card:h.b", "header:lobby", "card:h.a"]);
+  });
+
+  it("is open to a viewer: it changes only what this browser shows", async () => {
+    await mountApp("viewer");
+
+    aria("部屋 Review を上へ移動").click();
+    await tick();
+
+    expect(kinds()).toEqual(["header:r1", "card:h.b", "header:lobby", "card:h.a", "header:r2"]);
+  });
+
+  it("has no control on the group of rooms the server did not confirm", async () => {
+    await mountApp("viewer", { ...RAW, memberships: { "h.b": "r1" } });
+
+    expect(document.querySelector('[data-room="unknown"] button.reorder')).toBeNull();
+    expect(document.querySelector('[data-room="r1"] button.reorder')).not.toBeNull();
+  });
+
+  it("steps the detail view's next button through the new order", async () => {
+    const h = await mountApp("operator", { ...RAW, memberships: { "h.a": "lobby", "h.b": "r1", "h.c": "r2" } });
+    h.onSnapshot({ "h.a": envelope("h.a", "Alpha"), "h.b": envelope("h.b", "Bravo"), "h.c": envelope("h.c", "Charlie") });
+    await tick();
+    aria("部屋 Docs を上へ移動").click();
+    await tick();
     document.querySelector<HTMLButtonElement>("button[aria-label='Alpha の詳細を開く']")!.click();
     await tick();
 
