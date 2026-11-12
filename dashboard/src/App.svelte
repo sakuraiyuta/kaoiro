@@ -2757,8 +2757,13 @@
     overflow-y: auto;
     /* Inline padding = the 64px 本体 padding the breakpoint derivation in
        responsive-layout.md assumes; env() is a floor, not an addition. The
-       3rem bottom band doubles as clearance for the fixed sheet handle. */
-    padding: 1.6rem max(2rem, env(safe-area-inset-right)) 3rem
+       bottom band doubles as clearance for the fixed sheet handle: the
+       handle sits at max(0.25rem, safe-area-inset-bottom) from the screen
+       edge and is about 2rem tall, so the band is that offset plus the
+       handle height plus a small gap. A fixed 3rem left the composer under
+       the handle on devices with a home indicator (about 2.1rem inset). */
+    padding: 1.6rem max(2rem, env(safe-area-inset-right))
+      calc(2.7rem + max(0.25rem, env(safe-area-inset-bottom)))
       max(2rem, env(safe-area-inset-left));
   }
 
@@ -2767,7 +2772,7 @@
   @media (max-height: 500px) {
     main {
       padding-top: 0.5rem;
-      padding-bottom: 2.6rem;
+      padding-bottom: calc(2.35rem + max(0.25rem, env(safe-area-inset-bottom)));
     }
   }
 
