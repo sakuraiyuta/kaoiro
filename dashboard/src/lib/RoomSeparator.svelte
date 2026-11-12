@@ -5,12 +5,15 @@
   // One full-width row of the agent grid: a rule, the room name, how many
   // tiles it holds and, for an operator, the controls that apply to it. A
   // control is shown only when its handler is given (the lobby cannot be
-  // deleted; a group of unconfirmed rooms is not a room).
-  let { room, count, onRename, onDelete }: {
+  // deleted; a group of unconfirmed rooms is not a room). `reorder` adds the
+  // up/down pair (this browser's display order, not a room change, so anyone
+  // may use it); a `null` side is the end of the list and is shown disabled.
+  let { room, count, onRename, onDelete, reorder }: {
     room: Room | "unknown";
     count: number;
     onRename?: (() => void) | undefined;
     onDelete?: (() => void) | undefined;
+    reorder?: { up: (() => void) | null; down: (() => void) | null } | undefined;
   } = $props();
 
   const title = $derived(room === "unknown" ? msg().rooms.unknownGroup : roomName(room));
@@ -19,6 +22,26 @@
 <li class="room-header" data-room={room === "unknown" ? "unknown" : room.id}>
   <h3>{title}</h3>
   <span class="count">{msg().rooms.memberCount({ n: count })}</span>
+  {#if reorder !== undefined}
+    <button
+      type="button"
+      class="reorder"
+      disabled={reorder.up === null}
+      onclick={reorder.up ?? undefined}
+      aria-label={msg().rooms.reorderUpAria({ name: title })}
+    >
+      {msg().rooms.reorderUp}
+    </button>
+    <button
+      type="button"
+      class="reorder"
+      disabled={reorder.down === null}
+      onclick={reorder.down ?? undefined}
+      aria-label={msg().rooms.reorderDownAria({ name: title })}
+    >
+      {msg().rooms.reorderDown}
+    </button>
+  {/if}
   {#if onRename !== undefined}
     <button type="button" onclick={onRename} aria-label={msg().rooms.renameAria({ name: title })}>
       {msg().rooms.renameButton}
@@ -64,9 +87,14 @@
     color: var(--fg-dim);
   }
 
-  button:hover {
+  button:hover:not(:disabled) {
     color: var(--fg);
     border-color: var(--fg-dim);
+  }
+
+  button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   button.danger {

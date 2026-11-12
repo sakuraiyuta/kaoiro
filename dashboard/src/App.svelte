@@ -2420,6 +2420,12 @@
               <RoomSeparator
                 {room}
                 count={group.items.length}
+                reorder={room !== "unknown" && rooms.view.kind === "loaded"
+                  ? {
+                      up: rooms.canMoveRoom(room.id, -1) ? () => rooms.moveRoom(room.id, -1) : null,
+                      down: rooms.canMoveRoom(room.id, 1) ? () => rooms.moveRoom(room.id, 1) : null,
+                    }
+                  : undefined}
                 onRename={canManageRooms && room !== "unknown"
                   ? () => (roomRequest = { mode: "rename", room })
                   : undefined}
