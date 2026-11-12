@@ -5150,11 +5150,31 @@
 
   /* Rename affordance row (issue #187 段階3 unit B): the name plus its
      operator-only ✎ toggle sit side by side, sharing .cc-switchbox's
-     popover positioning so the form drops directly under the button. */
+     popover positioning so the form drops directly under the button.
+     The name takes the middle column and the ✎ the right one, so the name
+     is centred on the panel whether or not the ✎ is there. (As a plain flex
+     row the name started at the left edge of `.meta`, whose width follows
+     the longest line, usually the agent id, and the ✎ pushed it further
+     off centre.) Each side column keeps at least 2.2rem for the ✎, and the
+     middle `auto` column takes what is left, so a name only wraps once it
+     no longer fits between them. Do not cap the middle column with a
+     percentage such as `fit-content(calc(100% - …))`: `.meta` is sized by
+     its content, the percentage cannot resolve there, and every name wraps
+     after a few characters. */
   .name-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(2.2rem, 1fr) auto minmax(2.2rem, 1fr);
     align-items: center;
-    gap: 0.4rem;
+    column-gap: 0.4rem;
+  }
+
+  .name-row h2 {
+    grid-column: 2;
+  }
+
+  .name-row .rename-switchbox {
+    grid-column: 3;
+    justify-self: start;
   }
 
   .rename-switch {
