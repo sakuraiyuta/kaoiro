@@ -639,6 +639,19 @@ describe("room cleanup", () => {
     expect(api.sendSessionReset).not.toHaveBeenCalled();
   });
 
+  it("rejects an offline member change even without conversations", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async () => conversations([]));
+    const dialog = await openRoom();
+    h.onRoomsSnapshot?.(roomSnapshot({ ...membership, "host-b.p": "lobby" }));
+    await tick();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
   it("refuses an unresolved conversation participant", async () => {
     await setupRoom();
     const api = captured.api!;
@@ -687,6 +700,7 @@ describe("room cleanup", () => {
     expect(roomCleanupTargets("blue", { ...view, incomplete: true }, agent, rows())).toBeNull();
     expect(roomCleanupTargets("missing", view, agent, rows())).toBeNull();
     expect(roomCleanupTargets("blue", view, { "missing.p": envelope("missing.p", "idle") }, rows())).toBeNull();
+    expect(roomCleanupTargets("blue", { ...view, memberships: new Map([["host-a.p", "missing"]]) }, agent, [])).toBeNull();
     expect(roomCleanupTargets("blue", view, agent, [item("empty", [])])).toBeNull();
     expect(roomCleanupTargets("blue", view, agent, [item("unknown", ["missing.p"])])).toBeNull();
   });
