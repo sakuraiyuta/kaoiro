@@ -237,6 +237,83 @@ describe("the agent strip in the detail view", () => {
   });
 });
 
+describe("strip room collapsing", () => {
+  const group = (key: string) => document.querySelector<HTMLElement>(`[data-strip-key="${key}"]`)!;
+  const toggle = (key: string) => group(key).querySelector<HTMLButtonElement>(".room-toggle")!;
+  const open = (key: string) => toggle(key).getAttribute("aria-expanded") === "true";
+  const detail = async (name = "Alpha") => {
+    document.querySelector<HTMLButtonElement>(`button[aria-label='${name} の詳細を開く']`)!.click();
+    await tick();
+  };
+  it("opens the selected room only, supports several rooms, and preserves manual closure across updates", async () => {
+    const h = await mountApp("operator"); await detail();
+    expect(open("room:lobby")).toBe(true); expect(open("room:r1")).toBe(false);
+    toggle("room:r1").click(); await tick();
+    expect(open("room:lobby")).toBe(true); expect(open("room:r1")).toBe(true);
+    toggle("room:lobby").click(); await tick();
+    h.onSnapshot({ "h.a": { ...envelope("h.a", "Alpha"), state: "disconnected" }, "h.b": envelope("h.b", "Bravo"), "h.c": envelope("h.c", "Charlie") });
+    await tick();
+    h.onSnapshot({ "h.a": envelope("h.a", "Alpha"), "h.b": envelope("h.b", "Bravo") });
+    h.onRoomsSnapshot?.(snapshot(RAW)); await tick();
+    expect(open("room:lobby")).toBe(false);
+    expect(open("room:r1")).toBe(true);
+  });
+  it("next opens the destination without closing other rooms or changing navigation order", async () => {
+    await mountApp("operator"); await detail();
+    const next = document.querySelector<HTMLButtonElement>("button[aria-label='次のエージェント Bravo へ']")!;
+    expect(next).not.toBeNull(); next.click(); await tick();
+    expect(open("room:r1")).toBe(true); expect(open("room:lobby")).toBe(true);
+    expect(document.querySelector("button[aria-label='前のエージェント Alpha へ']")).not.toBeNull();
+  });
+  it("keeps unknown open across snapshots and rejoin gaps for a viewer", async () => {
+    const raw = { ...RAW, memberships: { "h.b": "r1" }, snapshot_incomplete: true };
+    const h = await mountApp("viewer", raw); await detail();
+    expect(open("unknown")).toBe(true);
+    h.onRoomsSnapshot?.(snapshot(raw)); await tick(); expect(open("unknown")).toBe(true);
+    toggle("unknown").click(); await tick();
+    h.onJoined?.(); await tick();
+    h.onSnapshot({ "h.a": envelope("h.a", "Alpha"), "h.b": envelope("h.b", "Bravo") });
+    h.onRoomsSnapshot?.(snapshot(raw)); await tick();
+    expect(open("unknown")).toBe(false);
+    document.querySelector<HTMLButtonElement>("button.back")!.click(); await tick(); await detail();
+    expect(open("unknown")).toBe(true);
+  });
+  it("opens an offline selection's room and reacts to actual membership changes", async () => {
+    const h = await mountApp("operator", { ...RAW, memberships: { "h.a": "lobby", "h.b": "lobby", "h.c": "r1" } });
+    h.onSnapshot({ "h.a": { ...envelope("h.a", "Alpha"), state: "disconnected" }, "h.b": envelope("h.b", "Bravo"), "h.c": envelope("h.c", "Charlie") });
+    await tick(); await detail();
+    expect(open("room:lobby")).toBe(true);
+    h.onRoomsSnapshot?.(snapshot({ ...RAW, memberships: { "h.a": "r1", "h.b": "lobby", "h.c": "r1" } })); await tick();
+    expect(open("room:r1")).toBe(true); expect(open("room:lobby")).toBe(true);
+  });
+  it("has no controls for a lone lobby, but retains controls with unknown or an empty second room", async () => {
+    const h = await mountApp("operator", { rooms: [{ id: "lobby", name: null }], memberships: {} }); await detail();
+    expect(document.querySelectorAll(".room-toggle")).toHaveLength(0);
+    expect(group("room:lobby").querySelector(".strip-reveal")?.getAttribute("aria-hidden")).toBe("false");
+    h.onRoomsSnapshot?.(snapshot({ rooms: [{ id: "lobby", name: null }], memberships: { "h.b": "missing" } })); await tick();
+    expect(toggle("unknown")).not.toBeNull(); expect(toggle("room:lobby")).not.toBeNull();
+    h.onRoomsSnapshot?.(snapshot({ ...RAW, memberships: {} })); await tick();
+    expect(toggle("room:lobby")).not.toBeNull();
+  });
+  it("moves focused chips to the destination folder when the source disappears", async () => {
+    const h = await mountApp("operator"); await detail();
+    toggle("room:r1").click(); await tick();
+    group("room:r1").querySelector<HTMLButtonElement>(".chip")!.focus();
+    h.onRoomsSnapshot?.(snapshot({ ...RAW, memberships: { "h.a": "lobby", "h.b": "r2" } }));
+    await tick(); await tick();
+    expect(document.querySelector('[data-strip-key="room:r1"]')).toBeNull();
+    expect(document.activeElement).toBe(toggle("room:r2"));
+  });
+  it("updates count and lamp while collapsed without writing a display preference", async () => {
+    const h = await mountApp("operator"); await detail();
+    const save = vi.spyOn(Storage.prototype, "setItem");
+    h.onSnapshot({ "h.a": envelope("h.a", "Alpha"), "h.b": { ...envelope("h.b", "Bravo"), state: "waiting_question" } }); await tick();
+    expect(group("room:r1").querySelector(".strip-count")?.textContent).toBe("1");
+    expect(group("room:r1").querySelector(".state-lamp")?.getAttribute("data-state")).toBe("waiting_question");
+    toggle("room:r1").click(); await tick(); expect(save).not.toHaveBeenCalled();
+  });
+});
+
 describe("the room order", () => {
   const headerNames = () =>
     [...document.querySelectorAll(".live-dashboard .room-header h3")].map((h) => h.textContent);

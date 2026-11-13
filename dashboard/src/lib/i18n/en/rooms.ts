@@ -5,6 +5,13 @@ export const rooms = {
   lobbyDefaultName: "Lobby",
   unknownGroup: "Room not confirmed",
   memberCount: ({ n }) => plural(n, "agent", "agents"),
+  stripToggle: ({ name, open, count, state }) =>
+    `${open ? "Collapse" : "Expand"} room ${name}, ${plural(count, "agent", "agents")}, ${state}`,
+  stripStates: {
+    idle: "idle", sending: "sending", thinking: "thinking", tool_running: "running a tool",
+    waiting_permission: "waiting for permission", waiting_question: "waiting for an answer", waiting_input: "waiting for input",
+    done: "done", error: "error", disconnected: "disconnected",
+  },
   emptyRoom: "No agents in this room",
   createButton: "Create room",
   renameButton: "Rename",

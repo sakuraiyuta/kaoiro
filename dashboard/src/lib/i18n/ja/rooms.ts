@@ -2,6 +2,13 @@ export const rooms = {
   lobbyDefaultName: "ロビー",
   unknownGroup: "部屋を確認できていません",
   memberCount: (p: { n: number }) => `${p.n} 件`,
+  stripToggle: (p: { name: string; open: boolean; count: number; state: string }) =>
+    `部屋 ${p.name} を${p.open ? "閉じる" : "開く"}、${p.count} 件、${p.state}`,
+  stripStates: {
+    idle: "待機中", sending: "送信中", thinking: "思考中", tool_running: "ツール実行中",
+    waiting_permission: "許可待ち", waiting_question: "回答待ち", waiting_input: "入力待ち",
+    done: "完了", error: "エラー", disconnected: "切断中",
+  },
   emptyRoom: "この部屋に agent はいません",
   createButton: "部屋を作成",
   renameButton: "改名",

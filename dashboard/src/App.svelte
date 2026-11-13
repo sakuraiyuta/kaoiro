@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
-  import { onMount, untrack } from "svelte";
+  import { onMount, untrack, tick } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import { DeliveryPolicyStore } from "./lib/deliveryPolicyStore.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
@@ -23,6 +23,8 @@
   import { RoomsStore } from "./lib/roomsStore.svelte";
   import RoomDialog from "./lib/RoomDialog.svelte";
   import RoomSeparator from "./lib/RoomSeparator.svelte";
+  import AgentStripRoom from "./lib/AgentStripRoom.svelte";
+  import { roomLamp } from "./lib/agentStripRooms";
   import { LOBBY_ID, roomName, type RoomRequest } from "./lib/rooms";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import {
@@ -715,6 +717,67 @@
   // offline section lists only rooms that hold a tile.
   const liveGroups = $derived(rooms.group(sorted, (envelope) => envelope.agent_id, true));
   const offlineGroups = $derived(rooms.group(offlineEntries, (tile) => tile.id, false));
+
+  const stripGroups = $derived(liveGroups.filter((group) => group.items.length > 0));
+  const selectedStripKey = $derived.by(() => {
+    if (selected === null) return null;
+    const ref = rooms.roomOf(selected);
+    return ref === null ? null : ref.kind === "unknown" ? "unknown" : `room:${ref.id}`;
+  });
+  const loneLobby = $derived(rooms.view.kind === "loaded" && rooms.view.rooms.length === 1
+    && rooms.view.rooms[0]?.id === LOBBY_ID && !stripGroups.some((group) => group.key === "unknown"));
+  let openStripRooms = $state(new Set<string>());
+  let lastStripAgent: string | null = null;
+  let lastStripKey: string | null = null;
+  $effect(() => {
+    const id = selected;
+    const key = selectedStripKey;
+    const view = rooms.view;
+    untrack(() => {
+      if (id === null) {
+        openStripRooms = new Set();
+        lastStripAgent = null;
+        lastStripKey = null;
+        return;
+      }
+      const next = new Set(openStripRooms);
+      if (view.kind === "loaded") {
+        for (const held of next) {
+          if (held.startsWith("room:") && !view.rooms.some((room) => `room:${room.id}` === held)) next.delete(held);
+        }
+      }
+      if (id !== lastStripAgent) { lastStripAgent = id; lastStripKey = null; }
+      if (key !== null && key !== lastStripKey) {
+        next.add(key);
+        lastStripKey = key;
+      }
+      openStripRooms = next;
+    });
+  });
+  function toggleStripRoom(key: string): void {
+    const next = new Set(openStripRooms);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    openStripRooms = next;
+  }
+  $effect.pre(() => {
+    const groups = stripGroups;
+    untrack(() => {
+      const focused = document.activeElement;
+      if (!(focused instanceof HTMLElement) || !focused.dataset.stripAgent) return;
+      const agentId = focused.dataset.stripAgent;
+      const destination = groups.find((group) => group.items.some((item) => item.agent_id === agentId));
+      void tick().then(() => {
+        if (document.activeElement === focused && focused.isConnected) return;
+        if (document.activeElement !== document.body && document.activeElement !== focused) return;
+        const group = [...document.querySelectorAll<HTMLElement>("[data-strip-key]")]
+          .find((element) => element.dataset.stripKey === destination?.key);
+        const chip = group && [...group.querySelectorAll<HTMLButtonElement>("[data-strip-agent]")]
+          .find((element) => element.dataset.stripAgent === agentId);
+        const target = chip && !chip.closest("[inert]") ? chip : group?.querySelector<HTMLButtonElement>(".room-toggle");
+        (target ?? document.querySelector<HTMLButtonElement>("button.back"))?.focus();
+      });
+    });
+  });
 
   // AgentDirectory is the authoritative display_name SoT (issue #187
   // 段階3, ふじ MF-3 レビュー指摘, wire field revised issue #209 D19):
@@ -2046,6 +2109,7 @@
         <button
           type="button"
           class="chip"
+          data-strip-agent={envelope.agent_id}
           class:current={envelope.agent_id === selected}
           data-state={expr.variant}
           aria-current={envelope.agent_id === selected ? "true" : undefined}
@@ -2068,27 +2132,21 @@
           <span class="lamp"></span>
         </button>
     {/snippet}
-    <!-- Chips follow the grid's room grouping. With no rooms snapshot the strip
-         stays flat as it always was; otherwise each group carries its room
-         name under the chips, and a thin rule divides it from the previous
-         group. The visible label is hidden from assistive tech: the group's
-         aria-label already names the room. -->
     <nav class="agent-strip" aria-label={msg().app.agentListAria}>
-      {#each liveGroups.filter((group) => group.items.length > 0) as group (group.key)}
+      {#each stripGroups as group (group.key)}
         {#if group.room === null}
           {#each group.items as envelope (envelope.agent_id)}
             {@render stripChip(envelope)}
           {/each}
         {:else}
           {@const label = group.room === "unknown" ? msg().rooms.unknownGroup : roomName(group.room)}
-          <span class="strip-group" role="group" aria-label={label} title={label}>
-            <span class="strip-chips">
-              {#each group.items as envelope (envelope.agent_id)}
-                {@render stripChip(envelope)}
-              {/each}
-            </span>
-            <span class="strip-label" aria-hidden="true">{label}</span>
-          </span>
+          <AgentStripRoom groupKey={group.key} {label} open={loneLobby || openStripRooms.has(group.key)}
+            control={!loneLobby} count={group.items.length} lamp={roomLamp(group.items)}
+            ontoggle={() => toggleStripRoom(group.key)}>
+            {#each group.items as envelope (envelope.agent_id)}
+              {@render stripChip(envelope)}
+            {/each}
+          </AgentStripRoom>
         {/if}
       {/each}
     </nav>
@@ -2663,46 +2721,6 @@
     min-width: 0;
   }
 
-  /* One room: its chips, then its name. A thin rule separates it from the
-     previous room. The label is held to the chips' width (width: 0 plus
-     min-width: 100%) and ellipsised, so a long room name never widens the
-     strip. */
-  .strip-group {
-    display: grid;
-    flex: 0 1 auto;
-    min-width: 0;
-    max-width: 100%;
-    justify-items: center;
-    gap: 0.2rem;
-  }
-
-  .strip-chips {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    min-width: 0;
-    max-width: 100%;
-    align-items: center;
-    gap: 0.45rem;
-  }
-
-  .strip-label {
-    width: 0;
-    min-width: 100%;
-    overflow: hidden;
-    text-align: center;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--fg-dim);
-    font-size: var(--fs-body-sm);
-    line-height: 1.2;
-  }
-
-  .strip-group + .strip-group {
-    padding-inline-start: 0.45rem;
-    border-inline-start: 1px solid var(--line);
-  }
-
   /* Smartphone header (docs/reference/ui/responsive-reachability.md app chrome): the title
      drops its "— 顔色" suffix, the connection badge shrinks to its dot,
      logout moves into SettingsDrawer, and the agent strip scrolls
@@ -2746,14 +2764,6 @@
       min-width: 0;
     }
 
-    .strip-group {
-      flex: 0 0 auto;
-      max-width: none;
-    }
-
-    .strip-chips {
-      flex-wrap: nowrap;
-    }
   }
 
   /* Each agent now reads as a miniature grid tile: the persona sprite shrunk
