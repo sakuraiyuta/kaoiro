@@ -165,10 +165,10 @@ test("wrapped room motion has no intermediate height spike and reverses safely",
   await openStrip(page, "", 90);
   const group = stripGroup(page, "room:r-review");
   const opening = await toggleTrace(page, "room:r-review");
-  expect(new Set(opening.map((row) => row.clip)).size).toBeGreaterThan(1);
   const expanded = opening.at(-1)!;
   expect(Math.max(...opening.map((row) => row.group))).toBeLessThanOrEqual(expanded.group + 1);
   expect(Math.max(...opening.map((row) => row.header))).toBeLessThanOrEqual(expanded.header + 1);
+  expect(new Set(opening.map((row) => row.clip)).size).toBeGreaterThan(1);
   expect(await group.locator(".strip-reveal").evaluate((el) => getComputedStyle(el).transitionDuration)).toBe("0.18s");
   const closing = await toggleTrace(page, "room:r-review");
   expect(Math.max(...closing.map((row) => row.group))).toBeLessThanOrEqual(expanded.group + 1);
@@ -234,4 +234,11 @@ test("moving a focused last chip restores focus to the closed destination folder
   } })));
   await expect(stripGroup(page, "room:r-review")).toHaveCount(0);
   await expect(stripGroup(page, "room:r-long").locator(".room-toggle")).toBeFocused();
+  await stripGroup(page, "room:r-long").locator(".room-toggle").click();
+  await stripGroup(page, "room:r-long").locator(".chip").first().focus();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("e2e:room-snapshot", { detail: {
+    rooms: [{ id: "lobby", name: null }, { id: "r-long", name: "Destination" }],
+    memberships: { "e2e-host.live-0": "lobby", "e2e-host.live-2": "r-long" }, snapshot_incomplete: true,
+  } })));
+  await expect(stripGroup(page, "unknown").locator(".room-toggle")).toBeFocused();
 });
