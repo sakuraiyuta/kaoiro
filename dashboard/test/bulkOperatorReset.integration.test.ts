@@ -578,7 +578,11 @@ describe("room cleanup", () => {
   ]);
   async function setupRoom() {
     const h = await mountApp();
-    makeOperator(h, { "host-a.p": envelope("host-a.p", "idle"), "host-x.p": envelope("host-x.p", "idle") });
+    makeOperator(h, {
+      "host-a.p": envelope("host-a.p", "idle"),
+      "host-b.p": envelope("host-b.p", "disconnected"),
+      "host-x.p": envelope("host-x.p", "idle"),
+    });
     h.onRoomsSnapshot?.(roomSnapshot());
     await tick();
     return h;
@@ -984,5 +988,13 @@ describe("room cleanup", () => {
     h.onRoomsSnapshot?.(roomSnapshot());
     await tick();
     expect(document.querySelector("button.cleanup")).toBeNull();
+  });
+
+  it("does not expose cleanup on an unconfirmed room group", async () => {
+    const h = await setupRoom();
+    h.onRoomsSnapshot?.({ ...roomSnapshot({ "host-a.p": "blue", "host-b.p": "blue" }), incomplete: true });
+    await tick();
+    expect(document.querySelector('[data-room="unknown"]')).not.toBeNull();
+    expect(document.querySelector('[data-room="unknown"] button.cleanup')).toBeNull();
   });
 });
