@@ -314,6 +314,16 @@ describe("strip room collapsing", () => {
     expect(document.querySelector('[data-strip-key="room:r1"]')).toBeNull();
     expect(document.activeElement).toBe(toggle("room:r2"));
   });
+  it("does not steal focus that moved to a detail control during a membership update", async () => {
+    const h = await mountApp("operator"); await detail();
+    toggle("room:r1").click(); await tick();
+    group("room:r1").querySelector<HTMLButtonElement>(".chip")!.focus();
+    h.onRoomsSnapshot?.(snapshot({ ...RAW, memberships: { "h.a": "lobby", "h.b": "r2" } }));
+    const settings = document.querySelector<HTMLButtonElement>("button.settings-toggle")!;
+    queueMicrotask(() => settings.focus());
+    await tick(); await tick();
+    expect(document.activeElement).toBe(settings);
+  });
   it("updates count and lamp while collapsed without writing a display preference", async () => {
     const h = await mountApp("operator"); await detail();
     const save = vi.spyOn(Storage.prototype, "setItem");
