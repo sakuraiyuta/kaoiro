@@ -87,15 +87,6 @@ test("a large room's chips remain reachable on desktop and scroll on mobile", as
     expect(box!.y + box!.height).toBeLessThanOrEqual(844);
     await chip.click();
   }
-  const geometry = await strip.locator(".strip-group").evaluateAll((groups) => groups.map((item) => {
-    const groupBox = item.getBoundingClientRect();
-    const chipsBox = item.querySelector(".strip-chips")!.getBoundingClientRect();
-    const labelBox = item.querySelector(".strip-label")!.getBoundingClientRect();
-    return { group: groupBox.toJSON(), chips: chipsBox.toJSON(), label: labelBox.toJSON(),
-      border: getComputedStyle(item).borderInlineStartWidth };
-  }));
-  console.log("Room strip geometry:", JSON.stringify(geometry));
-
   await page.setViewportSize({ width: 390, height: 844 });
   const scroll = await strip.evaluate((element) => {
     const before = element.scrollLeft;
