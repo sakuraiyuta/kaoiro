@@ -205,6 +205,18 @@ test("native disclosure keys, hidden focus and waiting-question color work in En
   expect(colors.actual).toBe(colors.expected);
   await button.focus(); await page.keyboard.press("Enter");
   await expect(button).toHaveAttribute("aria-expanded", "true");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const hiddenTookFocus = await group.evaluate(async (el) => {
+    el.querySelector<HTMLButtonElement>(".room-toggle")!.click();
+    await new Promise(requestAnimationFrame);
+    const chip = el.querySelector<HTMLButtonElement>(".chip")!;
+    chip.focus();
+    return document.activeElement === chip;
+  });
+  expect(hiddenTookFocus).toBe(false);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.keyboard.press("Space");
+  await expect(button).toHaveAttribute("aria-expanded", "true");
   await page.keyboard.press("Space");
   await expect(button).toHaveAttribute("aria-expanded", "false");
   const chip = group.locator(".chip").first();
