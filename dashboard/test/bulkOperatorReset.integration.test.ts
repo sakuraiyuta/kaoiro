@@ -666,6 +666,70 @@ describe("room cleanup", () => {
     expect(api.sendSessionReset).not.toHaveBeenCalled();
   });
 
+  it("rejects a changed room list while preparation is loading", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    const pending = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockReturnValueOnce(pending.promise);
+    document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.click();
+    const next = roomSnapshot();
+    h.onRoomsSnapshot?.({ ...next, rooms: [...next.rooms, { id: "extra", name: "Extra" }] });
+    pending.resolve(rows());
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("rejects membership changes while confirmation is loading", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    const pending = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows()).mockReturnValueOnce(pending.promise);
+    const dialog = await openRoom();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    h.onRoomsSnapshot?.(roomSnapshot({ ...membership, "host-b.p": "lobby" }));
+    pending.resolve(rows());
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("rejects a connected-member change after confirmation opens", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async () => rows());
+    const dialog = await openRoom();
+    h.onSnapshot({ "host-a.p": envelope("host-a.p", "disconnected"), "host-x.p": envelope("host-x.p", "idle") });
+    await tick();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("rejects an incomplete conversation list at confirmation", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows()).mockResolvedValueOnce(conversations([], true));
+    const dialog = await openRoom();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("rejects an incomplete room snapshot at preparation", async () => {
+    const h = await setupRoom();
+    h.onRoomsSnapshot?.({ ...roomSnapshot(), incomplete: true });
+    await tick();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows());
+    document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.click();
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
   it("summarizes partial failures using the shared cleanup execution", async () => {
     await setupRoom();
     const api = captured.api!;
