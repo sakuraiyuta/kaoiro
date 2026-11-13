@@ -46,8 +46,10 @@ marker, current owner and supported mechanisms additionally gate activation.
 | Element | Display condition | desktop / tablet | smartphone |
 |---|---|---|---|
 | Title (`h1`) | Always (also on the login screen) | Always | Always (may reduce to logo only) |
-| Agent-list chips (`nav.agent-strip`) | Authenticated, in detail view, and two or more agents | Always | Always (horizontal scroll) |
+| Agent-list chips (`nav.agent-strip`) | Authenticated, in detail view, and two or more live agents | Open room folder to reveal collapsed chips; flat/lone lobby always open | Same, with horizontal scroll |
 | Agent-strip room groups and labels | Agent-list chips shown and rooms snapshot received; non-empty groups only | Always in strip | In strip (horizontal scroll) |
+| Room folder disclosure | Group shown; except the lone lobby without an unconfirmed group | In strip; native button with expanded state and room name | Same, with horizontal scroll |
+| Collapsed room count and lamp | Room folder shown and closed | On folder; accessible count/state in button name | Same, with horizontal scroll |
 | Connection state (`p.conn`) | Authenticated | Always | Always (may reduce to a dot only) |
 | Settings (`button.settings-toggle`) | Authenticated | Always | Always |
 | Launch (`button.launch`) | Authenticated, operator, and connected | Always | Always |

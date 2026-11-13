@@ -348,6 +348,19 @@ on a smartphone.
   chips' width, hidden from assistive tech because the group's `aria-label` names the
   room) and a thin rule divides rooms; a room with no agent is left out. Without a
   snapshot the strip is flat and carries no label.
+  Each room has a folder disclosure at the left; opening reveals its chips to the
+  right while the room name remains below. Initially only the selected agent's
+  room is open; switching agents opens the destination and retains other open
+  rooms. Opening state lasts for the detail visit only. The lone lobby has no
+  disclosure and stays open; the last unconfirmed group behaves like a room.
+  A closed folder shows a digits-only live-member count and a state lamp with
+  priority permission/question/input waiting, error, active work, done/idle,
+  disconnected; ties use permission/question/input, tool/thinking/sending, then
+  done/idle order and the existing palette. The accessible button name includes
+  the room, count and aggregate state. Hidden chips are inert.
+  Revealing uses a 180ms CSS clip transition at the final layout width, retaining
+  desktop wrapping and narrow horizontal scrolling; it has no transition under
+  reduced motion. Closing releases the chip layout space after the transition.
 - Every confirmed room separator in the live grid has an up and a down button
   (disabled at the ends), for an operator and a viewer alike. They change this
   browser's display order only: the order is a list of room ids in localStorage
