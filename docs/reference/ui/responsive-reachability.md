@@ -2,7 +2,7 @@
 title: Responsive reachability-path inventory
 description: Exhaustive display conditions, size-specific reachability paths, and scroll owners for each UI element.
 status: provisional
-last_updated: 2026-11-11
+last_updated: 2026-11-13
 related: [responsive-layout, design]
 ---
 
@@ -47,6 +47,7 @@ marker, current owner and supported mechanisms additionally gate activation.
 |---|---|---|---|
 | Title (`h1`) | Always (also on the login screen) | Always | Always (may reduce to logo only) |
 | Agent-list chips (`nav.agent-strip`) | Authenticated, in detail view, and two or more agents | Always | Always (horizontal scroll) |
+| Agent-strip room groups and labels | Agent-list chips shown and rooms snapshot received; non-empty groups only | Always in strip | In strip (horizontal scroll) |
 | Connection state (`p.conn`) | Authenticated | Always | Always (may reduce to a dot only) |
 | Settings (`button.settings-toggle`) | Authenticated | Always | Always |
 | Launch (`button.launch`) | Authenticated, operator, and connected | Always | Always |
@@ -75,6 +76,7 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 | Card stats display | At least one usable `ext` value for stats and `settings.agentCardStatsEnabled` | Always | Always |
 | Card stop / restore | Agent state + connection | On card | Same |
 | Card interrupt / delete | Agent state + connection | On card | Same |
+| Room display-order buttons | Rooms snapshot received; confirmed rooms in live grid; operator or viewer | On each confirmed room separator; end buttons disabled | Same |
 | Response timeline | Operator | Always (right pane) | handle → sheet |
 | Timeline read operation | Operator and a readable entry exists | Always | Within sheet |
 | Offline list (`details.offline`) | Operator and offline agents exist | Expand disclosure | Same |

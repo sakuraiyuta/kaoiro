@@ -2,7 +2,7 @@
 title: kaoiro design principles
 description: Visual design specification for the dashboard/UI. Written in DESIGN.md format (YAML tokens + prose), affirming the existing implementation (dashboard/src/) as the canonical source.
 status: accepted
-last_updated: 2026-11-10
+last_updated: 2026-11-13
 related: [overview, personas, protocol, responsive-layout, responsive-reachability, rooms]
 format: stitch-design-md
 version: alpha
@@ -321,9 +321,10 @@ and pane placement.
 
 Contract: [rooms](../inter-agent/rooms.md). Once a `rooms_snapshot` has arrived,
 the grid is split by full-width separator rows: a rule, the room name, how many
-tiles it holds and, for an operator, the controls of that room. The lobby comes
-first, then the other rooms in the server's order. The live grid keeps a room
-with no tile; the operator-only offline section lists only rooms that hold one.
+tiles it holds and, for an operator, the controls of that room. Without a saved
+order, the lobby comes first, followed by the other rooms in server order. The
+live grid keeps a room with no tile; the operator-only offline section lists only
+rooms that hold one.
 A separator row spans the whole grid at every width, so its controls are reachable
 on a smartphone.
 
@@ -335,7 +336,7 @@ on a smartphone.
   list, goes to a last group, "room not confirmed".
 - An operator sees "Create room" as the grid's first row, rename and delete on a
   separator (never delete on the lobby), and "Change room" on each tile. A viewer
-  sees the separators and no control.
+  has no room-changing controls but can change this browser's display order.
 - A move and a delete open one dialog that shows how many conversations the change
   would close, marked as an estimate from the moment it was checked. The confirm
   button waits for that count; cancelling sends nothing.
@@ -347,12 +348,13 @@ on a smartphone.
   chips' width, hidden from assistive tech because the group's `aria-label` names the
   room) and a thin rule divides rooms; a room with no agent is left out. Without a
   snapshot the strip is flat and carries no label.
-- Every separator of a confirmed room has an up and a down button (disabled at the
-  ends), for an operator and a viewer alike. They change this browser's display order
+- Every confirmed room separator in the live grid has an up and a down button
+  (disabled at the ends), for an operator and a viewer alike. They change this browser's display order
   only: the order is a list of room ids in localStorage (`kaoiro.roomOrder.v1`), never
   sent to the server and not shared between devices. The grid, the offline section and
-  the detail view's previous and next buttons all follow it. A room the saved list does
-  not name goes last, and an id the server no longer lists is ignored. The lobby can
+  the detail view's previous and next buttons all follow it. The offline section has
+  no reorder buttons. A room the saved list does not name goes last, and an id the
+  server no longer lists is ignored. The lobby can
   move too. With nothing saved, the order is the server's.
 - Room names and agent names are shown as the operator typed them. All other text is
   in the i18n area `rooms`.

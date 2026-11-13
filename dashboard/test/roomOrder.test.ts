@@ -2,7 +2,9 @@
 // the server lists, and that a bad stored value never breaks the page.
 import "./isolation.setup";
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseRoomsSnapshot } from "../src/lib/rooms";
+import { RoomsStore } from "../src/lib/roomsStore.svelte";
 import {
   applyRoomOrder,
   loadRoomOrder,
@@ -14,7 +16,10 @@ import {
 const rooms = [{ id: "lobby" }, { id: "a" }, { id: "b" }, { id: "c" }];
 const ids = (list: { id: string }[]) => list.map((room) => room.id);
 
-afterEach(() => localStorage.removeItem(ROOM_ORDER_STORAGE_KEY));
+afterEach(() => {
+  vi.restoreAllMocks();
+  localStorage.removeItem(ROOM_ORDER_STORAGE_KEY);
+});
 
 describe("applyRoomOrder", () => {
   it("is the server's order when nothing is saved", () => {
@@ -56,6 +61,20 @@ describe("shiftRoom", () => {
 });
 
 describe("loadRoomOrder and saveRoomOrder", () => {
+  it("keeps the page order when saving fails", () => {
+    const store = new RoomsStore(() => true);
+    store.apply(parseRoomsSnapshot({
+      rooms: [{ id: "lobby", name: null }, { id: "a", name: "A" }, { id: "b", name: "B" }],
+      memberships: { x: "a", y: "b" },
+    })!);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    expect(() => store.moveRoom("b", -1)).not.toThrow();
+    expect(store.group(["x", "y"], (id) => id, true).map((group) => group.key))
+      .toEqual(["room:lobby", "room:b", "room:a"]);
+  });
+
   it("round-trips a list", () => {
     saveRoomOrder(["b", "a"]);
     expect(loadRoomOrder()).toEqual(["b", "a"]);

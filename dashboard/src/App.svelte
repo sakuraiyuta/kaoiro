@@ -2669,13 +2669,19 @@
      strip. */
   .strip-group {
     display: grid;
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
     justify-items: center;
     gap: 0.2rem;
   }
 
   .strip-chips {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    min-width: 0;
+    max-width: 100%;
     align-items: center;
     gap: 0.45rem;
   }
@@ -2738,6 +2744,15 @@
       justify-content: flex-start;
       overflow-x: auto;
       min-width: 0;
+    }
+
+    .strip-group {
+      flex: 0 0 auto;
+      max-width: none;
+    }
+
+    .strip-chips {
+      flex-wrap: nowrap;
     }
   }
 

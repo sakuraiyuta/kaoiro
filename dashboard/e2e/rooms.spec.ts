@@ -68,3 +68,40 @@ for (const size of SIZES) {
     expect(sideways).toBeLessThanOrEqual(0);
   });
 }
+
+test("a large room's chips remain reachable on desktop and scroll on mobile", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await page.goto("/e2e/harness/index.html?view=app&live=90&rooms=1");
+  await page.getByRole("button", { name: "live 0 の詳細を開く", exact: true }).click();
+  const strip = page.locator(".agent-strip");
+  const group = strip.locator(".strip-group").first();
+  const chips = group.locator(".chip");
+  await expect(chips).toHaveCount(30);
+  for (const chip of [chips.first(), chips.last()]) {
+    const box = await chip.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(1280);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+    await chip.click();
+  }
+  const geometry = await strip.locator(".strip-group").evaluateAll((groups) => groups.map((item) => {
+    const groupBox = item.getBoundingClientRect();
+    const chipsBox = item.querySelector(".strip-chips")!.getBoundingClientRect();
+    const labelBox = item.querySelector(".strip-label")!.getBoundingClientRect();
+    return { group: groupBox.toJSON(), chips: chipsBox.toJSON(), label: labelBox.toJSON(),
+      border: getComputedStyle(item).borderInlineStartWidth };
+  }));
+  console.log("Room strip geometry:", JSON.stringify(geometry));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const scroll = await strip.evaluate((element) => {
+    const before = element.scrollLeft;
+    element.scrollLeft = element.scrollWidth;
+    return { before, after: element.scrollLeft, width: element.clientWidth, content: element.scrollWidth };
+  });
+  expect(scroll.content).toBeGreaterThan(scroll.width);
+  expect(scroll.after).toBeGreaterThan(scroll.before);
+});
