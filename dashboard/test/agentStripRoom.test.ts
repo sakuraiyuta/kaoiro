@@ -46,10 +46,13 @@ it("uses default motion and completes an actual toggle lifecycle with digits and
   expect(document.querySelector(".strip-count")?.textContent).toBe("30");
   expect(document.querySelector(".state-lamp")?.getAttribute("data-state")).toBe("waiting_question");
   expect(reveal().getAttribute("aria-hidden")).toBe("true");
+  expect(reveal().hasAttribute("inert")).toBe(true);
   toggle().click(); await tick(); await frame();
   expect(toggle().getAttribute("aria-expanded")).toBe("true");
   expect(reveal().classList.contains("clipped")).toBe(false);
   toggle().click(); await tick();
+  expect(reveal().classList.contains("closed")).toBe(false);
+  end("clip-path", document.querySelector(".strip-chips")!); await tick();
   expect(reveal().classList.contains("closed")).toBe(false);
   end("opacity"); await tick();
   expect(reveal().classList.contains("closed")).toBe(false);
@@ -83,4 +86,11 @@ it("settles immediately when reduced motion changes during a close and removes i
 it("repaints the toggle name when the language changes", async () => {
   await setup(); setLocale("ja"); await tick();
   expect(toggle().getAttribute("aria-label")).toBe("部屋 Review を開く、30 件、回答待ち");
+});
+
+it("cancels queued opening work when unmounted", async () => {
+  await setup(); toggle().click(); await tick();
+  expect(callbacks.size).toBe(1);
+  await unmount(component!); component = null;
+  expect(callbacks.size).toBe(0);
 });

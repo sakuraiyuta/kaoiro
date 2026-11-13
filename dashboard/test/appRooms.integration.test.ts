@@ -295,6 +295,16 @@ describe("strip room collapsing", () => {
     h.onRoomsSnapshot?.(snapshot({ ...RAW, memberships: {} })); await tick();
     expect(toggle("room:lobby")).not.toBeNull();
   });
+  it("reopens for a different agent in the same room and prunes only deleted confirmed keys", async () => {
+    const h = await mountApp("operator", { ...RAW, memberships: { "h.a": "lobby", "h.b": "r1", "h.c": "lobby" } });
+    h.onSnapshot({ "h.a": envelope("h.a", "Alpha"), "h.b": envelope("h.b", "Bravo"), "h.c": envelope("h.c", "Charlie") }); await tick(); await detail();
+    toggle("room:r1").click(); toggle("room:lobby").click(); await tick();
+    document.querySelector<HTMLButtonElement>("button[aria-label='次のエージェント Charlie へ']")!.click(); await tick();
+    expect(open("room:lobby")).toBe(true);
+    h.onRoomsSnapshot?.(snapshot({ rooms: [{ id: "lobby", name: null }], memberships: {} })); await tick();
+    h.onRoomsSnapshot?.(snapshot(RAW)); await tick();
+    expect(open("room:r1")).toBe(false);
+  });
   it("moves focused chips to the destination folder when the source disappears", async () => {
     const h = await mountApp("operator"); await detail();
     toggle("room:r1").click(); await tick();
