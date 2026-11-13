@@ -10,6 +10,7 @@ import type {
   KaoiroConnection,
   KaoiroHandlers,
 } from "../src/lib/protocol";
+import { parseRoomsSnapshot } from "../src/lib/rooms";
 
 if (
   typeof HTMLDialogElement !== "undefined" &&
@@ -556,5 +557,159 @@ describe("SettingsDrawer bulk operator action (issue #423)", () => {
     expect(api.sendSessionReset).not.toHaveBeenCalled();
     expect(document.querySelector(".bulk-reset")).toBeNull();
     expect(document.querySelector(".spawn-notice")?.textContent ?? "").not.toContain("一括操作:");
+  });
+});
+
+describe("room cleanup", () => {
+  const membership = { "host-a.p": "blue", "host-b.p": "blue", "host-x.p": "lobby" };
+  const roomSnapshot = (members: Record<string, string> = membership) => {
+    const snapshot = parseRoomsSnapshot({ rooms: [{ id: "lobby", name: null }, { id: "blue", name: "Blue" }, { id: "empty", name: "Empty" }], memberships: members });
+    if (snapshot === null) throw new Error("invalid rooms snapshot");
+    return snapshot;
+  };
+  const item = (id: string, participants: string[], status: "open" | "closed" = "open") =>
+    ({ ...conversation(id, status), participants });
+  const rows = () => conversations([
+    item("c-blue", ["host-a.p", "host-b.p"]),
+    item("c-split", ["host-a.p", "host-x.p"]),
+    item("c-other", ["host-x.p"]),
+    item("c-closed", ["host-a.p", "host-b.p"], "closed"),
+  ]);
+  async function setupRoom() {
+    const h = await mountApp();
+    makeOperator(h, { "host-a.p": envelope("host-a.p", "idle"), "host-x.p": envelope("host-x.p", "idle") });
+    h.onRoomsSnapshot?.(roomSnapshot());
+    await tick();
+    return h;
+  }
+  async function openRoom() {
+    document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.click();
+    await vi.waitFor(() => expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).not.toBeNull());
+    return document.querySelector<HTMLDialogElement>('dialog[aria-label="部屋 Blue の後片付け"]')!;
+  }
+  it("closes only conversations whose participants all belong to the room", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async () => rows());
+    const dialog = await openRoom();
+    expect(dialog.textContent).toContain("会話 1 件");
+    expect(dialog.textContent).toContain("agent 1 件");
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(api.sendSessionReset).toHaveBeenCalledTimes(1));
+    expect(api.closeConversation).toHaveBeenCalledExactlyOnceWith("c-blue");
+    expect(api.sendSessionReset).toHaveBeenCalledExactlyOnceWith("host-a.p", "clear");
+  });
+
+  it("sends nothing when membership changes after confirmation opens", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async () => rows());
+    const dialog = await openRoom();
+    h.onRoomsSnapshot?.(roomSnapshot({ ...membership, "host-b.p": "lobby", "host-x.p": "blue" }));
+    await tick();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).toBeNull());
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+    expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し");
+  });
+
+  it("does not send requests when the confirmation is cancelled", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async () => rows());
+    const dialog = await openRoom();
+    [...dialog.querySelectorAll("button")].find((button) => button.textContent?.trim() === "キャンセル")!.click();
+    await tick();
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("rejects a changed conversation set even if its count stays the same", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows()).mockResolvedValueOnce(
+      conversations([item("c-new", ["host-a.p", "host-b.p"])]),
+    );
+    const dialog = await openRoom();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).toBeNull());
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unresolved conversation participant", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      conversations([item("c-unknown", ["host-a.p", "missing.p"])]),
+    );
+    document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.click();
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).toBeNull();
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("rejects a room change while the initial conversation list is loading", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    const pending = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockReturnValueOnce(pending.promise);
+    document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.click();
+    h.onRoomsSnapshot?.(roomSnapshot({ ...membership, "host-b.p": "lobby" }));
+    await tick();
+    pending.resolve(rows());
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).toBeNull();
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("summarizes partial failures using the shared cleanup execution", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async () => rows());
+    (api.closeConversation as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("unknown_conversation_id"));
+    (api.sendSessionReset as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("timeout"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dialog = await openRoom();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("結果不明 1"));
+    expect(api.closeConversation).toHaveBeenCalledExactlyOnceWith("c-blue");
+    expect(api.sendSessionReset).toHaveBeenCalledExactlyOnceWith("host-a.p", "clear");
+    expect(document.querySelector(".spawn-notice")?.textContent).toContain("close (skip 1)");
+  });
+
+  it("confirms an empty room with zero counts and sends nothing", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async () => conversations([]));
+    document.querySelector<HTMLButtonElement>('[data-room="empty"] button.cleanup')!.click();
+    await vi.waitFor(() => expect(document.querySelector('dialog[aria-label="部屋 Empty の後片付け"]')).not.toBeNull());
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="部屋 Empty の後片付け"]')!;
+    expect(dialog.textContent).toContain("会話 0 件");
+    expect(dialog.textContent).toContain("agent 0 件");
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector('dialog[aria-label="部屋 Empty の後片付け"]')).toBeNull());
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("offers cleanup when there are no agents anywhere", async () => {
+    const h = await mountApp();
+    makeOperator(h, {});
+    h.onRoomsSnapshot?.(roomSnapshot({}));
+    await tick();
+    expect(document.querySelector('[data-room="empty"] button.cleanup')).not.toBeNull();
+  });
+
+  it("does not expose room cleanup to a viewer", async () => {
+    const h = await mountApp();
+    h.onJoined?.(); h.onStatus("connected");
+    h.onSnapshot({ "host-a.p": envelope("host-a.p", "idle") });
+    h.onRoomsSnapshot?.(roomSnapshot());
+    await tick();
+    expect(document.querySelector("button.cleanup")).toBeNull();
   });
 });

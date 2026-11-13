@@ -96,3 +96,47 @@ test("a large room's chips remain reachable on desktop and scroll on mobile", as
   expect(scroll.content).toBeGreaterThan(scroll.width);
   expect(scroll.after).toBeGreaterThan(scroll.before);
 });
+
+for (const size of SIZES) {
+  test(`${size.name}: room cleanup dialog is reachable and viewer cannot open it`, async ({ page }) => {
+    await page.setViewportSize({ width: size.width, height: size.height });
+    await page.goto(APP);
+    const trigger = page.getByRole("button", { name: "部屋 Review を後片付け", exact: true });
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "部屋 Review の後片付け" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("会話 0 件");
+    await expect(dialog).toContainText("agent 2 件");
+    await expectDialogFits(page, size.width);
+    await page.getByRole("button", { name: "キャンセル", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+
+    await page.addInitScript(() => {
+      let socketType = window.WebSocket;
+      Object.defineProperty(window, "WebSocket", {
+        configurable: true,
+        get: () => socketType,
+        set: (value: typeof WebSocket) => {
+          socketType = new Proxy(value, {
+            construct(target, args, newTarget) {
+              const socket = Reflect.construct(target, args, newTarget) as WebSocket;
+              let handler: WebSocket["onmessage"] = null;
+              Object.defineProperty(socket, "onmessage", {
+                configurable: true,
+                get: () => (event: MessageEvent) => {
+                  if (JSON.parse(event.data)[3] !== "hosts") handler?.call(socket, event);
+                },
+                set: (value: WebSocket["onmessage"]) => { handler = value; },
+              });
+              return socket;
+            },
+          });
+        },
+      });
+    });
+    await page.reload();
+    await expect(page.locator(".live-dashboard .room-header")).toHaveCount(4);
+    await expect(page.locator(".live-dashboard button.cleanup")).toHaveCount(0);
+  });
+}
