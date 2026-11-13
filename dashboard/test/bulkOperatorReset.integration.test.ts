@@ -11,6 +11,7 @@ import type {
   KaoiroHandlers,
 } from "../src/lib/protocol";
 import { parseRoomsSnapshot } from "../src/lib/rooms";
+import { roomCleanupTargets } from "../src/lib/roomCleanup";
 
 if (
   typeof HTMLDialogElement !== "undefined" &&
@@ -666,6 +667,30 @@ describe("room cleanup", () => {
     expect(api.sendSessionReset).not.toHaveBeenCalled();
   });
 
+  it("rejects an added membership while preparation is loading", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    const pending = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockReturnValueOnce(pending.promise);
+    document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.click();
+    h.onRoomsSnapshot?.(roomSnapshot({ ...membership, "host-extra.p": "lobby" }));
+    pending.resolve(rows());
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("refuses unresolved inputs when selecting room targets", () => {
+    const view = { kind: "loaded" as const, ...roomSnapshot() };
+    const agent = { "host-a.p": envelope("host-a.p", "idle") };
+    expect(roomCleanupTargets("blue", { kind: "none" }, agent, rows())).toBeNull();
+    expect(roomCleanupTargets("blue", { ...view, incomplete: true }, agent, rows())).toBeNull();
+    expect(roomCleanupTargets("missing", view, agent, rows())).toBeNull();
+    expect(roomCleanupTargets("blue", view, { "missing.p": envelope("missing.p", "idle") }, rows())).toBeNull();
+    expect(roomCleanupTargets("blue", view, agent, [item("empty", [])])).toBeNull();
+    expect(roomCleanupTargets("blue", view, agent, [item("unknown", ["missing.p"])])).toBeNull();
+  });
+
   it("rejects a changed room list while preparation is loading", async () => {
     const h = await setupRoom();
     const api = captured.api!;
@@ -710,7 +735,7 @@ describe("room cleanup", () => {
   it("rejects an incomplete conversation list at confirmation", async () => {
     await setupRoom();
     const api = captured.api!;
-    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows()).mockResolvedValueOnce(conversations([], true));
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows()).mockResolvedValueOnce(conversations([...rows()], true));
     const dialog = await openRoom();
     dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
     await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
