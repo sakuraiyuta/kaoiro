@@ -823,6 +823,19 @@ describe("room cleanup", () => {
     expect(api.sendSessionReset).not.toHaveBeenCalled();
   });
 
+  it("does not query or send after the confirmation becomes stale", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows());
+    const dialog = await openRoom();
+    h.onJoined?.();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+    expect(api.listConversations).toHaveBeenCalledTimes(1);
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
   it("keeps the shared bulk lock until a room cleanup finishes", async () => {
     await setupRoom();
     const api = captured.api!;
@@ -838,6 +851,33 @@ describe("room cleanup", () => {
     pending.resolve(undefined);
     await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.disabled).toBe(false));
     expect(api.sendSessionReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start two preparations from consecutive events", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    const pending = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockReturnValueOnce(pending.promise);
+    const button = document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!;
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(api.listConversations).toHaveBeenCalledTimes(1);
+    pending.resolve(rows());
+    await vi.waitFor(() => expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).not.toBeNull());
+  });
+
+  it("does not start two confirmations from consecutive events", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    const pending = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows()).mockReturnValueOnce(pending.promise);
+    const dialog = await openRoom();
+    const button = dialog.querySelector<HTMLButtonElement>("button.danger")!;
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(api.listConversations).toHaveBeenCalledTimes(2);
+    pending.resolve(rows());
+    await vi.waitFor(() => expect(api.sendSessionReset).toHaveBeenCalledTimes(1));
   });
 
   it("does not dismiss an executing cleanup on Escape", async () => {
