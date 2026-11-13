@@ -8,11 +8,13 @@
   // deleted; a group of unconfirmed rooms is not a room). `reorder` adds the
   // up/down pair (this browser's display order, not a room change, so anyone
   // may use it); a `null` side is the end of the list and is shown disabled.
-  let { room, count, onRename, onDelete, reorder }: {
+  let { room, count, onRename, onDelete, onCleanup, cleanupDisabled = false, reorder }: {
     room: Room | "unknown";
     count: number;
     onRename?: (() => void) | undefined;
     onDelete?: (() => void) | undefined;
+    onCleanup?: (() => void) | undefined;
+    cleanupDisabled?: boolean;
     reorder?: { up: (() => void) | null; down: (() => void) | null } | undefined;
   } = $props();
 
@@ -50,6 +52,11 @@
   {#if onDelete !== undefined}
     <button type="button" class="danger" onclick={onDelete} aria-label={msg().rooms.deleteAria({ name: title })}>
       {msg().rooms.deleteButton}
+    </button>
+  {/if}
+  {#if onCleanup !== undefined}
+    <button type="button" class="danger cleanup" disabled={cleanupDisabled} onclick={onCleanup} aria-label={msg().rooms.cleanupAria({ name: title })}>
+      {msg().rooms.cleanupButton}
     </button>
   {/if}
   {#if count === 0}<span class="empty">{msg().rooms.emptyRoom}</span>{/if}

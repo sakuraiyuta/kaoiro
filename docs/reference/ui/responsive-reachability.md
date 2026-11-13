@@ -79,6 +79,7 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 | Card stop / restore | Agent state + connection | On card | Same |
 | Card interrupt / delete | Agent state + connection | On card | Same |
 | Room display-order buttons | Rooms snapshot received; confirmed rooms in live grid; operator or viewer | On each confirmed room separator; end buttons disabled | Same |
+| Room cleanup | Connected operator; confirmed room in live grid | Room separator → confirmation dialog | Same |
 | Response timeline | Operator | Always (right pane) | handle → sheet |
 | Timeline read operation | Operator and a readable entry exists | Always | Within sheet |
 | Offline list (`details.offline`) | Operator and offline agents exist | Expand disclosure | Same |

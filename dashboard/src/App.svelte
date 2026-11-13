@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
-  import { onMount, untrack, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import { DeliveryPolicyStore } from "./lib/deliveryPolicyStore.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
@@ -25,7 +25,10 @@
   import RoomSeparator from "./lib/RoomSeparator.svelte";
   import AgentStripRoom from "./lib/AgentStripRoom.svelte";
   import { roomLamp } from "./lib/agentStripRooms";
-  import { LOBBY_ID, roomName, type RoomRequest } from "./lib/rooms";
+  import Modal from "./lib/Modal.svelte";
+  import { executeBulkCleanup } from "./lib/bulkCleanup";
+  import { copyRoomView, roomCleanupTargets, sameRoomSnapshot, sameRoomTargets, type RoomCleanupTargets } from "./lib/roomCleanup";
+  import { LOBBY_ID, roomName, type Room, type RoomRequest } from "./lib/rooms";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import {
     conversationEntryKey,
@@ -429,6 +432,85 @@
     isOperator && connection !== null && status === "connected" && rooms.view.kind === "loaded",
   );
   const roomList = $derived(rooms.view.kind === "loaded" ? rooms.view.rooms : []);
+
+  let roomCleanup = $state<{
+    room: Room; connection: KaoiroConnection; generation: number;
+    token: number; targets: RoomCleanupTargets; trigger: HTMLElement | null;
+  } | null>(null);
+  let roomCleanupBusy = $state(false);
+
+  function cleanupCurrent(api: KaoiroConnection, generation: number): boolean {
+    return connection === api && connectionGeneration === generation && canManageRooms
+      && !awaitingSnapshot && !snapshotIncomplete;
+  }
+
+  function cancelRoomCleanup(): void {
+    if (roomCleanupBusy || roomCleanup === null) return;
+    const trigger = roomCleanup.trigger;
+    endBulkReset(roomCleanup.token);
+    roomCleanup = null;
+    void tick().then(() => { if (trigger?.isConnected) trigger.focus(); });
+  }
+
+  async function prepareRoomCleanup(room: Room): Promise<void> {
+    if (!connection || !canManageRooms || awaitingSnapshot || snapshotIncomplete) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const token = tryBeginBulkReset();
+    if (token === null) return;
+    const api = connection;
+    const generation = connectionGeneration;
+    const snapshot = copyRoomView(rooms.view);
+    let keepLock = false;
+    try {
+      const conversations = await api.listConversations();
+      const targets = roomCleanupTargets(room.id, rooms.view, agents, conversations);
+      if (conversations.incomplete || targets === null
+          || !sameRoomSnapshot(snapshot, rooms.view)) {
+        if (cleanupCurrent(api, generation)) showNotice(msg().rooms.cleanupStale);
+        return;
+      }
+      roomCleanup = { room, connection: api, generation, token, targets, trigger };
+      keepLock = true;
+    } catch {
+      if (cleanupCurrent(api, generation)) showNotice(msg().rooms.cleanupStale);
+    } finally {
+      if (!keepLock) {
+        endBulkReset(token);
+        void tick().then(() => { if (trigger?.isConnected) trigger.focus(); });
+      }
+    }
+  }
+
+  async function confirmRoomCleanup(): Promise<void> {
+    const target = roomCleanup;
+    if (target === null || roomCleanupBusy) return;
+    roomCleanupBusy = true;
+    const current = () => cleanupCurrent(target.connection, target.generation);
+    try {
+      if (!current()) return;
+      const conversations = await target.connection.listConversations();
+      const latest = roomCleanupTargets(target.room.id, rooms.view, agents, conversations);
+      if (conversations.incomplete || !sameRoomTargets(target.targets, latest)) {
+        if (current()) showNotice(msg().rooms.cleanupStale);
+        return;
+      }
+      const summary = await executeBulkCleanup(target.connection, target.targets.conversationIds,
+        target.targets.agentIds, current, () => agents);
+      if (summary !== null) showNotice(msg().settingsDrawer.bulkSummary(summary));
+    } catch {
+      if (current()) showNotice(msg().rooms.cleanupStale);
+    } finally {
+      roomCleanupBusy = false;
+      roomCleanup = null;
+      endBulkReset(target.token);
+      void tick().then(() => { if (target.trigger?.isConnected) target.trigger.focus(); });
+    }
+  }
+
+  $effect(() => {
+    if (roomCleanup !== null && !roomCleanupBusy
+        && !cleanupCurrent(roomCleanup.connection, roomCleanup.generation)) cancelRoomCleanup();
+  });
 
   function openRoomMove(agentId: string): void {
     const ref = rooms.roomOf(agentId);
@@ -2323,6 +2405,19 @@
   />
 {/if}
 
+{#if roomCleanup !== null}
+  <Modal ariaLabel={msg().rooms.cleanupTitle({ name: roomName(roomCleanup.room) })} onClose={cancelRoomCleanup}>
+    <h2>{msg().rooms.cleanupTitle({ name: roomName(roomCleanup.room) })}</h2>
+    <p>{msg().rooms.cleanupCounts({ conversations: roomCleanup.targets.conversationIds.length, agents: roomCleanup.targets.agentIds.length })}</p>
+    <p>{msg().rooms.cleanupLimit}</p>
+    <!-- svelte-ignore a11y_autofocus -- The non-destructive action receives initial focus. -->
+    <button type="button" disabled={roomCleanupBusy} onclick={cancelRoomCleanup} autofocus>{msg().common.cancel}</button>
+    <button type="button" class="danger" disabled={roomCleanupBusy} onclick={confirmRoomCleanup}>
+      {roomCleanupBusy ? msg().settingsDrawer.processing : msg().settingsDrawer.execute}
+    </button>
+  </Modal>
+{/if}
+
 {#if deviceOpen && deviceStart !== null}
   <DeviceApproval
     initialCode={deviceStart.code}
@@ -2410,7 +2505,7 @@
         >▶</button>
       {/if}
     </div>
-  {:else if sorted.length === 0 && offlineEntries.length === 0}
+  {:else if sorted.length === 0 && offlineEntries.length === 0 && !canManageRooms}
     {#if awaitingSnapshot}
       <p class="empty">Connecting…</p>
     {:else}
@@ -2490,6 +2585,10 @@
                 onDelete={canManageRooms && room !== "unknown" && room.id !== LOBBY_ID
                   ? () => (roomRequest = { mode: "delete", room })
                   : undefined}
+                onCleanup={canManageRooms && room !== "unknown"
+                  ? () => void prepareRoomCleanup(room)
+                  : undefined}
+                cleanupDisabled={bulkResetRunning}
               />
             {/if}
             {#each group.items as envelope, index (envelope.agent_id)}
