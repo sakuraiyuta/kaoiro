@@ -784,6 +784,12 @@ describe("room cleanup", () => {
     const dialog = await openRoom();
     dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
     h.onJoined?.();
+    h.onStatus("connected");
+    h.onHosts?.([], false);
+    h.onSnapshot({ "host-a.p": envelope("host-a.p", "idle"), "host-x.p": envelope("host-x.p", "idle") });
+    h.onSnapshotIncomplete?.(false);
+    h.onRoomsSnapshot?.(roomSnapshot());
+    await tick();
     pending.resolve(rows());
     await vi.waitFor(() => expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).toBeNull());
     expect(api.closeConversation).not.toHaveBeenCalled();
