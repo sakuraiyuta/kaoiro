@@ -45,6 +45,6 @@ export function roomCleanupTargets(
   };
 }
 
-export function sameRoomTargets(left: RoomCleanupTargets, right: RoomCleanupTargets): boolean {
+export function sameRoomTargets(left: RoomCleanupTargets, right: RoomCleanupTargets | null): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }

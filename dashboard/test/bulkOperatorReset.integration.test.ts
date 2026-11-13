@@ -923,6 +923,7 @@ describe("room cleanup", () => {
     h.onSnapshotIncomplete?.(false); h.onRoomsSnapshot?.(roomSnapshot());
     await tick();
     pending.resolve(rows());
+    await tick();
     await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')?.disabled).toBe(false));
     expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).toBeNull();
     expect(api.closeConversation).not.toHaveBeenCalled();

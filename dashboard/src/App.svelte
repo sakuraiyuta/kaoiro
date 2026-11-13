@@ -462,7 +462,7 @@
     try {
       const conversations = await api.listConversations();
       const targets = roomCleanupTargets(room.id, rooms.view, agents, conversations);
-      if (!cleanupCurrent(api, generation) || conversations.incomplete || targets === null
+      if (conversations.incomplete || targets === null
           || !sameRoomSnapshot(snapshot, rooms.view)) {
         if (cleanupCurrent(api, generation)) showNotice(msg().rooms.cleanupStale);
         return;
@@ -488,7 +488,7 @@
       if (!current()) return;
       const conversations = await target.connection.listConversations();
       const latest = roomCleanupTargets(target.room.id, rooms.view, agents, conversations);
-      if (!current() || conversations.incomplete || latest === null || !sameRoomTargets(target.targets, latest)) {
+      if (conversations.incomplete || !sameRoomTargets(target.targets, latest)) {
         if (current()) showNotice(msg().rooms.cleanupStale);
         return;
       }
