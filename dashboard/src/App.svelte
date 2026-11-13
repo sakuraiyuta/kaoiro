@@ -767,7 +767,7 @@
       const agentId = focused.dataset.stripAgent;
       const destination = groups.find((group) => group.items.some((item) => item.agent_id === agentId));
       void tick().then(() => {
-        if (document.activeElement === focused && focused.isConnected) return;
+        if (document.activeElement === focused && focused.isConnected && !focused.closest("[inert]")) return;
         if (document.activeElement !== document.body && document.activeElement !== focused) return;
         const group = [...document.querySelectorAll<HTMLElement>("[data-strip-key]")]
           .find((element) => element.dataset.stripKey === destination?.key);
