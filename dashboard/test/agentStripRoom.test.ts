@@ -46,7 +46,7 @@ it("uses default motion and completes an actual toggle lifecycle with digits and
   expect(document.querySelector(".strip-count")?.textContent).toBe("30");
   expect(document.querySelector(".state-lamp")?.getAttribute("data-state")).toBe("waiting_question");
   expect(reveal().getAttribute("aria-hidden")).toBe("true");
-  expect(reveal().hasAttribute("inert")).toBe(true);
+  expect(reveal().inert).toBe(true);
   toggle().click(); await tick(); await frame();
   expect(toggle().getAttribute("aria-expanded")).toBe("true");
   expect(reveal().classList.contains("clipped")).toBe(false);

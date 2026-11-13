@@ -767,13 +767,13 @@
       const agentId = focused.dataset.stripAgent;
       const destination = groups.find((group) => group.items.some((item) => item.agent_id === agentId));
       void tick().then(() => {
-        if (document.activeElement === focused && focused.isConnected && !focused.closest("[inert]")) return;
+        if (document.activeElement === focused && focused.isConnected && !focused.closest('[aria-hidden="true"]')) return;
         if (document.activeElement !== document.body && document.activeElement !== focused) return;
         const group = [...document.querySelectorAll<HTMLElement>("[data-strip-key]")]
           .find((element) => element.dataset.stripKey === destination?.key);
         const chip = group && [...group.querySelectorAll<HTMLButtonElement>("[data-strip-agent]")]
           .find((element) => element.dataset.stripAgent === agentId);
-        const target = chip && !chip.closest("[inert]") ? chip : group?.querySelector<HTMLButtonElement>(".room-toggle");
+        const target = chip && !chip.closest('[aria-hidden="true"]') ? chip : group?.querySelector<HTMLButtonElement>(".room-toggle");
         (target ?? document.querySelector<HTMLButtonElement>("button.back"))?.focus();
       });
     });
