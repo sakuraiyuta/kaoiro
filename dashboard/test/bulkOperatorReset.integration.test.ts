@@ -730,6 +730,58 @@ describe("room cleanup", () => {
     expect(api.sendSessionReset).not.toHaveBeenCalled();
   });
 
+  it("rejects an incomplete conversation list at preparation", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(conversations([], true));
+    document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.click();
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unavailable conversation list at confirmation", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows()).mockRejectedValueOnce(new Error("timeout"));
+    const dialog = await openRoom();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector(".spawn-notice")?.textContent).toContain("開き直し"));
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("stops a pending confirmation after a rejoin", async () => {
+    const h = await setupRoom();
+    const api = captured.api!;
+    const pending = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(rows()).mockReturnValueOnce(pending.promise);
+    const dialog = await openRoom();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    h.onJoined?.();
+    pending.resolve(rows());
+    await vi.waitFor(() => expect(document.querySelector('dialog[aria-label="部屋 Blue の後片付け"]')).toBeNull());
+    expect(api.closeConversation).not.toHaveBeenCalled();
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+  });
+
+  it("keeps the shared bulk lock until a room cleanup finishes", async () => {
+    await setupRoom();
+    const api = captured.api!;
+    const pending = deferred<void>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async () => rows());
+    (api.closeConversation as ReturnType<typeof vi.fn>).mockReturnValueOnce(pending.promise);
+    const dialog = await openRoom();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(api.closeConversation).toHaveBeenCalledTimes(1));
+    expect(document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.disabled).toBe(true);
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    expect(api.closeConversation).toHaveBeenCalledTimes(1);
+    pending.resolve(undefined);
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-room="blue"] button.cleanup')!.disabled).toBe(false));
+    expect(api.sendSessionReset).toHaveBeenCalledTimes(1);
+  });
+
   it("summarizes partial failures using the shared cleanup execution", async () => {
     await setupRoom();
     const api = captured.api!;
