@@ -340,6 +340,14 @@ on a smartphone.
 - A move and a delete open one dialog that shows how many conversations the change
   would close, marked as an estimate from the moment it was checked. The confirm
   button waits for that count; cancelling sends nothing.
+- An operator can clean up a confirmed room from its live-grid separator. The
+  confirmation names the room and counts its open conversations and connected
+  agents whose sessions will be cleared. Only conversations whose participants
+  all belong to the room are included; a resolved cross-room conversation is
+  excluded and can instead be closed by the global cleanup. Targets are frozen
+  when the confirmation opens and checked again before sending. A delayed or
+  missing room snapshot, or a room change after the last check and before the
+  server handles a request, can still cause requests to reach moved members.
 - A refusal is shown by its server code in the UI language; an unknown code is shown
   as it is. After an unconfirmed change the dialog offers "Reload", which rejoins the
   channel to read the rooms again; the dashboard never rejoins by itself.
