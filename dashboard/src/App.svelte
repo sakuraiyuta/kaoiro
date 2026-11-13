@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
-  import { onMount, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import { DeliveryPolicyStore } from "./lib/deliveryPolicyStore.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
@@ -433,7 +433,7 @@
 
   let roomCleanup = $state<{
     room: Room; connection: KaoiroConnection; generation: number;
-    token: number; targets: RoomCleanupTargets;
+    token: number; targets: RoomCleanupTargets; trigger: HTMLElement | null;
   } | null>(null);
   let roomCleanupBusy = $state(false);
 
@@ -444,12 +444,15 @@
 
   function cancelRoomCleanup(): void {
     if (roomCleanupBusy || roomCleanup === null) return;
+    const trigger = roomCleanup.trigger;
     endBulkReset(roomCleanup.token);
     roomCleanup = null;
+    void tick().then(() => { if (trigger?.isConnected) trigger.focus(); });
   }
 
   async function prepareRoomCleanup(room: Room): Promise<void> {
     if (!connection || !canManageRooms || awaitingSnapshot || snapshotIncomplete) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const token = tryBeginBulkReset();
     if (token === null) return;
     const api = connection;
@@ -464,12 +467,15 @@
         if (cleanupCurrent(api, generation)) showNotice(msg().rooms.cleanupStale);
         return;
       }
-      roomCleanup = { room, connection: api, generation, token, targets };
+      roomCleanup = { room, connection: api, generation, token, targets, trigger };
       keepLock = true;
     } catch {
       if (cleanupCurrent(api, generation)) showNotice(msg().rooms.cleanupStale);
     } finally {
-      if (!keepLock) endBulkReset(token);
+      if (!keepLock) {
+        endBulkReset(token);
+        void tick().then(() => { if (trigger?.isConnected) trigger.focus(); });
+      }
     }
   }
 
@@ -495,6 +501,7 @@
       roomCleanupBusy = false;
       roomCleanup = null;
       endBulkReset(target.token);
+      void tick().then(() => { if (target.trigger?.isConnected) target.trigger.focus(); });
     }
   }
 
@@ -2440,7 +2447,7 @@
         >▶</button>
       {/if}
     </div>
-  {:else if sorted.length === 0 && offlineEntries.length === 0}
+  {:else if sorted.length === 0 && offlineEntries.length === 0 && !canManageRooms}
     {#if awaitingSnapshot}
       <p class="empty">Connecting…</p>
     {:else}
