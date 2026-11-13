@@ -101,7 +101,7 @@ test("a large room's chips remain reachable on desktop and scroll on mobile", as
 const stripGroup = (page: Page, key: string) => page.locator(`[data-strip-key="${key}"]`);
 async function openStrip(page: Page, scenario = "", live = 6): Promise<void> {
   await page.goto(`/e2e/harness/index.html?view=app&rooms=1&live=${live}&stripScenario=${scenario}`);
-  await page.locator(".live-dashboard .agents article").first().click();
+  await page.locator(".live-dashboard .agents button.open").first().click();
   await expect(page.locator(".agent-strip")).toBeVisible();
 }
 async function toggleTrace(page: Page, key: string) {
