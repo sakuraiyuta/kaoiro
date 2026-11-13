@@ -440,6 +440,45 @@ describe("SettingsDrawer bulk operator action (issue #423)", () => {
     expect(warn).toHaveBeenCalledTimes(6);
   });
 
+  it("stops after a forbidden conversation close without showing a summary", async () => {
+    const h = await mountApp();
+    makeOperator(h, { "host-a.p": envelope("host-a.p", "idle") });
+    await openSettings();
+    await waitForConversationCalls(1);
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      conversations([conversation("c-1"), conversation("c-2")]),
+    );
+    (api.closeConversation as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("forbidden"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dialog = await prepareBulk();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>(".bulk-reset button")?.disabled).toBe(false));
+    expect(api.closeConversation).toHaveBeenCalledTimes(1);
+    expect(api.sendSessionReset).not.toHaveBeenCalled();
+    expect(document.querySelector(".spawn-notice")?.textContent ?? "").not.toContain("一括操作:");
+  });
+
+  it("stops after a forbidden session reset without showing a summary", async () => {
+    const h = await mountApp();
+    makeOperator(h, {
+      "host-a.p": envelope("host-a.p", "idle"),
+      "host-b.p": envelope("host-b.p", "idle"),
+    });
+    await openSettings();
+    await waitForConversationCalls(1);
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(conversations([conversation("c-1")]));
+    (api.sendSessionReset as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("forbidden"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dialog = await prepareBulk();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>(".bulk-reset button")?.disabled).toBe(false));
+    expect(api.closeConversation).toHaveBeenCalledTimes(1);
+    expect(api.sendSessionReset).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".spawn-notice")?.textContent ?? "").not.toContain("一括操作:");
+  });
+
   it("directory-onlyとdisconnected agentをreset対象に含めない", async () => {
     const h = await mountApp();
     makeOperator(h, {
