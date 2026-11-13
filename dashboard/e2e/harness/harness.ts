@@ -69,7 +69,7 @@ if (view === "app") {
   const offline = Number(params.get("offline") ?? 0);
   const live = Number(params.get("live") ?? 0);
   if (offline > 0 || live > 0) {
-    installFakeLobbySocket({ offline, live, rooms: params.get("rooms") === "1" });
+    installFakeLobbySocket({ offline, live, rooms: params.get("rooms") === "1", stripScenario: params.get("stripScenario") ?? "" });
   }
   mount(App, { target });
 } else if (view === "detail") {

@@ -12,14 +12,17 @@ export interface LobbyScenario {
   /** Push a complete rooms_snapshot that spreads the live agents over four
    *  rooms (one of them empty, one with a long name). */
   rooms?: boolean;
+  stripScenario?: string;
 }
 
-function roomsSnapshot(live: number): unknown {
+function roomsSnapshot(live: number, mode = ""): unknown {
   const placed = ["lobby", "r-review", "r-long"];
   const memberships: Record<string, string> = {};
   for (let index = 0; index < live; index += 1) {
     memberships[`e2e-host.live-${index}`] = placed[index % placed.length]!;
   }
+  if (mode === "lobby") return { rooms: [{ id: "lobby", name: null }], memberships: {} };
+  if (mode === "unknown") return { rooms: [{ id: "lobby", name: null }], memberships: { "e2e-host.live-0": "missing" }, snapshot_incomplete: true };
   return {
     rooms: [
       { id: "lobby", name: null },
@@ -48,7 +51,7 @@ function directoryEntries(count: number): Record<string, unknown> {
   return entries;
 }
 
-function liveAgents(count: number): Record<string, unknown> {
+function liveAgents(count: number, mode = ""): Record<string, unknown> {
   const agents: Record<string, unknown> = {};
   for (let index = 0; index < count; index += 1) {
     const id = `e2e-host.live-${index}`;
@@ -59,7 +62,7 @@ function liveAgents(count: number): Record<string, unknown> {
       display_name: `live ${index}`,
       ts: "2026-10-14T00:00:00Z",
       type: "state_change",
-      state: "idle",
+      state: mode === "lamp" && index === 1 ? "waiting_question" : "idle",
     };
   }
   return agents;
@@ -81,7 +84,10 @@ export function installFakeLobbySocket(scenario: LobbyScenario): void {
     onerror: ((event: unknown) => void) | null = null;
     protocol = "";
 
+    private roomUpdate = (event: Event) => { this.push("rooms_snapshot", (event as CustomEvent).detail); };
+
     constructor(readonly url: string) {
+      window.addEventListener("e2e:room-snapshot", this.roomUpdate);
       setTimeout(() => {
         this.readyState = FakeLobbySocket.OPEN;
         this.onopen?.({});
@@ -115,15 +121,16 @@ export function installFakeLobbySocket(scenario: LobbyScenario): void {
       this.push("hosts", {
         hosts: { "e2e-host": { personas: [], cwd_allowlist: [] } },
       });
-      this.push("snapshot", { agents: liveAgents(scenario.live ?? 0) });
+      this.push("snapshot", { agents: liveAgents(scenario.live ?? 0, scenario.stripScenario) });
       this.push("directory", {
         entries: directoryEntries(scenario.offline),
         directory_incomplete: false,
       });
-      if (scenario.rooms) this.push("rooms_snapshot", roomsSnapshot(scenario.live ?? 0));
+      if (scenario.rooms) this.push("rooms_snapshot", roomsSnapshot(scenario.live ?? 0, scenario.stripScenario));
     }
 
     close(): void {
+      window.removeEventListener("e2e:room-snapshot", this.roomUpdate);
       this.readyState = FakeLobbySocket.CLOSED;
       this.onclose?.({ code: 1000 });
     }
