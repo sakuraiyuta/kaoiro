@@ -66,6 +66,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.14.2](v2026.11.14.2.md) | 2026-11-14 | v2026.11.14.1 | Browser caching, composer send feedback, supervised Claude probes, Codex reply guidance, and pinned rollback archives. |
 | [v2026.11.14.1](v2026.11.14.1.md) | 2026-11-14 | v2026.11.10.3 | Room cleanup, collapsible room groups in the detail strip, browser-local room ordering, and dashboard layout fixes. |
 | [v2026.11.10.3](v2026.11.10.3.md) | 2026-11-11 | v2026.11.10.2 | The operator picks a new agent's room at launch, a director's peer session reset stays within its room, and the dashboard pins the gauges and status line, splits agent details into engine and kaoiro tabs and groups the settings drawer into tabs. |
 | [v2026.11.10.2](v2026.11.10.2.md) | 2026-11-10 | v2026.11.10.1 | Rooms: agents message only within their room and the operator manages rooms on the dashboard (new server store), and a long background-command label keeps the Claude Code continuation proof. |
