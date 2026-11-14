@@ -248,4 +248,8 @@ export const agentDetail = {
   removeAttachmentAria: "添付を解除",
   uploadProgressAria: "アップロード進捗",
   sendingNote: "送信中… 応答待ち",
+  sendUnconfirmed:
+    "サーバから返事がなく、指示が届いたか確かめられませんでした。すでに届いている場合があります。送り直す前に、上のログで届いているかを確かめてください",
+  sendNotConnected:
+    "サーバにつながっていないため、送っていません。再接続してから送り直してください",
 };

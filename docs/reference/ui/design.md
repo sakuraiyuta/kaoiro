@@ -2,7 +2,7 @@
 title: kaoiro design principles
 description: Visual design specification for the dashboard/UI. Written in DESIGN.md format (YAML tokens + prose), affirming the existing implementation (dashboard/src/) as the canonical source.
 status: accepted
-last_updated: 2026-11-13
+last_updated: 2026-11-14
 related: [overview, personas, protocol, responsive-layout, responsive-reachability, rooms]
 format: stitch-design-md
 version: alpha
@@ -485,6 +485,25 @@ Native text-like inputs, selects and textareas inherit the dashboard font and us
 
 - **input**: bg `var(--bg)` (darker than the body, giving an inset feel)
 - **textarea**: bg `var(--bg-card)`. During sending, border and background switch to a 22% `var(--c-tool_running)` blend, letting the input itself express state
+
+### Composer send outcome
+
+From the first attachment upload until the server replies, the composer of
+the target agent ignores further submits, Ctrl+Enter included, and the send
+button reads "Sending…". Other agents' composers stay usable, except while
+attachments upload: the attachment tray is shared by every agent's composer
+([issue #1107](https://github.com/sakuraiyuta/kaoiro/issues/1107)).
+
+- Not connected: nothing is pushed; the composer says so at once and keeps the
+  text.
+- Pushed but no reply before the push timeout: delivery is unknown, because
+  the server may have relayed it. The composer keeps the text and shows a
+  notice (`var(--c-waiting_permission)`) asking the operator to check the log
+  before sending again. The notice belongs to the target agent, survives its
+  state changes, and lasts until the next composer submit to that agent (send,
+  `/new`, `/clear`) or until the detail closes.
+- At most one line shows under the composer: an action error, if any, else
+  that notice.
 
 ### Permission Dock
 

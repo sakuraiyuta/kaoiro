@@ -253,4 +253,8 @@ export const agentDetail = {
   removeAttachmentAria: "Remove the attachment",
   uploadProgressAria: "Upload progress",
   sendingNote: "Sending… awaiting the reply",
+  sendUnconfirmed:
+    "No reply from the server, so delivery is unconfirmed. The instruction may already have reached the agent: check the log above before sending it again",
+  sendNotConnected:
+    "Not sent: the dashboard is not connected to the server. Send it again after it reconnects",
 } satisfies Messages["agentDetail"];
