@@ -34,6 +34,8 @@
     findPrecedingUserPrompt,
     formatAgentLabel,
     hostIdFromAgentId,
+    INSTRUCTION_NOT_CONNECTED,
+    INSTRUCTION_UNCONFIRMED,
     interAgentMessageOf,
     logOf,
     lookupTable,
@@ -1195,6 +1197,15 @@
   // first attach_open and the instruction push); locks the send button
   // against double-submits.
   let uploading = $state(false);
+  // Agents with a composer send in flight, from the first upload to the
+  // reply. Keyed by agent because this component is reused when the
+  // operator switches agents, and one agent's pending send must not lock
+  // another's composer.
+  let sendingAgents = $state<ReadonlySet<string>>(new Set());
+  // Agents whose last pushed instruction got no reply in time, so its
+  // delivery is unknown. The notice survives state changes (unlike
+  // actionError) until the next composer submit to that agent.
+  let unconfirmedAgents = $state<ReadonlySet<string>>(new Set());
   // Per-instruction attachment cap (file-upload spec / ADR-0025 F6). Kept
   // in sync with the wrapper's MAX_ATTACHMENTS_PER_INSTRUCTION; reading
   // it from a shared constant would mean importing from @kaoiro/protocol
@@ -2536,12 +2547,47 @@
     }
   }
 
+  // Everything shown under the composer is decided here, so at most one
+  // notice is ever rendered: a transient result first, else the unconfirmed
+  // send of the agent on screen.
+  type ComposerNotice = { kind: "error" | "unconfirmed"; text: string };
+  const composerNotice = $derived.by<ComposerNotice | null>(() => {
+    if (actionError !== "") return { kind: "error", text: actionError };
+    if (unconfirmedAgents.has(envelope.agent_id)) {
+      return { kind: "unconfirmed", text: msg().agentDetail.sendUnconfirmed };
+    }
+    return null;
+  });
+
+  // The only writers of unconfirmedAgents. Every composer submit (send,
+  // /new, /clear, and the synchronous refusals) passes beginComposerSubmit.
+  function beginComposerSubmit(agentId: string): void {
+    if (unconfirmedAgents.has(agentId)) {
+      const next = new Set(unconfirmedAgents);
+      next.delete(agentId);
+      unconfirmedAgents = next;
+    }
+    actionError = "";
+  }
+
+  function recordUnconfirmed(agentId: string): void {
+    unconfirmedAgents = new Set([...unconfirmedAgents, agentId]);
+  }
+
   function sendInstruction(event: SubmitEvent): void {
     event.preventDefault();
     const text = instruction.trim();
     // Either text or at least one staged file is required; both empty is
     // a no-op.
     if (!connection || (text === "" && stagedFiles.length === 0)) return;
+    // Captured once: the component outlives an agent switch, and every
+    // later step of this submit belongs to the agent it started on.
+    const agentId = envelope.agent_id;
+    const entries = stagedFiles;
+    // Ctrl+Enter calls requestSubmit(), which ignores the disabled button,
+    // so a pending send is refused here as well.
+    if (uploading || sendingAgents.has(agentId)) return;
+    beginComposerSubmit(agentId);
     // phase-17 17-8 (ADR-0036 F1): a first token of `/new`・`/clear`・`/reset`
     // (arguments are dropped) + no attachments + capability=on for the
     // requested mode → route to session_reset control event, not
@@ -2563,7 +2609,7 @@
         : shouldInterceptAsSessionReset(text, undefined, sessionCaps);
     if (resetTarget !== null) {
       void run(async () => {
-        await connection!.sendSessionReset(envelope.agent_id, resetTarget);
+        await connection!.sendSessionReset(agentId, resetTarget);
         instruction = "";
       });
       return;
@@ -2576,7 +2622,7 @@
       actionError = msg().agentDetail.resetUnavailable({ command: text });
       return;
     }
-    const entries = stagedFiles;
+    sendingAgents = new Set([...sendingAgents, agentId]);
     void run(async () => {
       // Force pin-to-bottom for the user's own send: even if they were
       // scrolled up reading earlier output, hitting send signals intent
@@ -2593,7 +2639,7 @@
         try {
           for (const entry of entries) {
             const uploadId = await connection.uploadFile(
-              envelope.agent_id,
+              agentId,
               entry.file,
               (uploaded, total) => {
                 entry.progress = uploaded / total;
@@ -2605,11 +2651,25 @@
           uploading = false;
         }
       }
-      await connection.sendInstruction(
-        envelope.agent_id,
-        text,
-        attachmentIds.length > 0 ? attachmentIds : undefined,
-      );
+      try {
+        await connection.sendInstruction(
+          agentId,
+          text,
+          attachmentIds.length > 0 ? attachmentIds : undefined,
+        );
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : undefined;
+        // Not a failure: the server may have relayed it, so the text
+        // stays and the notice asks the operator to check first.
+        if (reason === INSTRUCTION_UNCONFIRMED) {
+          recordUnconfirmed(agentId);
+          return;
+        }
+        if (reason === INSTRUCTION_NOT_CONNECTED) {
+          throw new Error(msg().agentDetail.sendNotConnected);
+        }
+        throw error;
+      }
       instruction = "";
       stagedFiles = [];
       if (stagedFileInput !== null) stagedFileInput.value = "";
@@ -2617,6 +2677,11 @@
       // when the server echoes the user envelope back, the effect sees
       // stickToBottom=true (forced at the start of this send) and runs
       // a layout-settled scrollTop assignment.
+    }).finally(() => {
+      // run() never rejects, so this always releases the lock.
+      const next = new Set(sendingAgents);
+      next.delete(agentId);
+      sendingAgents = next;
     });
   }
 
@@ -4538,9 +4603,12 @@
             <button
               type="submit"
               disabled={uploading ||
+                sendingAgents.has(envelope.agent_id) ||
                 resetMode !== null ||
                 (instruction.trim() === "" && stagedFiles.length === 0)}
-              >{uploading ? msg().agentDetail.sending : msg().agentDetail.send}</button
+              >{uploading || sendingAgents.has(envelope.agent_id)
+                ? msg().agentDetail.sending
+                : msg().agentDetail.send}</button
             >
           </form>
 
@@ -4582,8 +4650,13 @@
             <p class="sending-note">{msg().agentDetail.sendingNote}</p>
           {/if}
 
-          {#if actionError}
-            <p class="action-error">{actionError}</p>
+          {#if composerNotice}
+            <p
+              class="composer-notice"
+              class:action-error={composerNotice.kind === "error"}
+              class:send-unconfirmed={composerNotice.kind === "unconfirmed"}
+              role={composerNotice.kind === "unconfirmed" ? "status" : undefined}
+            >{composerNotice.text}</p>
           {/if}
         </div>
       {/if}
@@ -6378,11 +6451,18 @@
     cursor: default;
   }
 
-  .action-error {
+  .composer-notice {
     margin: 0;
     font-size: var(--fs-body-sm);
-    color: var(--c-error);
     overflow-wrap: anywhere;
+  }
+
+  .action-error {
+    color: var(--c-error);
+  }
+
+  .send-unconfirmed {
+    color: var(--c-waiting_permission);
   }
 
   /* File picker (ADR-0025): the input itself is hidden, the label acts as

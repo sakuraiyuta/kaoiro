@@ -3107,7 +3107,10 @@ export interface KaoiroConnection {
    *  was waiting for its retry timer; it never cycles a healthy transport. */
   notifyOnline: () => void;
   /** Sends an operator instruction; rejects on server refusal
-   * (forbidden / unknown_agent) or timeout. `attachmentIds` references
+   * (forbidden / unknown_agent), with INSTRUCTION_NOT_CONNECTED when the
+   * channel is not joined (nothing was pushed), or with
+   * INSTRUCTION_UNCONFIRMED when the pushed instruction got no reply in
+   * time. `attachmentIds` references
    * uploads previously sent through uploadFile / attach* (file-upload spec
    * / ADR-0025); the wrapper resolves each id to the corresponding bytes. */
   sendInstruction: (
@@ -4619,6 +4622,7 @@ function pushAsync(
   channel: Channel,
   event: string,
   payload: Record<string, unknown>,
+  timeoutReason = "timeout",
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     pushVersioned(channel, event, payload)
@@ -4626,9 +4630,16 @@ function pushAsync(
       .receive("error", (reason: { reason?: string } | undefined) =>
         reject(new Error(reason?.reason ?? "error")),
       )
-      .receive("timeout", () => reject(new Error("timeout")));
+      .receive("timeout", () => reject(new Error(timeoutReason)));
   });
 }
+
+/** `sendInstruction` rejects with this when the channel is not joined: the
+ *  instruction was not pushed at all. */
+export const INSTRUCTION_NOT_CONNECTED = "not_connected";
+/** `sendInstruction` rejects with this when the instruction was pushed but no
+ *  reply arrived in time: the server may still have relayed it. */
+export const INSTRUCTION_UNCONFIRMED = "instruction_unconfirmed";
 
 /** Resolves with the server's ok payload for requests that read a reply body.
  *  Callers that need only an acknowledgement use {@link pushAsync}. */
@@ -5616,14 +5627,22 @@ export function connectKaoiro(
         socketWithConnect.connect();
       }
     },
-    sendInstruction: (agentId, text, attachmentIds) =>
-      pushAsync(
+    sendInstruction: (agentId, text, attachmentIds) => {
+      // Phoenix buffers a push made before the join and drops it unsent when
+      // it times out, so a timeout would not mean "maybe delivered". Refuse
+      // instead, which keeps INSTRUCTION_UNCONFIRMED true to its word.
+      if (!socket.isConnected() || channel.state !== "joined") {
+        return Promise.reject(new Error(INSTRUCTION_NOT_CONNECTED));
+      }
+      return pushAsync(
         channel,
         "instruction",
         attachmentIds !== undefined && attachmentIds.length > 0
           ? { agent_id: agentId, text, attachment_ids: attachmentIds }
           : { agent_id: agentId, text },
-      ),
+        INSTRUCTION_UNCONFIRMED,
+      );
+    },
     sendPermissionDecision: (agentId, requestId, allow) =>
       pushAsync(channel, "permission_decision", {
         agent_id: agentId,
