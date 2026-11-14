@@ -65,6 +65,8 @@ function logs(): Envelope[] {
 }
 
 describe("AgentDetail with bodies that nest block quotes without limit", () => {
+  // Measured 1.34-1.75 s across three bubbles (0.5-0.7 s each in marked.lexer), leaving little margin
+  // under Vitest's 5,000 ms default during parallel runs; keep 100,000 '>' and allow 30,000 ms.
   it("renders each bubble as escaped text, with its time", async () => {
     const target = document.createElement("div");
     document.body.append(target);
@@ -84,5 +86,5 @@ describe("AgentDetail with bodies that nest block quotes without limit", () => {
       const body = bubble!.querySelector("p:not(.inter-agent-head)");
       expect(body?.textContent, `${selector} body`).toBe(HOSTILE);
     }
-  });
+  }, 30_000);
 });
