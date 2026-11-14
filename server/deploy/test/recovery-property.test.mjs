@@ -1,7 +1,8 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import childProcess, { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import {
   chmodSync,
   copyFileSync,
@@ -13,17 +14,22 @@ import {
   realpathSync,
   rmdirSync,
   rmSync,
+  statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { execChildSync } from "../../../runner/deploy/child-process-environment.mjs";
 
+import { loadConfig } from "../kaoiro-deploy-config.mjs";
 import { PHASE } from "../kaoiro-deploy-phase.mjs";
 import { newTransactionId } from "../kaoiro-deploy-transaction.mjs";
+import { DeployError, runRollback } from "../kaoiro-server-deploy.mjs";
 
 // Property test for the recovery table (issue #695, landing unit L1;
 // docs/plans/issue-695-transaction-state-table.md section 7.1). Each recipe
@@ -947,4 +953,408 @@ test("old retired metadata is ignored by actual printed resume while retained fi
   assert.equal(result.phase, PHASE.DONE);
   assert.equal(world.journal().release_context, journal.release_context);
   assert.deepEqual(world.journal().invocation.release_authority, journal.invocation.release_authority);
+});
+
+function buildSwappedArchiveBytes(archivePath, content = "SWAPPED\n") {
+  const stage = mkdtempSync(join(tmpdir(), "kaoiro-swap-archive-"));
+  try {
+    const rootDir = join(stage, "root");
+    mkdirSync(rootDir);
+    execFileSync("tar", ["xzf", archivePath, "-C", rootDir]);
+    const payloadPath = join(rootDir, "users.dets");
+    const mode = statSync(payloadPath).mode & 0o777;
+    writeFileSync(payloadPath, content);
+    chmodSync(payloadPath, mode);
+    const outPath = join(stage, "swapped.tar.gz");
+    execFileSync("tar", ["czf", outPath, "-C", rootDir, "."]);
+    return readFileSync(outPath);
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
+
+function setupDestructiveDoneWorld(t) {
+  const world = makeWorld(t);
+  const preDeploy = digestDir(world.volumeDir);
+  const update = world.update(...UPDATE_APPROVED);
+  assert.equal(update.status, 0, update.stderr);
+  assert.ok(existsSync(join(world.volumeDir, "written-by-target.txt")));
+  const txId = world.txId();
+  const txDir = join(world.backupRoot, txId);
+  const manifest = JSON.parse(readFileSync(join(txDir, "manifest.json"), "utf8"));
+  return { world, preDeploy, txId, txDir, archivePath: manifest.archive.path, manifest };
+}
+
+function destructiveCounts(world, fromIndex = 0) {
+  const calls = world.state().calls.slice(fromIndex);
+  return {
+    stop: calls.filter((c) => c.startsWith("stop -t 30 ")).length,
+    forensic: calls.filter((c) => c.includes("rollback-forensic.tar.gz")).length,
+    wipe: calls.filter((c) => c.includes("find /data -mindepth 1 -maxdepth 1 -exec rm")).length,
+    sha256sum: calls.filter((c) => /^run .*sha256sum \/backup\/archive\.tar\.gz$/.test(c)).length,
+  };
+}
+
+function listRestoreStageDirs(txDir) {
+  return readdirSync(txDir).filter((name) => name.startsWith(".restore-stage-"));
+}
+
+function withWorldEnv(world, fn) {
+  const overrides = {
+    KAOIRO_DEPLOY_DOCKER_BIN: join(world.root, "bin", "docker"),
+    KAOIRO_DEPLOY_CURL_BIN: join(world.root, "bin", "curl"),
+    FAKE_DOCKER_STATE: join(world.root, "docker-state.json"),
+  };
+  const previous = new Map();
+  for (const [key, value] of Object.entries(overrides)) {
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+function runRollbackWithExecHook(world, beforeExec, deps) {
+  const original = childProcess.execFileSync;
+  childProcess.execFileSync = (file, args, options) => {
+    beforeExec(file, args ?? [], options);
+    return original(file, args, options);
+  };
+  syncBuiltinESMExports();
+  try {
+    return withWorldEnv(world, () =>
+      runRollback(
+        { repo: world.work, config: world.config, transaction: world.txId(), confirmRestore: true },
+        loadConfig(world.config),
+        deps,
+      ));
+  } finally {
+    childProcess.execFileSync = original;
+    syncBuiltinESMExports();
+  }
+}
+
+test("issue #610 CP0: refuses valid metadata-identical swapped pre-deploy archive before stopping", (t) => {
+  const { world, txId, txDir, archivePath } = setupDestructiveDoneWorld(t);
+  writeFileSync(archivePath, buildSwappedArchiveBytes(archivePath));
+  const beforeCalls = world.calls();
+  const r = world.cliRun("rollback", "--transaction", txId, "--confirm-restore");
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /does not match its recorded sha256/);
+  assert.equal(world.journal().phase, PHASE.DONE);
+  const counts = destructiveCounts(world, beforeCalls);
+  assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [0, 0, 0]);
+  assert.ok(existsSync(join(world.volumeDir, "written-by-target.txt")));
+  assert.deepEqual(listRestoreStageDirs(txDir), []);
+});
+
+test("issue #610 CP1: refuses symlink pointing to a valid sha-matching archive via O_NOFOLLOW", (t) => {
+  const { world, txId, txDir, archivePath } = setupDestructiveDoneWorld(t);
+  const validCopy = join(world.root, "valid-identical.tar.gz");
+  copyFileSync(archivePath, validCopy);
+  unlinkSync(archivePath);
+  symlinkSync(validCopy, archivePath);
+  const beforeCalls = world.calls();
+  const r = world.cliRun("rollback", "--transaction", txId, "--confirm-restore");
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /ELOOP|symbolic link/i);
+  assert.equal(world.journal().phase, PHASE.DONE);
+  const counts = destructiveCounts(world, beforeCalls);
+  assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [0, 0, 0]);
+  assert.deepEqual(listRestoreStageDirs(txDir), []);
+});
+
+test("issue #610 CP-FIFO: refuses FIFO without blocking via O_NONBLOCK and fstat.isFile", (t) => {
+  const { world, txId, txDir, archivePath } = setupDestructiveDoneWorld(t);
+  unlinkSync(archivePath);
+  execFileSync("mkfifo", [archivePath]);
+  const beforeCalls = world.calls();
+  const env = {
+    ...process.env,
+    KAOIRO_DEPLOY_DOCKER_BIN: join(world.root, "bin", "docker"),
+    KAOIRO_DEPLOY_CURL_BIN: join(world.root, "bin", "curl"),
+    FAKE_DOCKER_STATE: join(world.root, "docker-state.json"),
+  };
+  const r = spawnSync(
+    process.execPath,
+    [world.cli, "rollback", "--repo", world.work, "--config", world.config, "--transaction", txId, "--confirm-restore"],
+    { env, encoding: "utf8", timeout: 1000 },
+  );
+  assert.equal(r.error, undefined, r.error?.message);
+  assert.equal(r.signal, null);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /not a regular file/);
+  assert.equal(world.journal().phase, PHASE.DONE);
+  const counts = destructiveCounts(world, beforeCalls);
+  assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [0, 0, 0]);
+  assert.deepEqual(listRestoreStageDirs(txDir), []);
+});
+
+for (const cp of [
+  {
+    id: "CP2",
+    match: ({ file, args, txDir, world }) =>
+      file === "tar" && args[0] === "tzf" && args[1]?.startsWith(join(txDir, ".restore-stage-")) &&
+      world.journal().phase === PHASE.DONE,
+  },
+  {
+    id: "CP3",
+    match: ({ file, args, txDir }) =>
+      file === "tar" && args[0] === "tvzf" && args[1]?.startsWith(join(txDir, ".restore-stage-")) &&
+      args.includes("--numeric-owner"),
+  },
+  {
+    id: "CP4-STOP",
+    match: ({ file, args, dockerBin }) =>
+      file === dockerBin && args[0] === "stop" && args[1] === "-t" && args[2] === "30",
+  },
+  {
+    id: "CP4-FORENSIC",
+    match: ({ file, args, dockerBin }) =>
+      file === dockerBin && args[0] === "run" && args.includes("czf") && args.includes("/backup/rollback-forensic.tar.gz"),
+  },
+  {
+    id: "CP5-ORIG",
+    match: ({ file, args, txDir }) =>
+      file === "tar" && args[0] === "tzf" && args[1] === join(txDir, "rollback-forensic.tar.gz"),
+  },
+  {
+    id: "CP6",
+    match: ({ file, args, dockerBin, world }) =>
+      file === dockerBin && args[0] === "compose" &&
+      !args.some((a) => a.endsWith("/recovery-compose.yaml")) &&
+      !args.includes("-a") && args.slice(-3).join(" ") === "ps -q kaoiro" &&
+      world.journal().phase === PHASE.ROLLBACK_RESTORING,
+  },
+]) {
+  test(`issue #610 ${cp.id}: completes rollback from staged copy when original archive is swapped at ${cp.id}`, (t) => {
+    const { world, preDeploy, txDir, archivePath } = setupDestructiveDoneWorld(t);
+    const swappedBytes = buildSwappedArchiveBytes(archivePath);
+    const dockerBin = join(world.root, "bin", "docker");
+    let hooks = 0;
+    const result = runRollbackWithExecHook(world, (file, args) => {
+      if (!cp.match({ file, args, txDir, dockerBin, world })) return;
+      hooks += 1;
+      writeFileSync(archivePath, swappedBytes);
+    });
+    assert.equal(hooks, 1);
+    assert.equal(result.phase, PHASE.ROLLED_BACK);
+    assert.equal(world.journal().phase, PHASE.ROLLED_BACK);
+    assertDestructive(world, preDeploy);
+    assert.equal(readFileSync(join(world.volumeDir, "users.dets"), "utf8"), "ledger\n");
+    assert.ok(!existsSync(join(world.volumeDir, "written-by-target.txt")));
+    assert.deepEqual(listRestoreStageDirs(txDir), []);
+  });
+}
+
+test("issue #610 CP5-STAGE-SHA: refuses valid swap of staged archive itself before wipe", (t) => {
+  const { world, txDir, archivePath } = setupDestructiveDoneWorld(t);
+  const swappedBytes = buildSwappedArchiveBytes(archivePath);
+  const beforeCalls = world.calls();
+  let tzf2Hooks = 0;
+  assert.throws(
+    () => runRollbackWithExecHook(world, (file, args) => {
+      if (file !== "tar" || args[0] !== "tzf" || args[1] !== join(txDir, "rollback-forensic.tar.gz")) return;
+      tzf2Hooks += 1;
+      const stages = listRestoreStageDirs(txDir);
+      assert.equal(stages.length, 1);
+      const stagedPath = join(txDir, stages[0], "archive.tar.gz");
+      chmodSync(stagedPath, 0o600);
+      writeFileSync(stagedPath, swappedBytes);
+      chmodSync(stagedPath, 0o400);
+    }),
+    (err) => err instanceof DeployError && /does not match its recorded sha256/.test(err.message),
+  );
+  assert.equal(tzf2Hooks, 1);
+  assert.equal(world.journal().phase, PHASE.ROLLBACK_FORENSIC_ARCHIVED);
+  const counts = destructiveCounts(world, beforeCalls);
+  assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [1, 1, 0]);
+  assert.deepEqual(listRestoreStageDirs(txDir), []);
+});
+
+test("issue #610 CP-DOCKER-READ: enforces container sha256sum readability and digest match before stopping", (t) => {
+  {
+    const { world, preDeploy, txId, txDir } = setupDestructiveDoneWorld(t);
+    const beforeCalls = world.calls();
+    const r = world.cliRun("rollback", "--transaction", txId, "--confirm-restore");
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(world.journal().phase, PHASE.ROLLED_BACK);
+    assertDestructive(world, preDeploy);
+    const calls = world.state().calls.slice(beforeCalls);
+    const shaIdx = calls.findIndex((c) => /^run .*sha256sum \/backup\/archive\.tar\.gz$/.test(c));
+    const stopIdx = calls.findIndex((c) => c.startsWith("stop -t 30 "));
+    assert.notEqual(shaIdx, -1);
+    assert.ok(shaIdx < stopIdx, "container sha256sum must precede stop");
+    assert.deepEqual(listRestoreStageDirs(txDir), []);
+  }
+  for (const kind of ["fail", "corrupt"]) {
+    const { world, txId, txDir } = setupDestructiveDoneWorld(t);
+    const beforeCalls = world.calls();
+    world.faults([{ match: "^run .*sha256sum", kind }]);
+    const r = world.cliRun("rollback", "--transaction", txId, "--confirm-restore");
+    assert.notEqual(r.status, 0);
+    assert.equal(world.journal().phase, PHASE.DONE);
+    const counts = destructiveCounts(world, beforeCalls);
+    assert.equal(counts.sha256sum, 1);
+    assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [0, 0, 0]);
+    assert.deepEqual(listRestoreStageDirs(txDir), []);
+  }
+});
+
+test("issue #610 CP-SWEEP-AND-BOUNDARY: sweeps stale stages only in eligible destructive preflight and fails closed on sweep error", (t) => {
+  {
+    const { world, preDeploy, txId, txDir } = setupDestructiveDoneWorld(t);
+    const staleDir = join(txDir, ".restore-stage-old");
+    mkdirSync(staleDir, { mode: 0o700 });
+    writeFileSync(join(staleDir, "archive.tar.gz"), "stale");
+    const r = world.cliRun("rollback", "--transaction", txId, "--confirm-restore");
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(existsSync(staleDir), false);
+    assert.equal(world.journal().phase, PHASE.ROLLED_BACK);
+    assertDestructive(world, preDeploy);
+  }
+  {
+    const { world, txId, txDir } = setupDestructiveDoneWorld(t);
+    world.faults([{ match: "tar czf /backup/rollback-forensic.tar.gz", kind: "fail" }]);
+    const first = world.cliRun("rollback", "--transaction", txId, "--confirm-restore");
+    assert.notEqual(first.status, 0);
+    assert.equal(world.journal().phase, PHASE.ROLLBACK_STOPPED);
+    const staleDir = join(txDir, ".restore-stage-old");
+    mkdirSync(staleDir, { mode: 0o700 });
+    writeFileSync(join(staleDir, "archive.tar.gz"), "stale");
+    const st = world.cliRun("status");
+    assert.equal(st.status, 0, st.stderr);
+    assert.equal(existsSync(staleDir), true, "status must never sweep stale stages");
+    const beforeSecond = world.calls();
+    const second = world.cliRun("rollback", "--transaction", txId, "--confirm-restore");
+    assert.notEqual(second.status, 0);
+    assert.equal(existsSync(staleDir), true, "rollback_stopped refusal must not sweep stale stages");
+    const counts = destructiveCounts(world, beforeSecond);
+    assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [0, 0, 0]);
+  }
+  {
+    const { world, txId, txDir } = setupDestructiveDoneWorld(t);
+    // Assumes non-root UID so mode 0o500 with an entry triggers EACCES on rmSync.
+    const unremovable = join(txDir, ".restore-stage-unremovable");
+    mkdirSync(unremovable, { mode: 0o755 });
+    writeFileSync(join(unremovable, "locked"), "keep");
+    chmodSync(unremovable, 0o500);
+    const beforeCalls = world.calls();
+    try {
+      const r = world.cliRun("rollback", "--transaction", txId, "--confirm-restore");
+      assert.notEqual(r.status, 0);
+      assert.ok(r.stderr.includes(unremovable), r.stderr);
+      assert.equal(world.journal().phase, PHASE.DONE);
+      const counts = destructiveCounts(world, beforeCalls);
+      assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [0, 0, 0]);
+    } finally {
+      chmodSync(unremovable, 0o700);
+      rmSync(unremovable, { recursive: true, force: true });
+    }
+  }
+});
+
+test("issue #610 CP-LOW-SPACE: refuses insufficient staging space before creating staging directory or stopping", (t) => {
+  const { world, txId, txDir } = setupDestructiveDoneWorld(t);
+  const beforeCalls = world.calls();
+  withWorldEnv(world, () => {
+    assert.throws(
+      () => runRollback(
+        { repo: world.work, config: world.config, transaction: txId, confirmRestore: true },
+        loadConfig(world.config),
+        { readAvailableBytes: () => 0 },
+      ),
+      (err) => err instanceof DeployError && /insufficient free space/.test(err.message),
+    );
+  });
+  assert.equal(world.journal().phase, PHASE.DONE);
+  const counts = destructiveCounts(world, beforeCalls);
+  assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [0, 0, 0]);
+  assert.deepEqual(listRestoreStageDirs(txDir), []);
+});
+
+test("issue #610 CP-CLEANUP-FAULTS: absorbs real EPIPE on destroyed stderr and rmSync EIO without masking ENOSPC", async (t) => {
+  const { world, txId, txDir } = setupDestructiveDoneWorld(t);
+  const beforeCalls = world.calls();
+  const deployUrl = pathToFileURL(join(repoRoot, "server/deploy/kaoiro-server-deploy.mjs")).href;
+  const configUrl = pathToFileURL(join(repoRoot, "server/deploy/kaoiro-deploy-config.mjs")).href;
+  const driver = `
+    import { readFileSync } from "node:fs";
+    const { DeployError, runRollback } = await import(process.argv[1]);
+    const { loadConfig } = await import(process.argv[2]);
+    process.stdout.write("READY\\n");
+    readFileSync(0);
+    let outcome;
+    try {
+      runRollback(
+        { repo: process.argv[3], config: process.argv[4], transaction: process.argv[5], confirmRestore: true },
+        loadConfig(process.argv[4]),
+        {
+          writeStageChunk() { throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }); },
+          removeStageDir() { throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" }); },
+        },
+      );
+      outcome = { threw: false };
+    } catch (err) {
+      outcome = {
+        threw: true,
+        isDeployError: err instanceof DeployError,
+        code: err?.code ?? null,
+        message: err?.message ?? "",
+      };
+    }
+    process.stdout.write(JSON.stringify(outcome) + "\\n");
+  `;
+  const env = {
+    ...process.env,
+    KAOIRO_DEPLOY_DOCKER_BIN: join(world.root, "bin", "docker"),
+    KAOIRO_DEPLOY_CURL_BIN: join(world.root, "bin", "curl"),
+    FAKE_DOCKER_STATE: join(world.root, "docker-state.json"),
+  };
+  const child = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", driver, deployUrl, configUrl, world.work, world.config, txId],
+    { env, stdio: ["pipe", "pipe", "pipe"] },
+  );
+  let stdout = "";
+  let stderrBeforeReady = "";
+  let resolved = false;
+  await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.stderr.on("data", (chunk) => {
+      if (!resolved) stderrBeforeReady += chunk.toString("utf8");
+    });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      if (!resolved && stdout.includes("READY\n")) {
+        resolved = true;
+        resolve();
+      }
+    });
+    child.once("close", (code) => {
+      if (!resolved) reject(new Error(`child closed before READY (code=${code}, stdout=${stdout}, stderr=${stderrBeforeReady})`));
+    });
+  });
+  const stderrClosed = once(child.stderr, "close");
+  child.stderr.destroy();
+  await stderrClosed;
+  child.stdin.end("GO\n");
+  const [exitCode, signal] = await once(child, "close");
+  assert.equal(signal, null);
+  assert.equal(exitCode, 0, `expected exit 0 after EPIPE/EIO absorption, got ${exitCode}; stdout=${stdout}`);
+  const lines = stdout.trim().split("\n");
+  const outcome = JSON.parse(lines.at(-1));
+  assert.equal(outcome.threw, true);
+  assert.equal(outcome.isDeployError, true);
+  assert.equal(outcome.code, "ENOSPC");
+  assert.equal(world.journal().phase, PHASE.DONE);
+  const counts = destructiveCounts(world, beforeCalls);
+  assert.deepEqual([counts.stop, counts.forensic, counts.wipe], [0, 0, 0]);
+  for (const d of listRestoreStageDirs(txDir)) rmSync(join(txDir, d), { recursive: true, force: true });
 });
