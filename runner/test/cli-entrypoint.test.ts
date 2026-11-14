@@ -1,6 +1,6 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const runnerRoot = fileURLToPath(new URL("../", import.meta.url));
 const cli = join(runnerRoot, "dist", "cli.js");
+const buildInfo = join(runnerRoot, "dist", "build-info.json");
 
 interface CliPath {
   name: string;
@@ -22,11 +23,16 @@ function run(entry: string, args: string[], cwd: string) {
 }
 
 describe("runner CLI built entry point", () => {
-  let root: string;
+  let root = "";
   let entries: CliPath[];
 
   beforeAll(() => {
-    execFileSync("pnpm", ["build"], { cwd: runnerRoot, stdio: "pipe" });
+    const missing = [cli, buildInfo].filter((artifact) => !existsSync(artifact));
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing prebuilt runner artifacts (${missing.join(", ")}). Run "pnpm -C runner build" first, or invoke via "pnpm -C runner test" / "pnpm -C runner test:integration".`,
+      );
+    }
     root = mkdtempSync(join(tmpdir(), "kaoiro-runner-cli-entry-"));
     const parentLink = join(root, "runner-parent-link");
     const entryLink = join(root, "runner-entry-link.js");
@@ -40,7 +46,9 @@ describe("runner CLI built entry point", () => {
   });
 
   afterAll(() => {
-    rmSync(root, { force: true, recursive: true });
+    if (root !== "") {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("prints the same version through direct and symlinked built entries", () => {
