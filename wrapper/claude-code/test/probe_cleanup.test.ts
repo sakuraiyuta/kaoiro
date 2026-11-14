@@ -55,8 +55,8 @@ afterEach(() => {
 describe("production-built probe ownership", () => {
   it("keeps runner spawn and parsed outcome unchanged", async () => {
     const f = fake();
-    const pending = runClaudeProbe({ ...f.deps,
-      superviseProcessTree: false });
+    const { superviseProcessTree: _optIn, ...deps } = f.deps;
+    const pending = runClaudeProbe(deps);
     const [, args, options] = f.launch.mock.calls[0]!;
     expect(args).not.toContain("--probe-cwd");
     expect(Object.keys(options).sort()).toEqual(["env", "stdio"]);
@@ -70,8 +70,8 @@ describe("production-built probe ownership", () => {
 
   it("keeps non-opt-in abort immediate without child close", async () => {
     const f = fake(), controller = new AbortController();
-    const pending = runClaudeProbe({ ...f.deps,
-      superviseProcessTree: false, signal: controller.signal });
+    const { superviseProcessTree: _optIn, ...deps } = f.deps;
+    const pending = runClaudeProbe({ ...deps, signal: controller.signal });
     controller.abort();
     expect((await pending).detail).toBe("aborted");
     expect(f.child.kill).toHaveBeenCalledWith("SIGTERM");
@@ -88,6 +88,48 @@ describe("production-built probe ownership", () => {
       elapsed_ms: expect.any(Number) });
     expect(existsSync(f.cwd()!)).toBe(false);
   });
+
+  it("concurrent production spawns keep group signals and cwds separate",
+    async () => {
+      vi.useFakeTimers();
+      const first = fake(9123), second = fake(9234);
+      const alive = new Set([9123, 9234]);
+      const signal = vi.fn((pid: number, _signal: unknown) => {
+        if (!alive.has(-pid)) throw errno("ESRCH");
+        return true;
+      });
+      const a = new AbortController(), b = new AbortController();
+      const one = runClaudeProbe({ ...first.deps, groupSignal: signal,
+        signal: a.signal });
+      const two = runClaudeProbe({ ...second.deps, groupSignal: signal,
+        signal: b.signal });
+      let secondDone = false;
+      void two.then(() => { secondDone = true; });
+      try {
+        expect(first.launch.mock.calls[0]![2].detached).toBe(true);
+        expect(second.launch.mock.calls[0]![2].detached).toBe(true);
+        expect(first.cwd()).not.toBe(second.cwd());
+        a.abort(); first.close(); alive.delete(9123);
+        await vi.advanceTimersByTimeAsync(25); await one;
+        expect(new Set(signal.mock.calls.map(([pid]) => pid)))
+          .toEqual(new Set([-9123]));
+        expect(signal).toHaveBeenCalledWith(-9123, "SIGTERM");
+        expect(existsSync(first.cwd()!)).toBe(false);
+        expect(existsSync(second.cwd()!)).toBe(true);
+        expect(secondDone).toBe(false);
+        signal.mockClear();
+        b.abort(); second.close(); alive.delete(9234);
+        await vi.advanceTimersByTimeAsync(25); await two;
+        expect(new Set(signal.mock.calls.map(([pid]) => pid)))
+          .toEqual(new Set([-9234]));
+        expect(signal).toHaveBeenCalledWith(-9234, "SIGTERM");
+        expect(existsSync(second.cwd()!)).toBe(false);
+      } finally {
+        a.abort(); b.abort(); first.close(); second.close(); alive.clear();
+        await vi.advanceTimersByTimeAsync(100);
+        await Promise.all([one, two]);
+      }
+    });
 
   it("already aborted never spawns", async () => {
     const f = fake(), ctl = new AbortController(); ctl.abort();
@@ -247,21 +289,33 @@ describe("host probe barrier", () => {
       releases[1]!(); await closing; await Promise.all([startup, manual]);
     });
 
-  it.each([false, true])("terminal abort precedes wait (deferred=%s)",
+  it.each([false, true])("host run waits for teardown (deferred=%s)",
     async (deferred) => {
-      let observed: AbortSignal | undefined;
+      let observed: AbortSignal | undefined, release!: () => void;
       const host = new AgentHost(config, { onState: () => {},
         deferQueryUntilFirstInput: deferred,
         queryFn: (() => { throw new Error("SDK failure"); }) as never,
         probeFn: (deps) => new Promise((resolve) => {
-          observed = deps!.signal!;
-          observed.addEventListener("abort", () => resolve(result));
+          observed = deps!.signal!; release = () => resolve(result);
         }) });
-      const probe = host.probeRateLimits(); await Promise.resolve();
-      const running = host.run();
-      if (deferred) { await host.close(); await running; }
-      else await expect(running).rejects.toThrow("SDK failure");
-      expect(observed!.aborted).toBe(true); await probe;
+      const probe = host.probeRateLimits();
+      let done = false;
+      const running = host.run().then(() => { done = true; }, error => {
+        done = true; return error;
+      });
+      const closing = deferred ? host.close() : undefined;
+      try {
+        await vi.waitFor(() => expect(observed!.aborted).toBe(true));
+        await new Promise(resolve => setImmediate(resolve));
+        expect(done).toBe(false);
+        release();
+        const outcome = await running;
+        if (deferred) expect(outcome).toBeUndefined();
+        else expect(outcome).toMatchObject({ message: "SDK failure" });
+        expect(done).toBe(true);
+      } finally {
+        release(); await running; await closing; await probe;
+      }
     });
 
   it("probe-only settlement aborts without full close side effects",

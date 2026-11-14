@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost } from "../src/host.js";
@@ -193,7 +193,7 @@ it("production spawn owns a resistant probe tree through host close",
   try {
     cli = await runIdleCli("", {
       probePath: fileURLToPath(new URL("./fixtures/probe-tree.cjs",
-        import.meta.url)), killEscalateMs: 100,
+        import.meta.url)), killEscalateMs: 750,
     });
     await vi.waitFor(() => expect(existsSync(marker)).toBe(true));
     tree = JSON.parse(readFileSync(marker, "utf8"));
@@ -218,5 +218,55 @@ it("production spawn owns a resistant probe tree through host close",
     if (tree) rmSync(tree.cwd, { recursive: true, force: true });
     vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+it("CLI waits for probe teardown before disconnect intent and link close",
+  async () => {
+  const events: string[] = [];
+  let observed: AbortSignal | undefined, release!: () => void;
+  let host: AgentHost | undefined;
+  let runSpy: MockInstance<AgentHost["run"]> | undefined;
+  let done = false;
+  const running = runClaudeCli({
+    parseCliArgs: () => ({ configPath: "test", prompt: undefined,
+      resume: undefined }),
+    loadConfig: () => ({ ...config }),
+    createServerLink: (_url, _agentId, options) => {
+      queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+      return { deliveryModes: () => undefined, send: () => {},
+        currentSessionId: () => null,
+        reportDisconnectIntent: async () => { events.push("disconnect"); },
+        close: () => { events.push("link close"); },
+      } as never;
+    },
+    createHost: (cfg, options) => {
+      host = new AgentHost(cfg, { ...options,
+        probeFn: (deps) => new Promise(resolve => {
+          observed = deps!.signal!;
+          release = () => {
+            events.push("probe resolved");
+            resolve({ ok: true, models: probeRows, elapsed_ms: 1 });
+          };
+        }) });
+      // Keep the Host's own barrier from satisfying the CLI's obligation.
+      runSpy = vi.spyOn(host, "run").mockResolvedValue(undefined);
+      return host;
+    },
+  });
+  const settled = running.then(() => { done = true; });
+  try {
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledOnce());
+    await new Promise(resolve => setImmediate(resolve));
+    expect(observed!.aborted).toBe(true);
+    expect(done).toBe(false);
+    expect(events).toEqual([]);
+    release(); await settled;
+    expect(events).toEqual(["probe resolved", "disconnect", "link close"]);
+    expect(done).toBe(true);
+  } finally {
+    release?.(); await settled; runSpy?.mockRestore();
+    await host?.close();
   }
 });

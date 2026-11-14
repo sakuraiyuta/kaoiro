@@ -67,6 +67,8 @@ Host-owned startup and pre-Query manual probes opt into a separate POSIX
 process group. On shutdown the host aborts these probes and waits for their
 bounded TERM/KILL teardown (2 s grace and 2 s final wait) before the wrapper
 finishes. The launcher removes its private cwd after the tree is gone.
+Each probe also cleans its group before returning a result, so a manual
+refresh may wait up to the teardown bound.
 Cleanup failures produce diagnostics and retain the cwd; parsed catalog
 results are preserved. This requires orphan reaping and does not cover a
 wrapper killed externally with SIGKILL or descendants creating new groups.
