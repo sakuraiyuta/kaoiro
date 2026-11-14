@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-11-07
+last_updated: 2026-11-14
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -130,6 +130,8 @@ pass. A result without `reply_authorization` never carries it.
 A Claude fold with at least one provisional `reply_authorization` includes the
 same sentence once before its authorization lines; see
 [Claude recipient handoff](delivery.md#claude-recipient-handoff).
+Codex mid-turn steer text also includes the same sentence once before its
+authorization lines when at least one authorization is attached.
 
 Tickets become usable only at complete tool-result handoff. `expires_in_ms:
 300000` is the lifetime from that handoff, not remaining time when the model

@@ -1,5 +1,10 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it, vi } from "vitest";
+import {
+  InterAgentTool,
+  REPLY_AUTHORIZATION_USAGE_GUIDANCE,
+  formatInboundMessage,
+} from "@kaoiro/agent-common";
 import type { Envelope, InterAgentMessagePayload, WrapperConfig } from "@kaoiro/agent-common";
 import { runCodexCli } from "../src/cli.js";
 
@@ -180,11 +185,47 @@ describe("production Codex IA steer composition", () => {
     expect(result.linkOptions.interAgentDeliveryModes.early).toBe("steer");
     expect(result.steer).toHaveBeenCalledOnce();
     expect(result.send).not.toHaveBeenCalled();
+    const text = result.steer.mock.calls[0]![0];
+    const inboundText = formatInboundMessage(inbound());
+    const inboundIndex = text.indexOf(inboundText);
+    const guidanceIndex = text.indexOf(REPLY_AUTHORIZATION_USAGE_GUIDANCE);
+    const authorizationIndex = text.indexOf("reply_authorization: ");
+    expect(text.split(REPLY_AUTHORIZATION_USAGE_GUIDANCE)).toHaveLength(2);
+    expect(inboundIndex).toBeGreaterThanOrEqual(0);
+    expect(inboundIndex).toBeLessThan(guidanceIndex);
+    expect(guidanceIndex).toBeLessThan(authorizationIndex);
+    expect(REPLY_AUTHORIZATION_USAGE_GUIDANCE).toContain("in_reply_to");
+    expect(REPLY_AUTHORIZATION_USAGE_GUIDANCE).toContain("reply_ticket");
     expect(result.reports.map(report => [report.stage, report.handoff ?? report.reason])).toEqual([
       ["queued", undefined], ["submitted", "turn_steer_accepted"], ["settled", "turn_end"],
     ]);
     expect(result.acknowledged).toContain(1);
   });
+
+  it(
+    "omits reply-authorization guidance without prepared authorizations",
+    async () => {
+      const original = InterAgentTool.prototype.prepareFoldInput;
+      const spy = vi.spyOn(InterAgentTool.prototype, "prepareFoldInput");
+      spy.mockImplementation(function (
+        this: InterAgentTool,
+        ...args: Parameters<InterAgentTool["prepareFoldInput"]>
+      ) {
+        const prepared = original.call(this, ...args);
+        if (prepared !== undefined) prepared.authorizations = [];
+        return prepared;
+      });
+      try {
+        const result = await compose("app-server", true);
+        expect(result.steer).toHaveBeenCalledOnce();
+        expect(result.steer.mock.calls[0]![0]).not.toContain(
+          REPLY_AUTHORIZATION_USAGE_GUIDANCE,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("accepts an item before its response without submitting twice", async () => {
     const result = await compose("app-server", true, "early", "item-before-response");
