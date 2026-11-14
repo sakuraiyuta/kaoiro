@@ -2,12 +2,13 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync,
+  rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
@@ -337,6 +338,50 @@ async function runSettle(group: RunnerGroup, options: SettleOptions): Promise<Gr
   }
 }
 
+function observeRunnerGroup(pgid: number, presence: string): void {
+  try {
+    const names = new Set(["node", "MainThread", "claude", "codex", "git",
+      "rg", "sh", "bash", "dash", "bwrap", "sleep", "antigravity",
+      "cli.js", "probe.js", "index.js", "main.js", "codex.js",
+      "runner-cli.js", "app-server", "version", "head", "cat", "uname"]);
+    const word = (value: string) => {
+      const leaf = basename(value.replaceAll("\\", "/"));
+      if (names.has(leaf)) return leaf;
+      if (/^--?[a-zA-Z][a-zA-Z0-9_-]*(?:=.*)?$/.test(leaf)) {
+        return leaf.split("=", 1)[0]!;
+      }
+      return "<other>";
+    };
+    let unreadable = 0;
+    const members = [];
+    for (const entry of readdirSync("/proc")) {
+      if (!/^[0-9]+$/.test(entry)) continue;
+      try {
+        const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+        const end = stat.lastIndexOf(")");
+        const fields = stat.slice(end + 2).trim().split(/\s+/);
+        if (fields.length < 20) { unreadable += 1; continue; }
+        if (Number(fields[2]) !== pgid) continue;
+        let cmdline: string[] | null = null;
+        try {
+          cmdline = readFileSync(`/proc/${entry}/cmdline`, "utf8")
+            .split("\0").filter(Boolean).slice(0, 2).map(word);
+        } catch { unreadable += 1; }
+        members.push({ pid: Number(entry), ppid: Number(fields[1]),
+          pgid: Number(fields[2]), sid: Number(fields[3]), state: fields[0],
+          comm: word(stat.slice(stat.indexOf("(") + 1, end)),
+          cmdlineFirst2: cmdline, startTicks: fields[19] });
+      } catch { unreadable += 1; }
+    }
+    members.sort((a, b) => a.pid - b.pid);
+    console.info("[762-A3-DIAG] " + JSON.stringify({ pgid, presence,
+      count: members.length, unreadable, members }));
+  } catch {
+    // Observation failures must preserve the original assertion and cleanup.
+    try { console.info('[762-A3-DIAG] {"unreadable":true}'); } catch {}
+  }
+}
+
 function initialGroupFailures(
   group: RunnerGroup, kill: GroupKill = defaultGroupKill,
 ): string[] {
@@ -526,6 +571,7 @@ describe("default composition (issue #469)", () => {
           "turn_watchdog_inactivity_ms=80000(config) turn_watchdog_abort_grace_ms=5000(config) " +
             "permission_timeout_ms=7000 tool_timeout_ms=2000(config) epoch_idle_ms=3000(config)",
         );
+        if (runnerGroup) observeRunnerGroup(runnerGroup.pgid, "control");
       } catch (error) {
         primary = error;
       }
@@ -542,7 +588,22 @@ describe("default composition (issue #469)", () => {
         if (pid > 1) wrapperPids.add(pid);
       }
       failures.push(...(await verifyWrappersGone(wrapperPids)));
-      if (runnerGroup) failures.push(...initialGroupFailures(runnerGroup));
+      if (runnerGroup) {
+        const group = runnerGroup;
+        const observedKill: GroupKill = (pid, signal) => {
+          try {
+            const result = defaultGroupKill(pid, signal);
+            observeRunnerGroup(group.pgid, "present");
+            return result;
+          } catch (error) {
+            observeRunnerGroup(group.pgid,
+              (error as NodeJS.ErrnoException).code === "ESRCH"
+                ? "absent" : "unknown");
+            throw error;
+          }
+        };
+        failures.push(...initialGroupFailures(group, observedKill));
+      }
       for (const socket of endpoint.sockets) socket.destroy();
       await new Promise<void>((resolve) => endpoint.server.close(() => resolve()));
       // Retain bounded cleanup after recording the immediate-exit assertion.
