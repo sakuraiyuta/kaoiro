@@ -279,6 +279,21 @@ describe("host probe barrier", () => {
     await pending; await probe;
   });
 
+  it("a late manual result cannot publish after host close", async () => {
+    const events: unknown[] = [];
+    let release!: () => void;
+    const host = new AgentHost(config, { onState: event => events.push(event),
+      probeFn: () => new Promise(resolve => {
+        release = () => resolve({ ...result, models: [
+          { value: "new", display_name: "New" },
+        ] });
+      }) });
+    const manual = host.refreshCatalogFor();
+    const closing = host.close(); release();
+    await manual; await closing;
+    expect(events).toEqual([]);
+  });
+
   it("a synchronous probe throw cannot strand close", async () => {
     const host = new AgentHost(config, { onState: () => {},
       probeFn: () => { throw new Error("synchronous probe failure"); } });
