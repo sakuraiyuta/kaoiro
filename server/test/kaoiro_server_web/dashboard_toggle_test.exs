@@ -114,13 +114,15 @@ defmodule KaoiroServerWeb.DashboardToggleTest do
           {"/favicon.ico", "public", false},
           {"/robots.txt", "public", false}
         ] do
-      fixture(path, "cache fixture")
+      file = Path.join(:code.priv_dir(:kaoiro_server), "static" <> path)
+      body = if dashboard?, do: "cache fixture", else: File.read!(file)
+      if dashboard?, do: fixture(path, body)
 
       for query <- ["", "?ordinary=1", "?vsn=123"] do
         url = path <> query
         expected = if query == "?vsn=123" and policy == "public", do: @immutable, else: policy
         conn = get(build_conn(), url)
-        assert response(conn, 200) == "cache fixture"
+        assert response(conn, 200) == body
         assert get_resp_header(conn, "cache-control") == [expected]
         assert get_resp_header(conn, "vary") == ["Accept-Encoding"]
         head = head(build_conn(), url)
@@ -164,7 +166,7 @@ defmodule KaoiroServerWeb.DashboardToggleTest do
     for path <- ["/missing-spa-route", "/assets/__missing_cache_asset__.js"] do
       conn = get(build_conn(), path)
       assert conn.status == 404
-      refute get_resp_header(conn, "cache-control") == [@immutable]
+      assert get_resp_header(conn, "cache-control") == ["max-age=0, private, must-revalidate"]
     end
 
     baseline = get(build_conn(), "/api/health")

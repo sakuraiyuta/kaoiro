@@ -1,6 +1,6 @@
 ---
 title: Server configuration
-description: The server's .env variables, DETS persistence paths, and persona/footer mount points.
+description: The server's .env variables, DETS persistence paths, persona/footer mount points, and dashboard static caching.
 status: accepted
 last_updated: 2026-11-14
 related: [deployment]
@@ -98,7 +98,8 @@ not repeated here.
 
 ## Bundled dashboard static caching
 
-`:serve_dashboard` defaults to `true`. Setting it to `false` disables the
+`:serve_dashboard` is application configuration, not an environment variable,
+and defaults to `true`. Setting it to `false` disables the
 bundled dashboard's static files and makes `/` return 404; channels and APIs
 remain available ([ADR-0007](../../adr/0007-client-separation-reference-dashboard.md)).
 
@@ -106,7 +107,7 @@ remain available ([ADR-0007](../../adr/0007-client-separation-reference-dashboar
 |---|---|
 | `/assets/*` | `public, max-age=31536000, immutable` |
 | `/index.html`, `/notification-worker/*` | `no-cache` |
-| `/icons/*`, `/manifest.webmanifest` | `public` with ETag revalidation, unchanged |
+| `/icons/*`, `/manifest.webmanifest` | `public` with ETag revalidation (Plug default) |
 | `/favicon.ico`, `/robots.txt` | `public` with ETag revalidation, always served |
 
 `/assets/` is reserved for content-hashed build output. Document queries,

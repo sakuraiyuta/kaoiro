@@ -66,6 +66,7 @@ defmodule KaoiroServerWeb.Endpoint do
     gzip: not code_reloading?,
     only: ~w(favicon.ico robots.txt)
 
+  # Only content-hashed output belongs here: year-long client caches cannot be recalled.
   plug KaoiroServerWeb.DashboardStatic,
     at: "/",
     from: :kaoiro_server,
