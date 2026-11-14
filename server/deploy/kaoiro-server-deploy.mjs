@@ -10,14 +10,23 @@
 import { createHash } from "node:crypto";
 import { execChildSync } from "../../runner/deploy/child-process-environment.mjs";
 import {
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
+  statSync,
   statfsSync,
+  writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -154,6 +163,225 @@ function sha256File(path) {
 
 function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+const RESTORE_STAGE_PREFIX = ".restore-stage-";
+const ARCHIVE_COPY_CHUNK_BYTES = 64 * 1024;
+const OPEN_REGULAR_READ_FLAGS = (() => {
+  if (typeof fsConstants.O_NOFOLLOW !== "number" || typeof fsConstants.O_NONBLOCK !== "number") {
+    throw new Error("node:fs constants O_NOFOLLOW and O_NONBLOCK must be numbers");
+  }
+  // O_NONBLOCK prevents hanging in open(2) if the path was swapped for a FIFO.
+  return fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+})();
+
+function safeWarnStderr(message) {
+  try {
+    // Synchronous fd-2 write prevents unhandled async EPIPE errors when stderr is closed.
+    writeSync(2, Buffer.from(`${message}\n`, "utf8"));
+  } catch {
+    // Best-effort diagnostic only; never mask the primary DeployError or restored outcome.
+  }
+}
+
+function defaultWriteAllFd(fd, chunk) {
+  let offset = 0;
+  while (offset < chunk.length) {
+    offset += writeSync(fd, chunk, offset, chunk.length - offset, null);
+  }
+}
+
+const DEFAULT_ROLLBACK_DEPS = {
+  writeStageChunk: defaultWriteAllFd,
+  removeStageDir: (stagingDir) => rmSync(stagingDir, { recursive: true, force: true }),
+  readAvailableBytes,
+};
+
+function openRegularFileNoFollow(filePath) {
+  let fd;
+  try {
+    fd = openSync(filePath, OPEN_REGULAR_READ_FLAGS);
+  } catch (err) {
+    fail(`could not open archive ${filePath} safely (symlinks rejected with O_NOFOLLOW): ${err.message}`);
+  }
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    if (!stat.isFile()) {
+      fail(`archive path ${filePath} is not a regular file — refusing to read it`);
+    }
+    return { fd, stat };
+  } catch (err) {
+    closeSync(fd);
+    throw err;
+  }
+}
+
+function digestRegularFd(fd, onChunk = null) {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(ARCHIVE_COPY_CHUNK_BYTES);
+  while (true) {
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+    if (bytesRead === 0) break;
+    const chunk = bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead);
+    if (onChunk !== null) onChunk(chunk);
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
+
+function hashRegularFileNoFollow(filePath) {
+  const { fd } = openRegularFileNoFollow(filePath);
+  try {
+    return digestRegularFd(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function cleanupStagingDir(stagingDir, removeStageDir = DEFAULT_ROLLBACK_DEPS.removeStageDir) {
+  try {
+    removeStageDir(stagingDir);
+  } catch (err) {
+    safeWarnStderr(
+      `warning: failed to remove rollback staging directory ${stagingDir}: ${err.message} — remove ${stagingDir} manually`,
+    );
+  }
+}
+
+function sweepStaleRestoreStages(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    fail(`could not scan transaction directory ${dir} for stale rollback staging directories: ${err.message}`);
+  }
+  for (const entry of entries) {
+    if (!entry.name.startsWith(RESTORE_STAGE_PREFIX)) continue;
+    const stalePath = join(dir, entry.name);
+    try {
+      rmSync(stalePath, { recursive: true, force: true });
+    } catch (err) {
+      fail(
+        `could not remove stale rollback staging directory ${stalePath}: ${err.message} — inspect and remove ${stalePath} manually before retrying rollback`,
+      );
+    }
+  }
+}
+
+function stageArchiveCopyForRollback(dir, sourcePath, expectedSha256, expectedEntries, deps) {
+  const { fd: srcFd, stat: srcStat } = openRegularFileNoFollow(sourcePath);
+  let srcClosed = false;
+  const closeSrc = () => {
+    if (!srcClosed) {
+      srcClosed = true;
+      closeSync(srcFd);
+    }
+  };
+  let stagingDir = null;
+  let dstFd = null;
+  const closeDst = () => {
+    if (dstFd !== null) {
+      const toClose = dstFd;
+      dstFd = null;
+      closeSync(toClose);
+    }
+  };
+  try {
+    const availBytes = deps.readAvailableBytes(dir);
+    if (!Number.isFinite(availBytes) || availBytes < 0 || BigInt(Math.floor(availBytes)) < srcStat.size) {
+      fail(
+        `insufficient free space at ${dir} to stage pre-deploy archive copy before restore: need ${srcStat.size} bytes, only ${availBytes} bytes available — refusing before stopping or touching anything`,
+      );
+    }
+
+    stagingDir = mkdtempSync(join(dir, RESTORE_STAGE_PREFIX));
+    if ((statSync(stagingDir).mode & 0o777) !== 0o700) {
+      fail(`rollback staging directory ${stagingDir} does not have private 0700 permissions`);
+    }
+    const stagedPath = join(stagingDir, "archive.tar.gz");
+    dstFd = openSync(stagedPath, "wx", 0o400);
+
+    let copiedSha;
+    try {
+      copiedSha = digestRegularFd(srcFd, (chunk) => deps.writeStageChunk(dstFd, chunk));
+      fsyncSync(dstFd);
+    } catch (err) {
+      fail(
+        `failed while staging pre-deploy archive copy at ${stagedPath}: ${err.message}`,
+        err instanceof DeployError ? err.exitCode : 1,
+        err?.code ? { code: err.code } : undefined,
+      );
+    }
+    closeDst();
+    closeSrc();
+    fsyncExistingPath(stagingDir);
+    if (copiedSha !== expectedSha256) {
+      fail(
+        `pre-deploy archive at ${sourcePath} does not match its recorded sha256 (expected ${expectedSha256}, got ${copiedSha}) — refusing before stopping or touching anything`,
+      );
+    }
+    try {
+      execChildSync("authority", "tar", ["tzf", stagedPath]);
+    } catch (err) {
+      fail(
+        `pre-deploy archive at ${stagedPath} failed full-traversal verification: ${err.message} — refusing before stopping or touching anything`,
+      );
+    }
+    let stagedListing;
+    try {
+      stagedListing = listArchiveVerbose(stagedPath);
+    } catch (err) {
+      fail(
+        `pre-deploy archive at ${stagedPath} failed listing for required_entries verification: ${err.message} — refusing before stopping or touching anything`,
+      );
+    }
+    const stagedEntries = parseTarEntries(stagedListing);
+    if (!requiredEntriesMatch(stagedEntries, expectedEntries)) {
+      fail(
+        `pre-deploy archive at ${stagedPath} does not match the recorded required_entries (expected ${JSON.stringify(expectedEntries)}, got ${JSON.stringify(stagedEntries)}) — refusing before stopping or touching anything`,
+      );
+    }
+    return { stagingDir, stagedPath };
+  } catch (err) {
+    closeDst();
+    closeSrc();
+    if (stagingDir !== null) {
+      cleanupStagingDir(stagingDir, deps.removeStageDir);
+    }
+    throw err;
+  }
+}
+
+function verifyStagedArchiveInContainer(bin, stagingDir, expectedSha256) {
+  ensureAlpineImage(bin);
+  let output;
+  try {
+    output = runDocker(bin, [
+      "run",
+      "--rm",
+      "-v",
+      `${stagingDir}:/backup:ro`,
+      ALPINE_IMAGE,
+      "sha256sum",
+      "/backup/archive.tar.gz",
+    ]);
+  } catch (err) {
+    fail(
+      `container readability check of staged pre-deploy archive in ${stagingDir} failed: ${err.message} — refusing before stopping or touching anything`,
+    );
+  }
+  const match = /^([0-9a-f]{64})(?:\s|$)/.exec(String(output ?? ""));
+  if (!match) {
+    fail(
+      `container sha256sum of staged pre-deploy archive in ${stagingDir} returned unexpected output ${JSON.stringify(output)} — refusing before stopping or touching anything`,
+    );
+  }
+  const digest = match[1];
+  if (digest !== expectedSha256) {
+    fail(
+      `container sha256sum of staged pre-deploy archive in ${stagingDir} (${digest}) does not match recorded sha256 (${expectedSha256}) — refusing before stopping or touching anything`,
+    );
+  }
 }
 
 function normalizeJson(value) {
@@ -2764,7 +2992,12 @@ function readRollbackDecision(dir, transactionId) {
   return { journal, operation: entry.operation, oldImageId, oldSha, oldContainerId, preflightContainer, destructive };
 }
 
-export function runRollback(flags, config) {
+export function runRollback(flags, config, deps = {}) {
+  const stageDeps = {
+    writeStageChunk: deps.writeStageChunk ?? DEFAULT_ROLLBACK_DEPS.writeStageChunk,
+    removeStageDir: deps.removeStageDir ?? DEFAULT_ROLLBACK_DEPS.removeStageDir,
+    readAvailableBytes: deps.readAvailableBytes ?? DEFAULT_ROLLBACK_DEPS.readAvailableBytes,
+  };
   const repo = flags.repo ?? process.cwd();
   const serverDir = resolve(repo, "server");
   warnIgnoredReleaseDescriptor(serverDir);
@@ -2825,6 +3058,7 @@ export function runRollback(flags, config) {
   // volume (measured: a deterministic injection at the mkdir call this
   // acquireLock makes reproduced exactly that — 2 wipes for 1 transaction).
   const locks = acquireDeploymentLocks(backupRoot, serverDir, repo, flags);
+  let activeStagingDir = null;
   try {
     const decision = readRollbackDecision(dir, flags.transaction);
     let journal = decision.journal;
@@ -2886,6 +3120,7 @@ export function runRollback(flags, config) {
     }
 
     // --- destructive path ---
+    sweepStaleRestoreStages(dir);
     const manifest = readManifest(dir);
     const volumeId = manifest.volume_id;
     const recoveryComposeFile = recoveryComposePath(dir);
@@ -2932,40 +3167,15 @@ export function runRollback(flags, config) {
         `old image ${oldImageId} (this transaction's own rollback target) no longer exists — refusing before stopping or touching anything: ${err.message}`,
       );
     }
-    const preflightArchiveSha = sha256File(manifest.archive.path);
-    if (preflightArchiveSha !== manifest.archive.sha256) {
-      fail(
-        `pre-deploy archive at ${manifest.archive.path} does not match its recorded sha256 (expected ${manifest.archive.sha256}, got ${preflightArchiveSha}) — refusing before stopping or touching anything`,
-      );
-    }
-    // This tzf pass and the listing below both read the whole archive. The
-    // tzf pass is kept on purpose: it reports an integrity failure with its
-    // own message, distinct from the listing or the required_entries check.
-    try {
-      execChildSync("authority", "tar", ["tzf", manifest.archive.path]);
-    } catch (err) {
-      fail(
-        `pre-deploy archive at ${manifest.archive.path} failed full-traversal verification: ${err.message} — refusing before stopping or touching anything`,
-      );
-    }
-    // issue #552 S1: the restore-time check below runs only after the wipe.
-    // Check the recorded required_entries against this archive's own listing
-    // here, so a manifest recorded before the LC_ALL=C change (UTF-8 form of
-    // a non-ASCII name) is refused before any stop, archive, or wipe.
-    let preflightListing;
-    try {
-      preflightListing = listArchiveVerbose(manifest.archive.path);
-    } catch (err) {
-      fail(
-        `pre-deploy archive at ${manifest.archive.path} failed listing for required_entries verification: ${err.message} — refusing before stopping or touching anything`,
-      );
-    }
-    const preflightEntries = parseTarEntries(preflightListing);
-    if (!requiredEntriesMatch(preflightEntries, manifest.required_entries)) {
-      fail(
-        `pre-deploy archive at ${manifest.archive.path} does not match the recorded required_entries (expected ${JSON.stringify(manifest.required_entries)}, got ${JSON.stringify(preflightEntries)}) — refusing before stopping or touching anything`,
-      );
-    }
+    const staged = stageArchiveCopyForRollback(
+      dir,
+      manifest.archive.path,
+      manifest.archive.sha256,
+      manifest.required_entries,
+      stageDeps,
+    );
+    activeStagingDir = staged.stagingDir;
+    verifyStagedArchiveInContainer(bin, staged.stagingDir, manifest.archive.sha256);
     const upEntry = journal.history.find((entry) => entry.phase === PHASE.UP);
     const recordedTargetId = upEntry?.observation?.container_id;
     const candidates = rollbackCandidateIds(bin, serverDir, recoveryArgs, volumeId, targetArgs);
@@ -3053,19 +3263,19 @@ export function runRollback(flags, config) {
       validateJournalAgainstStateMachine,
     );
 
-    // Re-verify the PRE-DEPLOY archive right before the destructive
+    // Re-verify the staged PRE-DEPLOY archive right before the destructive
     // wipe — a changed or corrupted archive must refuse to restore
     // rather than wipe the volume onto nothing recoverable.
-    const preDeployArchiveSha = sha256File(manifest.archive.path);
+    const preDeployArchiveSha = hashRegularFileNoFollow(staged.stagedPath);
     if (preDeployArchiveSha !== manifest.archive.sha256) {
       fail(
-        `pre-deploy archive at ${manifest.archive.path} does not match its recorded sha256 (expected ${manifest.archive.sha256}, got ${preDeployArchiveSha}) — refusing to restore from a changed archive`,
+        `staged pre-deploy archive at ${staged.stagedPath} does not match its recorded sha256 (expected ${manifest.archive.sha256}, got ${preDeployArchiveSha}) — refusing to restore from a changed archive`,
       );
     }
     try {
-      execChildSync("authority", "tar", ["tzf", manifest.archive.path]);
+      execChildSync("authority", "tar", ["tzf", staged.stagedPath]);
     } catch (err) {
-      fail(`pre-deploy archive at ${manifest.archive.path} failed full-traversal verification: ${err.message}`);
+      fail(`staged pre-deploy archive at ${staged.stagedPath} failed full-traversal verification: ${err.message}`);
     }
 
     // クロエ round 5 review SF-9: checkpointed immediately before the
@@ -3101,12 +3311,16 @@ export function runRollback(flags, config) {
       "-v",
       `${volumeId}:/data`,
       "-v",
-      `${dirname(manifest.archive.path)}:/backup:ro`,
+      `${staged.stagingDir}:/backup:ro`,
       ALPINE_IMAGE,
       "sh",
       "-c",
-      `find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar xzf /backup/${basename(manifest.archive.path)} -C /data`,
+      "find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar xzf /backup/archive.tar.gz -C /data",
     ]);
+    // Release staged space before writing rollback-restore-verify.tar.gz; a
+    // removal failure warns synchronously rather than failing a completed restore.
+    cleanupStagingDir(activeStagingDir, stageDeps.removeStageDir);
+    activeStagingDir = null;
 
     // Re-tar the JUST-RESTORED volume and confirm it matches the
     // manifest's own required_entries EXACTLY — proves the restore did
@@ -3195,6 +3409,9 @@ export function runRollback(flags, config) {
   } catch (err) {
     throw appendRecoveryHint(err, dir, flags.transaction);
   } finally {
+    if (activeStagingDir !== null) {
+      cleanupStagingDir(activeStagingDir, stageDeps.removeStageDir);
+    }
     releaseDeploymentLocks(locks);
   }
 }

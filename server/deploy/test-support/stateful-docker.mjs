@@ -7,6 +7,7 @@
 // effect, `partial` applies a defined partial effect and then kills, and
 // `corrupt` writes a damaged archive and returns success.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -201,6 +202,21 @@ function run(rest) {
     for (const entry of readdirSync(state.volume.dir)) rmSync(join(state.volume.dir, entry), { recursive: true, force: true });
     if (afterEffect === "partial") return finish();
     execFileSync("tar", ["xzf", join(host, name), "-C", state.volume.dir]);
+    return finish();
+  }
+  if (tail[0] === "sha256sum" && tail.length === 2 && tail[1].startsWith("/backup/")) {
+    const host = hostFor(":/backup:ro");
+    if (!host) return die(`missing :/backup:ro mount: ${joined}`, 1);
+    if (afterEffect === "corrupt") {
+      out(`${"0".repeat(64)}  ${tail[1]}`);
+      return finish();
+    }
+    try {
+      const digest = createHash("sha256").update(readFileSync(join(host, tail[1].slice("/backup/".length)))).digest("hex");
+      out(`${digest}  ${tail[1]}`);
+    } catch (err) {
+      return die(`sha256sum: ${tail[1]}: ${err.message}`, 1);
+    }
     return finish();
   }
   return die(`unmodelled run: ${joined}`, 2);

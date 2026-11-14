@@ -15,7 +15,7 @@ import fs, {
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, test } from "node:test";
 import { CHILD_PATH, childEnvironmentProfile } from "../../../runner/deploy/child-process-environment.mjs";
@@ -756,6 +756,31 @@ JS
             fi
             ;;
         esac
+        ;;
+      *"sha256sum /backup/"*)
+        prev=""
+        hostdir=""
+        infile=""
+        for arg in "$@"; do
+          case "$prev" in
+            -v)
+              case "$arg" in
+                *:/backup:ro) hostdir=\${arg%:/backup:ro} ;;
+                *:/backup) hostdir=\${arg%:/backup} ;;
+              esac
+              ;;
+          esac
+          case "$arg" in
+            /backup/*) infile=\${arg#/backup/} ;;
+          esac
+          prev=$arg
+        done
+        if [ -z "$hostdir" ] || [ -z "$infile" ] || [ ! -f "$hostdir/$infile" ]; then
+          printf 'sha256sum: missing backup file\n' >&2
+          exit 1
+        fi
+        sha256sum "$hostdir/$infile"
+        exit $?
         ;;
       *)
         # Pre-archive empty-volume guard (find -mindepth 1 -maxdepth 1
@@ -5226,11 +5251,14 @@ test("runRollback (destructive) runs the full stop/forensic/restore/retag/up/hea
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   const dir = join(backupRoot, transactionId);
-  assert.deepEqual(children.filter(call => call.file === "tar").map(call => call.args), [
-    ["tzf", join(dir, "archive.tar.gz")],
-    ["tzf", join(dir, "rollback-forensic.tar.gz")],
-    ["tzf", join(dir, "archive.tar.gz")],
-  ]);
+  const tarCalls = children.filter(call => call.file === "tar").map(call => call.args);
+  assert.equal(tarCalls.length, 3);
+  assert.equal(tarCalls[0][0], "tzf");
+  assert.equal(dirname(dirname(tarCalls[0][1])), dir);
+  assert.ok(basename(dirname(tarCalls[0][1])).startsWith(".restore-stage-"));
+  assert.equal(basename(tarCalls[0][1]), "archive.tar.gz");
+  assert.deepEqual(tarCalls[1], ["tzf", join(dir, "rollback-forensic.tar.gz")]);
+  assert.deepEqual(tarCalls[2], ["tzf", tarCalls[0][1]]);
   assert.ok(children.some(call => call.file === curlBin));
   assertPreparedChildren(children);
   assert.equal(result.destructive, true);
