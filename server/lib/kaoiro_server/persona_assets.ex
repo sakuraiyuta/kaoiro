@@ -168,8 +168,9 @@ defmodule KaoiroServer.PersonaAssets do
 
   @doc """
   Short content-hash used as the `?v=` cache-busting param. Single
-  source for manifest URL generation and the controller's check that
-  only manifest-issued `?v=` values earn immutable caching.
+  source for manifest URL generation and the controller's check that a
+  sprite response earns the long-lived private cache only when `?v=`
+  equals this value for the bytes being sent.
   """
   def version_param(hash), do: String.slice(hash, 0, 12)
 

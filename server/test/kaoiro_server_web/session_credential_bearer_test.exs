@@ -84,6 +84,13 @@ defmodule KaoiroServerWeb.SessionCredentialBearerTest do
     payload
   end
 
+  defp sprite_url(conn, token) do
+    %{"personas" => personas} =
+      conn |> bearer(token) |> get("/api/personas") |> json_response(200)
+
+    personas["ao"]["states"]["idle"]["url"]
+  end
+
   describe "valid bearer" do
     test "authenticates persona HTTP, ticket and refresh", %{conn: conn} do
       token = token_for(@ao)
@@ -105,6 +112,27 @@ defmodule KaoiroServerWeb.SessionCredentialBearerTest do
           conn |> put_req_header("authorization", "#{scheme} #{token}") |> get("/api/personas")
 
         assert conn.status == 200, scheme
+      end
+    end
+  end
+
+  describe "persona sprite images" do
+    test "a valid bearer gets the long-lived private cache on a manifest URL", %{conn: conn} do
+      token = token_for(@ao)
+      sent = conn |> bearer(token) |> get(sprite_url(conn, token))
+
+      assert sent.status == 200
+      assert get_resp_header(sent, "cache-control") == ["private, max-age=31536000, immutable"]
+    end
+
+    test "rejected and malformed bearers stay non-storable on a manifest URL", %{conn: conn} do
+      url = sprite_url(conn, token_for(@ao))
+
+      for {header, status} <- [{"Bearer not-a-token", 401}, {"Bearer !!", 400}] do
+        sent = conn |> put_req_header("authorization", header) |> get(url)
+
+        assert sent.status == status, header
+        assert get_resp_header(sent, "cache-control") == ["private, no-store"], header
       end
     end
   end

@@ -34,11 +34,25 @@ defmodule KaoiroServerWeb.PersonaController do
     with {:ok, scope} <- PersonaDelivery.scope(conn.assigns.persona_role),
          {:ok, %{path: path}} <- PersonaDelivery.fetch_file(scope, sprite_set, file),
          {:ok, bytes} <- File.read(path) do
-      conn |> put_resp_content_type("image/png", nil) |> send_resp(200, bytes)
+      conn
+      |> cache_versioned(bytes)
+      |> put_resp_content_type("image/png", nil)
+      |> send_resp(200, bytes)
     else
       {:error, :unavailable} -> unavailable(conn)
       _ -> conn |> put_status(:not_found) |> json(%{"error" => "not_found"})
     end
+  end
+
+  # Hash the bytes being sent, not the snapshot's stored hash: a cache slot
+  # rewritten or altered under a published snapshot must not be pinned in a
+  # browser for a year under a URL that names other content.
+  defp cache_versioned(conn, bytes) do
+    hash = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+    if conn.query_params["v"] == PersonaAssets.version_param(hash),
+      do: put_resp_header(conn, "cache-control", "private, max-age=31536000, immutable"),
+      else: conn
   end
 
   defp unavailable(conn),

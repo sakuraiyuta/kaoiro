@@ -4,6 +4,8 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
   # async: false ones, so this must serialize with it.
   use KaoiroServerWeb.ConnCase, async: false
 
+  @long_lived "private, max-age=31536000, immutable"
+
   describe "GET /api/personas" do
     setup %{conn: conn} do
       previous = Application.get_env(:kaoiro_server, :client_tokens)
@@ -88,6 +90,10 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
 
         assert response(served, 200)
         assert served.resp_body == bin
+
+        assert get_resp_header(served, "cache-control") ==
+                 [@long_lived],
+               state
       end
 
       [first_line | _] =
@@ -267,17 +273,26 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert conn.resp_body == File.read!(path)
     end
 
-    test "manifest URLs remain private and non-storable", %{conn: conn} do
-      %{"personas" => personas} =
-        get(conn, "/api/personas") |> json_response(200)
+    test "manifest URLs get the long-lived private cache on GET, HEAD and conditional GET",
+         %{conn: conn} do
+      url = state_url(conn, "idle")
+      {:ok, %{path: path}} = KaoiroServer.PersonaAssets.fetch_file("ao", "idle.png")
 
-      url = personas["ao"]["states"]["idle"]["url"]
-      conn = get(conn, url)
+      conditional =
+        conn
+        |> put_req_header("if-none-match", "*")
+        |> put_req_header("if-modified-since", "Wed, 21 Oct 2099 07:28:00 GMT")
 
-      assert response(conn, 200)
+      for {label, sent} <- [
+            {"GET", get(conn, url)},
+            {"HEAD", head(conn, url)},
+            {"conditional GET", get(conditional, url)}
+          ] do
+        assert sent.status == 200, label
+        assert get_resp_header(sent, "cache-control") == [@long_lived], label
+      end
 
-      assert get_resp_header(conn, "cache-control") ==
-               ["private, no-store"]
+      assert get(conditional, url).resp_body == File.read!(path)
     end
 
     test "unrecognized versions remain private and non-storable", %{conn: conn} do
@@ -287,9 +302,25 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert get_resp_header(conn, "cache-control") == ["private, no-store"]
     end
 
+    test "another state's version or a non-string version stays non-storable", %{conn: conn} do
+      idle_v = version_of(state_url(conn, "idle"))
+      thinking_v = version_of(state_url(conn, "thinking"))
+      refute idle_v == thinking_v
+
+      for path <- [
+            "/personas/ao/idle.png?v=#{thinking_v}&auth=1",
+            "/personas/ao/idle.png?v[]=#{idle_v}&auth=1"
+          ] do
+        sent = get(conn, path)
+        assert sent.status == 200, path
+        assert get_resp_header(sent, "cache-control") == ["private, no-store"], path
+      end
+    end
+
     test "未知のファイルは 404", %{conn: conn} do
-      conn = get(conn, "/personas/ao/nope.png")
+      conn = get(conn, "/personas/ao/nope.png?v=#{version_of(state_url(conn, "idle"))}&auth=1")
       assert json_response(conn, 404) == %{"error" => "not_found"}
+      assert get_resp_header(conn, "cache-control") == ["private, no-store"]
     end
 
     test "パストラバーサルは 404", %{conn: conn} do
@@ -297,4 +328,11 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert conn.status == 404
     end
   end
+
+  defp state_url(conn, state) do
+    %{"personas" => personas} = get(conn, "/api/personas") |> json_response(200)
+    personas["ao"]["states"][state]["url"]
+  end
+
+  defp version_of(url), do: URI.decode_query(URI.parse(url).query)["v"]
 end

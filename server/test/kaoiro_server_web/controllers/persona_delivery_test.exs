@@ -3,6 +3,8 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
   alias KaoiroServer.{AgentStates, PersonaAssets, PersonaPackFixture}
   alias KaoiroServerWeb.PersonaDelivery
 
+  @long_lived "private, max-age=31536000, immutable"
+
   setup do
     saved =
       Map.new(
@@ -82,7 +84,7 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
 
   defp denied_images(session, set) do
     for file <- ~w(idle.png fatigued.png missing.png),
-        query <- ["", "?v=old-public", "?v=old-public&auth=1"],
+        query <- ["", "?v=old-public", "?v=old-public&auth=1"] ++ current_query(set, file),
         method <- [:get, :head],
         headers <- [
           [],
@@ -102,6 +104,20 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
       assert get_resp_header(conn, "last-modified") == []
       assert conn.resp_body == if(method == :head, do: "", else: ~s({"error":"not_found"}))
     end
+  end
+
+  # The query a manifest would emit for the current bytes, so a denial is
+  # also checked where a long-lived cache could otherwise apply.
+  defp current_query(set, file) do
+    case PersonaAssets.fetch_file(set, file) do
+      {:ok, %{hash: hash}} -> ["?v=#{PersonaAssets.version_param(hash)}&auth=1"]
+      :error -> []
+    end
+  end
+
+  defp current_url(set, file \\ "idle.png") do
+    [query] = current_query(set, file)
+    "/personas/#{set}/#{file}" <> query
   end
 
   defp synthetic_scope(id, set) do
@@ -252,7 +268,12 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     [_, _, u, _] = ctx.ids
     state(u, "unique", "unique")
 
-    for path <- ["/api/personas", "/personas/unique/idle.png", "/personas/absent/no.png?v=old"] do
+    for path <- [
+          "/api/personas",
+          "/personas/unique/idle.png",
+          current_url("unique"),
+          "/personas/absent/no.png?v=old"
+        ] do
       for method <- [:get, :head] do
         conn =
           build_conn()
@@ -269,10 +290,11 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     manifest = body(session)
     url = manifest["personas"]["unique"]["states"]["idle"]["url"]
     assert url =~ "&auth=1"
+    assert url == current_url("unique")
+    assert get_resp_header(get(session, url), "cache-control") == [@long_lived]
 
     for path <- [
           "/api/personas",
-          url,
           "/personas/unique/idle.png",
           "/personas/unique/missing.png"
         ] do
@@ -283,7 +305,9 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     assert get(session, "/api/personas/absent").status == 403
     Application.put_env(:kaoiro_server, :client_tokens, "o:operator")
     assert get(session, "/api/personas").status == 401
-    assert get(session, url).status == 401
+    revoked = get(session, url)
+    assert revoked.status == 401
+    assert get_resp_header(revoked, "cache-control") == ["private, no-store"]
     Application.put_env(:kaoiro_server, :client_tokens, "")
     assert get(build_conn(), "/api/personas").status == 401
   end
@@ -395,6 +419,45 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     refute body(session)["version"] == visible["version"]
   end
 
+  test "a pack update moves the long-lived cache to the new URL only", ctx do
+    session = cookie("o")
+    old_url = current_url("unique")
+    assert get_resp_header(get(session, old_url), "cache-control") == [@long_lived]
+
+    PersonaPackFixture.write!(ctx.ingest, "u.zip", "unique", "unique", source: "fuji-1.0.2.zip")
+    :ok = PersonaAssets.rebuild()
+    new_url = body(session)["personas"]["unique"]["states"]["idle"]["url"]
+    refute new_url == old_url
+    {:ok, %{path: path}} = PersonaAssets.fetch_file("unique", "idle.png")
+
+    fresh = get(session, new_url)
+    assert fresh.resp_body == File.read!(path)
+    assert get_resp_header(fresh, "cache-control") == [@long_lived]
+
+    stale = get(session, old_url)
+    assert stale.status == 200
+    assert stale.resp_body == File.read!(path)
+    assert get_resp_header(stale, "cache-control") == ["private, no-store"]
+  end
+
+  # The setup's private cache dir keeps the altered slot away from other tests.
+  test "bytes that no longer match the published hash are not pinned" do
+    session = cookie("o")
+    url = current_url("unique")
+    {:ok, %{path: path}} = PersonaAssets.fetch_file("unique", "idle.png")
+    altered = File.read!(path) <> "altered"
+    File.write!(path, altered)
+
+    sent = get(session, url)
+    assert sent.status == 200
+    assert sent.resp_body == altered
+    assert get_resp_header(sent, "cache-control") == ["private, no-store"]
+
+    v = :crypto.hash(:sha256, altered) |> Base.encode16(case: :lower)
+    matching = get(session, "/personas/unique/idle.png?v=#{PersonaAssets.version_param(v)}")
+    assert get_resp_header(matching, "cache-control") == [@long_lived]
+  end
+
   for method <- [:get, :head],
       conditional <- [false, true],
       file <- ["idle.png", "fatigued.png"] do
@@ -457,29 +520,35 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     assert get(conn, "/personas/unique/idle.png").status == 200
     File.write!(path, "")
 
-    for url <- ["/api/personas", "/personas/unique/idle.png", "/personas/absent/idle.png"] do
-      assert get(conn, url).status == 401
+    for url <- [
+          "/api/personas",
+          "/personas/unique/idle.png",
+          current_url("unique"),
+          "/personas/absent/idle.png"
+        ] do
+      denied = get(conn, url)
+      assert denied.status == 401
+      assert get_resp_header(denied, "cache-control") == ["private, no-store"]
     end
   end
 
   test "corrupt/unknown credentials and disabled dashboard cannot bypass authentication" do
     Application.put_env(:kaoiro_server, :serve_dashboard, false)
 
-    for path <- ["/api/personas", "/personas/shared/idle.png", "/personas/absent/idle.png"] do
-      assert build_conn()
-             |> put_req_cookie("_kaoiro_server_key", "corrupt")
-             |> get(path)
-             |> response(401)
-
-      assert build_conn()
-             |> init_test_session(%{"client_token" => "unknown"})
-             |> get(path)
-             |> response(401)
-
-      assert build_conn()
-             |> init_test_session(%{"client_token" => %{}})
-             |> get(path)
-             |> response(401)
+    for path <- [
+          "/api/personas",
+          "/personas/shared/idle.png",
+          current_url("shared"),
+          "/personas/absent/idle.png"
+        ],
+        conn <- [
+          put_req_cookie(build_conn(), "_kaoiro_server_key", "corrupt"),
+          init_test_session(build_conn(), %{"client_token" => "unknown"}),
+          init_test_session(build_conn(), %{"client_token" => %{}})
+        ] do
+      denied = get(conn, path)
+      assert response(denied, 401)
+      assert get_resp_header(denied, "cache-control") == ["private, no-store"]
     end
 
     assert get(cookie("o"), "/api/personas").status == 200
