@@ -12,7 +12,8 @@ Issue: [#551](https://github.com/sakuraiyuta/kaoiro/issues/551).
   `3cecdbef4536cc1b559f087314b96d729856924eac71fffffb569e815acaa403`.
 - The production `runCodexCli` composition ran through the host, bridge,
   session, and native app-server using a local Responses provider and a fake
-  Phoenix loopback. No real model or credentials were used.
+  Phoenix loopback in an isolated container. No real model or credentials were
+  used.
 - Four cases covered six wrapper lifecycles and 18 model requests. In all four
   cases, the tool definition reached the model as an `exec` lookup result;
   top-level `tools` were absent from all 18 requests.
