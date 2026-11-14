@@ -1,7 +1,7 @@
 ---
 title: Authentication and authorization
 status: accepted
-last_updated: 2026-11-10
+last_updated: 2026-11-14
 ---
 
 # Authentication and authorization
@@ -126,7 +126,11 @@ It live-resolves the request's credential, the cookie or a device access token
 in `Authorization: Bearer` ([below](#device-authorization-grant)), and accepts
 viewer/operator/admin only. Anonymous, invalid and revoked credentials receive
 401 before lookup; no token in a URL, a form body or a WS ticket substitutes for
-them. Responses use `Cache-Control: private, no-store`.
+them. Responses use `Cache-Control: private, no-store`, except a successful
+image response whose `v` matches the bytes sent, which the client may cache
+privately for up to a year; see
+[persona delivery](../protocol/persona-delivery.md) for the rule and the
+accepted residual exposure.
 
 Operator/admin receive all packs. Viewer access uses the shared channel viewer
 projection over non-disconnected `AgentStates` entries, canonical persona

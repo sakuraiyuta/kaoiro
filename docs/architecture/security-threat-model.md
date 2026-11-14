@@ -1,7 +1,7 @@
 ---
 title: Security threat model
 status: accepted
-last_updated: 2026-10-03
+last_updated: 2026-11-14
 ---
 
 # Security threat model
@@ -56,11 +56,16 @@ records threats and mitigations before full operation or external release
    access is limited to unambiguous packs in the logical running-agent list.
    An unused claimant can make a set ambiguous, so filtering only manifest
    entries or checking only active pack IDs is insufficient. Denied direct
-   images use generic 404, filtered versions exclude hidden content, and all
-   protected responses are private/no-store. Already downloaded data and
-   already authorized in-flight responses cannot be retracted. See
-   [persona delivery](../reference/protocol/persona-delivery.md) for snapshot,
-   cache-migration and collision limitations.
+   images use generic 404 and filtered versions exclude hidden content. The
+   manifest and every error response are private/no-store; a successful image
+   response whose `v` matches the bytes sent is cached privately by the client
+   for up to a year. Accepted residual exposure (operator, 2026-11-14): images
+   a client already cached stay displayable after revocation, logout or a
+   lowered role, and to anyone using the same browser profile, without
+   contacting the server. Already authorized in-flight responses cannot be
+   retracted either. See
+   [persona delivery](../reference/protocol/persona-delivery.md) for the cache
+   rule, snapshot, marker and collision limitations.
 
 ### Mitigations
 

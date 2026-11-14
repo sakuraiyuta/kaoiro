@@ -148,3 +148,9 @@ The same-room boundary on the director-requested peer session reset.
 The AgentDetail engine / kaoiro tab split.
 
 - [detail-tabs-item-set-2026-11-11.md](issue-1075/detail-tabs-item-set-2026-11-11.md) — the rendered item set per input before and after the split (all 19 status row kinds, equal per input), and the tabs in a viewer session.
+
+## issue-1105/
+
+Browser caching of persona sprite images.
+
+- [browser-cache-2026-11-14.md](issue-1105/browser-cache-2026-11-14.md) — real endpoint headers and Chromium cache reuse before the design and on the implementation: repeats reach the server 0 times under the long-lived private cache, re-download under no-store once the image is collected or the page reloads, and 401 for uncached URLs after revocation.

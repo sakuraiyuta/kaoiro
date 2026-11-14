@@ -2,7 +2,7 @@
 title: Network and login runbook
 description: nginx reverse proxy, the direct-VPN deployment alternative, and configuring OAuth login.
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-14
 related: [deployment]
 ---
 
@@ -243,11 +243,14 @@ constraints; changing only the WebSocket URL does not authenticate asset
 requests there. Use a same-origin reverse proxy. Do not put credentials in
 image URLs or enable permissive credentialed CORS as a workaround.
 
-Persona responses are private/no-store. `auth=1` in emitted image URLs is a
-fixed, nonsecret migration marker, preventing reuse of legacy public immutable
-URLs in the updated dashboard. Old tabs and already downloaded images remain
-outside revocation; the server cannot erase those bytes. No-store can repeat
-image transfers when expressions change or the session reconnects. Viewer
+The persona manifest and error responses are private/no-store. Sprite images
+requested through manifest URLs are cached privately by the browser for up to
+a year, so expression changes and reloads reuse them without a transfer.
+`auth=1` in emitted image URLs is a fixed, nonsecret marker that keeps them
+apart from legacy public immutable URLs. Old tabs and cached images remain
+outside revocation, including after logout or a lowered role; the server
+cannot erase those bytes. After a pack update, reload the dashboard so it
+takes the new image URLs. Viewer
 manifests omit inactive and ambiguous packs, and image errors use CSS faces.
 See [persona delivery](../reference/protocol/persona-delivery.md) for the full
 policy and retry behavior. Login-less screenshot fixtures use CSS faces; tests

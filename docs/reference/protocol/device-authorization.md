@@ -2,7 +2,7 @@
 title: Device authorization grant
 description: The HTTP contract a native client (kaoiro-client.nvim) follows to log in through the browser and use a device access token.
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-14
 related_adrs: [70, 13, 42]
 ---
 
@@ -178,5 +178,5 @@ be needed soon, then run the flow again once refresh answers 401.
 Responses of the native endpoints, `GET /device`, the approval API, ticket and
 refresh carry `Cache-Control: no-store` and `Pragma: no-cache`, except the
 https redirect a production server's `Plug.SSL` sends before the request
-reaches the application. Persona HTTP keeps its own
-`Cache-Control: private, no-store`.
+reaches the application. Persona HTTP has its own cache policy; see
+[persona delivery](persona-delivery.md).

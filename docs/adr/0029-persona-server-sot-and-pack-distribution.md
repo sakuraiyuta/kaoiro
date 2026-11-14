@@ -238,3 +238,19 @@ to ambiguity, including inactive ones; ambiguous sets are omitted/404 for
 viewers. Import collision selection retains one complete pack before publication ([issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499)).
 See [persona delivery](../reference/protocol/persona-delivery.md) for the current
 wire contract, version scope, URL cache migration and dashboard refresh rules.
+
+## HTTP caching addendum (2026-11-14)
+
+[Issue 1105](https://github.com/sakuraiyuta/kaoiro/issues/1105) revisits the
+image part of the 2026-10-03 addendum. Under `no-store`, the dashboard
+downloaded a sprite again on every reload and whenever a state change showed an
+image the browser no longer held in memory. A successful image response whose
+`v` equals the version of the bytes being sent now carries
+`Cache-Control: private, max-age=31536000, immutable`; unversioned or
+mismatched URLs, the manifest and every error response stay
+`private, no-store`, and every request that reaches the server is still
+authenticated and scoped. The operator accepted that images a client already
+cached remain displayable after it loses access, and left cache clearing at
+logout out of scope. Rule, residual exposure and marker:
+[persona delivery](../reference/protocol/persona-delivery.md). Measurements:
+[evidence](../evidence/issue-1105/browser-cache-2026-11-14.md).

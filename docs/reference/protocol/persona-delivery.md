@@ -2,7 +2,7 @@
 title: Persona delivery
 description: The persona asset HTTP API and the WS-handshake personality-prompt push, including the wire's reject/fail-closed guarantees.
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-14
 related: [protocol, personas]
 ---
 
@@ -43,11 +43,35 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
 - `name` / `pack_version` / `description` come from the persona pack `manifest.json`
   ([persona-pack-format](../personas/pack-format.md)). `personality.md` is not exposed by this API;
   it is pushed only during the WS wrapper handshake (see "Personality prompt delivery").
-- Manifest and image responses, including errors and HEAD, use
-  `Cache-Control: private, no-store`. Both bare and versioned image requests
-  revalidate the credential (cookie or bearer) and role before any asset
-  lookup. Anonymous, invalid, and revoked credentials receive 401, even for
-  nonexistent packs.
+- The manifest and every error response, including HEAD, use
+  `Cache-Control: private, no-store`. A successful image response uses
+  `Cache-Control: private, max-age=31536000, immutable` only when its `v`
+  query equals the version (`PersonaAssets.version_param/1`, the first 12 hex
+  characters of the SHA-256) of the bytes being sent. Every other successful
+  image response (no `v`, another file's or an older `v`, a non-string `v`)
+  uses `private, no-store`. The comparison uses the bytes sent, not the
+  snapshot's stored hash, so a file that no longer matches its published hash
+  is never pinned: a slot whose file is missing, not a regular file, or whose
+  modes cannot be normalised is re-extracted in place by the next rebuild, and
+  a file whose content alone was changed is not re-extracted and differs from
+  the published hash until the next publication. No `ETag` or
+  `Last-Modified` is sent, so conditional requests receive the full response.
+  Both bare and versioned image requests revalidate the credential (cookie or
+  bearer) and role before any asset lookup. Anonymous, invalid, and revoked
+  credentials receive 401, even for nonexistent packs.
+- Cached images are outside revocation. A user who later loses access
+  (credential revoked, logged out, agent stopped, pack hidden, or role
+  lowered, for example from operator to viewer) can still display images
+  their browser already cached, and anyone using the same browser profile can
+  display them through the cached URL, without contacting the server. A
+  bearer client that keeps an HTTP cache can do the same after its token is
+  revoked or replaced. The server cannot erase or expire those entries. Every
+  request that reaches the server is still authenticated and scoped; a client
+  without a cache entry receives 401 or 404. Shared caches never store these
+  responses (`private`). The operator accepted this exposure on 2026-11-14
+  ([issue 1105](https://github.com/sakuraiyuta/kaoiro/issues/1105)). After a
+  pack update, a client that cached an old URL keeps showing the old image
+  under it until it uses the new manifest URL.
 - Operator/admin receive all accepted packs. Viewers receive only packs used by the
   logical running-agent list: one `AgentStates` snapshot, projected through the
   same viewer envelope allowlist as the channel, excluding `disconnected`.
@@ -63,10 +87,11 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
 - HTTP `version` is 16 lowercase hex characters derived from only the returned
   entries and a fixed delivery-policy marker. Hidden pack edits do not affect
   it while the visible result remains unchanged. The nonsecret `auth=1` URL
-  marker avoids reusing URLs previously served with public immutable caching;
-  it is not an authorization token. Previously downloaded/decoded bytes cannot
-  be revoked, nor can an old cache entry be erased by a server response it
-  never requests.
+  marker keeps these URLs apart from ones previously served with public
+  immutable caching; it is not an authorization token and does not take part
+  in the cache decision. Browsers may keep entries under `&auth=1` URLs for up
+  to a year, so a policy that must stop reusing them has to change the marker,
+  which also changes `version`.
 - Each request captures one asset generation, then the viewer state snapshot.
   Removal before that state read denies access; already authorized transfers
   may finish. Separate manifest/image requests can therefore disagree during
