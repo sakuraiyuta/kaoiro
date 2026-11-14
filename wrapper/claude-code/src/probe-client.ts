@@ -11,7 +11,7 @@
 
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EngineCatalogFailReason, EngineModelInfo } from "@kaoiro/protocol";
@@ -96,7 +96,7 @@ export async function runClaudeProbe(
   let child: ChildProcess;
   try {
     const supervised = deps.superviseProcessTree === true &&
-      (deps.platform ?? process.platform) !== "win32";
+      (deps.platform ?? platform()) !== "win32";
     if (supervised) cwd = mkdtempSync(join(tmpdir(), "kaoiro-claude-probe-"));
     if (deps.spawnProbe !== undefined) {
       child = deps.spawnProbe();
