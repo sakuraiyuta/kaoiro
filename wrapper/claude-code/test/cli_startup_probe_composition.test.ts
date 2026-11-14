@@ -178,11 +178,15 @@ it("production spawn owns a resistant probe tree through host close", async () =
     ["-e", "setInterval(()=>{},1000)"], { detached: true, stdio: "ignore" });
   let tree: { leader: number; grandchild: number; cwd: string } | undefined;
   let cli: Awaited<ReturnType<typeof runIdleCli>> | undefined;
+  const ownedPid = (pid: number) => {
+    if (!Number.isSafeInteger(pid) || pid <= 1) throw Error("invalid test pid");
+    return pid;
+  };
   const alive = (pid: number) => {
-    try { process.kill(pid, 0); return true; } catch { return false; }
+    try { process.kill(ownedPid(pid), 0); return true; } catch { return false; }
   };
   const ownSignal = (pid: number, group = false) => {
-    if (!Number.isSafeInteger(pid) || pid <= 1) throw Error("invalid test pid");
+    ownedPid(pid);
     try { process.kill(group ? -pid : pid, "SIGKILL"); } catch {}
   };
   try {
@@ -197,7 +201,7 @@ it("production spawn owns a resistant probe tree through host close", async () =
     expect(alive(child.grandchild)).toBe(true);
     await cli.host.close();
     expect(alive(child.grandchild)).toBe(false);
-    expect(() => process.kill(-child.leader, 0)).toThrow();
+    expect(() => process.kill(-ownedPid(child.leader), 0)).toThrow();
     expect(existsSync(child.cwd)).toBe(false);
     await cli.running;
     expect(alive(unrelated.pid!)).toBe(true);
