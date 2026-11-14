@@ -4139,11 +4139,16 @@ export class AgentHost implements EngineAdapter {
   }
 
   #runOwnedProbe(includeUsage = false): Promise<ProbeOutcome> {
-    const pending = Promise.resolve().then(() => this.#probeFn({
-      includeUsage, superviseProcessTree: true,
-      signal: this.#startupProbeAbort.signal,
-    }));
+    let resolve!: (outcome: ProbeOutcome) => void;
+    let reject!: (error: unknown) => void;
+    const pending = new Promise<ProbeOutcome>((ok, fail) => {
+      resolve = ok; reject = fail;
+    });
     this.#probeTasks.add(pending);
+    try {
+      void this.#probeFn({ includeUsage, superviseProcessTree: true,
+        signal: this.#startupProbeAbort.signal }).then(resolve, reject);
+    } catch (error) { reject(error); }
     void pending.finally(() => this.#probeTasks.delete(pending)).catch(() => {});
     return pending;
   }
