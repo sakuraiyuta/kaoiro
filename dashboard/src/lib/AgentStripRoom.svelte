@@ -69,7 +69,25 @@
       <button type="button" class="room-toggle" aria-expanded={open} aria-controls={id}
         aria-label={msg().rooms.stripToggle({ name: label, open, count, state: msg().rooms.stripStates[lamp] })}
         onclick={ontoggle}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 5h8l2 3h10v12H2z" /></svg>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <defs>
+            <linearGradient id="{id}-edge" x1="0" y1="0" x2="0.15" y2="1">
+              <stop offset="0" stop-color="#a78bdb" />
+              <stop offset="1" stop-color="#8468be" />
+            </linearGradient>
+            <linearGradient id="{id}-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#c9a2f5" stop-opacity="0.22" />
+              <stop offset="1" stop-color="#8468be" stop-opacity="0.10" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M3.5 9.15V6.7Q3.5 5.05 5.15 5.05H9.35Q10.45 5.05 11 6L12.55 9.15H18.5Q20.55 9.15 20.55 11.2V18.05Q20.55 20.1 18.5 20.1H5.55Q3.5 20.1 3.5 18.05Z"
+            fill="url(#{id}-fill)"
+            stroke="url(#{id}-edge)"
+            stroke-width="1.2"
+          />
+          <path d="M5.5 6.55h3.5" fill="none" stroke="#c4b0e8" stroke-width="0.7" stroke-linecap="round" />
+        </svg>
         {#if !open}
           <span class="strip-count" aria-hidden="true">{count}</span>
           <span class="state-lamp" data-state={lamp} aria-hidden="true"></span>
@@ -90,7 +108,7 @@
   .strip-row { display: flex; align-items: flex-start; min-width: 0; max-width: 100%; }
   .room-toggle { position: relative; flex: none; width: clamp(3rem, 8dvh, 3.6rem); height: clamp(3rem, 8dvh, 3.6rem); padding: 0.45rem; }
   .room-toggle:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; }
-  svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  svg { width: 100%; height: 100%; }
   .strip-count { position: absolute; bottom: 0.1rem; left: 0.1rem; font-size: var(--fs-caption); background: var(--bg); border-radius: 0.2rem; padding: 0 0.1rem; }
   .state-lamp { --tone: var(--c-idle); position: absolute; top: 0.1rem; right: 0.1rem; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--tone); box-shadow: 0 0 6px var(--tone); }
   .state-lamp[data-state="waiting_permission"] { --tone: var(--c-waiting_permission); }

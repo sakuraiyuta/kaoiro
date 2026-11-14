@@ -83,6 +83,17 @@ it("settles immediately when reduced motion changes during a close and removes i
   await unmount(component!); component = null;
   expect(media.removeEventListener).toHaveBeenCalledOnce();
 });
+it("paints the adopted lilac room mark", async () => {
+  await setup();
+  const [shape, glint] = toggle().querySelectorAll("path");
+  expect(shape?.getAttribute("d")).toBe("M3.5 9.15V6.7Q3.5 5.05 5.15 5.05H9.35Q10.45 5.05 11 6L12.55 9.15H18.5Q20.55 9.15 20.55 11.2V18.05Q20.55 20.1 18.5 20.1H5.55Q3.5 20.1 3.5 18.05Z");
+  expect(shape?.getAttribute("fill")).toMatch(/^url\(#.+-fill\)$/);
+  expect(shape?.getAttribute("stroke")).toMatch(/^url\(#.+-edge\)$/);
+  expect(glint?.getAttribute("stroke")).toBe("#c4b0e8");
+  const edge = shape?.getAttribute("stroke")?.slice(5, -1);
+  expect(edge && document.getElementById(edge)?.tagName.toLowerCase()).toBe("lineargradient");
+});
+
 it("repaints the toggle name when the language changes", async () => {
   await setup(); setLocale("ja"); await tick();
   expect(toggle().getAttribute("aria-label")).toBe("部屋 Review を開く、30 件、回答待ち");
