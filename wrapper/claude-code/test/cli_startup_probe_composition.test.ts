@@ -11,13 +11,17 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // `queryFn` only records calls: starting the real SDK or the real probe from
 // a unit test would need an account and the network.
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost } from "../src/host.js";
-import { runClaudeProbe } from "../src/probe-client.js";
+import { runClaudeProbe, type ProbeSpawnDeps } from "../src/probe-client.js";
 import { projectModel } from "../src/probe.js";
 
 const config: WrapperConfig = {
@@ -57,7 +61,9 @@ function probeChild(stdoutLine: string): ChildProcess {
   return child;
 }
 
-async function runIdleCli(stdoutLine: string): Promise<{
+async function runIdleCli(
+  stdoutLine: string, realProbe?: ProbeSpawnDeps,
+): Promise<{
   sent: Envelope[];
   spawnProbe: ReturnType<typeof vi.fn>;
   queryFn: ReturnType<typeof vi.fn>;
@@ -85,12 +91,17 @@ async function runIdleCli(stdoutLine: string): Promise<{
       host = new AgentHost(cfg, {
         ...options,
         queryFn: queryFn as never,
-        probeFn: (deps) => runClaudeProbe({ ...deps, spawnProbe }),
+        probeFn: (deps) => runClaudeProbe({ ...deps,
+          ...(realProbe ?? { spawnProbe, superviseProcessTree: false }) }),
       });
       return host;
     },
   });
-  await vi.waitFor(() => expect(spawnProbe).toHaveBeenCalledTimes(1));
+  if (realProbe === undefined) {
+    await vi.waitFor(() => expect(spawnProbe).toHaveBeenCalledTimes(1));
+  } else {
+    await vi.waitFor(() => expect(host).toBeDefined());
+  }
   return { sent, spawnProbe, queryFn, host, running };
 }
 
@@ -156,4 +167,51 @@ describe("Claude CLI startup probe composition (issue #448)", () => {
       await running;
     }
   });
+});
+
+
+it("production spawn owns a resistant probe tree through host close", async () => {
+  const root = mkdtempSync(join(tmpdir(), "probe-tree-test-"));
+  const marker = join(root, "ready.json");
+  vi.stubEnv("FUJI762_TREE_MARKER", marker);
+  const unrelated = spawn(process.execPath,
+    ["-e", "setInterval(()=>{},1000)"], { detached: true, stdio: "ignore" });
+  let tree: { leader: number; grandchild: number; cwd: string } | undefined;
+  let cli: Awaited<ReturnType<typeof runIdleCli>> | undefined;
+  const alive = (pid: number) => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  const ownSignal = (pid: number, group = false) => {
+    if (!Number.isSafeInteger(pid) || pid <= 1) throw Error("invalid test pid");
+    try { process.kill(group ? -pid : pid, "SIGKILL"); } catch {}
+  };
+  try {
+    cli = await runIdleCli("", {
+      probePath: fileURLToPath(new URL("./fixtures/probe-tree.cjs",
+        import.meta.url)), killEscalateMs: 100,
+    });
+    await vi.waitFor(() => expect(existsSync(marker)).toBe(true));
+    tree = JSON.parse(readFileSync(marker, "utf8"));
+    expect(cli.spawnProbe).not.toHaveBeenCalled();
+    const child = tree!;
+    expect(alive(child.grandchild)).toBe(true);
+    await cli.host.close();
+    expect(alive(child.grandchild)).toBe(false);
+    expect(() => process.kill(-child.leader, 0)).toThrow();
+    expect(existsSync(child.cwd)).toBe(false);
+    await cli.running;
+    expect(alive(unrelated.pid!)).toBe(true);
+  } finally {
+    if (tree) {
+      if (alive(tree.grandchild)) ownSignal(tree.grandchild);
+      if (alive(tree.leader)) ownSignal(tree.leader, true);
+    }
+    await cli?.host.close(); await cli?.running;
+    const closed = new Promise<void>(resolve =>
+      unrelated.once("close", () => resolve()));
+    ownSignal(unrelated.pid!); await closed;
+    if (tree) rmSync(tree.cwd, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
