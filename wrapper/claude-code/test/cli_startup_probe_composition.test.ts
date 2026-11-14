@@ -170,7 +170,8 @@ describe("Claude CLI startup probe composition (issue #448)", () => {
 });
 
 
-it("production spawn owns a resistant probe tree through host close", async () => {
+it("production spawn owns a resistant probe tree through host close",
+  async () => {
   const root = mkdtempSync(join(tmpdir(), "probe-tree-test-"));
   const marker = join(root, "ready.json");
   vi.stubEnv("FUJI762_TREE_MARKER", marker);

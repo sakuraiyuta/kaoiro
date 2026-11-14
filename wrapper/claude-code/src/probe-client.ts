@@ -9,7 +9,9 @@
 // The probe CLI (src/probe.ts) is the child process that opens the SDK
 // Query; this file only owns the launcher.
 
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import {
+  spawn, type ChildProcess, type SpawnOptions,
+} from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,7 +129,8 @@ export async function runClaudeProbe(
     };
   }
 
-  const cleanup = cwd === undefined ? undefined : probeCleanup(child, cwd, deps);
+  const cleanup = cwd === undefined
+    ? undefined : probeCleanup(child, cwd, deps);
   const outcome = await new Promise<ProbeOutcome>((resolve) => {
     let stdout = "";
     let stderr = "";

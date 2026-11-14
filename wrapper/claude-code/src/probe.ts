@@ -209,7 +209,9 @@ export async function runProbe(
   usageTimeoutMs = 3_000,
 ): Promise<number> {
   const args = parseArgs(argv);
-  const cwd = args.cwd ?? join(tmpdir(), `kaoiro-claude-probe-${process.pid}-${Date.now()}`);
+  const cwd = args.cwd ?? join(
+    tmpdir(), `kaoiro-claude-probe-${process.pid}-${Date.now()}`,
+  );
   mkdirSync(cwd, { recursive: true });
 
   const t0 = performance.now();

@@ -264,7 +264,8 @@ describe("host probe barrier", () => {
       expect(observed!.aborted).toBe(true); await probe;
     });
 
-  it("probe-only settlement aborts without full close side effects", async () => {
+  it("probe-only settlement aborts without full close side effects",
+    async () => {
     let signal: AbortSignal | undefined;
     const host = new AgentHost(config, { onState: () => {},
       probeFn: (deps) => new Promise((resolve) => {

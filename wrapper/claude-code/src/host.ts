@@ -4149,7 +4149,8 @@ export class AgentHost implements EngineAdapter {
       void this.#probeFn({ includeUsage, superviseProcessTree: true,
         signal: this.#startupProbeAbort.signal }).then(resolve, reject);
     } catch (error) { reject(error); }
-    void pending.finally(() => this.#probeTasks.delete(pending)).catch(() => {});
+    void pending.finally(() => this.#probeTasks.delete(pending))
+      .catch(() => {});
     return pending;
   }
 

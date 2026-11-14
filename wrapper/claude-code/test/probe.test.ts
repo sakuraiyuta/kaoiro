@@ -174,11 +174,13 @@ describe("optional usage probe", () => {
 it("the internal cwd argument leaves deletion to its launcher", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "probe-owned-cwd-"));
   try {
-    const queryFn = vi.fn((_options: unknown) => ({ initializationResult: async () => ({
+    const queryFn = vi.fn((_options: unknown) => ({
+      initializationResult: async () => ({
       models: [{ value: "default", displayName: "Default" }],
     }), close: () => {} }));
     await runProbe(["--probe-cwd", cwd], queryFn as never, () => {});
-    expect((queryFn.mock.calls[0]![0] as {options: {cwd: string}}).options.cwd).toBe(cwd);
+    const call = queryFn.mock.calls[0]![0] as {options: {cwd: string}};
+    expect(call.options.cwd).toBe(cwd);
     expect(existsSync(cwd)).toBe(true);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
