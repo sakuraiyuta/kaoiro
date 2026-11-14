@@ -2,7 +2,7 @@
 title: Server configuration
 description: The server's .env variables, DETS persistence paths, and persona/footer mount points.
 status: accepted
-last_updated: 2026-11-10
+last_updated: 2026-11-14
 related: [deployment]
 ---
 
@@ -95,6 +95,26 @@ tooling should treat the file as an optional leftover, not a required object.
 `KAOIRO_PLAIN_HTTP` and `KAOIRO_PUBLISH_IP` (direct-VPN deployment only) are
 covered in the [Network and login runbook](../../operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26),
 not repeated here.
+
+## Bundled dashboard static caching
+
+`:serve_dashboard` defaults to `true`. Setting it to `false` disables the
+bundled dashboard's static files and makes `/` return 404; channels and APIs
+remain available ([ADR-0007](../../adr/0007-client-separation-reference-dashboard.md)).
+
+| Resource | Cache-Control |
+|---|---|
+| `/assets/*` | `public, max-age=31536000, immutable` |
+| `/index.html`, `/notification-worker/*` | `no-cache` |
+| `/icons/*`, `/manifest.webmanifest` | `public` with ETag revalidation, unchanged |
+| `/favicon.ico`, `/robots.txt` | `public` with ETag revalidation, always served |
+
+`/assets/` is reserved for content-hashed build output. Document queries,
+including `?vsn=`, retain `no-cache`; `/` redirects to `/index.html`. Icons,
+manifest, favicon and robots retain Plug's version-query behavior: a leading
+`?vsn=` uses `public, max-age=31536000, immutable` without an ETag.
+Validators use Plug's existing file size and modification time; `no-cache`
+requires revalidation and permits a 304 when the validator is unchanged.
 
 ## Device authorization grant
 

@@ -50,7 +50,7 @@ defmodule KaoiroServerWeb.Endpoint do
     longpoll: false
 
   # CSP and the other browser hardening headers (issue #145). Must stay
-  # ABOVE the two static plugs: they serve index.html and the built
+  # ABOVE static delivery: the plugs serve index.html and the built
   # assets without ever reaching the router, so the :browser pipeline is
   # too late to cover the SPA itself.
   plug KaoiroServerWeb.SecurityHeaders
@@ -70,7 +70,23 @@ defmodule KaoiroServerWeb.Endpoint do
     at: "/",
     from: :kaoiro_server,
     gzip: not code_reloading?,
-    only: ~w(index.html assets manifest.webmanifest icons notification-worker)
+    only: ~w(assets),
+    cache_control_for_etags: "public, max-age=31536000, immutable",
+    cache_control_for_vsn_requests: "public, max-age=31536000, immutable"
+
+  plug KaoiroServerWeb.DashboardStatic,
+    at: "/",
+    from: :kaoiro_server,
+    gzip: not code_reloading?,
+    only: ~w(index.html notification-worker),
+    cache_control_for_etags: "no-cache",
+    cache_control_for_vsn_requests: "no-cache"
+
+  plug KaoiroServerWeb.DashboardStatic,
+    at: "/",
+    from: :kaoiro_server,
+    gzip: not code_reloading?,
+    only: ~w(manifest.webmanifest icons)
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
