@@ -1762,6 +1762,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // stale one per invocation for any caller (tests included) that runs it
     // more than once in the same process, each closing over an
     // already-finished host (issue #379's listener-accumulation lesson).
+    await host.settleProbes?.();
     process.off("SIGTERM", onSigterm);
     // Deny in-flight permission requests, then release the socket so the
     // process can exit.

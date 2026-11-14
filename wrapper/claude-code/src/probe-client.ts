@@ -9,10 +9,13 @@
 // The probe CLI (src/probe.ts) is the child process that opens the SDK
 // Query; this file only owns the launcher.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EngineCatalogFailReason, EngineModelInfo } from "@kaoiro/protocol";
-import { clipUtf16Head } from "@kaoiro/wrapper-core";
+import { clipUtf16Head, writeRedactedStderr } from "@kaoiro/wrapper-core";
 
 /** Wall-clock cap on the child process itself. Slightly above the probe's own
  *  internal --timeout-ms so a stuck child (e.g. SDK deadlock past its own
@@ -63,6 +66,14 @@ function resolveProbePath(): string {
  *  actually spawning the probe subprocess. Production uses the real spawn. */
 export interface ProbeSpawnDeps {
   spawnProbe?: () => ChildProcess;
+  spawn?: (command: string, args: string[],
+    options: SpawnOptions) => ChildProcess;
+  probePath?: string;
+  superviseProcessTree?: boolean;
+  platform?: NodeJS.Platform;
+  groupSignal?: (pid: number, signal: NodeJS.Signals | 0) => unknown;
+  removeCwd?: (cwd: string) => void;
+  diagnostic?: (message: string) => void;
   /** Wall-clock cap. Overridable so tests fire timeouts quickly. */
   hardTimeoutMs?: number;
   /** Grace period between SIGTERM and SIGKILL. */
@@ -81,25 +92,33 @@ export async function runClaudeProbe(
   const killEscalateMs = deps.killEscalateMs ?? 2_000;
   if (deps.signal?.aborted) return { ok: false, reason: "timeout", detail: "aborted", elapsed_ms: Date.now() - start };
 
+  let cwd: string | undefined;
   let child: ChildProcess;
   try {
+    const supervised = deps.superviseProcessTree === true &&
+      (deps.platform ?? process.platform) !== "win32";
+    if (supervised) cwd = mkdtempSync(join(tmpdir(), "kaoiro-claude-probe-"));
     if (deps.spawnProbe !== undefined) {
       child = deps.spawnProbe();
     } else {
-      const probePath = resolveProbePath();
+      const probePath = deps.probePath ?? resolveProbePath();
       const childEnv = { ...process.env };
       delete childEnv.CODEX_HOME;
-      child = spawn(
+      child = (deps.spawn ?? spawn)(
         process.execPath,
-        [probePath, "--timeout-ms", String(PROBE_INTERNAL_TIMEOUT_MS), ...(deps.includeUsage ? ["--usage"] : [])],
+        [probePath, "--timeout-ms", String(PROBE_INTERNAL_TIMEOUT_MS),
+          ...(cwd ? ["--probe-cwd", cwd] : []),
+          ...(deps.includeUsage ? ["--usage"] : [])],
         {
           // Preserve the SDK's auth sources without exporting Codex state.
           stdio: ["ignore", "pipe", "pipe"],
           env: childEnv,
+          ...(supervised ? { detached: true } : {}),
         },
       );
     }
   } catch (err) {
+    if (cwd !== undefined) removeProbeCwd(cwd, deps);
     return {
       ok: false,
       reason: "spawn_failed",
@@ -108,7 +127,8 @@ export async function runClaudeProbe(
     };
   }
 
-  return new Promise<ProbeOutcome>((resolve) => {
+  const cleanup = cwd === undefined ? undefined : probeCleanup(child, cwd, deps);
+  const outcome = await new Promise<ProbeOutcome>((resolve) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -135,17 +155,19 @@ export async function runClaudeProbe(
       // is a "kill(sig) was called" flag — NOT proof the child has exited.
       // We track actual exit via the `close` event (closed=true), which is
       // what Node emits when stdio streams flush AND the process is reaped.
-      try {
-        child.kill("SIGTERM");
-      } catch {}
-      const escalate = setTimeout(() => {
-        if (!closed) {
-          try {
-            child.kill("SIGKILL");
-          } catch {}
-        }
-      }, killEscalateMs);
-      escalate.unref?.();
+      if (cleanup !== undefined) {
+        void cleanup();
+      } else {
+        try {
+          child.kill("SIGTERM");
+        } catch {}
+        const escalate = setTimeout(() => {
+          if (!closed) {
+            try { child.kill("SIGKILL"); } catch {}
+          }
+        }, killEscalateMs);
+        escalate.unref?.();
+      }
       finish({
         ok: false,
         reason: "timeout",
@@ -187,6 +209,104 @@ export async function runClaudeProbe(
         elapsed_ms: Date.now() - start,
       });
     });
+  });
+  await cleanup?.();
+  return outcome;
+}
+
+function probeDiagnostic(deps: ProbeSpawnDeps, message: string): void {
+  try {
+    (deps.diagnostic ?? writeRedactedStderr)(
+      `[kaoiro] probe cleanup: ${message}\n`,
+    );
+  } catch {}
+}
+
+function removeProbeCwd(cwd: string, deps: ProbeSpawnDeps): void {
+  try {
+    (deps.removeCwd ?? ((path) => rmSync(path, {
+      recursive: true, force: true,
+    })))(cwd);
+  } catch {
+    probeDiagnostic(deps, "could not remove owned cwd");
+  }
+}
+
+function probeCleanup(
+  child: ChildProcess, cwd: string, deps: ProbeSpawnDeps,
+): () => Promise<void> {
+  const pid = child.pid;
+  const kill = deps.groupSignal ?? process.kill;
+  const grace = deps.killEscalateMs ?? 2_000;
+  let closed = false, retired = false, unsafe = false, fallback = false;
+  let noProcess = false;
+  let running: Promise<void> | undefined;
+  const onClose = () => { closed = true; };
+  child.once("close", onClose);
+  const onError = () => { noProcess = pid === undefined; };
+  child.once("error", onError);
+  const exited = () => closed || child.exitCode != null ||
+    child.signalCode != null;
+  const valid = () => Number.isSafeInteger(pid) && pid! > 1;
+  const direct = (signal: NodeJS.Signals) => {
+    if (valid() && !exited()) child.kill(signal);
+  };
+  const signal = (value: NodeJS.Signals | 0): boolean => {
+    if (retired) return false;
+    if (!valid()) {
+      retired = true;
+      if (!noProcess) {
+        unsafe = true;
+        probeDiagnostic(deps, "invalid process id; owned cwd retained");
+      }
+      return false;
+    }
+    try {
+      // PGIDs can be reused between a liveness check and a later signal.
+      // Never signal again after observing ESRCH; the reuse gap remains.
+      kill(-pid!, value);
+      return true;
+    } catch (error) {
+      retired = true;
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        if (!exited()) {
+          unsafe = true; fallback = true;
+          probeDiagnostic(deps, "group absent before leader exit");
+          direct("SIGTERM");
+        }
+      } else {
+        unsafe = true;
+        probeDiagnostic(deps, "group signal refused");
+      }
+      return false;
+    }
+  };
+  const settle = async () => {
+    const start = Date.now();
+    let escalated = false;
+    signal("SIGTERM");
+    while (signal(0) || !closed) {
+      const elapsed = Date.now() - start;
+      if (elapsed >= 2 * grace) {
+        unsafe = true;
+        probeDiagnostic(deps, "deadline reached; owned cwd retained");
+        break;
+      }
+      if (!escalated && elapsed >= grace) {
+        escalated = true;
+        if (fallback) direct("SIGKILL");
+        else signal("SIGKILL");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!unsafe) removeProbeCwd(cwd, deps);
+  };
+  // Signal callers may ignore the barrier: cleanup must never reject.
+  return () => running ??= settle().catch(() => {
+    probeDiagnostic(deps, "unexpected failure; owned cwd retained");
+  }).finally(() => {
+    child.off("close", onClose);
+    child.off("error", onError);
   });
 }
 

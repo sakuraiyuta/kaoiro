@@ -63,6 +63,15 @@ refresh, which wins over the automatic startup probe. A delayed lower-priority
 result cannot replace a higher-priority catalog. Empty or failed results keep
 the last accepted catalog.
 
+Host-owned startup and pre-Query manual probes opt into a separate POSIX
+process group. On shutdown the host aborts these probes and waits for their
+bounded TERM/KILL teardown (2 s grace and 2 s final wait) before the wrapper
+finishes. The launcher removes its private cwd after the tree is gone.
+Cleanup failures produce diagnostics and retain the cwd; parsed catalog
+results are preserved. This requires orphan reaping and does not cover a
+wrapper killed externally with SIGKILL or descendants creating new groups.
+Windows and runner-owned catalog refresh retain child-only probe behavior.
+
 `#refreshSupportedModels()` performs an automatic bounded retry (three total,
 counting init as trial 1; `MAX_MODEL_REFRESH_RETRIES = 3`) and retries on a
 turn-driven `result` message. It is silent after the cap, emitting one

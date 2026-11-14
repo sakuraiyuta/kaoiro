@@ -4,9 +4,9 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // 欠落時は property 自体 absent」を両方向で固定する (ADR-0037 追補)。
 
 import { describe, expect, it, vi } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { sep } from "node:path";
+import { join, sep } from "node:path";
 import { projectCommand, projectModel, runProbe } from "../src/probe.js";
 import type { query } from "@anthropic-ai/claude-agent-sdk";
 
@@ -168,4 +168,17 @@ describe("optional usage probe", () => {
     expect(code).toBe(0);
     expect(emitted[0].commands).toEqual(["clear", "anthropic-skills:built-in-browser"]);
   });
+});
+
+
+it("the internal cwd argument leaves deletion to its launcher", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "probe-owned-cwd-"));
+  try {
+    const queryFn = vi.fn((_options: unknown) => ({ initializationResult: async () => ({
+      models: [{ value: "default", displayName: "Default" }],
+    }), close: () => {} }));
+    await runProbe(["--probe-cwd", cwd], queryFn as never, () => {});
+    expect((queryFn.mock.calls[0]![0] as {options: {cwd: string}}).options.cwd).toBe(cwd);
+    expect(existsSync(cwd)).toBe(true);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

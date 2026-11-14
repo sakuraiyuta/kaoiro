@@ -1121,6 +1121,8 @@ export class AgentHost implements EngineAdapter {
     { status?: string; utilization?: number; resets_at?: number }
   >();
   #nativeRateLimitsSeen = false;
+  #probeSettlement: Promise<void> | undefined;
+  readonly #probeTasks = new Set<Promise<ProbeOutcome>>();
   readonly #startupProbeAbort = new AbortController();
   /** The SDK's in-stream rate_limit_event is deliberately sparse for an
    *  allowed subscription (it can carry just five_hour status + reset). The
@@ -1781,7 +1783,7 @@ export class AgentHost implements EngineAdapter {
   /** Close the input stream; the session ends once the current turn drains.
    *  Clears the TTL GC interval so the host does not keep the Node event
    *  loop alive after the session has settled. */
-  close(): void {
+  close(): Promise<void> {
     this.#cancelResumeReceipt("close");
     this.#terminalReduction?.finish();
     this.#invalidateNative();
@@ -1806,6 +1808,7 @@ export class AgentHost implements EngineAdapter {
     // was not remeasured on 0.3.289. Aborting triggers the SDK's stdin-EOF ->
     // SIGTERM -> SIGKILL escalation regardless of queue state.
     this.#abort?.abort();
+    return this.settleProbes();
   }
 
   /** Drop pending_uploads whose age exceeds PENDING_UPLOAD_TTL_MS
@@ -3048,6 +3051,7 @@ export class AgentHost implements EngineAdapter {
       await this.#waitForFirstInput();
       if (this.#closed) {
         this.#finishHost("closed_before_query");
+        await this.settleProbes();
         return;
       }
     }
@@ -3546,6 +3550,7 @@ export class AgentHost implements EngineAdapter {
       // and query construction/iteration can throw before a ResultMessage.
       // Both are hard terminal boundaries for every accepted turn.
       this.#finishHost("stream_eof");
+      await this.settleProbes();
     }
   }
 
@@ -4133,9 +4138,32 @@ export class AgentHost implements EngineAdapter {
     this.#nativeRateLimitsSeen = true;
   }
 
+  #runOwnedProbe(includeUsage = false): Promise<ProbeOutcome> {
+    const pending = Promise.resolve().then(() => this.#probeFn({
+      includeUsage, superviseProcessTree: true,
+      signal: this.#startupProbeAbort.signal,
+    }));
+    this.#probeTasks.add(pending);
+    void pending.finally(() => this.#probeTasks.delete(pending)).catch(() => {});
+    return pending;
+  }
+
+  /** Aborts host probes and waits for cleanup. Never rejects: signal/recovery
+   * callers may discard this barrier without causing unhandled rejection. */
+  settleProbes(): Promise<void> {
+    this.#startupProbeAbort.abort();
+    return this.#probeSettlement ??= Promise.allSettled([...this.#probeTasks])
+      .then((results) => {
+        if (results.some((result) => result.status === "rejected")) {
+          try { writeRedactedStderr("[kaoiro] probe cleanup failed\n"); }
+          catch {}
+        }
+      });
+  }
+
   async probeRateLimits(): Promise<void> {
     try {
-      const outcome = await this.#probeFn({ includeUsage: true, signal: this.#startupProbeAbort.signal });
+      const outcome = await this.#runOwnedProbe(true);
       if (this.#closed) return;
       let stateChanged = false;
       if (
@@ -4556,7 +4584,7 @@ export class AgentHost implements EngineAdapter {
     // spinner would spin until the 45s client-side timeout.
     let outcome: ProbeOutcome;
     try {
-      outcome = await this.#probeFn();
+      outcome = await this.#runOwnedProbe();
     } catch (err) {
       return {
         ok: false,
@@ -4569,7 +4597,7 @@ export class AgentHost implements EngineAdapter {
       };
     }
     if (
-      outcome.ok &&
+      !this.#closed && outcome.ok &&
       outcome.models !== undefined &&
       this.#applyProbeCatalog(outcome.models, "manual_probe")
     ) {

@@ -82,11 +82,13 @@ async function* neverYields(): AsyncGenerator<never, void, void> {
 interface CliArgs {
   timeoutMs: number;
   usage: boolean;
+  cwd?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
   let timeoutMs = 30_000;
   let usage = false;
+  let cwd: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--timeout-ms" && i + 1 < argv.length) {
@@ -103,6 +105,9 @@ function parseArgs(argv: string[]): CliArgs {
       }
       timeoutMs = n;
       i++;
+    } else if (arg === "--probe-cwd") {
+      // Internal launcher argument: the parent owns and removes this cwd.
+      cwd = argv[++i];
     } else if (arg === "--usage") {
       usage = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -113,7 +118,7 @@ function parseArgs(argv: string[]): CliArgs {
       process.exit(0);
     }
   }
-  return { timeoutMs, usage };
+  return { timeoutMs, usage, ...(cwd === undefined ? {} : { cwd }) };
 }
 
 /** Map an SDK ModelInfo (structural — the SDK type may have extra optional
@@ -204,7 +209,7 @@ export async function runProbe(
   usageTimeoutMs = 3_000,
 ): Promise<number> {
   const args = parseArgs(argv);
-  const cwd = join(tmpdir(), `kaoiro-claude-probe-${process.pid}-${Date.now()}`);
+  const cwd = args.cwd ?? join(tmpdir(), `kaoiro-claude-probe-${process.pid}-${Date.now()}`);
   mkdirSync(cwd, { recursive: true });
 
   const t0 = performance.now();
@@ -313,7 +318,7 @@ export async function runProbe(
     return 1;
   } finally {
     try {
-      rmSync(cwd, { recursive: true, force: true });
+      if (args.cwd === undefined) rmSync(cwd, { recursive: true, force: true });
     } catch {}
   }
 }
