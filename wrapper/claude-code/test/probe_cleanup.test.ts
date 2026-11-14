@@ -199,6 +199,16 @@ describe("production-built probe ownership", () => {
       expect.stringContaining("unexpected failure"));
   });
 
+  it("diagnostic write failure cannot change a parsed catalog", async () => {
+    const f = fake(); f.gone();
+    const pending = runClaudeProbe({ ...f.deps,
+      removeCwd: () => { throw errno("EACCES"); },
+      diagnostic: () => { throw errno("EPIPE"); } });
+    f.success();
+    await expect(pending).resolves.toMatchObject({ ok: true,
+      models: result.models });
+  });
+
   it("host close resolves even if cwd removal and diagnostic output throw",
     async () => {
       const f = fake(); f.gone();
@@ -211,7 +221,8 @@ describe("production-built probe ownership", () => {
       f.success();
       await expect(host.close()).resolves.toBeUndefined(); await probe;
       expect(removeCwd).toHaveBeenCalled();
-      expect(diagnostic).toHaveBeenCalled();
+      expect(diagnostic).toHaveBeenCalledWith(
+        expect.stringContaining("could not remove"));
     });
 });
 
@@ -265,6 +276,13 @@ describe("host probe barrier", () => {
     expect(signal!.aborted).toBe(true);
     expect(host.closed).toBe(false);
     await pending; await probe;
+  });
+
+  it("a synchronous probe throw cannot strand close", async () => {
+    const host = new AgentHost(config, { onState: () => {},
+      probeFn: () => { throw new Error("synchronous probe failure"); } });
+    const probe = host.probeRateLimits();
+    await expect(host.close()).resolves.toBeUndefined(); await probe;
   });
 
   it("a rejected probe cannot reject the ignored close barrier", async () => {

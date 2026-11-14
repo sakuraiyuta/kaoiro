@@ -337,6 +337,17 @@ async function runSettle(group: RunnerGroup, options: SettleOptions): Promise<Gr
   }
 }
 
+function initialGroupFailures(
+  group: RunnerGroup, kill: GroupKill = defaultGroupKill,
+): string[] {
+  try { kill(-requireGroupPid(group.pgid), 0); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return [];
+    return ["runner group absence could not be verified"];
+  }
+  return ["runner process group was not empty at wrapper exit"];
+}
+
 /** Removes the fixture only after the runner's process group is gone, so no
  *  descendant can write into it. `rmSync` retries only its last `rmdir` and never
  *  re-scans, so retrying cannot stand in for the wait. */
@@ -531,12 +542,10 @@ describe("default composition (issue #469)", () => {
         if (pid > 1) wrapperPids.add(pid);
       }
       failures.push(...(await verifyWrappersGone(wrapperPids)));
+      if (runnerGroup) failures.push(...initialGroupFailures(runnerGroup));
       for (const socket of endpoint.sockets) socket.destroy();
       await new Promise<void>((resolve) => endpoint.server.close(() => resolve()));
-      // The wrappers' startup probe leaves an orphaned Claude CLI that writes into
-      // HOME for a moment after the wrappers are gone (issue #762); wait for the
-      // runner's process group to empty before removing the tree. A failure that
-      // remains joins the cleanup report instead of replacing the primary error.
+      // Retain bounded cleanup after recording the immediate-exit assertion.
       let groupNote = "";
       if (runnerGroup !== undefined) {
         const removed = await removeFixtureAfterGroup(root, runnerGroup);
@@ -751,4 +760,17 @@ describe("runner group cleanup with real processes", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+
+it("initial runner group check rejects members and unknown ownership", () => {
+  const errno = (code: string) => Object.assign(new Error(code), { code });
+  const group = openRunnerGroup(1234);
+  expect(initialGroupFailures(group, () => true)).toEqual([
+    "runner process group was not empty at wrapper exit",
+  ]);
+  expect(initialGroupFailures(group, () => { throw errno("EPERM"); }))
+    .toEqual(["runner group absence could not be verified"]);
+  expect(initialGroupFailures(group, () => { throw errno("ESRCH"); }))
+    .toEqual([]);
 });
