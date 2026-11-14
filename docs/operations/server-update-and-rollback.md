@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-14
 related: [deployment]
 ---
 
@@ -176,6 +176,16 @@ and retain the established backend until the failure is resolved.
   `--config` file's `backup_root` the same across every invocation on a host
   (the default, `~/kaoiro-deploy`, already satisfies this without a config
   file at all).
+- **Exclusive writer contract and container mount constraints under `backup_root`.**
+  The checkout-keyed lock (`<backup_root>/.lock.<key>`, derived from
+  `realpathSync(repo)`) governs mutating CLI runs only; `backup_root` and its
+  transaction directories (`manifest.json`, `journal.json`, and temporary
+  `.restore-stage-*`) require no concurrent external backups or manual edits.
+  Direct same-UID or host `root` tampering with `.restore-stage-*`, its parent
+  directory, or transaction metadata is outside the rollback staging fault
+  boundary. On `root_squash` NFS or Docker `userns-remap` hosts, ensure the
+  Docker daemon can read private `0700`/`0400` staged files under `backup_root`
+  (destructive `rollback` preflight checks this with `alpine:3` before stop).
 
 #### Child tool environments
 
@@ -770,20 +780,33 @@ phase comes from the recovery table above.
   new container was started at least once, so **treat state as opened**;
   there is no guarantee old code can read DETS written by new code, issue
   #209 previously changed a tuple from 3 to 4 elements): verifies the WHOLE
-  recovery pair — the old image still exists, the pre-deploy archive's
-  checksum and a full traversal, and `docker compose config` still
-  renders — **before touching anything** (no stop, no wipe, without all of
-  it present); only then stops whatever is currently running for the
-  service (refuses on more than one match), forensically archives the
-  CURRENT volume state before touching it (full-traversal verified),
-  re-verifies the pre-deploy archive's checksum AND a full traversal AGAIN
-  right before the destructive wipe (catches a change during the stop/
-  forensic window itself), wipes the volume (`find -mindepth 1 -maxdepth 1
-  -exec rm -rf -- {} +` — a bare `rm -rf /data/*` would leave dotfiles
-  behind) and restores from it, re-archives the JUST-restored volume and
-  confirms it matches the manifest's own `required_entries` **exactly**
-  (owner and mode included), retags `latest` back (verified), brings the
-  old image up with `--force-recreate`, and polls health for the old SHA.
+  recovery pair **before touching anything** (no stop, no wipe): checks old
+  image existence and `docker compose config`, sweeps stale `.restore-stage-*`
+  entries in the transaction directory under lock (failing closed on error),
+  checks `backup_root` free space is at least the pre-deploy archive size `A`,
+  opens `manifest.archive.path` once (`O_RDONLY | O_NOFOLLOW | O_NONBLOCK`,
+  rejecting symlinks, FIFOs, and non-regular files via `fstat.isFile()`),
+  streams it into a private `0700`/`0400` staged copy
+  `<txDir>/.restore-stage-<id>/archive.tar.gz` while verifying SHA-256, runs
+  host `tar tzf` and `tar tvzf` (`required_entries`) on the staged copy, and
+  runs `ensureAlpineImage` plus `alpine:3` `sha256sum /backup/archive.tar.gz`
+  against the read-only staged mount. Swaps/corruption read during that single
+  `fd` copy refuse before stop; once committed to the staged copy, changes to
+  `manifest.archive.path` do not affect subsequent steps. Only then does it
+  stop the running service (refuses on more than one match), forensically
+  archive the CURRENT volume state (`F`, full-traversal verified), re-verify
+  SHA-256 (`O_NOFOLLOW | O_NONBLOCK`) and `tar tzf` on the **staged copy**
+  right before the wipe, wipe `/data` (`find -mindepth 1 -maxdepth 1 -exec
+  rm -rf -- {} +` — bare `rm -rf /data/*` would leave dotfiles behind) and
+  restore from the read-only staged mount `/backup/archive.tar.gz`, remove
+  the staging directory before creating `rollback-restore-verify.tar.gz`
+  (`V`), confirm `V` matches `required_entries` **exactly** (owner and mode
+  included), retag `latest`, recreate with `--force-recreate`, and poll
+  health for the old SHA. Normal archive peak disk usage is `max(A + S + F,
+  A + F + V)` (`S = A`); if removing the staging directory fails after `tar
+  xzf`, a synchronous `stderr` warning names the residual path without
+  failing the completed restore and `V` may temporarily raise peak usage to
+  `A + S + F + V`.
 
 Both paths advance the transaction to `rolled_back` on success — a rollback
 of an already-`rolled_back` transaction is refused; investigate manually if it
@@ -796,7 +819,12 @@ transaction's manifest, never “old image only” or “backup only”.
 
 Both `update` and `rollback` refuse these phases. Automatic resumption is
 not supported; the operator can recover using the recorded transaction and
-saved Compose plan. The journal is not changed.
+saved Compose plan. The journal is not changed. Stale `.restore-stage-*` directories under `<txDir>` are swept automatically
+only when an eligible destructive `rollback` (phases prior to
+`rollback_stopped`) acquires the checkout lock; once a transaction enters
+`rollback_stopped` or later, neither `rollback`, `status`, nor `prune`
+cleans them automatically, so inspect and manually remove any residual
+`.restore-stage-*` directory during manual recovery.
 
 Use Bash, Docker with Compose, jq, GNU tar, Python 3 and the existing deploy CLI on the deployment host. Independently confirm that no deployment, rollback, backup, host-side writer, or other operator is active, and that the affected fleet is stopped or independently verified compatible with the old image. Docker's volume filter cannot find host-side writers or containers bind-mounting Docker's internal volume directory. If a lock exists, stop and follow 4.4 (0a), including its owner check. Never edit a journal.
 
