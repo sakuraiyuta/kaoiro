@@ -2,7 +2,7 @@
 title: Grok Build ACP engine
 description: Resident ACP host, tools, permissions and unsupported operations.
 status: accepted
-last_updated: 2026-10-18
+last_updated: 2026-11-15
 ---
 
 # Grok Build ACP engine
@@ -121,14 +121,64 @@ unsupported. Weekly account allowance reporting is available through
 `rate_limits` (see [Account rate limits](#account-rate-limits)). Unsupported
 controls reject explicitly.
 
-Session reset is unsupported in both directions. The adapter advertises
-`supports_session_reset: false`, so operator, self and director-requested
-resets of a Grok agent are refused with `unsupported_session_reset`, and its
-tool list does not register `request_session_reset`. Separately, the adapter
+Session reset is supported (see [Session reset](#session-reset)): the adapter
+advertises `supports_session_reset: true` with `session_reset_modes: ["new",
+"clear"]`, registers `request_session_reset`, and can be the target of a
+director's `request_peer_session_reset`. Separately, the adapter
 does not negotiate `work_control` on join and does not register the director
 tool `request_peer_session_reset`
 ([ADR-0068](../../adr/0068-director-requested-peer-session-reset.md)). Both are tracked by
 [issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658).
+
+## Session reset
+
+A reset is the runner's engine-neutral fresh relaunch
+([runner control](../protocol/runner-control.md)): SIGTERM to the wrapper,
+then a launch without `--resume` that carries the stored resume snapshot.
+The fresh wrapper sends `session/new` with the current persona and footer as
+`_meta.rules`, starts a new ToolHost with a new token, and applies the
+snapshot's model, effort, sandbox and network as the start selection (see
+[Start selection and restore hold](#start-selection-and-restore-hold)).
+`new` and `clear` are the same relaunch; they differ only on the server. The
+wrapper joins before `session/new`, so the completion carries
+`to_session_id: null` and the server adopts the session id later. A fresh
+session replays no history.
+
+The wrapper's SIGTERM path closes the host, whose process-group escalation
+(3 s) stays below the runner's 5 s reset grace. Grok's own in-process
+`session/new` on a live connection also works but is not used: it would not
+give a new process group, sandbox environment or ToolHost token.
+
+`request_session_reset` is served by the ToolHost behind
+`operatorApprovalGated`. Every call asks the operator through the
+`PermissionBroker`; there is no autonomous skip, because the approval axis is
+a fixed `on-request` projection. The wait is bounded at 300 s, or at
+`permission_timeout_ms` when that is shorter, and a timeout denies. Grok does
+not ask before a kaoiro MCP call on the measured host configuration, so this
+gate is the only approval. A call outside a turn, or one whose turn or HTTP
+request ended, is cancelled and reserves nothing.
+
+An approved reservation belongs to the turn that made it. When that turn's
+prompt returns with a stop reason other than `cancelled`, the wrapper sends
+`session_reset_request`; the ready `state_change` was already published with
+the turn's result. A cancelled (interrupted or permission-rejected) or failed
+turn, or a host close, drops the reservation, and the agent is told in a turn
+of its own. Server refusals and lifecycle failures reach the agent the same
+way; these notices queue behind input that arrived before them.
+
+Limits, measured on Grok Build 1.0.52
+([evidence](../../evidence/grok/2026-11-15-session-reset.md)):
+
+- A Grok configuration whose hooks ask before MCP calls adds Grok's own
+  permission requests before the wrapper's dialog (two per call with a
+  `PreToolUse` ask hook).
+- Grok waited for a blocked kaoiro MCP call for the full 600 s in the
+  measured run. Its own timeout and whether it closes the HTTP request when
+  that timeout fires are not measured; the 300 s bound keeps the wrapper's
+  answer ahead of it.
+- Grok's `use_tool` accepts only the qualified name
+  (`kaoiro__request_session_reset`); an unqualified call fails inside Grok
+  and never reaches the ToolHost.
 
 ## Cold resume and session discovery
 

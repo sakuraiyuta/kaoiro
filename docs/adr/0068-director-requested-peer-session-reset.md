@@ -2,7 +2,7 @@
 title: Director-requested session reset of an assigned peer
 description: A director holding an active work grant may request the session reset of its assignee through a dedicated wrapper-to-server request; authority comes from the server-owned work record alone, the target passes the operator reset's gates, and the result returns to the requester's own topic.
 status: accepted
-last_updated: 2026-11-10
+last_updated: 2026-11-15
 date: 2026-10-17
 opened: 2026-10-17
 supersedes: [43]
@@ -106,6 +106,9 @@ can be targets. Grok is neither today: its wrapper advertises
 join (measured on the built `runGrokCli` options and on the wire, 2026-10-18,
 wrapper review r1), so the tool is not registered for it. Both halves are
 tracked by [issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658).
+Amendment (2026-11-15, issue #658): Grok now advertises
+`supports_session_reset: true` and can be a target; the requester half above
+is unchanged.
 
 D7. **ADR-0043 D2, by sentence.** (1) "no dedicated protocol / tool through
 which agent A requests a reset for agent B" is superseded for the lifetime of

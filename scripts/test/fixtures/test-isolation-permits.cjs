@@ -4,7 +4,7 @@
 // Plain data so the checker can read it without installing the guard.
 "use strict";
 const grok = ["history", "inspect", "lifecycle", "mcp", "permission-answer", "permission-switch",
-  "rate-limits", "resume", "sandbox"].map(name => [`wrapper/grok/test/native-${name}.test.ts`, ["network"]]);
+  "rate-limits", "resume", "sandbox", "session-reset"].map(name => [`wrapper/grok/test/native-${name}.test.ts`, ["network"]]);
 
 const table = {
   "scripts/test/test-isolation.test.mjs": ["systemd"],

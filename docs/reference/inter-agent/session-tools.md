@@ -2,7 +2,7 @@
 title: Inter-agent session tools
 description: Exact contract for agent-requested compaction, context threshold notices, and session reset.
 status: provisional
-last_updated: 2026-11-10
+last_updated: 2026-11-15
 related: [protocol, inter-agent-messaging]
 ---
 
@@ -117,7 +117,9 @@ selection are both `never`, and permission state is not blocked. Missing policy
 on a live turn, a failed policy read, `untrusted`, or `on-request` asks through
 `PermissionBroker`. Exec and app-server with the axis off submit `never`.
 A stricter mid-turn selection affects the next call; loosening waits for the
-next turn. Antigravity keeps its per-call broker approval.
+next turn. Antigravity keeps its per-call broker approval. Grok asks the
+broker on every call too, and denies an approval that is not answered within
+300 s, or within `permission_timeout_ms` when that is shorter.
 
 The tool describes this as: "When the engine and approval policy permit
 autonomous reset, the reservation is made at once without an operator dialog;
@@ -131,7 +133,7 @@ likewise leave the next call's approval to the engine and policy.
 | turn boundary | Wrapper sends `session_reset_request {mode, reason?}` to the server, which applies the same capability/pending-lock/state/cooldown gates as operator requests. In both Codex SDK and app-server paths, the ready `state_change` is sent on the same socket before `session_reset_request`, following [ADR-0043 D3](../../adr/0043-agent-initiated-session-reset.md)'s requirement to process the result first. |
 | denial | Broker deny or approval timeout returns an error without a reservation. Server refusals arrive after reservation as a notice: `agent_busy` is retried once and may then succeed; unsupported/runner-unavailable replies confirm refusal. A push timeout or pending reset leaves the outcome unconfirmed. |
 | Codex lifetime | A call with no live turn is cancelled before the approval setting is consulted. Autonomous approval also checks cancellation before reserving. When required, the approval wait is bounded at 300 s (`CODEX_APPROVAL_TIMEOUT_MS`, below codex's 310 s `tool_timeout_sec`) and denies on timeout. It is also bound to the calling turn: interrupt, a stream ending without a terminal, a rejected run, watchdog stop or host close deny a pending wait, and drop an already-made reservation with a notice to the agent. Only `turn.completed` / `turn.failed` is the boundary that sends `session_reset_request`, and a terminal delivered after the turn was abandoned from outside (operator interrupt, watchdog, host close) does not count. |
-| engine | Claude via canUseTool and its permission mode; Codex via the policy-aware wrapper gate (ADR-0043 2026-10-15 addendum); Antigravity via its per-call wrapper broker. Codex `request_compact` is not registered. |
+| engine | Claude via canUseTool and its permission mode; Codex via the policy-aware wrapper gate (ADR-0043 2026-10-15 addendum); Antigravity via its per-call wrapper broker; Grok via its per-call wrapper broker with the 300 s bound ([issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658)). Codex `request_compact` is not registered. |
 
 Rules:
 
@@ -180,9 +182,9 @@ the epoch from your own work results (`work_control_result` /
 | input | `{ agent_id, mode: "new" \| "clear", work_id, expected_authority_epoch, reason?: string, wait?: boolean }`; `wait` defaults to `true`. |
 | send | Immediately — the caller is not the process being replaced, so there is no turn boundary to wait for. The wrapper sends `peer_session_reset_request`; the server authorizes, applies the operator reset's gates plus `agent_in_conversation`, then checks the same-room rule immediately before the lock — the lock's own state / cooldown / pending-reset gates run after it — and replies `{ request_id }`. |
 | result | With `wait`, the tool returns `{ request_id, agent_id, mode, work_id, outcome: "completed" \| "failed" \| "timeout", reason?, to_session_id? }` within 70 s (the server's 60 s reset transaction plus margin). With `wait: false` it returns `{ request_id, agent_id, mode, work_id, outcome: "accepted" }` and a later `peer_session_reset_result` reaches the model as a root input, like a work notice. If the request itself gets no reply, the outcome is unknown; the tool says so and the caller must not resend. |
-| refusal | One of these closed reasons: `reset_not_authorized` (any authority failure, undifferentiated), `work_control_unavailable`, `unknown_agent`, `unsupported_session_reset` (Grok targets today), `agent_in_conversation` (the target has an open conversation with a third agent; one with the caller is allowed), `agent_busy`, `session_reset_pending`, `runner_unavailable`, `room_mismatch` (the target is in another room; the grant stays valid, so ask the operator rather than retrying — [rooms](rooms.md#the-director-requested-peer-session-reset)), `rooms_unavailable` (the rooms store did not answer this one read; retryable). |
+| refusal | One of these closed reasons: `reset_not_authorized` (any authority failure, undifferentiated), `work_control_unavailable`, `unknown_agent`, `unsupported_session_reset` (a target that does not advertise session reset), `agent_in_conversation` (the target has an open conversation with a third agent; one with the caller is allowed), `agent_busy`, `session_reset_pending`, `runner_unavailable`, `room_mismatch` (the target is in another room; the grant stays valid, so ask the operator rather than retrying — [rooms](rooms.md#the-director-requested-peer-session-reset)), `rooms_unavailable` (the rooms store did not answer this one read; retryable). |
 | before calling | Have the target externalize its state (file or status line) and carry the context into your next request; the target's status line survives the reset, its session does not. A busy target is refused, never interrupted — use the cooperative yield first. |
-| engine | Requester side registered on Claude Code, Codex and Antigravity, where `request_session_reset` is. Target side is any engine advertising `supports_session_reset: true`. Grok is neither requester (no `work_control` negotiation, tool not registered) nor target (`supports_session_reset: false`) today; both are tracked by [issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658). |
+| engine | Requester side registered on Claude Code, Codex and Antigravity, where `request_session_reset` is. Target side is any engine advertising `supports_session_reset: true`. Grok is a target ([issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658)). Grok is not a requester (no `work_control` negotiation, tool not registered); tracked by [issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658). |
 
 The Rules above belong to `request_session_reset`. For this tool: the request
 is sent immediately, `reason` travels only in the `peer_session_reset_request`

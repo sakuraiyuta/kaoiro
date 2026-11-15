@@ -15,8 +15,13 @@ import {
   makeLog,
   makeStateChange,
   mergePendingDisplayNameSync,
+  operatorApprovalGated,
   PermissionBroker,
   QuestionBroker,
+  REQUEST_SESSION_RESET_TOOL_FQN,
+  requestSessionResetDescriptor,
+  SessionResetCoordinator,
+  validateRequestSessionResetInput,
   writeRedactedStderr,
   type Envelope,
   type ToolDescriptor,
@@ -34,6 +39,12 @@ import type { GrokWireMetadata } from "./grok/wire.js";
 import { GrokLaunchError } from "./grok/errors.js";
 import { readGrokHistory } from "./history.js";
 
+/** Upper bound on the operator's answer to a `request_session_reset` call.
+ *  Grok waited a blocked kaoiro MCP call for the full 600 s in the measured
+ *  run (issue #658, M6); its own timeout is unmeasured, so the wrapper must
+ *  answer first or a late allow could reserve for a call Grok gave up on. */
+export const GROK_RESET_APPROVAL_TIMEOUT_MS = 300_000;
+
 export interface GrokCliDependencies {
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;
@@ -45,6 +56,8 @@ export interface GrokCliDependencies {
   onHostCreated?: (host: GrokHost) => void;
   onMetadata?: (metadata: GrokWireMetadata) => void;
   additionalTools?: ToolDescriptor[];
+  /** Overrides GROK_RESET_APPROVAL_TIMEOUT_MS (tests). */
+  resetApprovalTimeoutMs?: number;
   cwd?: string;
   platform?: NodeJS.Platform;
 }
@@ -107,6 +120,31 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     send,
     onPendingChange: (pending) => host?.setPendingQuestion(pending),
   });
+  // ADR-0043 D3: an approved reset waits for the reserving turn's settled
+  // boundary. Its notices ride the instruction chain, behind queued input.
+  const sessionReset = new SessionResetCoordinator({
+    request: (mode, reason) =>
+      link
+        ? link.requestSessionReset(mode, reason)
+        : Promise.reject(new Error("server link unavailable")),
+    notify: (text) => {
+      const queued = chain.then(async () => {
+        await hostReady;
+        await host!.send(text);
+      });
+      chain = queued.catch(() => {});
+      return queued;
+    },
+    log: (text) => writeRedactedStderr(`${text}\n`),
+  });
+  // A per-call deadline replaces the broker's own, so the shorter of the two
+  // is taken here; Grok's other permission requests keep the broker's.
+  const resetApprovalCapMs =
+    dependencies.resetApprovalTimeoutMs ?? GROK_RESET_APPROVAL_TIMEOUT_MS;
+  const resetApprovalDeadlineMs = Math.min(
+    resetApprovalCapMs,
+    config.permission_timeout_ms ?? resetApprovalCapMs,
+  );
   const turns = {
     deliverySequencesForTurn: (token: string) =>
       (deliveries.get(token) ?? []).flatMap((envelope) => {
@@ -211,6 +249,9 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     onPermissionDecision: (
       decision: Parameters<PermissionBroker["resolve"]>[0],
     ) => permission.resolve(decision),
+    onSessionResetFailed: (
+      { requestId, reason }: { requestId: string; reason: string },
+    ) => sessionReset.onResetFailed(requestId, reason),
     onQuestionResponse: (answer: Parameters<QuestionBroker["resolve"]>[0]) =>
       question.resolve(answer),
     onInterrupt: () => {
@@ -312,6 +353,23 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
         toolDescriptors: [
           ...interAgent.descriptors(),
           askUserQuestionDescriptor((questions) => question.decide(questions)),
+          // Grok does not ask before a kaoiro tool call (issue #658, M4), so
+          // this gate is the only approval: every call asks the operator.
+          operatorApprovalGated(
+            requestSessionResetDescriptor({
+              reserve: (mode, reason) =>
+                sessionReset.reserve(mode, reason,
+                  host?.activeInterAgentTurnToken() ?? undefined),
+              offerCompact: false,
+            }),
+            {
+              decide: (name, input, signal) =>
+                permission.decide(name, input, signal,
+                  { deadlineMs: resetApprovalDeadlineMs }),
+              toolName: REQUEST_SESSION_RESET_TOOL_FQN,
+              validate: validateRequestSessionResetInput,
+            },
+          ),
           ...(dependencies.additionalTools ?? []),
         ],
         decidePermission: (
@@ -334,11 +392,21 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
           turnToken,
           conversationIds,
           error,
+          settled,
         }: {
           turnToken: string;
           conversationIds: string[];
           error?: { detail: string; reason?: string };
+          settled?: { authoritative: boolean; why?: string };
         }) => {
+          // The ready state_change was published with the turn's result, so
+          // a reset request sent from here follows it on the link.
+          if (settled)
+            sessionReset.onTurnEnd({
+              turnToken,
+              authoritative: settled.authoritative,
+              ...(settled.why !== undefined ? { why: settled.why } : {}),
+            });
           question.close();
           if (error?.reason === "permission_sync_timeout") {
             retirePermissionSyncInput({
