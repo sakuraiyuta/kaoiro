@@ -40,6 +40,42 @@ defmodule KaoiroServer.PersonaRebuildLockTest do
     end
   end
 
+  @tag :tmp_dir
+  test "notification is skipped while the endpoint is absent", %{tmp_dir: tmp} do
+    Application.put_env(:kaoiro_server, :persona_dir, tmp)
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+    endpoint = KaoiroServerWeb.Endpoint
+    :erlang.trace_pattern({endpoint, :broadcast, 3}, true, [:local])
+
+    on_exit(fn -> :erlang.trace_pattern({endpoint, :broadcast, 3}, false, [:local]) end)
+
+    run = fn ->
+      task =
+        Task.async(fn ->
+          receive do
+            :go -> PersonaAssets.rebuild()
+          end
+        end)
+
+      :erlang.trace(task.pid, true, [:call, {:tracer, self()}])
+      send(task.pid, :go)
+      assert Task.await(task, 10_000) == :ok
+      task.pid
+    end
+
+    running = run.()
+    assert_receive {:trace, ^running, :call, {^endpoint, :broadcast, _}}, 1_000
+
+    assert :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, endpoint)
+
+    try do
+      absent = run.()
+      refute_receive {:trace, ^absent, :call, {^endpoint, :broadcast, _}}, 200
+    after
+      assert {:ok, _pid} = Supervisor.restart_child(KaoiroServer.Supervisor, endpoint)
+    end
+  end
+
   describe "issue #185 round-3: boot ownership (warm init)" do
     @tag :tmp_dir
     test "warm child の起動時 rebuild 失敗は Supervisor.start_link を即座に失敗させ、" <>
