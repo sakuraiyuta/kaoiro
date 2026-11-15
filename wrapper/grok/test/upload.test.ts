@@ -128,16 +128,32 @@ describe("upload intake", () => {
     ["too many ids", Array.from({ length: 11 }, () => "u1"), "count_over"],
     ["an unknown id", ["u1", "missing"], "timeout"],
     ["an incomplete upload", ["u1", "open"], "timeout"],
+    ["a complete upload without attach_close", ["u1", "unclosed"], "timeout"],
   ])("refuses %s at staging and consumes nothing", (_name, ids, reason) => {
     const { intake, envelopes } = created();
     upload(intake, "u1", "a.txt", "text/plain", bytes("a"));
     intake.attachOpen({ upload_id: "open", filename: "o", mime: "text/plain", size: 2, chunks: 2 });
+    intake.attachOpen({ upload_id: "unclosed", filename: "u", mime: "text/plain", size: 1, chunks: 1 });
+    intake.attachChunk(chunkPayload("unclosed", 0, bytes("u")));
     expect(intake.stage(ids)).toBeUndefined();
     expect(rejections(envelopes)).toEqual([
       expect.objectContaining({ type: "instruction_rejected", attachment_ids: ids, reason }),
     ]);
     // A later valid instruction can use the same upload.
     expect(intake.stage(["u1"])?.uploads).toHaveLength(1);
+  });
+  it("stages an upload refused before its attach_close once the close arrives", () => {
+    const { intake, envelopes } = created();
+    intake.attachOpen({ upload_id: "u1", filename: "a.txt", mime: "text/plain", size: 1, chunks: 1 });
+    intake.attachChunk(chunkPayload("u1", 0, bytes("a")));
+    expect(intake.stage(["u1"])).toBeUndefined();
+    expect(rejections(envelopes)).toEqual([
+      { type: "instruction_rejected", attachment_ids: ["u1"], reason: "timeout",
+        detail: "upload_id u1 is not closed" },
+    ]);
+    intake.attachClose("u1");
+    expect(intake.stage(["u1"])?.uploads.map((u) => u.meta.upload_id)).toEqual(["u1"]);
+    expect(rejections(envelopes)).toHaveLength(1);
   });
   it("checks a repeated id before anything moves and attaches it once", () => {
     const { intake, envelopes } = created();

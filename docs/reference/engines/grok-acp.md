@@ -267,7 +267,10 @@ incoming message over 32 MiB, and Grok exits on an incoming message over
 ### Staging and interrupt
 
 An instruction's uploads leave the pending set when the instruction arrives,
-before it waits behind earlier input. ADR-0025 F11 then holds wherever it
+before it waits behind earlier input. Only uploads closed with `attach_close`
+are taken: an instruction that names one not yet closed gets
+`instruction_rejected` `timeout`, takes none of its uploads, and the upload
+stays pending for a later instruction. ADR-0025 F11 then holds wherever it
 waits: an interrupt sends `attach_rejected` `interrupted` for every pending
 upload and for each upload of an instruction whose turn has not started, and
 `instruction_rejected` `interrupted` for that instruction, which never runs. A
