@@ -145,19 +145,24 @@ it("rejects work locally with an old server but keeps normal messages", async ()
   });
 });
 
-it("queues notices before readiness and suppresses permission timeouts", async () => {
-  await fixture(true, async ({ options, send, envelopes }) => {
+it("queues notices until the host is ready", async () => {
+  await fixture(true, async ({ send }) => {
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0]?.[0]).toContain('"op":"assign"');
+  }, true);
+});
+
+it("suppresses notice permission timeouts and continues the queue", async () => {
+  await fixture(true, async ({ options, send, envelopes }) => {
     send.mockRejectedValueOnce(new PermissionSyncTimeoutError());
     options.onWorkNotice?.({ ...notice, op: "complete" });
     options.onWorkNotice?.({ ...notice, op: "cancel" });
-    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
-    expect(send.mock.calls[0]?.[0]).toContain('"op":"assign"');
-    expect(send.mock.calls[1]?.[0]).toContain('"op":"complete"');
-    expect(send.mock.calls[2]?.[0]).toContain('"op":"cancel"');
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(send.mock.calls[0]?.[0]).toContain('"op":"complete"');
+    expect(send.mock.calls[1]?.[0]).toContain('"op":"cancel"');
     expect(envelopes.some(e => e.payload.text === "grok turn failed"))
       .toBe(false);
-  }, true);
+  });
 });
 
 it("reports other notice failures", async () => {
