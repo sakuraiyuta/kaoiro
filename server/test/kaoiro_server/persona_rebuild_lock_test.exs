@@ -64,7 +64,9 @@ defmodule KaoiroServer.PersonaRebuildLockTest do
     end
 
     running = run.()
-    assert_receive {:trace, ^running, :call, {^endpoint, :broadcast, _}}, 1_000
+
+    assert_receive {:trace, ^running, :call, {^endpoint, :broadcast, _}},
+                   KaoiroServer.TestTimeouts.file_event()
 
     assert :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, endpoint)
 
