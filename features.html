@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14141d">
+  <title>kaoiro: Features</title>
+  <meta name="description" content="What kaoiro gives you when several AI agents do the work: a clear view of how it is going, and a place to make the decisions that need a person.">
+  <link rel="alternate" hreflang="ja"
+    href="ja/features.html">
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#personas">Skip to content</a>
+  <nav class="wrap topbar" aria-label="Site">
+    <a href="./">Home</a>
+    <a href="features.html" aria-current="page">Features</a>
+    <a href="how-it-works.html">How it works</a>
+    <a href="deployments.html">Deployments</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">Docs</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">Release notes</a>
+    <a href="ja/features.html" hreflang="ja" lang="ja">日本語</a>
+  </nav>
+  <nav class="toc" aria-label="Sections">
+    <ol>
+      <li><a href="#personas"><span>See who is who, and how each one is
+        doing</span></a></li>
+      <li><a href="#work-status"><span>Know what each agent is working
+        on</span></a></li>
+      <li><a href="#conversations"><span>Follow every conversation</span></a></li>
+      <li><a href="#collaboration"><span>Make agents a team</span></a></li>
+      <li><a href="#decisions"><span>Keep people in the
+        decisions</span></a></li>
+      <li><a href="#browser-control"><span>Run agents from the
+        browser</span></a></li>
+      <li><a href="#limits"><span>Fit it to your team</span></a></li>
+    </ol>
+  </nav>
+  <main class="features-page">
+    <header class="wrap page-head feature-top">
+      <div class="feature-top-copy">
+        <p class="eyebrow"><a href="./">kaoiro</a> / Features</p>
+        <h1>What kaoiro does</h1>
+        <p class="lead">When several AI agents do the work, your job becomes knowing how it is going and deciding at the points that need a person. kaoiro puts both on one screen.</p>
+      </div>
+      <figure class="feature-top-shot">
+        <img src="assets/feature-overview-en.webp" width="1280" height="820" alt="Four agent cards beside the conversation timeline">
+        <figcaption>The real dashboard, shown with made-up data.</figcaption>
+      </figure>
+      <nav class="feature-index" aria-label="On this page">
+        <ol>
+          <li><a href="#personas"><span>See who is who, and how each one is doing</span></a></li>
+          <li><a href="#work-status"><span>Know what each agent is working on</span></a></li>
+          <li><a href="#conversations"><span>Follow every conversation</span></a></li>
+          <li><a href="#collaboration"><span>Make agents a team</span></a></li>
+          <li><a href="#decisions"><span>Keep people in the decisions</span></a></li>
+          <li><a href="#browser-control"><span>Run agents from the browser</span></a></li>
+          <li><a href="#limits"><span>Fit it to your team</span></a></li>
+        </ol>
+      </nav>
+    </header>
+
+    <section class="wrap block" aria-labelledby="personas">
+      <p class="eyebrow"><span>01</span> / Recognize</p>
+      <h2 id="personas">See who is who, and how each one is doing</h2>
+      <p class="intro">The more agents you run, the harder it is to tell who is doing what. kaoiro gives each one a name and a face, and shows its current state as an expression.</p>
+      <article class="feature split" id="identity">
+        <div class="feature-copy">
+          <h3>A name and a face for every agent</h3>
+          <p class="feature-main">Each agent has its own name and character. However many you run side by side, you can tell by face and name which job went to whom.</p>
+          <p class="feature-support">The name and face carry over when an agent is stopped and started again. Tomorrow you look for the same face to pick up where you left off.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-cards-en.webp" width="856" height="564" loading="lazy" alt="Cards for four agents, each with a name and a face">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-overview-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature split flip" id="voice">
+        <div class="feature-copy">
+          <h3>Each agent can have its own way of speaking</h3>
+          <p class="feature-main">You can tell each agent how to speak: how it refers to itself, its tone, and how it shapes a reply. One can answer briefly with the main point first, another can write out each step, to suit the people reading.</p>
+          <p class="feature-support">These are instructions about speaking style. What the agent should do still comes from the request you send it. A distinct voice is one more cue for telling who said what.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-persona-en.webp" width="544" height="348" loading="lazy" alt="Speaking-style instructions and basic details for a fictional character">
+          </div>
+          <figcaption>The real dashboard. The character settings shown are made up.</figcaption>
+        </figure>
+      </article>
+      <article class="feature stack" id="faces">
+        <div class="feature-copy">
+          <h3>The expression shows the current state</h3>
+          <p class="feature-main">Idle, thinking, waiting for approval. When an agent&#x27;s state changes, its expression changes with it. A look across the screen tells you who is working and who is waiting for a person.</p>
+          <p class="feature-support">Each state can have its own expression image. While an agent is running separate work inside itself (a subagent or a workflow), points of light circle above its head.</p>
+        </div>
+        <div class="feature-media-row">
+          <figure class="feature-media faces">
+            <ul class="face-strip">
+              <li data-state="idle">
+                <img src="assets/feature-face-idle.webp" width="160" height="160" loading="lazy" alt="">
+                <strong>Idle</strong><span>Ready for the next job.</span>
+              </li>
+              <li data-state="thinking">
+                <img src="assets/feature-face-thinking.webp" width="160" height="160" loading="lazy" alt="">
+                <strong>Thinking</strong><span>Working on it.</span>
+              </li>
+              <li data-state="waiting_permission">
+                <img src="assets/feature-face-waiting_permission.webp" width="160" height="160" loading="lazy" alt="">
+                <strong>Waiting for approval</strong><span>Waiting for a person to decide.</span>
+              </li>
+            </ul>
+            <figcaption>Expressions of a bundled character.</figcaption>
+          </figure>
+          <figure class="feature-media shot">
+            <div class="plate">
+              <img src="assets/feature-crop-card-en.webp" width="284" height="280" loading="lazy" alt="An agent card with white dots above the head">
+            </div>
+            <figcaption>A card from the real dashboard. The white dots above the head show work running inside the agent.</figcaption>
+          </figure>
+        </div>
+      </article>
+      <article class="feature split" id="fatigue">
+        <div class="feature-copy">
+          <h3>A long session shows on the face</h3>
+          <p class="feature-main">An agent can hold only so much in view at once. That capacity is its context. As context usage grows, the idle face changes to a tired one.</p>
+          <p class="feature-support">The tired face stands for context usage. Looking across the grid, you can spot by face the agents to move to a fresh session.</p>
+        </div>
+        <figure class="feature-media face-pair">
+          <div>
+            <img src="assets/feature-face-idle.webp" width="160" height="160" loading="lazy" alt="">
+            <p>Normal</p>
+          </div>
+          <span class="arrow" aria-hidden="true">→</span>
+          <div>
+            <img src="assets/feature-face-fatigued.webp" width="160" height="160" loading="lazy" alt="">
+            <p>Higher context usage</p>
+          </div>
+        </figure>
+      </article>
+    </section>
+
+    <section class="wrap block" aria-labelledby="work-status">
+      <p class="eyebrow"><span>02</span> / Understand</p>
+      <h2 id="work-status">Know what each agent is working on</h2>
+      <p class="intro">Once the faces tell you how things stand, short summaries and a few numbers tell you the rest. You get the main points without rereading long conversations.</p>
+      <article class="feature split" id="status">
+        <div class="feature-copy">
+          <h3>Each agent writes up what it is doing</h3>
+          <p class="feature-main">An agent keeps a short summary of its own: what it is assigned, how far it has got, and links it wants you to check. The card gives you the main points without opening the conversation.</p>
+          <p class="feature-support">With several agents running, that summary helps you choose whom to look at next. &quot;Read more&quot; opens the full text.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-status-en.webp" width="246" height="284" loading="lazy" alt="A status line shown below an agent&#x27;s name, state and usage gauges">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-detail-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature split flip" id="status-history">
+        <div class="feature-copy">
+          <h3>Step away and still catch up</h3>
+          <p class="feature-main">Each time an agent rewrites its status line, the entry is kept with its time. You can read, in order and separately from the conversation log, what each agent has been working on and where it stands.</p>
+          <p class="feature-support">Recent entries are listed together, so you can pick up the thread from the summaries in the morning, or when work changes hands.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-status-history-en.webp" width="672" height="290" loading="lazy" alt="Status summaries listed with their times, newest first">
+          </div>
+          <figcaption>The real dashboard, shown with made-up data.</figcaption>
+        </figure>
+      </article>
+      <div class="feature-grid">
+      <article class="feature card" id="todo">
+        <div class="feature-copy">
+          <h3>See how much is left</h3>
+          <p class="feature-main">An agent&#x27;s TODO list is shown as a completion count and a list of items. You can see what is done and what remains without reading the conversation.</p>
+          <p class="feature-support">For a job with many steps, it is a quick measure of progress.</p>
+          <p class="note todo-note">Available with supported engines and models.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-todo-en.webp" width="336" height="106" loading="lazy" alt="A TODO list with a completion count and three items">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-detail-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature card" id="usage">
+        <div class="feature-copy">
+          <h3>Check the headroom before the next move</h3>
+          <p class="feature-main">For each agent, kaoiro shows context usage (how much of what the agent can hold in view is in use), how much of the AI service&#x27;s usage allowance is used, and when that allowance resets.</p>
+          <p class="feature-support">These numbers help you decide whom to give the next job, and which agent to move to a fresh session. You can route work to an agent that still has room.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-gauges-en.webp" width="246" height="96" loading="lazy" alt="Two gauges for context and usage allowance">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-detail-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      </div>
+    </section>
+
+    <section class="wrap block" aria-labelledby="conversations">
+      <p class="eyebrow"><span>03</span> / Follow</p>
+      <h2 id="conversations">Follow every conversation</h2>
+      <p class="intro">Who asked for what, and what came back. Every exchange is in one place, in time order.</p>
+      <article class="feature split" id="timeline">
+        <div class="feature-copy">
+          <h3>Every exchange in a single timeline</h3>
+          <p class="feature-main">Instructions from people, replies from agents and messages between agents appear in one timeline, in time order. You can follow the whole team without going from terminal to terminal.</p>
+          <p class="feature-support">A request for implementation, the questions along the way and the reviewer&#x27;s reply sit in the same column, so a handoff reads straight through.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-timeline-en.webp" width="368" height="494" loading="lazy" alt="A timeline of instructions, replies and messages between agents">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-overview-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature split flip" id="transcript">
+        <div class="feature-copy">
+          <h3>From a line that catches your eye to the full record</h3>
+          <p class="feature-main">New messages carry an unread mark. Select a row in the timeline and that agent&#x27;s detailed record opens.</p>
+          <p class="feature-support">Skim the timeline, then open the full record for a line you want. From there you can see who is waiting for a reply and what led up to it.</p>
+        </div>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>What you want to know</th>
+                <th>Where to look</th>
+              </tr>
+              <tr>
+                <td>What has just arrived</td>
+                <td>Rows with an unread mark</td>
+              </tr>
+              <tr>
+                <td>What led up to a message</td>
+                <td>That agent&#x27;s record, opened by selecting the row</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="wrap block" aria-labelledby="collaboration">
+      <p class="eyebrow"><span>04</span> / Team up</p>
+      <h2 id="collaboration">Make agents a team</h2>
+      <p class="intro">Agents can ask each other for work. Agents from different products can be on the same team.</p>
+      <article class="feature stack" id="messages">
+        <div class="feature-copy">
+          <h3>Agents from different products talk to each other directly</h3>
+          <p class="feature-main">Agents running on Claude Code, Codex, Antigravity and Grok Build can send each other requests and get replies. The text passes between the agents.</p>
+          <p class="feature-support">One model can implement and a model from another company can review. The exchange stays as a conversation, so you can read how it went afterwards.</p>
+        </div>
+        <figure class="feature-media diagram-flow">
+          <ol class="flow">
+            <li><strong>Ask</strong><p>A Claude Code agent to a Codex agent: &quot;Please check the captions.&quot;</p></li>
+            <li><strong>Work</strong><p>The Codex agent is checking the captions.</p></li>
+            <li><strong>Reply</strong><p>The Codex agent to the Claude Code agent: &quot;Here is what I found.&quot;</p></li>
+          </ol>
+          <figcaption>An explanatory diagram.</figcaption>
+        </figure>
+      </article>
+      <article class="feature split" id="rooms">
+        <div class="feature-copy">
+          <h3>A room for each team</h3>
+          <p class="feature-main">Put agents into rooms and the grid is grouped by team, with messages between agents staying inside the same room.</p>
+          <p class="feature-support">With several jobs running at once, such as development and documentation, a request stays with its own team. Rooms group teams and keep each team&#x27;s messages in that room.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-rooms-en.webp" width="856" height="718" loading="lazy" alt="Agent cards grouped into a Development room and a Documentation room">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-rooms-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <div class="feature-grid">
+      <article class="feature card" id="work">
+        <div class="feature-copy">
+          <h3>A record of who asked whom</h3>
+          <p class="feature-main">When one agent hands work to another, kaoiro can record the coordinating agent (the director), the agent taking the work (the assignee), and the stage the assignment has reached.</p>
+          <p class="feature-support">The record holds the assignment and its stage. When a coordinating agent is dividing up the work, both sides can proceed without mistaking who took what. Checking the result is still done through the conversation and the work itself.</p>
+        </div>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>Stage</th>
+                <th>Meaning</th>
+              </tr>
+              <tr>
+                <td>Assign</td>
+                <td>The director names an assignee</td>
+              </tr>
+              <tr>
+                <td>Accept</td>
+                <td>The assignee takes the work</td>
+              </tr>
+              <tr>
+                <td>Decline</td>
+                <td>The assignee turns it down</td>
+              </tr>
+              <tr>
+                <td>Complete</td>
+                <td>The work is recorded as finished</td>
+              </tr>
+              <tr>
+                <td>Cancel</td>
+                <td>The assignment is withdrawn</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      <article class="feature card" id="coordination">
+        <div class="feature-copy">
+          <h3>A notice when an exchange runs long</h3>
+          <p class="feature-main">A notice appears on screen when messages between the same agents keep growing, or when confirmation that a message was received has stopped.</p>
+          <p class="feature-support">When the notice appears, a person can sort out the open points or add an instruction.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-notice-en.webp" width="390" height="85" loading="lazy" alt="A banner reporting a growing exchange">
+          </div>
+          <figcaption>The real dashboard, shown with made-up data.</figcaption>
+        </figure>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>Notice</th>
+                <th>Where to look</th>
+              </tr>
+              <tr>
+                <td>A growing exchange</td>
+                <td>The open points and the next action</td>
+              </tr>
+              <tr>
+                <td>Stalled delivery confirmation</td>
+                <td>The recipient&#x27;s state and the messages in transit</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      </div>
+    </section>
+
+    <section class="wrap block" aria-labelledby="decisions">
+      <p class="eyebrow"><span>05</span> / Decide</p>
+      <h2 id="decisions">Keep people in the decisions</h2>
+      <p class="intro">Work you have handed off will sometimes need an approval or a choice. kaoiro brings that question to a person&#x27;s screen.</p>
+      <article class="feature stack" id="approvals">
+        <div class="feature-copy">
+          <h3>A person decides what may run</h3>
+          <p class="feature-main">When an agent asks for approval, the request reaches the browser before the action runs. You read what it is about to do and choose, there and then, whether to allow it.</p>
+          <p class="feature-support">However many agents are working, their approval requests come to your screen. The permission settings you choose at launch set how far an agent goes on its own and where it asks first.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="assets/feature-crop-approval-en.webp" width="914" height="208" loading="lazy" alt="The action an agent wants to run, with buttons to allow or deny it">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-permission-en.webp">See the whole screen</a></figcaption>
+        </figure>
+        <figure class="feature-media diagram-flow">
+          <ol class="flow">
+            <li><strong>Arrives</strong><p>An approval request reaches the browser.</p></li>
+            <li><strong>Read and decide</strong><p>You read it and choose whether to allow it.</p></li>
+            <li><strong>Work continues</strong><p>Your answer reaches the agent, and the work goes on.</p></li>
+          </ol>
+          <figcaption>An explanatory diagram.</figcaption>
+        </figure>
+      </article>
+      <article class="feature stack" id="questions">
+        <div class="feature-copy">
+          <h3>When there is a choice, the agent asks</h3>
+          <p class="feature-main">When there is more than one way to proceed, an agent can ask a multiple-choice question. It arrives on the same screen, and you answer by picking an option.</p>
+          <p class="feature-support">Which draft to go with, how far to take the research. The work stays with the agent; you decide only the turns that set its direction.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="assets/feature-crop-question-en.webp" width="914" height="284" loading="lazy" alt="A question asking which image candidate to use">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-question-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature split" id="notifications">
+        <div class="feature-copy">
+          <h3>Sound and notifications when it is your turn</h3>
+          <p class="feature-main">When an agent starts waiting for a reply or an approval, an open dashboard tells you with a sound and a desktop notification.</p>
+          <p class="feature-support">Leave the dashboard open and get on with other work.</p>
+        </div>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>Signal</th>
+                <th>What it tells you</th>
+              </tr>
+              <tr>
+                <td>Sound</td>
+                <td>That a reply is needed. Waiting for input and waiting for approval sound different</td>
+              </tr>
+              <tr>
+                <td>Desktop notification</td>
+                <td>The name of the agent that is waiting, and its state</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      <article class="feature split flip" id="mobile">
+        <div class="feature-copy">
+          <h3>Answer when you are away from your desk</h3>
+          <p class="feature-main">The dashboard rearranges itself to fit a phone. You can answer questions and approval requests from the device in your hand.</p>
+          <p class="feature-support">Where your phone can reach the server, you can send a decision between meetings or on the move.</p>
+        </div>
+        <figure class="feature-media shot phone">
+          <div class="plate">
+            <img src="assets/feature-phone-en.webp" width="390" height="844" loading="lazy" alt="A question and its answer controls at phone width">
+          </div>
+          <figcaption>The real dashboard, shown with made-up data.</figcaption>
+        </figure>
+      </article>
+      <article class="feature stack" id="roles">
+        <div class="feature-copy">
+          <h3>Separate those who watch from those who operate</h3>
+          <p class="feature-main">Each user can be given a role: viewer, to watch, or operator, to send instructions and handle approvals.</p>
+          <p class="feature-support">A viewer sees faces, states and status lines. Conversation content and approval controls appear on an operator&#x27;s screen. You can show viewers how the work is going, and leave launch, instructions and approvals with operators.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="assets/feature-viewer-en.webp" width="1216" height="327" loading="lazy" alt="A viewer&#x27;s screen, with agent faces and states">
+          </div>
+          <figcaption>The real dashboard, shown with made-up data. <a href="assets/feature-viewer-en.webp">View larger</a></figcaption>
+        </figure>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>Role</th>
+                <th>Sees</th>
+                <th>Can do</th>
+              </tr>
+              <tr>
+                <td>Viewer</td>
+                <td>Faces, states and status lines</td>
+                <td>Watch</td>
+              </tr>
+              <tr>
+                <td>Operator</td>
+                <td>The above, plus conversations, progress and usage</td>
+                <td>Launch, instruct, answer questions, approve</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="wrap block" aria-labelledby="browser-control">
+      <p class="eyebrow"><span>06</span> / Operate</p>
+      <h2 id="browser-control">Run agents from the browser</h2>
+      <p class="intro">Launch agents, send instructions, change settings and resume work, all from the browser.</p>
+      <article class="feature split" id="launch">
+        <div class="feature-copy">
+          <h3>Choose the machine and the AI to run</h3>
+          <p class="feature-main">In the launch dialog you choose the machine, the character, the engine, the working folder and the permission settings.</p>
+          <p class="feature-support">Agents running on several machines come together in one dashboard. Work on your own PC and work on a server sit side by side in the same grid.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-launch-en.webp" width="464" height="394" loading="lazy" alt="The launch dialog&#x27;s selectors for character, working folder, engine, model and permissions">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-launch-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature stack" id="input">
+        <div class="feature-copy">
+          <h3>Send instructions, and change course midway</h3>
+          <p class="feature-main">You send instructions from the browser. You can attach a screenshot or a diagram and say &quot;fix this part&quot;.</p>
+          <p class="feature-support">Add instructions as the work goes on, or interrupt it and take a different direction.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="assets/feature-crop-input-en.webp" width="914" height="72" loading="lazy" alt="The prompt box with attach and send buttons">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-detail-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <div class="feature-grid">
+      <article class="feature card" id="tuning">
+        <div class="feature-copy">
+          <h3>Change settings as the job moves on</h3>
+          <p class="feature-main">You can change the model, the reasoning effort and the permission settings from the browser while the work is under way.</p>
+          <p class="feature-support">Use one model for research and another for implementation, or change the permissions when you want an agent to do more on its own.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-tuning-en.webp" width="246" height="90" loading="lazy" alt="The model and effort settings with their switch buttons">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-detail-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature card" id="sessions">
+        <div class="feature-copy">
+          <h3>Stop, continue or start fresh</h3>
+          <p class="feature-main">After an agent is stopped, &quot;Restore agent&quot; brings it back with the same name and face. You can also pick an earlier session (one continuous run of work) to resume, or reset and begin from a fresh context.</p>
+          <p class="feature-support">You return to interrupted work with the conversation so far. For a new topic, reset first and then ask.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-restore-en.webp" width="231" height="184" loading="lazy" alt="The controls that include the &quot;Restore agent&quot; button">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-restore-en.webp">See the whole screen</a></figcaption>
+        </figure>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>Operation</th>
+                <th>When to use it</th>
+              </tr>
+              <tr>
+                <td>Stop</td>
+                <td>To halt the work</td>
+              </tr>
+              <tr>
+                <td>Restore, resume</td>
+                <td>To continue an earlier conversation</td>
+              </tr>
+              <tr>
+                <td>Reset</td>
+                <td>To start a different topic from a fresh context</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      </div>
+      <article class="feature stack" id="session-history">
+        <div class="feature-copy">
+          <h3>A record of when a session changed, and at whose request</h3>
+          <p class="feature-main">Session operations such as resets are listed in a history with their times and the requester that was recorded.</p>
+          <p class="feature-support">You can check afterwards whether a coordinating agent made the change or the agent did it itself. It also helps you decide where to resume.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="assets/feature-session-history-en.webp" width="768" height="408" loading="lazy" alt="Session operations listed with who requested them">
+          </div>
+          <figcaption>The real dashboard, shown with made-up data. <a href="assets/feature-session-history-en.webp">View larger</a></figcaption>
+        </figure>
+      </article>
+    </section>
+
+    <section class="wrap block" aria-labelledby="limits">
+      <p class="eyebrow"><span>07</span> / Adapt</p>
+      <h2 id="limits">Fit it to your team</h2>
+      <p class="intro">You can bring your own characters. This is also where to check which features apply to you.</p>
+      <div class="feature-grid">
+      <article class="feature card" id="packs">
+        <div class="feature-copy">
+          <h3>Add your own characters</h3>
+          <p class="feature-main">A character is a zip file holding expression images, speaking-style instructions, and details such as its name. Put the file in the server&#x27;s ingest folder and it joins the same list as the bundled characters.</p>
+          <p class="feature-support">You might use a mascot your company already knows, or give each team a consistent look.</p>
+        </div>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>Contents</th>
+                <th>Purpose</th>
+              </tr>
+              <tr>
+                <td>Images</td>
+                <td>An expression for each state</td>
+              </tr>
+              <tr>
+                <td>personality.md</td>
+                <td>Speaking-style instructions</td>
+              </tr>
+              <tr>
+                <td>manifest.json</td>
+                <td>Name, author and other details</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      <article class="feature card" id="capabilities">
+        <div class="feature-copy">
+          <h3>The engine and your role decide what you can use</h3>
+          <p class="feature-main">Some features on this page are not available with every engine or role, and some are not supported yet.</p>
+          <p class="feature-support">The screen shows the controls that work for each agent. Launch with the engine you plan to use and start from the controls you see.</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="assets/feature-crop-engine-en.webp" width="464" height="68" loading="lazy" alt="The engine selector in the launch dialog">
+          </div>
+          <figcaption>Part of the real dashboard, shown with made-up data. <a href="assets/feature-launch-en.webp">See the whole screen</a></figcaption>
+        </figure>
+      </article>
+      </div>
+    </section>
+    <nav class="wrap block next" aria-label="Next">
+      <h2 class="next-title">Read next</h2>
+      <ul class="actions">
+        <li><a href="how-it-works.html">How it works</a></li>
+        <li><a href="getting-started.html">Getting started</a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a></li>
+      </ul>
+    </nav>
+  </main>
+  <footer class="wrap">
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">Security policy</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/LICENSE">MIT License</a>
+    · <a href="assets/jams2026-poster.pdf">JAMS 2026 poster (PDF)</a>
+  </footer>
+</body>
+</html>

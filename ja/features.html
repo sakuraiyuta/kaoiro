@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14141d">
+  <title>kaoiro: 機能</title>
+  <meta name="description" content="複数の AI エージェントに仕事を任せるとき、様子を知り、要所で判断するための機能を紹介します。">
+  <link rel="alternate" hreflang="en"
+    href="../features.html">
+  <link rel="stylesheet" href="../style.css">
+  <script src="../site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#personas">本文へ</a>
+  <nav class="wrap topbar" aria-label="サイト">
+    <a href="./">ホーム</a>
+    <a href="features.html" aria-current="page">機能</a>
+    <a href="how-it-works.html">仕組み</a>
+    <a href="deployments.html">構築事例</a>
+    <a href="getting-started.html">はじめかた</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro">GitHub</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/README.md">ドキュメント</a>
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/release/README.md">リリースノート</a>
+    <a href="../features.html" hreflang="en" lang="en">English</a>
+  </nav>
+  <nav class="toc" aria-label="目次">
+    <ol>
+      <li><a href="#personas"><span>ひと目で、誰がどんな様子か分かる</span></a></li>
+      <li><a href="#work-status"><span>仕事の中身と進み具合を知る</span></a></li>
+      <li><a href="#conversations"><span>全員のやり取りを追う</span></a></li>
+      <li><a href="#collaboration"><span>エージェントどうしをチームにする</span></a></li>
+      <li><a href="#decisions"><span>要所では、人が判断する</span></a></li>
+      <li><a href="#browser-control"><span>ブラウザから動かす</span></a></li>
+      <li><a href="#limits"><span>自分たちの使い方に合わせる</span></a></li>
+    </ol>
+  </nav>
+  <main class="features-page">
+    <header class="wrap page-head feature-top">
+      <div class="feature-top-copy">
+        <p class="eyebrow"><a href="./">kaoiro</a> / 機能</p>
+        <h1>kaoiro でできること</h1>
+        <p class="lead">複数の AI エージェントに仕事を任せると、人の役目は、様子を知ることと、要所で判断することに変わります。kaoiro は、その 2 つを 1 つの画面にまとめます。</p>
+      </div>
+      <figure class="feature-top-shot">
+        <img src="../assets/feature-overview-ja.webp" width="1280" height="820" alt="4 体のエージェントのカードと、会話のタイムライン">
+        <figcaption>実際の画面です。表示しているデータは架空のものです。</figcaption>
+      </figure>
+      <nav class="feature-index" aria-label="このページ">
+        <ol>
+          <li><a href="#personas"><span>ひと目で、誰がどんな様子か分かる</span></a></li>
+          <li><a href="#work-status"><span>仕事の中身と進み具合を知る</span></a></li>
+          <li><a href="#conversations"><span>全員のやり取りを追う</span></a></li>
+          <li><a href="#collaboration"><span>エージェントどうしをチームにする</span></a></li>
+          <li><a href="#decisions"><span>要所では、人が判断する</span></a></li>
+          <li><a href="#browser-control"><span>ブラウザから動かす</span></a></li>
+          <li><a href="#limits"><span>自分たちの使い方に合わせる</span></a></li>
+        </ol>
+      </nav>
+    </header>
+
+    <section class="wrap block" aria-labelledby="personas">
+      <p class="eyebrow"><span>01</span> / 見分ける</p>
+      <h2 id="personas">ひと目で、誰がどんな様子か分かる</h2>
+      <p class="intro">エージェントが増えるほど、誰が何をしているかは見えにくくなります。kaoiro は 1 体ずつに名前と顔を与え、いまの状態を表情で示します。</p>
+      <article class="feature split" id="identity">
+        <div class="feature-copy">
+          <h3>名前と顔で、誰の仕事かが分かる</h3>
+          <p class="feature-main">エージェントには、1 体ずつ名前とキャラクターが付きます。何体を並行して動かしていても、どの仕事を誰に任せたかを、顔と名前で追えます。</p>
+          <p class="feature-support">名前と顔は、エージェントを止めて再開しても引き継がれます。昨日の続きを頼む相手を、同じ顔で見つけられます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-cards-ja.webp" width="856" height="564" loading="lazy" alt="名前と顔が付いた 4 体のエージェントのカード">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-overview-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature split flip" id="voice">
+        <div class="feature-copy">
+          <h3>話し方も、相手ごとに決められる</h3>
+          <p class="feature-main">一人称、口調、返事のまとめ方を、エージェントごとに指示できます。要点から短く返す相手、手順を丁寧に書く相手、と読む人の好みに合わせられます。</p>
+          <p class="feature-support">指示するのは話し方です。仕事の内容は、これまでどおり依頼の文で伝えます。話し方が違うと、誰の発言かを見分ける手がかりにもなります。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-persona-ja.webp" width="544" height="348" loading="lazy" alt="架空のキャラクターの、話し方の指示と基本情報">
+          </div>
+          <figcaption>実際の画面です。表示しているキャラクターの設定は架空のものです。</figcaption>
+        </figure>
+      </article>
+      <article class="feature stack" id="faces">
+        <div class="feature-copy">
+          <h3>いまの状態が、表情で分かる</h3>
+          <p class="feature-main">待機中、考え中、承認待ち。エージェントの状態が変わると、顔の表情も変わります。画面を見渡すだけで、作業を進めている相手と、人の返事を待っている相手を見分けられます。</p>
+          <p class="feature-support">表情の画像は、状態ごとに設定できます。エージェントが内部で別の作業 (subagent や workflow) を走らせている間は、頭の上を光の点が回ります。</p>
+        </div>
+        <div class="feature-media-row">
+          <figure class="feature-media faces">
+            <ul class="face-strip">
+              <li data-state="idle">
+                <img src="../assets/feature-face-idle.webp" width="160" height="160" loading="lazy" alt="">
+                <strong>待機中</strong><span>次の仕事を頼めます。</span>
+              </li>
+              <li data-state="thinking">
+                <img src="../assets/feature-face-thinking.webp" width="160" height="160" loading="lazy" alt="">
+                <strong>考え中</strong><span>作業を進めています。</span>
+              </li>
+              <li data-state="waiting_permission">
+                <img src="../assets/feature-face-waiting_permission.webp" width="160" height="160" loading="lazy" alt="">
+                <strong>承認待ち</strong><span>人の判断を待っています。</span>
+              </li>
+            </ul>
+            <figcaption>同梱のキャラクターの表情です。</figcaption>
+          </figure>
+          <figure class="feature-media shot">
+            <div class="plate">
+              <img src="../assets/feature-crop-card-ja.webp" width="284" height="280" loading="lazy" alt="頭の上に白い点が出ているエージェントのカード">
+            </div>
+            <figcaption>実際の画面のカードです。頭の上の白い点が、内部で走っている作業を示します。</figcaption>
+          </figure>
+        </div>
+      </article>
+      <article class="feature split" id="fatigue">
+        <div class="feature-copy">
+          <h3>会話が積み重なると、顔に出る</h3>
+          <p class="feature-main">エージェントが一度に扱える情報量 (コンテキスト) には上限があります。その使用量が増えると、待機中の顔が疲れた表情に変わります。</p>
+          <p class="feature-support">この表情が表すのは、コンテキストの使用量です。一覧を見渡して、新しいセッションに切り替える相手を、顔で見つけられます。</p>
+        </div>
+        <figure class="feature-media face-pair">
+          <div>
+            <img src="../assets/feature-face-idle.webp" width="160" height="160" loading="lazy" alt="">
+            <p>通常</p>
+          </div>
+          <span class="arrow" aria-hidden="true">→</span>
+          <div>
+            <img src="../assets/feature-face-fatigued.webp" width="160" height="160" loading="lazy" alt="">
+            <p>コンテキストの使用量が増えたとき</p>
+          </div>
+        </figure>
+      </article>
+    </section>
+
+    <section class="wrap block" aria-labelledby="work-status">
+      <p class="eyebrow"><span>02</span> / 把握する</p>
+      <h2 id="work-status">仕事の中身と進み具合を知る</h2>
+      <p class="intro">顔で様子をつかんだら、中身は短い文と数字で確かめます。長い会話を読み返さなくても、要点が分かります。</p>
+      <article class="feature split" id="status">
+        <div class="feature-copy">
+          <h3>何をしているかは、本人が書く</h3>
+          <p class="feature-main">エージェントは、担当している仕事、進み具合、確認してほしいリンクを、自分で短くまとめて表示します。会話を開かなくても、カードを読めば要点が分かります。</p>
+          <p class="feature-support">何体も同時に動かしているときは、この短い文が、次に見る相手を選ぶ手がかりになります。全文は「続きを読む」から開けます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-status-ja.webp" width="246" height="266" loading="lazy" alt="エージェントの名前、状態、使用量の下に表示された状況表示">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-detail-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature split flip" id="status-history">
+        <div class="feature-copy">
+          <h3>席を外しても、経過をたどれる</h3>
+          <p class="feature-main">状況表示が書き換わると、その内容が時刻つきで残ります。各エージェントが何を手掛け、いまどういう状態かの要約を、会話のログとは別に、時系列で読めます。</p>
+          <p class="feature-support">直近の書き換えが並ぶので、長い会話を読み返す代わりに、要約から流れをつかめます。朝に前日の続きを確かめるときや、仕事を引き継ぐときに使えます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-status-history-ja.webp" width="672" height="290" loading="lazy" alt="状況表示の要約が、時刻つきで新しい順に並ぶ履歴">
+          </div>
+          <figcaption>実際の画面です。表示しているデータは架空のものです。</figcaption>
+        </figure>
+      </article>
+      <div class="feature-grid">
+      <article class="feature card" id="todo">
+        <div class="feature-copy">
+          <h3>残りの作業が、数で見える</h3>
+          <p class="feature-main">エージェントが持つ TODO リストを、完了数と項目の一覧で確認できます。何が済み、何が残っているかを、会話を読まずに把握できます。</p>
+          <p class="feature-support">手順の多い仕事を任せたときに、進み具合の目安になります。</p>
+          <p class="note todo-note">対応するエンジンとモデルで利用できます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-todo-ja.webp" width="336" height="106" loading="lazy" alt="完了数と 3 つの項目が並ぶ TODO リスト">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-detail-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature card" id="usage">
+        <div class="feature-copy">
+          <h3>余力を見て、次の一手を決める</h3>
+          <p class="feature-main">エージェントごとに、コンテキスト (一度に扱える情報量) の使用量と、 AI サービス側の利用枠の使用率、枠がリセットされる時刻を表示します。</p>
+          <p class="feature-support">次の仕事を誰に頼むか、どの相手を新しいセッションに切り替えるかを、数字を見て決められます。枠に余裕のある相手へ、仕事を回せます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-gauges-ja.webp" width="246" height="96" loading="lazy" alt="コンテキストと利用枠の使用率を示す 2 本のゲージ">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-detail-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      </div>
+    </section>
+
+    <section class="wrap block" aria-labelledby="conversations">
+      <p class="eyebrow"><span>03</span> / 追う</p>
+      <h2 id="conversations">全員のやり取りを追う</h2>
+      <p class="intro">誰が何を頼み、どう返ってきたか。全員のやり取りを、1 か所で時刻順に読めます。</p>
+      <article class="feature split" id="timeline">
+        <div class="feature-copy">
+          <h3>全員のやり取りを、1 本の流れで読む</h3>
+          <p class="feature-main">人からの指示、エージェントの返事、エージェントどうしの連絡が、時刻順に 1 本のタイムラインに並びます。ターミナルを 1 つずつ見て回らなくても、チーム全体の動きを追えます。</p>
+          <p class="feature-support">実装の依頼、途中の相談、レビューの返事が同じ列に並ぶので、引き継ぎの前後もそのまま読めます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-timeline-ja.webp" width="368" height="494" loading="lazy" alt="指示と返事、エージェント間の連絡が並ぶタイムライン">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-overview-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature split flip" id="transcript">
+        <div class="feature-copy">
+          <h3>気になった発言から、詳しい記録へ</h3>
+          <p class="feature-main">新しい発言には未読の印が付きます。タイムラインの行を選ぶと、そのエージェントの詳しい記録が開きます。</p>
+          <p class="feature-support">全体は流し読みし、気になったところだけを深く読めます。返事を待っている相手と、そこに至った経緯を確かめられます。</p>
+        </div>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>知りたいこと</th>
+                <th>見るところ</th>
+              </tr>
+              <tr>
+                <td>新しく届いた発言</td>
+                <td>未読の印が付いた行</td>
+              </tr>
+              <tr>
+                <td>その発言の前後の経緯</td>
+                <td>行を選んで開く、そのエージェントの記録</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="wrap block" aria-labelledby="collaboration">
+      <p class="eyebrow"><span>04</span> / 組ませる</p>
+      <h2 id="collaboration">エージェントどうしをチームにする</h2>
+      <p class="intro">エージェントは互いに仕事を頼み合えます。製品の違うエージェントも、同じチームに入れられます。</p>
+      <article class="feature stack" id="messages">
+        <div class="feature-copy">
+          <h3>製品の違う AI どうしが、直接やり取りする</h3>
+          <p class="feature-main">Claude Code、Codex、Antigravity、Grok Build のエージェントが、互いに依頼を送り、返事を受け取れます。依頼と返事は、人の貼り直しを挟まず、相手のエージェントに届きます。</p>
+          <p class="feature-support">実装はあるモデルに、レビューは別の会社のモデルに任せられます。やり取りは会話として残るので、あとから経緯を読めます。</p>
+        </div>
+        <figure class="feature-media diagram-flow">
+          <ol class="flow">
+            <li><strong>頼む</strong><p>Claude Code のエージェントから Codex のエージェントへ: 「図版の説明文を確認してください」</p></li>
+            <li><strong>取り組む</strong><p>Codex のエージェントが、説明文を確認しています。</p></li>
+            <li><strong>返す</strong><p>Codex のエージェントから Claude Code のエージェントへ: 「確認の結果です」</p></li>
+          </ol>
+          <figcaption>説明図です。</figcaption>
+        </figure>
+      </article>
+      <article class="feature split" id="rooms">
+        <div class="feature-copy">
+          <h3>チームごとに、部屋を分ける</h3>
+          <p class="feature-main">エージェントをルームに分けると、一覧がチームごとにまとまり、エージェント間の連絡は同じルームの中で行われます。</p>
+          <p class="feature-support">開発と資料作成のように、複数の仕事を並行させても、依頼は同じチームの中に届きます。ルームは、チーム分けと誤送信の防止のための仕組みです。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-rooms-ja.webp" width="856" height="718" loading="lazy" alt="「開発」と「資料作成」の 2 つのルームに分かれて並ぶカード">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-rooms-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <div class="feature-grid">
+      <article class="feature card" id="work">
+        <div class="feature-copy">
+          <h3>誰が誰に任せたかを、記録に残す</h3>
+          <p class="feature-main">エージェントが別のエージェントに仕事を任せるとき、取りまとめ役 (director) と担当 (assignee)、そして依頼がいまどの段階にあるかを記録できます。</p>
+          <p class="feature-support">記録するのは、担当と段階です。取りまとめ役のエージェントに分担を任せているときも、誰が引き受けたかを、当事者どうしで取り違えずに進められます。成果物の確認は、これまでどおり会話と成果物で行います。</p>
+        </div>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>段階</th>
+                <th>意味</th>
+              </tr>
+              <tr>
+                <td>依頼</td>
+                <td>取りまとめ役が、担当を指名する</td>
+              </tr>
+              <tr>
+                <td>受諾</td>
+                <td>担当が引き受ける</td>
+              </tr>
+              <tr>
+                <td>辞退</td>
+                <td>担当が断る</td>
+              </tr>
+              <tr>
+                <td>完了</td>
+                <td>仕事が終わったことを記録する</td>
+              </tr>
+              <tr>
+                <td>取消</td>
+                <td>依頼を取り下げる</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      <article class="feature card" id="coordination">
+        <div class="feature-copy">
+          <h3>やり取りが長引いたら、知らせが出る</h3>
+          <p class="feature-main">同じ相手とのやり取りが増え続けたときや、連絡の受け取り確認が止まったときに、画面に知らせが出ます。</p>
+          <p class="feature-support">知らせが来たら、論点を整理したり、指示を足したりできます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-notice-ja.webp" width="390" height="71" loading="lazy" alt="やり取りの増加を知らせる帯">
+          </div>
+          <figcaption>実際の画面です。表示しているデータは架空のものです。</figcaption>
+        </figure>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>知らせ</th>
+                <th>見に行くところ</th>
+              </tr>
+              <tr>
+                <td>やり取りの増加</td>
+                <td>論点と、次の行動</td>
+              </tr>
+              <tr>
+                <td>受け取り確認の停滞</td>
+                <td>相手の状態と、連絡の状況</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      </div>
+    </section>
+
+    <section class="wrap block" aria-labelledby="decisions">
+      <p class="eyebrow"><span>05</span> / 判断する</p>
+      <h2 id="decisions">要所では、人が判断する</h2>
+      <p class="intro">任せた仕事の途中で、承認や選択が必要になることがあります。kaoiro はその問いを人の画面に届けます。</p>
+      <article class="feature stack" id="approvals">
+        <div class="feature-copy">
+          <h3>実行してよいかは、人が決める</h3>
+          <p class="feature-main">エージェントが承認を求めた操作は、実行の前にブラウザへ届きます。何をしようとしているかを読み、許可するかどうかを、その場で選べます。</p>
+          <p class="feature-support">何体に任せていても、承認の判断は自分の画面に集まります。どこまでを任せ、どこから承認を求めるかは、起動時の権限の設定で決められます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="../assets/feature-crop-approval-ja.webp" width="914" height="208" loading="lazy" alt="エージェントが実行しようとしている操作の内容と、許可・拒否のボタン">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-permission-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+        <figure class="feature-media diagram-flow">
+          <ol class="flow">
+            <li><strong>届く</strong><p>承認の依頼が、ブラウザに届きます。</p></li>
+            <li><strong>読んで決める</strong><p>内容を読み、許可するかどうかを選びます。</p></li>
+            <li><strong>作業が続く</strong><p>答えがエージェントに届き、作業が続きます。</p></li>
+          </ol>
+          <figcaption>説明図です。</figcaption>
+        </figure>
+      </article>
+      <article class="feature stack" id="questions">
+        <div class="feature-copy">
+          <h3>迷ったら、エージェントが聞いてくる</h3>
+          <p class="feature-main">進め方に選択肢があるとき、エージェントは選択式の質問を出せます。質問は同じ画面に届き、選ぶだけで答えられます。</p>
+          <p class="feature-support">どちらの案で進めるか、調査をどこまで広げるか。作業は任せたまま、方向を決める分岐だけを人が返せます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="../assets/feature-crop-question-ja.webp" width="914" height="284" loading="lazy" alt="図版の候補から 1 つを選ぶ質問">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-question-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature split" id="notifications">
+        <div class="feature-copy">
+          <h3>出番が来たら、音と通知で知らせる</h3>
+          <p class="feature-main">エージェントが返事や承認を待つ状態になると、開いているダッシュボードが音とデスクトップ通知で知らせます。</p>
+          <p class="feature-support">ダッシュボードを開いたまま、ほかの仕事を進められます。</p>
+        </div>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>知らせ方</th>
+                <th>分かること</th>
+              </tr>
+              <tr>
+                <td>音</td>
+                <td>返事が必要になったこと。入力待ちと承認待ちで、音が違います</td>
+              </tr>
+              <tr>
+                <td>デスクトップ通知</td>
+                <td>待っているエージェントの名前と、その状態</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      <article class="feature split flip" id="mobile">
+        <div class="feature-copy">
+          <h3>席を離れていても、答えられる</h3>
+          <p class="feature-main">ダッシュボードは、スマートフォンの幅に合わせて配置が変わります。届いた質問や承認に、手元の端末から答えられます。</p>
+          <p class="feature-support">手元の端末からサーバーに接続できる環境であれば、移動中や会議の合間にも判断を返せます。</p>
+        </div>
+        <figure class="feature-media shot phone">
+          <div class="plate">
+            <img src="../assets/feature-phone-ja.webp" width="390" height="844" loading="lazy" alt="スマートフォンの幅で表示した、質問と回答の欄">
+          </div>
+          <figcaption>実際の画面です。表示しているデータは架空のものです。</figcaption>
+        </figure>
+      </article>
+      <article class="feature stack" id="roles">
+        <div class="feature-copy">
+          <h3>見る人と、操作する人を分ける</h3>
+          <p class="feature-main">利用者には、見守る役 (viewer) と、指示や承認を行う役 (operator) を割り当てられます。</p>
+          <p class="feature-support">viewer に見えるのは、顔と状態、状況表示です。会話の内容や承認の操作は operator の画面に出ます。進み具合を関係者と共有しながら、操作できる人を絞れます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="../assets/feature-viewer-ja.webp" width="1216" height="327" loading="lazy" alt="viewer の画面。エージェントの顔と状態が並ぶ">
+          </div>
+          <figcaption>実際の画面です。表示しているデータは架空のものです。<a href="../assets/feature-viewer-ja.webp">大きく見る</a></figcaption>
+        </figure>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>役</th>
+                <th>見えるもの</th>
+                <th>できること</th>
+              </tr>
+              <tr>
+                <td>viewer</td>
+                <td>顔、状態、状況表示</td>
+                <td>見守る</td>
+              </tr>
+              <tr>
+                <td>operator</td>
+                <td>上に加えて、会話、進み具合、使用量</td>
+                <td>起動、指示、質問への回答、承認</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="wrap block" aria-labelledby="browser-control">
+      <p class="eyebrow"><span>06</span> / 動かす</p>
+      <h2 id="browser-control">ブラウザから動かす</h2>
+      <p class="intro">エージェントの起動から、指示、設定の変更、再開までを、ブラウザで行えます。</p>
+      <article class="feature split" id="launch">
+        <div class="feature-copy">
+          <h3>どのマシンで、どの AI を動かすかを選ぶ</h3>
+          <p class="feature-main">起動画面で、動かすマシン、キャラクター、エンジン、作業フォルダ、権限の設定を選びます。</p>
+          <p class="feature-support">複数のマシンで動くエージェントを、1 つのダッシュボードに集められます。手元の PC とサーバーの仕事を、同じ一覧で並べて見られます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-launch-ja.webp" width="464" height="394" loading="lazy" alt="起動画面の、キャラクター、作業フォルダ、エンジン、モデル、権限を選ぶ欄">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-launch-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature stack" id="input">
+        <div class="feature-copy">
+          <h3>指示を送り、途中で向きを変える</h3>
+          <p class="feature-main">ブラウザから指示を送れます。画面の写しや図を添えて、「この部分を直して」と頼むこともできます。</p>
+          <p class="feature-support">進み具合を見ながら指示を足したり、中断して方針を変えたりできます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="../assets/feature-crop-input-ja.webp" width="914" height="72" loading="lazy" alt="指示の入力欄と、添付と送信のボタン">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-detail-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <div class="feature-grid">
+      <article class="feature card" id="tuning">
+        <div class="feature-copy">
+          <h3>仕事の段階に合わせて、設定を切り替える</h3>
+          <p class="feature-main">使うモデル、推論の深さ (effort)、権限の設定を、作業の途中でブラウザから変更できます。</p>
+          <p class="feature-support">調査と実装でモデルを使い分けられます。任せる範囲を広げるときは、権限を変えられます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-tuning-ja.webp" width="246" height="92" loading="lazy" alt="モデルと effort の表示と、切替のボタン">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-detail-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      <article class="feature card" id="sessions">
+        <div class="feature-copy">
+          <h3>止める、続ける、新しく始める</h3>
+          <p class="feature-main">エージェントは、止めたあとも画面の「エージェントを復帰」から、同じ名前と顔のまま戻せます。以前のセッション (一続きの作業) を選んで再開することも、リセットして新しい文脈から始めることもできます。</p>
+          <p class="feature-support">中断した仕事には、それまでの会話を引き継いで戻れます。話題を変えるときは、リセットしてから頼めます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-restore-ja.webp" width="231" height="184" loading="lazy" alt="「エージェントを復帰」のボタンがある操作欄">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-restore-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>操作</th>
+                <th>こんなときに</th>
+              </tr>
+              <tr>
+                <td>停止</td>
+                <td>作業を止めたいとき</td>
+              </tr>
+              <tr>
+                <td>復帰、再開</td>
+                <td>以前の会話の続きを頼むとき</td>
+              </tr>
+              <tr>
+                <td>リセット</td>
+                <td>別の話題を、新しい文脈で始めるとき</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      </div>
+      <article class="feature stack" id="session-history">
+        <div class="feature-copy">
+          <h3>いつ、誰の依頼で切り替わったかが残る</h3>
+          <p class="feature-main">リセットなどのセッションの操作が、時刻と、記録された依頼元とともに履歴に並びます。</p>
+          <p class="feature-support">取りまとめ役のエージェントが切り替えたのか、本人が切り替えたのかを、あとから確かめられます。再開する位置を決める手がかりにもなります。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate scroll">
+            <img src="../assets/feature-session-history-ja.webp" width="768" height="408" loading="lazy" alt="セッションの操作と、その依頼元が並ぶ履歴">
+          </div>
+          <figcaption>実際の画面です。表示しているデータは架空のものです。<a href="../assets/feature-session-history-ja.webp">大きく見る</a></figcaption>
+        </figure>
+      </article>
+    </section>
+
+    <section class="wrap block" aria-labelledby="limits">
+      <p class="eyebrow"><span>07</span> / 合わせる</p>
+      <h2 id="limits">自分たちの使い方に合わせる</h2>
+      <p class="intro">キャラクターは自分たちで用意できます。使える機能の範囲も、ここで確認できます。</p>
+      <div class="feature-grid">
+      <article class="feature card" id="packs">
+        <div class="feature-copy">
+          <h3>自分たちのキャラクターを追加する</h3>
+          <p class="feature-main">キャラクターは、表情の画像、話し方の指示、名前などの情報をまとめた zip ファイルです。サーバーの取り込み用フォルダに置くと、同梱のキャラクターと同じ一覧に加わります。</p>
+          <p class="feature-support">社内で親しまれているマスコットを使えます。チームごとに見た目を揃えることもできます。</p>
+        </div>
+        <div class="feature-media">
+          <div class="table-wrap">
+            <table>
+              <tr>
+                <th>中身</th>
+                <th>役割</th>
+              </tr>
+              <tr>
+                <td>画像</td>
+                <td>状態ごとの表情</td>
+              </tr>
+              <tr>
+                <td>personality.md</td>
+                <td>話し方の指示</td>
+              </tr>
+              <tr>
+                <td>manifest.json</td>
+                <td>名前、作者などの情報</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </article>
+      <article class="feature card" id="capabilities">
+        <div class="feature-copy">
+          <h3>使える機能は、エンジンと役割で決まる</h3>
+          <p class="feature-main">このページの機能には、エンジンや役割によっては使えないものや、まだ対応していないものがあります。</p>
+          <p class="feature-support">画面には、そのエージェントで使える操作が表示されます。使いたいエンジンで起動し、画面に出ている操作から始められます。</p>
+        </div>
+        <figure class="feature-media shot">
+          <div class="plate">
+            <img src="../assets/feature-crop-engine-ja.webp" width="464" height="68" loading="lazy" alt="起動画面の、エンジンを選ぶ欄">
+          </div>
+          <figcaption>実際の画面の一部です。表示しているデータは架空のものです。<a href="../assets/feature-launch-ja.webp">画面全体を見る</a></figcaption>
+        </figure>
+      </article>
+      </div>
+    </section>
+    <nav class="wrap block next" aria-label="次に読む">
+      <h2 class="next-title">次に読む</h2>
+      <ul class="actions">
+        <li><a href="how-it-works.html">仕組み</a></li>
+        <li><a href="getting-started.html">はじめかた</a></li>
+        <li><a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">SECURITY.md</a></li>
+      </ul>
+    </nav>
+  </main>
+  <footer class="wrap">
+    <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/SECURITY.md">セキュリティ方針</a> · <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/LICENSE">MIT License</a>
+    · <a href="../assets/jams2026-poster.pdf">学会発表のポスター (PDF)</a>
+  </footer>
+</body>
+</html>
