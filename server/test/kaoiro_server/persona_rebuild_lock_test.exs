@@ -4,6 +4,8 @@ defmodule KaoiroServer.PersonaRebuildLockTest do
   # same isolation discipline as PersonaAssetsTest.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PersonaRebuildLock
 
@@ -32,8 +34,17 @@ defmodule KaoiroServer.PersonaRebuildLockTest do
       assert :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, child)
 
       try do
-        assert :ok = PersonaAssets.rebuild()
-        assert is_map(PersonaAssets.manifest())
+        log =
+          capture_log(fn ->
+            assert :ok = PersonaAssets.rebuild()
+            assert is_map(PersonaAssets.manifest())
+          end)
+
+        if child == KaoiroServerWeb.Endpoint do
+          refute log =~ "persona hosts notification failed"
+        else
+          assert log =~ "persona hosts notification failed"
+        end
       after
         assert {:ok, _pid} = Supervisor.restart_child(KaoiroServer.Supervisor, child)
       end

@@ -69,6 +69,7 @@ defmodule KaoiroServer.PersonaRebuildLock do
   """
 
   use GenServer
+  require Logger
 
   @doc """
   Starts the lock. `:name` overrides the registered name (tests run
@@ -98,9 +99,9 @@ defmodule KaoiroServer.PersonaRebuildLock do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => %{}})
     end
   rescue
-    _ -> :ok
+    _ -> Logger.warning("persona hosts notification failed")
   catch
-    _, _ -> :ok
+    _, _ -> Logger.warning("persona hosts notification failed")
   end
 
   @impl true
