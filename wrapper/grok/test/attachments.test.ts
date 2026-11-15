@@ -195,6 +195,17 @@ describe("G1: a dropped instruction is never queued", () => {
     expect(await settledWithin(sent)).toBe("resolved");
     expect(t.prompts()).toEqual([]);
   });
+  it("reports only the interrupt when the extraction of a dropped instruction fails", async () => {
+    const held = heldExtractor();
+    const t = await started({ officeExtractor: held.extractor });
+    upload(t.intake, "d", "a.docx", DOCX, bytes("doc"));
+    const sent = t.host.send("office", t.intake.stage(["d"]));
+    await held.entered.promise;
+    await t.host.interrupt();
+    held.release.resolve(null);
+    expect(await settledWithin(sent)).toBe("resolved");
+    expect(rejections(t.envelopes)).toEqual(interrupted(["d"]));
+  });
   it("resolves an instruction dropped before it reached the host", async () => {
     const t = await started();
     const record = imageRecord(t, "i");

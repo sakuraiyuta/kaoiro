@@ -3,7 +3,7 @@
 // scripts/test-isolation/check.mjs reads it to flag other mentions early.
 // Plain data so the checker can read it without installing the guard.
 "use strict";
-const grok = ["history", "inspect", "lifecycle", "mcp", "permission-answer", "permission-switch",
+const grok = ["attachments", "history", "inspect", "lifecycle", "mcp", "permission-answer", "permission-switch",
   "rate-limits", "resume", "sandbox", "session-reset"].map(name => [`wrapper/grok/test/native-${name}.test.ts`, ["network"]]);
 
 const table = {
