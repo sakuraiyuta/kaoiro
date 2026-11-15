@@ -189,6 +189,13 @@ restoring runner registration after an abnormal partition exit. Reconnecting
 a runner alone does not clear the existing application generation's refusal.
 A channel-only rejoin also does not resend host registration.
 
+The runner can recover automatically from a wire channel error followed by
+close 1000, including when it resumes after the VM restart. Its
+[bounded retry policy](../reference/protocol/runner-control.md) preserves
+intentional shutdown and configuration replacement. Wait for registration
+and perform the fresh observation above; this transport recovery does not
+authorize skipping either check or restarting only the application.
+
 An abnormal Registry partition exit terminates runner channels. The partition
 failure itself does not terminate wrapper channels or agents, which are not
 registered there. The subsequent VM restart disconnects their server

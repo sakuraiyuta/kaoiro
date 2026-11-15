@@ -29,7 +29,7 @@ function encodeText(text: string): Buffer {
 /** Pops one complete client frame (always masked) off `buffer`. */
 function takeFrame(
   buffer: Buffer,
-): { opcode: number; text: string; rest: Buffer } | undefined {
+): { opcode: number; text: string; payload: Buffer; rest: Buffer } | undefined {
   if (buffer.length < 2) return undefined;
   let length = buffer[1]! & 0x7f;
   let offset = 2;
@@ -49,6 +49,7 @@ function takeFrame(
   return {
     opcode: buffer[0]! & 0x0f,
     text: payload.toString("utf8"),
+    payload,
     rest: buffer.subarray(offset + 4 + length),
   };
 }
@@ -63,6 +64,10 @@ export async function startPhoenixOutageServer(
   const live = new Set<Duplex>();
   const silent = new Set<Duplex>();
   const events: WireEvent[] = [];
+  const joined = new Map<Duplex, string | null>();
+  const muted = new Set<Duplex>();
+  let rejectJoins = false;
+  let connections = 0;
   let down: OutageMode | null = null;
 
   server.on("upgrade", (request, socket) => {
@@ -78,7 +83,11 @@ export async function startPhoenixOutageServer(
       return;
     }
     live.add(socket);
-    socket.on("close", () => live.delete(socket));
+    connections++;
+    socket.on("close", () => {
+      live.delete(socket); joined.delete(socket);
+      muted.delete(socket);
+    });
     const key = String(request.headers["sec-websocket-key"] ?? "");
     socket.write(
       "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
@@ -90,7 +99,9 @@ export async function startPhoenixOutageServer(
       for (let frame = takeFrame(buffer); frame !== undefined; frame = takeFrame(buffer)) {
         buffer = frame.rest;
         if (frame.opcode === 8) {
-          socket.end();
+          socket.end(Buffer.concat([
+            Buffer.from([0x88, frame.payload.length]), frame.payload,
+          ]));
           return;
         }
         if (frame.opcode !== 1) continue;
@@ -102,9 +113,13 @@ export async function startPhoenixOutageServer(
           unknown,
         ];
         events.push({ topic, event, payload });
+        if (event === "phx_join") joined.set(socket, joinRef);
+        if (event === "heartbeat" && muted.has(socket)) continue;
         if (ref !== null) {
           const response = event === "phx_join" ? joinReply(topic) : {};
-          socket.write(encodeText(JSON.stringify([joinRef, ref, topic, "phx_reply", { status: "ok", response }])));
+          const status = event === "phx_join" && rejectJoins
+            ? "error" : "ok";
+          socket.write(encodeText(JSON.stringify([joinRef, ref, topic, "phx_reply", { status, response }])));
         }
       }
     });
@@ -128,6 +143,18 @@ export async function startPhoenixOutageServer(
   return {
     url: (path: string) => `ws://127.0.0.1:${port}${path}`,
     events,
+    send(topic: string, event: string) {
+      for (const socket of live) {
+        socket.write(encodeText(JSON.stringify([
+          joined.get(socket), null, topic, event, {},
+        ])));
+      }
+    },
+    rejectJoins() { rejectJoins = true; },
+    connections: () => connections,
+    silenceCurrentHeartbeats() {
+      for (const socket of live) muted.add(socket);
+    },
     count: (event: string, topicPrefix = "") =>
       events.filter((e) => e.event === event && e.topic.startsWith(topicPrefix)).length,
 
