@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflateSync, gunzipSync, inflateSync, zstdDecompressSync } from "node:zlib";
+import { RequestError } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerLinkOptions } from "@kaoiro/wrapper-core";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
@@ -206,28 +207,55 @@ describe.skipIf(!live)("native attachments", () => {
       return head + "x".repeat(size - used);
     };
     await withStub(async (stub, cwd) => {
-      await nativeRun(config("d"), cwd, async (host, _callbacks, envelopes, metadata) => {
+      await nativeRun(config("d"), cwd, async (host, callbacks, envelopes, metadata) => {
         await ready(host);
         const pid = host.processId;
-        await host.send(textAt(PROMPT_BYTE_LIMIT)).catch(() => {});
-        expect(results(envelopes)).toHaveLength(1);
+        const completed = () => metadata.filter((m) => m.vendor_kind === "turn_completed").length;
+        const asked = (marker: string) => stub.bodies.filter((body) => body.includes(marker) &&
+          !body.includes('"name":"session_title"')).length;
+        // A turn Grok took over ACP: Grok asked the model, reported the
+        // prompt completed, and answered it. The stub's HTTP 400 makes that
+        // answer a JSON-RPC error, which a turn the wrapper ends itself
+        // (a permission gate, a local throw) never is.
+        const runsAtGrok = async (text: string, marker: string) => {
+          const before = { completed: completed(), asked: asked(marker), results: results(envelopes).length };
+          const error = await host.send(text).then(() => undefined, (cause: unknown) => cause);
+          expect(error).toBeInstanceOf(RequestError);
+          expect(completed()).toBe(before.completed + 1);
+          expect(asked(marker)).toBeGreaterThan(before.asked);
+          expect(results(envelopes)).toHaveLength(before.results + 1);
+          expect(results(envelopes).at(-1)!.payload).toMatchObject({ error_code: "grok_turn_failed" });
+        };
+        // A failed prompt leaves the permission's outcome unconfirmed, so the
+        // host holds later turns until the next selection. The operator's
+        // selection through the link reopens it, as the dashboard does.
+        let revision = 0;
+        const select = () => {
+          expect(host.statusExtSnapshot().permission_gate).toMatchObject({ reason: "observation_unavailable" });
+          revision += 1;
+          callbacks.onSetPermission?.({ revision, requested: { sandbox: "workspace-write", network_access: true } });
+          expect(host.statusExtSnapshot()).not.toHaveProperty("permission_gate");
+        };
+        await runsAtGrok(textAt(PROMPT_BYTE_LIMIT), "NATIVE_1143_D");
         // Grok sent the prompt's text back (_x.ai/queue/changed) as a line
         // over the tee's 4 MiB, and the connection took it.
         expect(metadata.filter((m) => m.direction === "in" && m.oversized_lines).length)
           .toBeGreaterThan(0);
-        // The connection stayed open: the same Grok takes the next turn to its
-        // result. Grok may end it without a model request, because the
-        // session's history now holds the large prompt.
-        await host.send("NATIVE_1143_D_NEXT").catch(() => {});
-        expect(results(envelopes)).toHaveLength(2);
+        // The connection stayed open: the same Grok runs the next turn.
+        select();
+        await runsAtGrok("NATIVE_1143_D_NEXT", "NATIVE_1143_D_NEXT");
         expect(host.processId).toBe(pid);
         expect(host.state).not.toBe("error");
         await expect(host.send(textAt(PROMPT_BYTE_LIMIT + 1))).rejects.toThrow("size limit");
         expect(envelopes.filter((e) => e.type === "instruction_rejected").map((e) => e.payload.reason))
           .toEqual(["total_request_over"]);
+        select();
+        await runsAtGrok("NATIVE_1143_D_LAST", "NATIVE_1143_D_LAST");
         expect(host.processId).toBe(pid);
-        await host.send("NATIVE_1143_D_LAST").catch(() => {});
-        expect(results(envelopes)).toHaveLength(3);
+        // One session throughout: the host never opened or loaded another.
+        expect(metadata.filter((m) => m.direction === "out" &&
+          (m.method === "session/new" || m.method === "session/load")).map((m) => m.method))
+          .toEqual(["session/new"]);
       }, stub.env);
     });
   }, 240_000);
