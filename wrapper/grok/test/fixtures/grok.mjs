@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
-import { writeFileSync, appendFileSync, existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { writeFileSync, appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 if (process.argv.includes("--version")) {
@@ -198,6 +200,24 @@ const update = (data) =>
   });
 const textChunk = (text) =>
   update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+const sha = (value) => createHash("sha256").update(value).digest("hex");
+// What a prompt block carried, small enough for the events file. A linked
+// file is read as Grok's read_file would, with its mode at that moment.
+const blockSummary = (block) => {
+  switch (block.type) {
+    case "text": return { type: "text", textLength: block.text.length, textSha: sha(block.text) };
+    case "image": return { type: "image", mimeType: block.mimeType, dataSha: sha(block.data) };
+    case "resource": return { type: "resource", uri: block.resource.uri,
+      mimeType: block.resource.mimeType, text: block.resource.text };
+    case "resource_link": {
+      const path = fileURLToPath(block.uri);
+      const readable = existsSync(path);
+      return { type: "resource_link", uri: block.uri, name: block.name, mimeType: block.mimeType,
+        ...(readable ? { fileSha: sha(readFileSync(path)), fileMode: statSync(path).mode & 0o777 } : {}) };
+    }
+    default: return { type: block.type };
+  }
+};
 const finish = (id, text, stopReason = "end_turn", category, noCall = false) => {
   if (turnCalls === 0 && stopReason === "end_turn" && !noCall) modelCall(1);
   if (text)
@@ -420,6 +440,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         prompt = msg.id;
         promptIds.set(msg.id, msg.params._meta?.promptId ?? String(msg.id));
         record("prompt_id", { promptId: msg.params._meta?.promptId ?? null });
+        record("prompt_blocks", { blocks: msg.params.prompt.map(blockSummary) });
         if (!/^foreign-(during|interrupt|interrupt-early)$/.test(msg.params.prompt[0].text))
           queueChanged(promptIds.get(msg.id));
         turnCalls = 0;
@@ -461,6 +482,24 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         }
         if (text === "no-calls") {
           finish(msg.id, "", "end_turn", undefined, true);
+          break;
+        }
+        // A prompt at the size limit is answered without repeating it.
+        if (text.startsWith("cap:")) {
+          finish(msg.id, "cap accepted");
+          break;
+        }
+        if (text === "image-dropped") {
+          // Grok 1.0.52's message for a 7×7 PNG, then two that are not this
+          // session's.
+          const notes = ["Image 1 was dropped before send: too small (7×7); images must be at least 8×8 pixels."];
+          notification("_x.ai/session_notification", { sessionId: sid,
+            update: { sessionUpdate: "image_dropped", notes }, _meta: { eventId: `${sid}-5` } });
+          notification("_x.ai/session_notification", { sessionId: "another-session",
+            update: { sessionUpdate: "image_dropped", notes: ["OTHER_SESSION_NOTE"] } });
+          notification("_x.ai/session_notification", {
+            update: { sessionUpdate: "image_dropped", notes: ["NO_SESSION_NOTE"] } });
+          finish(msg.id, "");
           break;
         }
         if (text === "rogue-config-update") {

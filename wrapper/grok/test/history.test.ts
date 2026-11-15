@@ -147,6 +147,17 @@ describe("what is skipped", () => {
   });
 
   it.each([
+    ["an image", { type: "image", mimeType: "image/png", data: "AAAA" }],
+    ["a text resource", { type: "resource", resource: { uri: "attachment:///a.txt", text: "a" } }],
+    ["a resource link", { type: "resource_link", uri: "file:///tmp/a.pdf", name: "a.pdf" }],
+  ])("skips an instruction's attachment, %s, without counting it", (_name, content) => {
+    const result = run([user("look", 0), line({ sessionUpdate: "user_message_chunk", content,
+      _meta: { promptIndex: 0, modelId: "m" } })]);
+    expect(result.skipped).toEqual({});
+    expect(result.envelopes.map((e) => e.payload)).toEqual([{ kind: "user", text: "look" }]);
+  });
+
+  it.each([
     ["a numeric tool call id", toolCall(7)],
     ["an empty tool call id", toolCall("")],
     ["a title that is not a string", toolCall("c1", 5)],

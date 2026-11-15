@@ -7,6 +7,7 @@ import { InterAgentTool, type Envelope, type WrapperConfig } from "@kaoiro/agent
 import { runGrokCli } from "../src/cli.js";
 import { GrokHost } from "../src/host.js";
 import * as events from "../src/grok/events.js";
+import { chunkPayload } from "./upload-support.js";
 const config: WrapperConfig = {
   agent_id: "test.grok",
   server_url: "ws://127.0.0.1:1/agent",
@@ -196,10 +197,9 @@ describe("runGrokCli composition", () => {
             expect(JSON.stringify(envelopes))
               .not.toContain("TURN_FAILURE_BODY_MARKER");
             callbacks.onInstruction?.("attachment", ["attachment-id"]);
-            await vi.waitFor(() => expect(envelopes.some((e) =>
-              e.type === "log" && e.payload.text ===
-                "grok attachment input is unsupported in work unit 1",
-            )).toBe(true));
+            expect(envelopes.filter((e) => e.type === "instruction_rejected").map((e) => e.payload))
+              .toEqual([{ attachment_ids: ["attachment-id"], reason: "timeout",
+                detail: "unknown upload_id attachment-id" }]);
             expect(envelopes.filter(e => e.type === "log" && e.payload.kind === "user")
               .map(e => e.payload.text)).toEqual(["fail-turn"]);
             const output = stderr.join("");
@@ -476,5 +476,76 @@ describe("runGrokCli shutdown releases reply waiters (issue #1130)", () => {
     } finally {
       close.mockRestore();
     }
+  });
+});
+
+describe("runGrokCli attachments", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const open = (callbacks: ServerLinkOptions, id: string) => {
+    callbacks.onAttachOpen?.({ upload_id: id, filename: `${id}.png`, mime: "image/png", size: 4, chunks: 1 });
+    callbacks.onAttachChunk?.(chunkPayload(id, 0, png));
+    callbacks.onAttachClose?.(id);
+  };
+  const rejected = (envelopes: Envelope[]) => envelopes
+    .filter((e) => e.type === "attach_rejected" || e.type === "instruction_rejected")
+    .map((e) => ({ type: e.type, ...e.payload }));
+  it("T5: drops an instruction that arrived during a turn at the interrupt", async () => {
+    const envelopes: Envelope[] = [];
+    let callbacks!: ServerLinkOptions;
+    let probe!: Promise<void>;
+    await runGrokCli({
+      parseCliArgs: () => ({ configPath: "fixture" }),
+      loadConfig: () => ({ ...config }),
+      loadWrapperBuildInfo: () => buildInfo,
+      createHost: options => new GrokHost({ ...options,
+        executable: fileURLToPath(new URL("./fixtures/grok.mjs", import.meta.url)) }),
+      createServerLink: (_url, _id, options) => {
+        callbacks = options;
+        return recordingLink(options, envelopes, [], []);
+      },
+      onHostCreated: host => {
+        probe = (async () => {
+          await vi.waitFor(() => expect(host.state).toBe("waiting_input"), { timeout: 5000 });
+          callbacks.onInstruction?.("hold-chunks");
+          await vi.waitFor(() => expect(envelopes.some(e => e.type === "log" &&
+            e.payload.kind === "user")).toBe(true), { timeout: 5000 });
+          open(callbacks, "u1");
+          open(callbacks, "u2");
+          callbacks.onInstruction?.("SECOND_WITH_ATTACHMENTS", ["u1", "u2"]);
+          callbacks.onInterrupt?.();
+          expect(rejected(envelopes)).toEqual([
+            { type: "attach_rejected", upload_id: "u1", reason: "interrupted" },
+            { type: "attach_rejected", upload_id: "u2", reason: "interrupted" },
+            { type: "instruction_rejected", attachment_ids: ["u1", "u2"], reason: "interrupted" },
+          ]);
+          // A later instruction runs only after the chain has passed the second.
+          callbacks.onInstruction?.("AFTER");
+          await vi.waitFor(() => expect(envelopes.filter(e => e.type === "result")).toHaveLength(2),
+            { timeout: 5000 });
+          expect(rejected(envelopes)).toHaveLength(3);
+          expect(envelopes.filter(e => e.type === "log" && e.payload.kind === "user")
+            .map(e => e.payload.text)).toEqual(["hold-chunks", "AFTER"]);
+        })().finally(() => host.close());
+        void probe.catch(() => {});
+      },
+    });
+    await probe;
+  });
+  it("drops pending uploads when the start fails before the host exists (R3-S3)", async () => {
+    const envelopes: Envelope[] = [];
+    await expect(runGrokCli({
+      parseCliArgs: () => ({ configPath: "fixture" }),
+      loadConfig: () => ({ ...config }),
+      loadWrapperBuildInfo: () => buildInfo,
+      createHost: () => { throw new Error("START_FAILURE"); },
+      createServerLink: (_url, _id, options) => {
+        const link = recordingLink(options, envelopes, [], []);
+        open(options, "u1");
+        return link;
+      },
+    })).rejects.toThrow("START_FAILURE");
+    expect(rejected(envelopes)).toEqual([
+      { type: "attach_rejected", upload_id: "u1", reason: "interrupted" },
+    ]);
   });
 });
