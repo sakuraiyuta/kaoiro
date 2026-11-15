@@ -5,7 +5,7 @@ import "./isolation.setup";
 // CSS scroll anchoring produces right after ensureIndexVisible expands the
 // #174 render window for a pending timeline jump. This file pins the
 // suppression CONTROLLER's timing/ownership contract with fake timers and
-// a controllable renderMermaidIn — deterministic, real-browser-independent
+// a controllable afterLogUpdate — deterministic, real-browser-independent
 // coverage for the class of races real CSS scroll anchoring is not needed
 // to reproduce (unlike the position-landing regression itself, which is
 // dashboard/e2e/timelineScroll.spec.ts, real-Chromium-only).
@@ -14,12 +14,12 @@ import "./isolation.setup";
 // or an agent switch carrying its own jump) must not have its protection
 // cut short by an OLDER, now-superseded jump's failsafe timer firing.
 // must-fix 2 (failsafe start point): the failsafe must not start counting
-// until the caller's own pre-scroll async work (tick + renderMermaidIn,
+// until the caller's own pre-scroll async work (tick + afterLogUpdate,
 // unbounded) has resolved and the scroll is about to be issued — not at
 // ensureIndexVisible's (synchronous, much earlier) expansion time.
 // must-fix round 2 (stale-call clobbering): armSuppressFailsafe itself —
 // not just its eventual setTimeout callback — must no-op for a stale
-// generation. renderMermaidIn's duration is content-dependent, so
+// generation. afterLogUpdate's duration is content-dependent, so
 // completion order is not dispatch order: an OLDER (lower-generation) jump
 // can resolve AFTER a NEWER one already armed its own correct timer. Only
 // resolving jumps strictly in dispatch order (as the must-fix-1 tests
@@ -28,7 +28,7 @@ import "./isolation.setup";
 // round-2 fix protected the SUPPRESSION TIMER from a stale generation, but
 // nothing protected the actual scroll/DOM mutation itself. The main scroll
 // $effect's `tick().then(async () => {...})` continuation only re-checked
-// `logEl` after its `renderMermaidIn` await, never whether a NEWER effect
+// `logEl` after its `afterLogUpdate` await, never whether a NEWER effect
 // run (a second rapid jump, or an agent switch) had since superseded it.
 // So an OLDER, now-irrelevant continuation could still call
 // `scrollToTimelineEntry`'s own `logEl.scrollTo(...)` (or the rAF-based
@@ -41,13 +41,13 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
 import { conversationEntryKey } from "../src/lib/conversationTimeline";
-import { renderMermaidIn } from "../src/lib/markdown";
+import { afterLogUpdate } from "../src/lib/logLayout";
 import type { Envelope } from "../src/lib/protocol";
 import { makeReactiveTimelineDetailProps } from "./reactiveProps.svelte";
 
-vi.mock("../src/lib/markdown", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/lib/markdown")>();
-  return { ...actual, renderMermaidIn: vi.fn(async () => undefined) };
+vi.mock("../src/lib/logLayout", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/logLayout")>();
+  return { ...actual, afterLogUpdate: vi.fn(async () => undefined) };
 });
 
 const ROW_PX = 30;
@@ -78,7 +78,7 @@ afterEach(async () => {
   component = null;
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  vi.mocked(renderMermaidIn).mockImplementation(async () => undefined);
+  vi.mocked(afterLogUpdate).mockImplementation(async () => undefined);
   vi.useRealTimers();
   for (const [prop, orig] of [
     ["clientHeight", originalClientHeight],
@@ -229,6 +229,7 @@ function installRowGeometry(): void {
 }
 
 function scrollLogTo(logEl: HTMLElement, top: number): void {
+  logEl.dispatchEvent(new Event("wheel"));
   logEl.scrollTop = top;
   logEl.dispatchEvent(new Event("scroll"));
 }
@@ -247,7 +248,7 @@ async function renderReactive(props: Parameters<typeof makeReactiveTimelineDetai
   return { target, props: reactiveProps };
 }
 
-/** Queue-based renderMermaidIn control (same pattern as logWindow's round-2
+/** Queue-based afterLogUpdate control (same pattern as logWindow's round-2
  *  M3/round-3 S2 test): each call gets its own independently-resolvable
  *  deferred promise, so a specific jump's render can be held pending while
  *  fake time advances, or resolved on demand. */
@@ -256,14 +257,14 @@ function installControllableMermaid(): {
   resolveNext(): void;
 } {
   const resolvers: Array<() => void> = [];
-  vi.mocked(renderMermaidIn).mockImplementation(
+  vi.mocked(afterLogUpdate).mockImplementation(
     () => new Promise<void>((resolve) => resolvers.push(resolve)),
   );
   return {
     resolvers,
     resolveNext() {
       const next = resolvers.shift();
-      if (!next) throw new Error("no pending renderMermaidIn call to resolve");
+      if (!next) throw new Error("no pending afterLogUpdate call to resolve");
       next();
     },
   };
@@ -317,7 +318,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
       scrollToEntryKey: null,
       onClose: vi.fn(),
     });
-    mermaid.resolveNext(); // mount's own renderMermaidIn call
+    mermaid.resolveNext(); // mount's own afterLogUpdate call
     await vi.advanceTimersByTimeAsync(0);
     const logEl = target.querySelector(".log") as HTMLElement;
 
@@ -336,7 +337,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     expect(target.querySelector(".transcript-entry")?.getAttribute("data-envelope-key")).toBe(
       targetA,
     );
-    mermaid.resolveNext(); // A's renderMermaidIn -> scrollToTimelineEntry -> arms failsafe A at t=0
+    mermaid.resolveNext(); // A's afterLogUpdate -> scrollToTimelineEntry -> arms failsafe A at t=0
     await vi.advanceTimersByTimeAsync(0);
 
     // Half a second later, before A's failsafe (1000ms) fires, re-arm with
@@ -347,7 +348,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     await tick();
     await vi.advanceTimersByTimeAsync(0);
     expect(target.querySelectorAll(".transcript-entry").length).toBe(245);
-    mermaid.resolveNext(); // B's renderMermaidIn -> scrollToTimelineEntry -> arms failsafe B at t=500
+    mermaid.resolveNext(); // B's afterLogUpdate -> scrollToTimelineEntry -> arms failsafe B at t=500
     await vi.advanceTimersByTimeAsync(0);
 
     // Advance to t=1000 -- exactly when A's ORIGINAL failsafe would have
@@ -406,7 +407,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     await tick();
     await vi.advanceTimersByTimeAsync(0);
     expect(target.querySelectorAll(".transcript-entry").length).toBe(295);
-    mermaid.resolveNext(); // B's own renderMermaidIn -> arms failsafe B at t=200 (due t=1200)
+    mermaid.resolveNext(); // B's own afterLogUpdate -> arms failsafe B at t=200 (due t=1200)
     await vi.advanceTimersByTimeAsync(0);
 
     // Advance to t=1100: past t=1000, when A's failsafe (armed at t=0)
@@ -419,7 +420,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     expect(target.querySelectorAll(".transcript-entry").length).toBe(295);
   });
 
-  it("must-fix 2: renderMermaidIn が 1 秒を超えて解決しなくても、着地前に window が巻き戻らない", async () => {
+  it("must-fix 2: afterLogUpdate が 1 秒を超えて解決しなくても、着地前に window が巻き戻らない", async () => {
     stubScrollTo();
     installScrollGeometry();
     const mermaid = installControllableMermaid();
@@ -439,13 +440,13 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
 
     // Request the jump: ensureIndexVisible expands the window and arms
     // suppression SYNCHRONOUSLY, but per must-fix 2 the failsafe timer
-    // must not start yet -- renderMermaidIn (awaited before
+    // must not start yet -- afterLogUpdate (awaited before
     // scrollToTimelineEntry runs) is still pending.
     props.scrollToEntryKey = target10;
     await tick();
     expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
-    // Let 1500ms of fake time pass WITHOUT resolving renderMermaidIn --
+    // Let 1500ms of fake time pass WITHOUT resolving afterLogUpdate --
     // longer than the 1000ms failsafe. A pre-fix (arm-time-started) timer
     // would already have fired by now.
     await vi.advanceTimersByTimeAsync(1500);
@@ -558,7 +559,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     const logEl = target.querySelector(".log") as HTMLElement;
 
     // Dispatch OLD first: expands to [10,250), arms generation 1, but its
-    // renderMermaidIn call is held pending (not resolved yet) — simulating
+    // afterLogUpdate call is held pending (not resolved yet) — simulating
     // a diagram-heavy message taking longer to render.
     props.scrollToEntryKey = targetOld;
     await tick();
@@ -566,7 +567,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
     // Dispatch NEW before OLD's render resolves: expands further to
-    // [5,250), arms generation 2. Its OWN renderMermaidIn call is also
+    // [5,250), arms generation 2. Its OWN afterLogUpdate call is also
     // held pending.
     props.scrollToEntryKey = targetNew;
     await tick();
@@ -604,7 +605,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     // cancel-on-rearm、armSuppressFailsafe のコールバック内 generation
     // guard)は個別に無効化しても他方が単独で守り切れるため、
     // must-fix-1 系テストのタイミング(NEW が自分の失敗も即座に
-    // renderMermaidIn を解決する)では red にならない。両方を同時に
+    // afterLogUpdate を解決する)では red にならない。両方を同時に
     // 無効化し、かつ NEW の render を OLD の ORIGINAL deadline を
     // 越えるまで pending にした場合(NEW 自身がまだ自分の failsafe を
     // 一度も arm していない時点で OLD の stale timer が発火する)だけが
@@ -637,7 +638,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     // At t=50, NEW is dispatched: ensureIndexVisible expands the window
     // further and re-arms SYNCHRONOUSLY (this is what cancel-on-rearm
     // protects against OLD's still-pending timer) — but its OWN
-    // renderMermaidIn is held pending well past t=1000, so NEW never gets
+    // afterLogUpdate is held pending well past t=1000, so NEW never gets
     // a chance to arm its OWN failsafe before OLD's original deadline.
     await vi.advanceTimersByTimeAsync(50);
     props.scrollToEntryKey = targetNew;
@@ -681,7 +682,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     mermaid.resolveNext(); // mount
     await vi.advanceTimersByTimeAsync(0);
 
-    // Dispatch OLD (expands to [10,250)); its renderMermaidIn is held
+    // Dispatch OLD (expands to [10,250)); its afterLogUpdate is held
     // pending (e.g. a diagram-heavy message taking longer to render).
     props.scrollToEntryKey = targetOld;
     await tick();
@@ -689,7 +690,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
     // Dispatch NEW before OLD resolves (expands further to [5,250)); its
-    // own renderMermaidIn is also held pending.
+    // own afterLogUpdate is also held pending.
     props.scrollToEntryKey = targetNew;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
@@ -744,7 +745,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
 
     // Jump on agent A (stickToBottom defaults true — the operator was
     // pinned to the tail, the common starting state per issue #227's own
-    // root-cause analysis). renderMermaidIn held pending.
+    // root-cause analysis). afterLogUpdate held pending.
     props.scrollToEntryKey = targetA;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
@@ -789,13 +790,13 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     expect(logEl.scrollTop).toBe(scrollTopAfterB);
   });
 
-  it("N-a: 2連 rAF 後の 3 番目の ownership guard がないと、OLD の遅延 continuation が NEW の着地を上書きする (pin)", async () => {
+  it.each([1, 2])("stale restore cannot resume after frame %i", async (boundary) => {
     // クロエ review N-a: the M1 probes above pin the FIRST two async resume
     // points -- but in BOTH probes, OLD's own generation already mismatches
-    // by the time its renderMermaidIn resolves, so it returns at that
+    // by the time its afterLogUpdate resolves, so it returns at that
     // EARLIER check and never even reaches the double-rAF wait. This test
     // instead lets OLD pass that earlier check (it is still the latest
-    // generation when its renderMermaidIn resolves), then supersedes it
+    // generation when its afterLogUpdate resolves), then supersedes it
     // with NEW only WHILE OLD is mid-rAF-wait -- the one case only the
     // third guard (right before the final `logEl.scrollTop = ...` write)
     // can catch. Per クロエ's own measurement, removing just this guard
@@ -819,7 +820,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
       onClose: vi.fn(),
     });
     // Drain the mount's own continuation (unseen agent -> stick defaults
-    // true -> also runs the renderMermaidIn + double-rAF + write path).
+    // true -> also runs the afterLogUpdate + double-rAF + write path).
     mermaid.resolveNext();
     await vi.advanceTimersByTimeAsync(0);
     raf.resolveOldest();
@@ -852,7 +853,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
 
     // OLD: switch back to agent-a -> restores its memorized top=100,
     // captured synchronously into THIS run's `restoreTop`. Its
-    // renderMermaidIn resolves PROMPTLY, while OLD is still the latest run
+    // afterLogUpdate resolves PROMPTLY, while OLD is still the latest run
     // -> passes the post-render generation check -> enters the double-rAF
     // wait (held).
     props.envelope = state("agent-a");
@@ -861,7 +862,11 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     await vi.advanceTimersByTimeAsync(0);
     mermaid.resolveNext();
     await vi.advanceTimersByTimeAsync(0);
-    expect(raf.pending.length).toBe(1); // OLD awaiting its first rAF
+    expect(raf.pending.length).toBe(1);
+    if (boundary === 2) {
+      raf.resolveOldest();
+      await vi.advanceTimersByTimeAsync(0);
+    }
 
     // NEW: switch to agent-b again BEFORE OLD's rAFs resolve -> restores
     // its OWN memorized top=200, superseding OLD (bumps
@@ -886,8 +891,7 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     // a generation that no longer matches.
     raf.resolveOldest();
     await vi.advanceTimersByTimeAsync(0);
-    raf.resolveOldest();
-    await vi.advanceTimersByTimeAsync(0);
+    expect(raf.pending).toHaveLength(0);
 
     // The pin: OLD's stale restore (100) must not have overwritten NEW's
     // landing (200).

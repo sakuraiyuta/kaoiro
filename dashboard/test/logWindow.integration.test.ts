@@ -11,17 +11,17 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
 import { conversationEntryKey } from "../src/lib/conversationTimeline";
-import { renderMermaidIn } from "../src/lib/markdown";
+import { afterLogUpdate } from "../src/lib/logLayout";
 import type { Envelope } from "../src/lib/protocol";
 import { updateSettings } from "../src/lib/settings.svelte";
 import { makeReactiveTimelineDetailProps } from "./reactiveProps.svelte";
 
 // vi.mock calls are hoisted above every import in this file (including
 // AgentDetail.svelte's own "./markdown" import), so this replaces the real
-// renderMermaidIn everywhere it's used regardless of source order.
-vi.mock("../src/lib/markdown", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/lib/markdown")>();
-  return { ...actual, renderMermaidIn: vi.fn(async () => undefined) };
+// afterLogUpdate everywhere it's used regardless of source order.
+vi.mock("../src/lib/logLayout", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/logLayout")>();
+  return { ...actual, afterLogUpdate: vi.fn(async () => undefined) };
 });
 
 const LOG_WINDOW_SIZE = 200;
@@ -66,7 +66,7 @@ afterEach(async () => {
   // clearAllMocks resets call history but not a custom mockImplementation
   // (round-3 S2's deferred-mermaid test installs one) — restore the
   // vi.mock factory's default so later tests see the normal resolved mock.
-  vi.mocked(renderMermaidIn).mockImplementation(async () => undefined);
+  vi.mocked(afterLogUpdate).mockImplementation(async () => undefined);
   for (const [prop, orig] of [
     ["scrollTo", originalScrollTo],
     ["scrollIntoView", originalScrollIntoView],
@@ -214,6 +214,7 @@ function installScrollGeometry(): void {
 }
 
 function scrollLogTo(logEl: HTMLElement, top: number): void {
+  logEl.dispatchEvent(new Event("wheel"));
   logEl.scrollTop = top;
   logEl.dispatchEvent(new Event("scroll"));
 }
@@ -732,10 +733,10 @@ describe("AgentDetail log render window (#174)", () => {
     // effectiveWindowStart (-> frozenWindow) tracked from inside this same
     // $effect, so expanding the window for the target registered
     // frozenWindow as a dependency and risked a second, redundant
-    // renderMermaidIn pass for the same mount. Exactly one call is fixed
+    // afterLogUpdate pass for the same mount. Exactly one call is fixed
     // behaviour, mirroring the round-1 M3 / round-3 M2 test's
     // toHaveBeenCalledTimes tightening.
-    expect(renderMermaidIn).toHaveBeenCalledTimes(1);
+    expect(afterLogUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("window 外の tool_use/tool_result 相互 jump (#40) も window を拡張して描画する (round-2 S1)", async () => {
@@ -824,7 +825,7 @@ describe("AgentDetail log render window (#174)", () => {
       scrollToEntryKey: null,
       onClose: vi.fn(),
     });
-    vi.mocked(renderMermaidIn).mockClear();
+    vi.mocked(afterLogUpdate).mockClear();
     (target.querySelector(".load-earlier") as HTMLButtonElement).click();
     await tick();
     await Promise.resolve();
@@ -832,11 +833,11 @@ describe("AgentDetail log render window (#174)", () => {
     // round-3 M2: the shrink guard used to read `frozenWindow` as a tracked
     // dependency of the main scroll $effect, so showEarlierLogs's own state
     // write re-triggered that effect too — a second, redundant
-    // renderMermaidIn pass for the same click (interleaving DOM replacement
+    // afterLogUpdate pass for the same click (interleaving DOM replacement
     // with showEarlierLogs's own scrollHeight-based correction). Exactly
     // one call is the fixed behaviour; toHaveBeenCalled() alone would have
     // let a second call through unnoticed.
-    expect(renderMermaidIn).toHaveBeenCalledTimes(1);
+    expect(afterLogUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("showEarlierLogs 中に agent 切替しても新 agent の scrollTop を壊さない (round-2 M3, round-3 S2)", async () => {
@@ -855,7 +856,7 @@ describe("AgentDetail log render window (#174)", () => {
     });
     const logEl = target.querySelector(".log") as HTMLElement;
 
-    // Every renderMermaidIn call gets its OWN independently-resolvable
+    // Every afterLogUpdate call gets its OWN independently-resolvable
     // deferred promise (mount's, showEarlierLogs's, and the switch-to-B
     // settle effect's calls all land here) — a single shared resolver would
     // resolve them all at once and make it impossible to let B settle
@@ -865,7 +866,7 @@ describe("AgentDetail log render window (#174)", () => {
     // own), so `waitForCalls` polls via repeated `tick()`s instead of
     // assuming a fixed number of awaits gets there.
     const resolvers: Array<() => void> = [];
-    vi.mocked(renderMermaidIn).mockImplementation(
+    vi.mocked(afterLogUpdate).mockImplementation(
       () => new Promise<void>((resolve) => resolvers.push(resolve)),
     );
     const resolveFrom = (fromIndex: number) => resolvers.slice(fromIndex).forEach((r) => r());
@@ -874,18 +875,18 @@ describe("AgentDetail log render window (#174)", () => {
         await tick();
       }
       if (resolvers.length < atLeast) {
-        throw new Error(`expected >=${atLeast} renderMermaidIn calls, got ${resolvers.length}`);
+        throw new Error(`expected >=${atLeast} afterLogUpdate calls, got ${resolvers.length}`);
       }
     }
 
-    // (The mount's own renderMermaidIn call already ran — via the vi.mock
+    // (The mount's own afterLogUpdate call already ran — via the vi.mock
     // factory's default auto-resolving implementation, installed before
     // `renderReactive` awaited its first tick — and is not tracked in
     // `resolvers` at all, since the queue-based implementation above was
     // only just installed.)
 
     // Starts showEarlierLogs for A; it awaits tick() then blocks on its OWN
-    // deferred renderMermaidIn call. A's scrollHeight/scrollTop at THIS
+    // deferred afterLogUpdate call. A's scrollHeight/scrollTop at THIS
     // moment (still the default 200-row window, never scrolled) are
     // 200*30=6000 / 0 — showEarlierLogs captures both before this await.
     const aCallIndex = resolvers.length;

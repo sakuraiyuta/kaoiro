@@ -152,7 +152,11 @@ any state.
 The change log dialog renders only the latest entry in full on open. An older
 entry shows its time and its first line, cut to 160 code points and drawn in the
 inline profile like the card, and is rendered in full when expanded, so opening
-the dialog parses one entry in full however long the log is.
+the dialog requests full formatting for one entry however long the log is.
+Expanded full text uses the shared
+[asynchronous lexer policy](../ui/design.md#asynchronous-markdown-bodies), retaining
+its strict parser/sanitizer profile. The complete source remains readable while
+queued or on failure. Card/panel heads and collapsed summaries stay synchronous.
 
 Markdown written by an agent is rendered under one fixed policy
 (`untrustedMarkdown.ts`, shared with any other renderer of text written by

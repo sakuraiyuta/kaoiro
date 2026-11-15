@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
-  import { onMount, tick, untrack } from "svelte";
+  import { onDestroy, onMount, tick, untrack } from "svelte";
+  import { disposeMarkdownWorker } from "./lib/markdownWorker";
+  onDestroy(disposeMarkdownWorker);
   import AgentCard from "./lib/AgentCard.svelte";
   import { DeliveryPolicyStore } from "./lib/deliveryPolicyStore.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";

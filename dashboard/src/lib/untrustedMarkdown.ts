@@ -1,7 +1,7 @@
 // Renders markdown written by someone else - an agent's status line, an
 // operator's ToDo - under the fixed policy the operator chose (issue 482):
 // raw HTML is shown literally, links keep only http(s), images are shown as
-// links and never loaded, nothing is time-bounded beyond the guards below.
+// links and never loaded, full history uses the asynchronous lexer service.
 //
 // This is deliberately NOT `markdown.ts`. That module renders chat replies and
 // still passes sanitized raw HTML, loads images and allows other link schemes;
@@ -21,14 +21,10 @@
 // cannot be pressed, because a button may not contain an interactive element.
 
 import createDOMPurify from "dompurify";
-import { Marked, type Token, type Tokens } from "marked";
+import { Marked, type Tokens, type TokensList } from "marked";
 
-/** Deeper than this (blockquote or list nesting) renders as plain text. A
- *  deep nest makes the lexer overflow the stack, and below that DOMPurify slow
- *  on the resulting tree (measured: ">" x 1000 took 459 ms to sanitize). The
- *  chat renderer (markdown.ts) applies the same limit, and nothing else of
- *  this module's policy. */
-export const MAX_NESTING_DEPTH = 32;
+import { LEXER_OPTIONS, MAX_NESTING_DEPTH, nestingDepth } from "./markdownTokens";
+export { MAX_NESTING_DEPTH, nestingDepth } from "./markdownTokens";
 
 export type UntrustedRender =
   | { kind: "html"; html: string }
@@ -73,8 +69,6 @@ function httpUrl(href: string): string | null {
 
 /** What both profiles lex with. One constant, so the two cannot drift apart
  *  and the trim of a cut head lexes as either one does. */
-const LEXER_OPTIONS = { async: false, breaks: true, gfm: true } as const;
-
 const marked = new Marked({
   ...LEXER_OPTIONS,
   renderer: {
@@ -268,33 +262,20 @@ export function sanitizeUntrustedInlineHtml(html: string): string {
   });
 }
 
-/** Blockquote and list nesting along the deepest path of a token tree. The
- *  chat renderer (markdown.ts) measures with it too, where one paragraph can
- *  hold more inline tokens than an argument list can spread, so each array is
- *  walked in place. */
-export function nestingDepth(tokens: readonly Token[]): number {
-  let deepest = 0;
-  for (const token of tokens) {
-    let below = 0;
-    if ("tokens" in token && Array.isArray(token.tokens)) below = nestingDepth(token.tokens);
-    if (token.type === "list" && "items" in token && Array.isArray(token.items)) {
-      below = Math.max(below, nestingDepth(token.items as Token[]));
-    }
-    const own = token.type === "blockquote" || token.type === "list" ? 1 : 0;
-    deepest = Math.max(deepest, own + below);
-  }
-  return deepest;
-}
-
-/** Markdown to sanitized HTML under the policy above, or `plain` when it cannot
- *  be done safely and quickly: the parser threw, or the nesting is too deep.
- *  The time is bounded per click, not per input: for 16 KB the slowest shape
- *  measured (jsdom, load about 2.7) was "*a _b" x 3276 at 739 ms, and a deep
- *  "> - " nest costs about 544 ms of lexing before it falls back to plain. */
+/** Synchronous rendering for bounded previews and reference tests. */
 export function renderUntrustedMarkdown(text: string): UntrustedRender {
   try {
     const tokens = marked.lexer(text);
     if (nestingDepth(tokens) > MAX_NESTING_DEPTH) return { kind: "plain" };
+    return renderUntrustedTokens(tokens);
+  } catch {
+    return { kind: "plain" };
+  }
+}
+
+/** Parse worker tokens with the same full-view policy as bounded previews. */
+export function renderUntrustedTokens(tokens: TokensList): UntrustedRender {
+  try {
     return { kind: "html", html: sanitizeUntrustedHtml(marked.parser(tokens)) };
   } catch {
     return { kind: "plain" };
