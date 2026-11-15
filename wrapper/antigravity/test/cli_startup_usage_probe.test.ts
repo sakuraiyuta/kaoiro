@@ -2,7 +2,7 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { InterAgentTool, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, type SpawnedAgy } from "../src/host.js";
 import { createHarnessHost } from "./host_test_harness.js";
 import { runAntigravityCli } from "../src/cli.js";
@@ -107,5 +107,18 @@ describe("Antigravity CLI startup usage probe (issue #660)", () => {
   it("does not probe at startup when an initial prompt starts a turn", async () => {
     const { probeCalls } = await runCli({ prompt: "hello" });
     expect(probeCalls).toBe(0);
+  });
+});
+
+describe("Antigravity CLI shutdown releases reply waiters (issue #1130)", () => {
+  it("closes this invocation's InterAgentTool when the CLI stops", async () => {
+    const close = vi.spyOn(InterAgentTool.prototype, "close");
+    try {
+      await runCli({});
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(close.mock.contexts[0]).toBeInstanceOf(InterAgentTool);
+    } finally {
+      close.mockRestore();
+    }
   });
 });

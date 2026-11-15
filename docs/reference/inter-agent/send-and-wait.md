@@ -77,7 +77,7 @@ An agent replies with `send_to_agent` when it chooses to respond. Otherwise a
 normal `result` envelope is sufficient; it need not send `done`. The
 conversation remains open until both sides send `done=true`, a hard limit is
 exceeded, or `open_conversation_ttl_ms` elapses (default 24 hours, issue
-#211). The former server `max_wallclock` hard limit automatically attached
+# 211). The former server `max_wallclock` hard limit automatically attached
 `done` on timeout; issue #211 removed it. `open_conversation_ttl_ms` is now
 memory reclamation rather than a hard-limit escalation or evidence of mutual
 agreement. GC closes the server entry and sends a synthetic `kind: "done"`,
@@ -156,6 +156,10 @@ this conservative guidance.
   arrives, **release the waiter immediately** and return a reject or delivery-
   unknown result (Fujino 30-10 M5, 2026-08-08). Do not wait the full timeout for
   a peer that cannot answer.
+- When the wrapper stops, release every waiter pending at that moment the
+  same way as a timeout (send ack and `reply_pending=true`; `timeout_ms` is
+  the configured value, not elapsed time). This neither cancels the send nor
+  ends the conversation. The waiter's timer never keeps the process alive.
 
 ## Send acceptance and rejection
 

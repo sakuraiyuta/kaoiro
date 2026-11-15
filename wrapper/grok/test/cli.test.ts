@@ -3,7 +3,7 @@ import {PermissionSyncTimeoutError} from "@kaoiro/wrapper-core";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerLink, ServerLinkOptions } from "@kaoiro/wrapper-core";
-import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { InterAgentTool, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { runGrokCli } from "../src/cli.js";
 import { GrokHost } from "../src/host.js";
 import * as events from "../src/grok/events.js";
@@ -450,4 +450,31 @@ it("retires a real Grok CLI sync failure once without the generic duplicate fail
       blocked=false;await host.send("recovered");
     })().finally(()=>host.close());void probe.catch(()=>{});}});
   await work;await probe;
+});
+
+describe("runGrokCli shutdown releases reply waiters (issue #1130)", () => {
+  it("closes this invocation's InterAgentTool when the CLI stops", async () => {
+    const close = vi.spyOn(InterAgentTool.prototype, "close");
+    let probe!: Promise<void>;
+    try {
+      await runGrokCli({
+        parseCliArgs: () => ({ configPath: "fixture" }),
+        loadConfig: () => ({ ...config }),
+        loadWrapperBuildInfo: () => buildInfo,
+        createHost: options => new GrokHost({ ...options,
+          executable: fileURLToPath(new URL("./fixtures/grok.mjs", import.meta.url)) }),
+        createServerLink: (_url, _id, callbacks) => recordingLink(callbacks, [], [], []),
+        onHostCreated: host => {
+          probe = vi.waitFor(() => expect(host.state).toBe("waiting_input"), { timeout: 5000 })
+            .finally(() => host.close());
+          void probe.catch(() => {});
+        },
+      });
+      await probe;
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(close.mock.contexts[0]).toBeInstanceOf(InterAgentTool);
+    } finally {
+      close.mockRestore();
+    }
+  });
 });

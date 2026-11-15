@@ -6,8 +6,8 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // broke vitest teardown there). A fake host (not a fake queryFn) is enough
 // here: this pin is about listener bookkeeping, not the SDK subprocess
 // escalation, which the real-process pin covers separately.
-import { describe, expect, it } from "vitest";
-import type { WrapperConfig } from "@kaoiro/agent-common";
+import { describe, expect, it, vi } from "vitest";
+import { InterAgentTool, type WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 
 const config: WrapperConfig = {
@@ -78,5 +78,18 @@ describe("Claude CLI SIGTERM handler lifecycle (issue #391)", () => {
     const second = await runOnceAndSigterm();
     expect(second.closed).toBe(true);
     expect(process.listenerCount("SIGTERM")).toBe(before);
+  });
+});
+
+describe("CLI shutdown releases reply waiters (issue #1130)", () => {
+  it("closes this invocation's InterAgentTool when run() settles", async () => {
+    const close = vi.spyOn(InterAgentTool.prototype, "close");
+    try {
+      await runOnceAndSigterm();
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(close.mock.contexts[0]).toBeInstanceOf(InterAgentTool);
+    } finally {
+      close.mockRestore();
+    }
   });
 });

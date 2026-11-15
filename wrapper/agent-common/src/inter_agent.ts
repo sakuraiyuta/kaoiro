@@ -2951,6 +2951,17 @@ export class InterAgentTool {
     waiter.resolve(undefined);
   }
 
+  /** Releases every `wait_for_response` waiter pending at this moment, as if
+   *  its timeout had elapsed (`reply_pending=true`). Idempotent. Not a
+   *  terminal state: a wait that starts after this call is not refused; its
+   *  timer is unref'd, so it cannot keep the process alive but is not
+   *  released either. */
+  close(): void {
+    for (const conversationId of [...this.#replyWaiters.keys()]) {
+      this.#cancelReplyWait(conversationId);
+    }
+  }
+
   #waitForReply(
     conversationId: string,
     peer: string,
@@ -2962,6 +2973,8 @@ export class InterAgentTool {
         this.#replyWaiters.delete(conversationId);
         resolve(undefined);
       }, timeoutMs);
+      // A pending wait must not keep a stopping process alive (see close()).
+      timeout.unref?.();
       this.#replyWaiters.set(conversationId, { resolve, timeout, peer, sentTurnNumber });
     });
   }

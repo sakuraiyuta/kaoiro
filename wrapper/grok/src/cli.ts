@@ -485,6 +485,7 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     process.off("SIGINT", stop);
     question.close();
     permission.close();
+    interAgent.close();
     host?.close();
     await host?.closed;
     try {
