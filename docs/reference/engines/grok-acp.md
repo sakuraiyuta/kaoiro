@@ -101,8 +101,9 @@ directory, and one that is not a string literal counts as outside.
 
 The adapter supports text turns, conversation continuity while the wrapper
 is resident, cancellation, operator permission requests, user questions,
-normal peer messages and dispatch confirmation. The declared receiving
-modes remain `early: "none"` and `yield: "none"`.
+normal peer messages, dispatch confirmation and shared work tools. Work
+operations follow the server's existing authority rules. The declared
+receiving modes remain `early: "none"` and `yield: "none"`.
 
 Receiving early input remains unsupported. Grok 1.0.52 accepts
 `_x.ai/interject` and may apply the text within the running prompt. A queued
@@ -150,11 +151,9 @@ controls reject explicitly.
 Session reset is unsupported in both directions. The adapter advertises
 `supports_session_reset: false`, so operator, self and director-requested
 resets of a Grok agent are refused with `unsupported_session_reset`, and its
-tool list does not register `request_session_reset`. Separately, the adapter
-does not negotiate `work_control` on join and does not register the director
-tool `request_peer_session_reset`
-([ADR-0068](../../adr/0068-director-requested-peer-session-reset.md)). Both are tracked by
-[issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658).
+tool list does not register `request_session_reset` or the director tool
+`request_peer_session_reset` ([ADR-0068](../../adr/0068-director-requested-peer-session-reset.md)).
+Session reset is tracked by [issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658).
 
 ## Cold resume and session discovery
 

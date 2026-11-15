@@ -125,7 +125,34 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
       return incarnation && generation ? { incarnation, generation } : null;
     },
   );
+  const workTools = {
+    workControlSupported: () =>
+      typeof link?.workControlSupported === "function" &&
+      link.workControlSupported(),
+    deliveryModesSupported: () =>
+      typeof link?.deliveryModes === "function" && link.deliveryModes() !== null,
+    deliveryModes: () => typeof link?.deliveryModesState === "function"
+      ? link.deliveryModesState() : "pending" as const,
+    workStatus: ({ work_id }: { work_id?: string | undefined }) => link
+      ? link.requestWorkStatus(work_id === undefined ? {} : { work_id })
+      : Promise.reject(new Error("work_control_unavailable")),
+    workOpResult: (input: { operation_id: string }) => link
+      ? link.requestWorkOpResult(input)
+      : Promise.reject(new Error("work_control_unavailable")),
+    deliveryStatus: (input: {
+      conversation_id?: string | undefined;
+      turn_number?: number | undefined;
+    }) => link
+      ? link.requestDeliveryStatus(
+        input.conversation_id === undefined || input.turn_number === undefined
+          ? {}
+          : { conversation_id: input.conversation_id,
+            turn_number: input.turn_number },
+      )
+      : Promise.reject(new Error("work_control_unavailable")),
+  };
   const interAgent = new InterAgentTool({
+    workTools,
     config,
     send,
     getState: () => host?.state ?? "idle",
@@ -177,6 +204,18 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     ...(config.transition_id ? { transitionId: config.transition_id } : {}),
     buildInfo,
     noticeAttribution: "v1" as const,
+    workControl: "v1" as const,
+    onWorkNotice: (notice) => {
+      chain = chain
+        .then(async () => {
+          await hostReady;
+          await host!.send(`Work notice: ${JSON.stringify(notice)}`);
+        })
+        .catch((error: unknown) => {
+          if (error instanceof PermissionSyncTimeoutError) return;
+          turnFailure();
+        });
+    },
     interAgentDeliveryModes: {
       version: "v1" as const,
       early: "none" as const,

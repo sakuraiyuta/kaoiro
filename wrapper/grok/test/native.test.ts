@@ -98,6 +98,9 @@ it.skipIf(!live)(
               return { kind: "accepted", stamp: null };
             },
             noticeAttributionMode: () => "legacy",
+            workControlSupported: () => true,
+            deliveryModes: () => null,
+            deliveryModesState: () => "legacy",
             deliveryIncarnation: () => "native-incarnation",
             deliveryGeneration: () => "native-generation",
             acknowledgeInterAgentDelivery: (n: number) => ack.push(n),
@@ -199,7 +202,9 @@ it.skipIf(!live)(
                   kind: "request",
                   body:
                     "Send once to native-peer here via kaoiro send_to_agent. " +
-                    "Use kind=response, body=received, done=true; " +
+                    "Use work_control accept_assignment with work_id " +
+                    "wrk_AbCdEfGhIjKlMnOpQrStUv, kind=response, " +
+                    "body=received, done=true, wait_for_response=false; " +
                     "empty propose_next.",
                   meta: { done: false, propose_next: "" },
                 },
@@ -216,6 +221,8 @@ it.skipIf(!live)(
                 to: "native-peer",
                 conversation_id: "native-conversation",
                 kind: "response",
+                work_control: { op: "accept_assignment",
+                  work_id: "wrk_AbCdEfGhIjKlMnOpQrStUv" },
               });
               expect(ack).toEqual([1]);
               const allowed = (tool: string) =>
