@@ -294,7 +294,7 @@ export class UploadIntake {
     }
   }
 
-  /** Takes the uploads an instruction references, or refuses it with
+  /** Takes the sealed uploads an instruction references, or refuses it with
    *  `instruction_rejected` and consumes nothing. Every id is checked before
    *  any upload moves; a repeated id is attached once. */
   stage(ids: readonly string[]): StagedRecord | undefined {
@@ -311,8 +311,8 @@ export class UploadIntake {
     for (const id of unique) {
       const upload = this.#pending.get(id);
       if (!upload) return refuse("timeout", `unknown upload_id ${id}`);
-      const result = validateClose(upload);
-      if (!result.ok) return refuse(result.reason, result.detail);
+      // attach_close validated it, and a sealed upload takes no more chunks.
+      if (!upload.sealed) return refuse("timeout", `upload_id ${id} is not closed`);
       uploads.push(upload);
     }
     for (const id of unique) this.#pending.delete(id);
