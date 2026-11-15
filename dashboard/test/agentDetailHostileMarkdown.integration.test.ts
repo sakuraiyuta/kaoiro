@@ -6,6 +6,8 @@ import "./isolation.setup";
 // whole transcript, not just the one bubble.
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { marked } from "marked";
+import { lexerOutcomes } from "./markdownWorker.setup";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
 import type { Envelope } from "../src/lib/protocol";
 
@@ -68,6 +70,7 @@ describe("AgentDetail with bodies that nest block quotes without limit", () => {
   // Measured 1.34-1.75 s across three bubbles (0.5-0.7 s each in marked.lexer), leaving little margin
   // under Vitest's 5,000 ms default during parallel runs; keep 100,000 '>' and allow 30,000 ms.
   it("renders each bubble as escaped text, with its time", async () => {
+    const lexer = vi.spyOn(marked, "lexer");
     const target = document.createElement("div");
     document.body.append(target);
     mounted.push(
@@ -77,13 +80,18 @@ describe("AgentDetail with bodies that nest block quotes without limit", () => {
       }),
     );
     await tick();
+    await vi.waitFor(() => expect(lexerOutcomes.filter(
+      (r) => r.kind === "plain" && r.reason === "lexer",
+    )).toHaveLength(3));
+    expect(lexer).toHaveBeenCalledTimes(3);
+    await tick();
 
     expect(target.querySelector("blockquote")).toBeNull();
     for (const selector of [".msg.assistant", ".msg.user", ".msg.inter-agent"]) {
       const bubble = target.querySelector(selector);
       expect(bubble, `${selector} is missing`).not.toBeNull();
       expect(bubble!.querySelector("time")).not.toBeNull();
-      const body = bubble!.querySelector("p:not(.inter-agent-head)");
+      const body = bubble!.querySelector(".markdown-source");
       expect(body?.textContent, `${selector} body`).toBe(HOSTILE);
     }
   }, 30_000);

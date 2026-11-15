@@ -133,7 +133,7 @@
           {#if entry.text === null}
             <p class="cleared">{msg().statusLineHistoryDialog.cleared}</p>
           {:else if index === 0 || keyOf(entry) in expanded}
-            <UntrustedMarkdown text={entry.text} />
+            <UntrustedMarkdown text={entry.text} execution="worker" />
             {#if index !== 0}
               <button type="button" class="toggle" onclick={() => toggle(entry)}>{msg().statusLineHistoryDialog.collapse}</button>
             {/if}

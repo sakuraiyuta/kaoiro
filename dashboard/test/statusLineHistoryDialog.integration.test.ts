@@ -4,7 +4,7 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import StatusLineHistoryDialog from "../src/lib/StatusLineHistoryDialog.svelte";
 import type { StatusLineHistoryEntry } from "../src/lib/statusLine";
-import { renderUntrustedInline, renderUntrustedMarkdown } from "../src/lib/untrustedMarkdown";
+import { renderUntrustedInline, renderUntrustedTokens } from "../src/lib/untrustedMarkdown";
 import { reactiveObject } from "./reactiveObject.svelte";
 
 // The real renderers, observed: the dialog must parse markdown in full for the
@@ -14,7 +14,7 @@ vi.mock("../src/lib/untrustedMarkdown", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/untrustedMarkdown")>();
   return {
     ...actual,
-    renderUntrustedMarkdown: vi.fn(actual.renderUntrustedMarkdown),
+    renderUntrustedTokens: vi.fn(actual.renderUntrustedTokens),
     renderUntrustedInline: vi.fn(actual.renderUntrustedInline),
   };
 });
@@ -34,11 +34,11 @@ if (
 }
 
 const mounted: object[] = [];
-const renderCalls = () => vi.mocked(renderUntrustedMarkdown).mock.calls.length;
+const renderCalls = () => vi.mocked(renderUntrustedTokens).mock.calls.length;
 const inlineCalls = () => vi.mocked(renderUntrustedInline).mock.calls.map(([text]) => text);
 
 beforeEach(() => {
-  vi.mocked(renderUntrustedMarkdown).mockClear();
+  vi.mocked(renderUntrustedTokens).mockClear();
   vi.mocked(renderUntrustedInline).mockClear();
 });
 
@@ -123,6 +123,7 @@ describe("StatusLineHistoryDialog", () => {
 
     second.querySelector<HTMLButtonElement>(".toggle")!.click();
     await tick();
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-markdown-state="pending"]')).toHaveLength(0));
 
     expect(second.querySelector(".first-line")).toBeNull();
     const link = second.querySelector<HTMLAnchorElement>("a")!;
@@ -154,6 +155,7 @@ describe("StatusLineHistoryDialog", () => {
 
     items(target)[2]!.querySelector<HTMLButtonElement>(".toggle")!.click();
     await tick();
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-markdown-state="pending"]')).toHaveLength(0));
 
     expect(renderCalls()).toBe(2);
     expect(items(target)[2]!.querySelector("h1")?.textContent).toBe("heading 3");
@@ -161,6 +163,7 @@ describe("StatusLineHistoryDialog", () => {
 
     items(target)[2]!.querySelector<HTMLButtonElement>(".toggle")!.click();
     await tick();
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-markdown-state="pending"]')).toHaveLength(0));
 
     expect(items(target)[2]!.querySelector("h1")).toBeNull();
     expect(renderCalls()).toBe(2);
@@ -171,12 +174,14 @@ describe("StatusLineHistoryDialog", () => {
     const { target, state } = await open(async () => current);
     items(target)[3]!.querySelector<HTMLButtonElement>(".toggle")!.click();
     await tick();
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-markdown-state="pending"]')).toHaveLength(0));
     expect(renderCalls()).toBe(2);
 
     current = [entry(6, "# heading 6"), ...current];
     state.refreshKey = "k1";
     await vi.waitFor(() => expect(items(target)).toHaveLength(6));
     await tick();
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-markdown-state="pending"]')).toHaveLength(0));
 
     expect(renderCalls()).toBe(3);
     expect(items(target)[0]!.querySelector("h1")?.textContent).toBe("heading 6");
@@ -272,6 +277,7 @@ describe("StatusLineHistoryDialog", () => {
       }),
     );
     await tick();
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-markdown-state="pending"]')).toHaveLength(0));
     state.refreshKey = "k1";
     await vi.waitFor(() => expect(resolvers).toHaveLength(2));
 
@@ -279,6 +285,7 @@ describe("StatusLineHistoryDialog", () => {
     await vi.waitFor(() => expect(items(target)).toHaveLength(2));
     resolvers[0]!(log(5));
     await tick();
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-markdown-state="pending"]')).toHaveLength(0));
     await Promise.resolve();
 
     expect(items(target)).toHaveLength(2);

@@ -121,16 +121,14 @@ describe("where untrusted text becomes HTML", () => {
     eager: true,
   }) as Record<string, string>;
 
-  it("UntrustedMarkdown.svelte is the one {@html} site for untrusted text", () => {
+  it("only the bounded and asynchronous render components insert sanitized HTML", () => {
     const own = sources["../src/lib/UntrustedMarkdown.svelte"]!;
     expect(own.match(/\{@html /g)).toHaveLength(1);
 
-    // The chat renderer in AgentDetail is an older policy, listed as the only
-    // other {@html}: it is always `renderMarkdown(...)`, never a status line.
     for (const [path, source] of Object.entries(sources)) {
       if (path.endsWith("/UntrustedMarkdown.svelte")) continue;
       for (const match of source.matchAll(/\{@html ([^}]*)\}/g)) {
-        expect(`${path}: ${match[1]}`, path).toMatch(/AgentDetail\.svelte: renderMarkdown\(/);
+        expect(`${path}: ${match[1]}`, path).toMatch(/AsyncMarkdown\.svelte: currentResult\.rendered\.html$/);
       }
     }
   });

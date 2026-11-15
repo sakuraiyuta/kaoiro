@@ -14,7 +14,8 @@
     spriteUrlFor,
   } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
-  import { renderMarkdown, renderMermaidIn } from "./markdown";
+  import { afterLogUpdate } from "./logLayout";
+  import AsyncMarkdown from "./AsyncMarkdown.svelte";
   import PersonaFace from "./PersonaFace.svelte";
   import { personaForAgent } from "./personaName";
   import TaskRing from "./TaskRing.svelte";
@@ -1134,18 +1135,20 @@
     const el = logEl;
     const agentId = envelope.agent_id;
     if (!el) return;
+    const anchor = readingAnchor();
+    const generation = ++scrollEffectGeneration;
+    layoutIntent = anchor ? { kind: "anchor", anchor } : null;
     const prevScrollHeight = el.scrollHeight;
     const prevScrollTop = el.scrollTop;
     frozenWindow = { start: 0, mode: "explicit-expanded", anchorLength: logs.length };
-    await tick();
-    if (logEl !== el || envelope.agent_id !== agentId) return;
-    try {
-      await renderMermaidIn(el);
-    } catch (error) {
-      console.error("mermaid render failed", error);
-    }
-    if (logEl !== el || envelope.agent_id !== agentId) return;
+    await afterLogUpdate();
+    if (logEl !== el || envelope.agent_id !== agentId ||
+      generation !== scrollEffectGeneration) return;
+    if (logEl !== el || envelope.agent_id !== agentId ||
+      generation !== scrollEffectGeneration) return;
     el.scrollTop = prevScrollTop + (el.scrollHeight - prevScrollHeight);
+    layoutReadyGeneration = generation;
+    correctLayout();
     // ふじ round-1 must-fix M2: unlike a scroll-driven freeze (handled inside
     // handleLogScroll), this expansion has no scroll event of its own to
     // persist it — without this, switching agents right after clicking
@@ -1153,6 +1156,7 @@
     // null` and silently re-collapse to the tail.
     scrollMemory.set(agentId, {
       top: el.scrollTop,
+      anchor,
       stick: stickToBottom,
       frozenWindow,
     });
@@ -2173,6 +2177,102 @@
   // DOM mutation, at both of its async resume points.
   let scrollEffectGeneration = 0;
 
+  type ReadingAnchor = { key: string; offset: number };
+  type LayoutIntent =
+    | { kind: "pin" }
+    | { kind: "anchor"; anchor: ReadingAnchor }
+    | { kind: "timeline"; key: string }
+    | { kind: "tool"; key: string; toolKind: string };
+  let layoutIntent: LayoutIntent | null = null;
+  let layoutFrame: number | null = null;
+  let layoutReadyGeneration = -1;
+
+  function readingAnchor(): ReadingAnchor | undefined {
+    if (!logEl) return;
+    const rows = logEl.querySelectorAll<HTMLElement>("[data-envelope-key]");
+    for (const row of rows) {
+      if (row.offsetTop + row.offsetHeight > logEl.scrollTop) {
+        return { key: row.dataset.envelopeKey!,
+          offset: row.offsetTop - logEl.scrollTop };
+      }
+    }
+  }
+
+  function rowFor(key: string): HTMLElement | undefined {
+    return [...(logEl?.querySelectorAll<HTMLElement>("[data-envelope-key]") ?? [])]
+      .find((row) => row.dataset.envelopeKey === key);
+  }
+
+  function correctLayout(): void {
+    if (!logEl || !layoutIntent) return;
+    if (layoutIntent.kind === "pin") {
+      logEl.scrollTop = logEl.scrollHeight;
+    } else if (layoutIntent.kind === "anchor") {
+      const row = rowFor(layoutIntent.anchor.key);
+      if (row) logEl.scrollTop = row.offsetTop - layoutIntent.anchor.offset;
+    } else if (layoutIntent.kind === "timeline") {
+      const row = rowFor(layoutIntent.key);
+      const target = row?.querySelector<HTMLElement>(".msg") ?? row;
+      if (!target) return;
+      resetTimelineScrollTail();
+      const top = Math.max(0, target.offsetTop - TIMELINE_SCROLL_TOP_GAP_PX);
+      timelineScrollTailPx = Math.max(0,
+        top - Math.max(0, logEl.scrollHeight - logEl.clientHeight));
+      logEl.style.setProperty("--timeline-scroll-tail", `${timelineScrollTailPx}px`);
+      logEl.scrollTop = top;
+    } else {
+      const intent = layoutIntent;
+      const target = logEl.querySelector<HTMLElement>(
+        `[data-tuid="${CSS.escape(intent.key)}"][data-kind="${intent.toolKind}"]`,
+      );
+      if (target) logEl.scrollTop = target.offsetTop + target.offsetHeight / 2
+        - logEl.clientHeight / 2;
+    }
+  }
+
+  function scheduleLayoutCorrection(): void {
+    if (!layoutIntent || layoutReadyGeneration !== scrollEffectGeneration ||
+      layoutFrame !== null) return;
+    const el = logEl, agent = envelope.agent_id;
+    const generation = scrollEffectGeneration;
+    layoutFrame = requestAnimationFrame(() => {
+      layoutFrame = null;
+      if (logEl !== el || envelope.agent_id !== agent ||
+        scrollEffectGeneration !== generation) return;
+      correctLayout();
+    });
+  }
+
+  function manualLogNavigation(event: Event): void {
+    if (event instanceof KeyboardEvent &&
+      !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]
+        .includes(event.key)) return;
+    layoutIntent = null;
+    ++scrollEffectGeneration;
+    if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
+    layoutFrame = null;
+  }
+
+  $effect(() => {
+    const el = logEl;
+    void visibleLogs;
+    if (!el) return;
+    const observer = typeof ResizeObserver === "undefined" ? null
+      : new ResizeObserver(scheduleLayoutCorrection);
+    observer?.observe(el);
+    el.querySelectorAll("[data-envelope-key]").forEach((row) => observer?.observe(row));
+    el.addEventListener("scrollend", scheduleLayoutCorrection);
+    const inputs = ["wheel", "touchstart", "pointerdown", "keydown"];
+    inputs.forEach((name) => el.addEventListener(name, manualLogNavigation));
+    return () => {
+      observer?.disconnect();
+      inputs.forEach((name) => el.removeEventListener(name, manualLogNavigation));
+      el.removeEventListener("scrollend", scheduleLayoutCorrection);
+      if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
+      layoutFrame = null;
+    };
+  });
+
   function resetTimelineScrollTail(): void {
     timelineScrollTailPx = 0;
     logEl?.style.setProperty("--timeline-scroll-tail", "0px");
@@ -2244,9 +2344,14 @@
       0,
       settledEntry.offsetTop - TIMELINE_SCROLL_TOP_GAP_PX,
     );
+    layoutIntent = { kind: "timeline", key: targetKey };
+    layoutReadyGeneration = scrollEffectGeneration;
     logEl.scrollTo({ top, behavior: "smooth" });
     stickToBottom = false;
-    scrollMemory.set(envelope.agent_id, { top, stick: false, frozenWindow });
+    scrollMemory.set(envelope.agent_id, {
+      top, stick: false, frozenWindow,
+      anchor: { key: targetKey, offset: rowFor(targetKey)!.offsetTop - top },
+    });
     return finish(true);
   }
 
@@ -2272,6 +2377,7 @@
     string,
     {
       top: number;
+      anchor?: ReadingAnchor | undefined;
       stick: boolean;
       frozenWindow:
         | {
@@ -2286,6 +2392,7 @@
 
   function handleLogScroll(): void {
     if (!logEl) return;
+    if (layoutIntent) return;
     const distance = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
     stickToBottom = distance <= STICK_THRESHOLD_PX;
     if (stickToBottom) {
@@ -2332,6 +2439,7 @@
     }
     scrollMemory.set(envelope.agent_id, {
       top: logEl.scrollTop,
+      anchor: readingAnchor(),
       stick: stickToBottom,
       frozenWindow,
     });
@@ -2457,6 +2565,7 @@
     // also prevents this effect from re-firing on every user scroll.
     let shouldStick = untrack(() => stickToBottom);
     let restoreTop: number | null = null;
+    if (switching || shrinkInvalidated) layoutIntent = null;
     if (switching) {
       scrollAgent = agentId;
       // Adopt the incoming agent's pin intent (unseen agent => bottom), and
@@ -2472,6 +2581,9 @@
       shouldStick = effectiveMem ? effectiveMem.stick : true;
       stickToBottom = shouldStick;
       restoreTop = effectiveMem && !effectiveMem.stick ? effectiveMem.top : null;
+      if (effectiveMem?.anchor && !shouldStick) {
+        layoutIntent = { kind: "anchor", anchor: effectiveMem.anchor };
+      }
     }
     // ふじ review round 3 must-fix 1: this specific effect run's identity.
     // Captured synchronously (before the async continuation below), so a
@@ -2479,8 +2591,9 @@
     // `scrollEffectGeneration` and make this continuation detect it is no
     // longer the latest — at both of its async resume points, before any
     // DOM mutation.
+    if (shouldStick && !shouldScrollTimelineTarget) layoutIntent = { kind: "pin" };
     const myScrollEffectGeneration = ++scrollEffectGeneration;
-    void tick().then(async () => {
+    void afterLogUpdate().then(async () => {
       if (!logEl) return;
       // クロエ review N-b: this is the FIRST of the continuation's three
       // async resume points (after tick(), after renderMermaidIn, after the
@@ -2489,11 +2602,6 @@
       // resolves still calls renderMermaidIn for nothing — harmless (the
       // two later guards still block any DOM mutation) but pure waste.
       if (myScrollEffectGeneration !== scrollEffectGeneration) return;
-      try {
-        await renderMermaidIn(logEl);
-      } catch (error) {
-        console.error("mermaid render failed", error);
-      }
       // The component may have unmounted during the await; re-check logEl.
       if (!logEl) return;
       // A newer effect run has since superseded this one — its own
@@ -2515,7 +2623,11 @@
         handledTimelineScrollTarget = timelineTarget;
         return;
       }
-      if (restoreTop === null && !shouldStick) return;
+      if (restoreTop === null && !shouldStick) {
+        layoutReadyGeneration = myScrollEffectGeneration;
+        correctLayout();
+        return;
+      }
       // The composer reflows one frame late (e.g. stagedFiles clearing on
       // send), and an in-flow permission/question dock appearing or clearing
       // also resizes .log via flex. Double rAF lets layout settle before the
@@ -2523,12 +2635,15 @@
       // short of the true bottom (the failure that prompted scrollIntoView
       // previously).
       await new Promise((r) => requestAnimationFrame(r));
+      if (myScrollEffectGeneration !== scrollEffectGeneration) return;
       await new Promise((r) => requestAnimationFrame(r));
       if (!logEl) return;
       // Re-check: another effect run (and its own restore) could have
       // started during these two frames.
       if (myScrollEffectGeneration !== scrollEffectGeneration) return;
       logEl.scrollTop = restoreTop !== null ? restoreTop : logEl.scrollHeight;
+      layoutReadyGeneration = myScrollEffectGeneration;
+      correctLayout();
     });
   });
 
@@ -2933,6 +3048,8 @@
     event.preventDefault();
     event.stopPropagation(); // don't toggle the <details> we live inside
     if (!logEl) return;
+    const el = logEl, agent = envelope.agent_id;
+    const generation = ++scrollEffectGeneration;
     const toKind = fromKind === "tool_use" ? "tool_result" : "tool_use";
     const targetIndex = logs.findIndex((entry) => {
       const log = logOf(entry);
@@ -2940,6 +3057,8 @@
     });
     const suppressGenerationForThisJump = ensureIndexVisible(targetIndex);
     await tick();
+    if (logEl !== el || envelope.agent_id !== agent ||
+      generation !== scrollEffectGeneration) return;
     // issue #227 must-fix 2: arm the failsafe only now, after the
     // (bounded, here — just one tick) pre-scroll async wait, not at
     // ensureIndexVisible's expansion time. Once, regardless of whether the
@@ -2953,7 +3072,16 @@
       `[data-tuid="${CSS.escape(id)}"][data-kind="${toKind}"]`,
     );
     if (!target) return;
+    layoutIntent = { kind: "tool", key: id, toolKind: toKind };
+    layoutReadyGeneration = generation;
+    stickToBottom = false;
     target.scrollIntoView({ behavior: "smooth", block: "center" });
+    const row = target.closest<HTMLElement>("[data-envelope-key]");
+    const top = Math.max(0, Math.min(logEl.scrollHeight - logEl.clientHeight,
+      target.offsetTop + target.offsetHeight / 2 - logEl.clientHeight / 2));
+    scrollMemory.set(agent, { top, stick: false, frozenWindow,
+      anchor: row ? { key: row.dataset.envelopeKey!, offset: row.offsetTop - top }
+        : undefined });
     target.classList.add("flash");
     setTimeout(() => target.classList.remove("flash"), 1000);
   }
@@ -4174,19 +4302,22 @@
                 <span class="cid" title="conversation_id">cid:{iam.conversation_id.slice(0, 8)}</span>
                 <span class="turn">t{iam.turn_number}</span>
               </p>
-              {@html renderMarkdown(iam.body)}
+              <AsyncMarkdown text={iam.body} scope={envelope.agent_id}
+                onlayout={scheduleLayoutCorrection} />
               <time class="ts" datetime={env.ts}>{time}</time>
             </div>
           {:else if log?.kind === "user"}
             <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
             <div class="msg user">
-              {@html renderMarkdown(log.text ?? "")}
+              <AsyncMarkdown text={log.text ?? ""} scope={envelope.agent_id}
+                onlayout={scheduleLayoutCorrection} />
               <time class="ts" datetime={env.ts}>{time}</time>
             </div>
           {:else if log?.kind === "assistant"}
             <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
             <div class="msg assistant">
-              {@html renderMarkdown(log.text ?? "")}
+              <AsyncMarkdown text={log.text ?? ""} scope={envelope.agent_id}
+                onlayout={scheduleLayoutCorrection} />
               <time class="ts" datetime={env.ts}>{time}</time>
             </div>
           {:else if log?.kind === "system"}
