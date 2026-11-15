@@ -907,6 +907,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       return;
     }
     yieldClaimInFlight = true;
+    let reservation: ReturnType<AgentHost["reserveYieldCut"]> = null;
     void (async () => {
       let reason: string | undefined;
       let granted = false;
@@ -944,6 +945,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         attemptYieldCandidates();
         return;
       }
+      reservation = host.reserveYieldCut(ownerToken, cutContext);
+      if (reservation === null) {
+        yieldClaimInFlight = false;
+        downgradeYield(batch, "eligibility_changed");
+        return;
+      }
       const receiptDeadline = performance.now() + pendingReceiptRootTimeoutMs;
       while (true) {
         if (!yieldCandidates.has(batchToken)) {
@@ -961,29 +968,42 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
             host.yieldEligibility(authority.work_id!) !== null ||
             !host.canReserveYieldOvertake() || !host.hasQueuedInput(batchToken)) {
           yieldClaimInFlight = false;
-          downgradeYield(batch, "eligibility_changed");
+          const ended = host.activeInterAgentTurnToken() !== ownerToken;
+          downgradeYield(batch,
+            ended ? "no_work_input" : "eligibility_changed", !ended);
           attemptYieldCandidates();
           return;
         }
-        if (performance.now() >= receiptDeadline) {
+        if (host.hasPendingPushedReceipt() &&
+            performance.now() >= receiptDeadline) {
           yieldClaimInFlight = false;
           downgradeYield(batch, "receipt_wait_timeout");
           attemptYieldCandidates();
           return;
         }
         if (!host.hasPendingPushedReceipt()) {
-          if (host.canPushLiveInput()) break;
+          if (host.hasRunningMcp(reservation)) {
+            await host.waitForMcp(reservation);
+            continue;
+          }
+          if (host.canPushLiveInput(reservation)) break;
           yieldClaimInFlight = false;
           downgradeYield(batch, "eligibility_changed");
           attemptYieldCandidates();
           return;
         }
         const remaining = receiptDeadline - performance.now();
-        if (remaining <= 0 || !await host.waitForPushedReceipt(ownerToken, remaining)) {
-          const waitReason = host.matchesLiveInputContext(ownerToken, cutContext) &&
-            host.hasPendingPushedReceipt() ? "receipt_wait_timeout" : "eligibility_changed";
+        if (remaining <= 0 ||
+            !await host.waitForPushedReceipt(ownerToken, remaining) ||
+            performance.now() >= receiptDeadline) {
+          const ended = host.activeInterAgentTurnToken() !== ownerToken;
+          const waitReason = ended ? "no_work_input"
+            : host.matchesLiveInputContext(ownerToken, cutContext) &&
+              (host.hasPendingPushedReceipt() ||
+                performance.now() >= receiptDeadline)
+              ? "receipt_wait_timeout" : "eligibility_changed";
           yieldClaimInFlight = false;
-          downgradeYield(batch, waitReason);
+          downgradeYield(batch, waitReason, !ended);
           attemptYieldCandidates();
           return;
         }
@@ -1007,6 +1027,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       const envelopes = prepared.batch.items.map(item => item.envelope);
       const pushed = host.pushLiveInput({
         kind: "cut",
+        cutReservation: reservation,
         text: foldId => cutText(foldId, preclaimBatch.text),
         envelopes,
         conversationIds: prepared.batch.conversationIds,
@@ -1026,7 +1047,11 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         ticketLease: { activate: () => true, discard: () => {} } });
       deliveryStages.yieldDisposition(envelope, { outcome: "cut", at: new Date().toISOString() });
       attemptYieldCandidates();
-    })();
+    })().finally(() => {
+      host.releaseYieldCut(reservation);
+      attemptFoldCandidates();
+      attemptYieldCandidates();
+    });
   };
 
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<

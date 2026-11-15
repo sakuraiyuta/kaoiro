@@ -418,6 +418,13 @@ export function nativeUnavailableMessage(reason: NativeUnavailableReason): strin
     "relaunch the wrapper to restore native coordination";
 }
 
+interface YieldCutReservation {
+  ownerToken: string;
+  sessionId: string;
+  query: Query;
+  generation: string;
+}
+
 export interface AgentHostOptions {
   recovery?: RecoveryReporter;
   nativeContinuations?: boolean;
@@ -859,6 +866,9 @@ export class AgentHost implements EngineAdapter {
   readonly #pushedQueue: PushedReceipt[] = [];
   #pendingPushedReceipt: PushedReceipt | ResumeReceipt | null = null;
   readonly #receiptWaiters = new Set<() => void>();
+  #yieldCutReservation: YieldCutReservation | null = null;
+  readonly #mcpCalls = new Map<string, YieldCutReservation>();
+  readonly #mcpWaiters = new Set<() => void>();
   readonly #hostRunGeneration = randomUUID();
   #pendingRootDeadline: number | null = null;
   #pendingRootRemaining: number | null = null;
@@ -1264,11 +1274,12 @@ export class AgentHost implements EngineAdapter {
     return this.#activeTurn?.turnToken ?? null;
   }
 
-  canPushLiveInput(): boolean {
+  canPushLiveInput(reservation?: YieldCutReservation): boolean {
     return !this.#closed && !this.#admissionFailStopped &&
       this.#activeTurn !== null && this.#activeTurn.kind !== "sdk_notification" &&
       this.#query !== null && this.#sessionId !== null &&
       this.#pendingPushedReceipt === null && this.#pushedQueue.length === 0 &&
+      (!this.#liveYieldCut() || this.#yieldCutReservation === reservation) &&
       [...this.#promptOwners.values()].some(owner =>
         owner.token === this.#activeTurn?.turnToken &&
         owner.sessionId === this.#sessionId && !owner.tainted);
@@ -1285,6 +1296,78 @@ export class AgentHost implements EngineAdapter {
       this.#sessionId === context.sessionId && this.#query === context.query &&
       [...this.#promptOwners.values()].some(owner =>
         owner.token === ownerToken && owner.sessionId === context.sessionId && !owner.tainted);
+  }
+
+  #liveYieldCut(): boolean {
+    const cut = this.#yieldCutReservation;
+    return cut !== null && cut.generation === this.#hostRunGeneration &&
+      this.matchesLiveInputContext(cut.ownerToken, cut);
+  }
+
+  reserveYieldCut(ownerToken: string, context: {
+    sessionId: string; query: Query;
+  }): YieldCutReservation | null {
+    if (this.#liveYieldCut() ||
+        !this.matchesLiveInputContext(ownerToken, context))
+      return null;
+    const cut = { ownerToken, ...context, generation: this.#hostRunGeneration };
+    this.#yieldCutReservation = cut;
+    return cut;
+  }
+
+  releaseYieldCut(cut: YieldCutReservation | null): void {
+    if (cut !== null && this.#yieldCutReservation === cut)
+      this.#yieldCutReservation = null;
+    this.#wakeReceiptWaiters();
+  }
+
+  hasRunningMcp(cut: YieldCutReservation): boolean {
+    return [...this.#mcpCalls.values()].some(call =>
+      call.ownerToken === cut.ownerToken && call.sessionId === cut.sessionId &&
+      call.query === cut.query && call.generation === cut.generation);
+  }
+
+  async waitForMcp(cut: YieldCutReservation): Promise<void> {
+    if (!this.hasRunningMcp(cut)) return;
+    await new Promise<void>(resolve => {
+      const check = (): void => {
+        if (!this.matchesLiveInputContext(cut.ownerToken, cut) ||
+            !this.hasRunningMcp(cut)) {
+          this.#mcpWaiters.delete(check);
+          resolve();
+        }
+      };
+      this.#mcpWaiters.add(check);
+      check();
+    });
+  }
+
+  #mcpAdmissionClosed(call: YieldCutReservation): boolean {
+    const opening = this.#sessionId === null &&
+      this.#activeTurn?.turnToken === call.ownerToken &&
+      this.#query === call.query &&
+      [...this.#promptOwners.values()].some(owner => !owner.tainted &&
+        owner.token === call.ownerToken && owner.sessionId === call.sessionId);
+    return this.#closed || this.#admissionFailStopped ||
+      call.generation !== this.#hostRunGeneration ||
+      (!opening && !this.matchesLiveInputContext(call.ownerToken, call)) ||
+      (this.#pendingPushedReceipt?.kind === "cut" &&
+        this.#pendingPushedReceipt.eligibleOwner === call.ownerToken);
+  }
+
+  #reserveMcp(input: HookInput): YieldCutReservation | null | undefined {
+    if (input.hook_event_name !== "PreToolUse" || input.agent_id ||
+        !input.tool_name.startsWith("mcp__") || !input.prompt_id) return;
+    if (this.#retiredPromptIds.has(input.prompt_id)) return null;
+    const owner = this.#promptOwners.get(input.prompt_id);
+    if (!owner || owner.tainted || owner.sessionId !== input.session_id ||
+        this.#activeTurn?.kind === "sdk_notification" ||
+        this.#activeTurn?.turnToken !== owner.token || !this.#query) return;
+    const call = { ownerToken: owner.token, sessionId: input.session_id,
+      query: this.#query, generation: this.#hostRunGeneration };
+    if (!this.#mcpAdmissionClosed(call))
+      this.#mcpCalls.set(input.tool_use_id, call);
+    return call;
   }
 
   hasPendingPushedReceipt(): boolean {
@@ -1311,6 +1394,7 @@ export class AgentHost implements EngineAdapter {
 
   #wakeReceiptWaiters(): void {
     for (const check of [...this.#receiptWaiters]) check();
+    for (const check of [...this.#mcpWaiters]) check();
   }
 
   /** The scheduler settings this host acts on, defaults applied. */
@@ -1375,8 +1459,15 @@ export class AgentHost implements EngineAdapter {
     ticketValues?: readonly string[];
     conversationIds: readonly string[];
     operatorInput?: boolean;
+    cutReservation?: YieldCutReservation;
   }): { kind: "pushed"; policyRevision?: number } | { kind: "declined"; reason: "local_policy_disabled" | "ineligible" } {
-    if (!this.canPushLiveInput()) return { kind: "declined", reason: "ineligible" };
+    if (!this.canPushLiveInput(options.kind === "cut"
+      ? options.cutReservation : undefined))
+      return { kind: "declined", reason: "ineligible" };
+    if (options.kind === "cut" && options.cutReservation &&
+        (this.#yieldCutReservation !== options.cutReservation ||
+          !this.#liveYieldCut() || this.hasRunningMcp(options.cutReservation)))
+      return { kind: "declined", reason: "ineligible" };
     const active = this.#activeTurn!;
     if (options.kind === "fold" && (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) >= this.foldsPerTurn) return { kind: "declined", reason: "ineligible" };
     const ownerPromptId = [...this.#promptOwners].find(([, owner]) =>
@@ -1413,6 +1504,7 @@ export class AgentHost implements EngineAdapter {
       ...(policy.revision === undefined ? {} : { policyRevision: policy.revision }),
     };
     this.#pendingPushedReceipt = receipt;
+    if (options.cutReservation) this.releaseYieldCut(options.cutReservation);
     if (options.kind === "fold") {
       this.#foldsUsedByTurn.set(active.turnToken, (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) + 1);
       if (active.kind !== "sdk_notification") active.inputEnvelopes = [...(active.inputEnvelopes ?? []), ...options.envelopes];
@@ -3114,7 +3206,15 @@ export class AgentHost implements EngineAdapter {
         PreToolUse: [
           ...(userHooks.PreToolUse ?? []),
           { hooks: [async (input, toolUseId, context) => {
+            const call = this.#reserveMcp(input);
+            const denied = () => call === null ||
+              (call !== undefined && this.#mcpAdmissionClosed(call));
             const update = await this.#nativePreTool(input, toolUseId, context.signal);
+            if (denied()) return { hookSpecificOutput: {
+              hookEventName: "PreToolUse" as const,
+              permissionDecision: "deny" as const,
+              permissionDecisionReason: "director yield retired this call",
+            } };
             this.#observePromptTool(input, toolUseId);
             return update ? { hookSpecificOutput: { hookEventName: "PreToolUse" as const, updatedInput: update } } : {};
           }] },
@@ -3158,12 +3258,24 @@ export class AgentHost implements EngineAdapter {
       // Set last so queryOptions can never override the hook that drives
       // waiting_permission.
       canUseTool: async (toolName, input, options) => {
+        const call = this.#mcpCalls.get(options.toolUseID);
+        this.#mcpCalls.delete(options.toolUseID);
+        this.#wakeReceiptWaiters();
+        let signal = options.signal;
         if (toolName === INTER_AGENT_TOOL_FQN && this.#options.queryOptions?.mcpServers?.kaoiro) {
           const origin = await this.resolveToolOrigin(options.toolUseID);
-          if (!origin?.signal || origin.signal.aborted || options.signal.aborted) return { behavior: "deny", message: "unbound or retired inter-agent tool call" };
-          return this.#canUseTool(toolName, input, AbortSignal.any([origin.signal, options.signal]));
+          if (!origin?.signal || origin.signal.aborted || signal.aborted)
+            return { behavior: "deny",
+              message: "unbound or retired inter-agent tool call" };
+          signal = AbortSignal.any([origin.signal, signal]);
         }
-        const decision = await this.#canUseTool(toolName, input, options.signal);
+        const decision = await this.#canUseTool(toolName, input, signal);
+        if (call && decision.behavior === "allow") {
+          if (signal.aborted || this.#mcpAdmissionClosed(call))
+            return { behavior: "deny",
+              message: "director yield retired this call" };
+          this.#mcpCalls.set(options.toolUseID, call);
+        }
         if (decision.behavior === "deny") this.#nativeRegistry?.rejectCall(options.toolUseID);
         return decision;
       },
@@ -3199,6 +3311,9 @@ export class AgentHost implements EngineAdapter {
       const resumeRequested = this.#options.queryOptions?.resume;
       let requestedAttach = resumeRequested;
       for await (const message of this.#fenceTerminals(session)) {
+        for (const id of sdkMessageToToolResultIds(message))
+          this.#mcpCalls.delete(id);
+        this.#wakeReceiptWaiters();
         if (!sawSystemInit && resumeRequested !== undefined && message.type === "result" &&
             message.is_error === true && message.subtype === "error_during_execution") {
           this.#options.recovery?.refuseLaunch();
@@ -5460,6 +5575,10 @@ export class AgentHost implements EngineAdapter {
       }
     }
     this.#activeTurn = null;
+    for (const [id, call] of this.#mcpCalls)
+      if (call.ownerToken === turn?.turnToken) this.#mcpCalls.delete(id);
+    if (this.#yieldCutReservation?.ownerToken === turn?.turnToken)
+      this.releaseYieldCut(this.#yieldCutReservation);
     this.#nativeRegistry?.tick(this.#foreignOccupancy !== null);
     if (turn) this.#nativeLeases.delete(turn.turnToken);
     this.#wakeReceiptWaiters();
