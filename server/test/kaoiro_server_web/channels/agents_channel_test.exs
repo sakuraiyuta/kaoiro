@@ -24,6 +24,93 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.WorkStore
 
   @tag :tmp_dir
+  test "watcher refreshes connected hosts and rejects stale host payloads", %{tmp_dir: tmp} do
+    alias KaoiroServer.{PersonaAssets, PersonaPackFixture, PersonaWatcher}
+
+    old_dir = Application.get_env(:kaoiro_server, :persona_dir)
+    old_cache = Application.get_env(:kaoiro_server, :persona_cache_dir)
+    ingest = Path.join(tmp, "ingest")
+    stage = Path.join(tmp, "stage")
+    File.mkdir_p!(ingest)
+    File.mkdir_p!(stage)
+    Application.put_env(:kaoiro_server, :persona_dir, ingest)
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+
+    on_exit(fn ->
+      if old_dir,
+        do: Application.put_env(:kaoiro_server, :persona_dir, old_dir),
+        else: Application.delete_env(:kaoiro_server, :persona_dir)
+
+      if old_cache,
+        do: Application.put_env(:kaoiro_server, :persona_cache_dir, old_cache),
+        else: Application.delete_env(:kaoiro_server, :persona_cache_dir)
+
+      PersonaAssets.rebuild()
+    end)
+
+    assert :ok = PersonaAssets.rebuild()
+    register_host("live-refresh")
+    operator = join_as(:operator)
+    assert_push "hosts", %{"hosts" => initial}
+    assert Enum.map(initial["live-refresh"].personas, & &1["id"]) == ["default"]
+    {:ok, watcher} = GenServer.start_link(PersonaWatcher, dir: ingest)
+    assert :sys.get_state(watcher).watcher != nil
+    on_exit(fn -> if Process.alive?(watcher), do: GenServer.stop(watcher) end)
+
+    pack = PersonaPackFixture.write!(stage, "a.zip", "live-a", "live-a")
+    File.cp!(pack.path, Path.join(ingest, "a.zip"))
+    assert_push "hosts", %{"hosts" => added}, 10_000
+    assert Enum.any?(added["live-refresh"].personas, &(&1["id"] == "live-a"))
+
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => initial})
+    assert_push "hosts", %{"hosts" => current}
+    assert current == added
+
+    second = PersonaPackFixture.write!(stage, "b.tmp", "live-b", "live-b")
+    File.rename!(second.path, Path.join(ingest, "b.zip"))
+    assert_push "hosts", %{"hosts" => renamed}, 10_000
+    assert Enum.any?(renamed["live-refresh"].personas, &(&1["id"] == "live-b"))
+    File.touch!(Path.join(ingest, "b.zip"))
+    assert_push "hosts", %{"hosts" => touched}, 10_000
+    assert touched == renamed
+
+    replacement =
+      PersonaPackFixture.write!(stage, "replacement.tmp", "live-b", "live-b", name: "New name")
+
+    File.rename!(replacement.path, Path.join(ingest, "b.zip"))
+    assert_push "hosts", %{"hosts" => replaced}, 10_000
+    assert Enum.any?(replaced["live-refresh"].personas, &(&1["name"] == "New name"))
+
+    duplicate = PersonaPackFixture.write!(stage, "duplicate.tmp", "live-c", "live-b")
+    File.rename!(duplicate.path, Path.join(ingest, "c.zip"))
+    assert_push "hosts", %{"hosts" => _, "ingest_warnings" => [warning]}, 10_000
+    assert warning =~ "live-c"
+    File.rm!(Path.join(ingest, "c.zip"))
+    assert_push "hosts", %{"ingest_warnings" => []}, 10_000
+
+    File.rm!(Path.join(ingest, "a.zip"))
+    assert_push "hosts", %{"hosts" => removed}, 10_000
+    refute Enum.any?(removed["live-refresh"].personas, &(&1["id"] == "live-a"))
+
+    bad_cache = Path.join(tmp, "not-a-directory")
+    File.write!(bad_cache, "file")
+    Application.put_env(:kaoiro_server, :persona_cache_dir, bad_cache)
+    assert :ok = PersonaAssets.rebuild()
+    assert_push "hosts", %{"hosts" => retained}
+    assert retained == removed
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+
+    Process.unlink(operator.channel_pid)
+    assert_reply leave(operator), :ok
+    _viewer = join_as(:viewer)
+    assert_push "snapshot", %{}
+    @endpoint.subscribe("agents:lobby")
+    File.touch!(Path.join(ingest, "b.zip"))
+    assert_receive %Phoenix.Socket.Broadcast{event: "hosts"}, 10_000
+    refute_push "hosts", %{}, 1_000
+  end
+
+  @tag :tmp_dir
   test "pack warnings are operator-only siblings of hosts", %{tmp_dir: tmp} do
     alias KaoiroServer.{PersonaAssets, PersonaPackFixture}
     old_dir = Application.get_env(:kaoiro_server, :persona_dir)
@@ -7034,10 +7121,18 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => _}
       assert_push "hosts", %{"hosts" => _}
 
+      owner = self()
+
       hosts =
         Map.new(1..130, fn n ->
-          {"test.host-frame-#{n}", %{"cwd_allowlist" => [String.duplicate("h", 65_536)]}}
+          id = "test.host-frame-#{n}"
+          register_host(id, cwd_allowlist: [String.duplicate("h", 65_536)])
+          {id, %{}}
         end)
+
+      on_exit(fn ->
+        for id <- Map.keys(hosts), do: HostRegistry.drop(id, owner)
+      end)
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => hosts})
 

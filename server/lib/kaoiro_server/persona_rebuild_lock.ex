@@ -84,9 +84,23 @@ defmodule KaoiroServer.PersonaRebuildLock do
   @doc "Runs a full persona rebuild, excluding any other concurrent call."
   def rebuild(server \\ __MODULE__) do
     case GenServer.call(server, :rebuild, :infinity) do
-      {:ok, result} -> result
-      {:raised, exception, stacktrace} -> reraise(exception, stacktrace)
+      {:ok, result} ->
+        notify_hosts()
+        result
+
+      {:raised, exception, stacktrace} ->
+        reraise(exception, stacktrace)
     end
+  end
+
+  defp notify_hosts do
+    if Process.whereis(KaoiroServerWeb.Endpoint) do
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => %{}})
+    end
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   @impl true

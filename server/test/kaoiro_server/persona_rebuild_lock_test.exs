@@ -23,6 +23,23 @@ defmodule KaoiroServer.PersonaRebuildLockTest do
   defp restore_env(key, nil), do: Application.delete_env(:kaoiro_server, key)
   defp restore_env(key, value), do: Application.put_env(:kaoiro_server, key, value)
 
+  @tag :tmp_dir
+  test "runtime rebuild survives an absent endpoint and a failed notification", %{tmp_dir: tmp} do
+    Application.put_env(:kaoiro_server, :persona_dir, tmp)
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+
+    for child <- [KaoiroServerWeb.Endpoint, Phoenix.PubSub.Supervisor] do
+      assert :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, child)
+
+      try do
+        assert :ok = PersonaAssets.rebuild()
+        assert is_map(PersonaAssets.manifest())
+      after
+        assert {:ok, _pid} = Supervisor.restart_child(KaoiroServer.Supervisor, child)
+      end
+    end
+  end
+
   describe "issue #185 round-3: boot ownership (warm init)" do
     @tag :tmp_dir
     test "warm child の起動時 rebuild 失敗は Supervisor.start_link を即座に失敗させ、" <>
