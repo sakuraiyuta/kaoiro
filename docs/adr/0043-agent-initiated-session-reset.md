@@ -148,9 +148,11 @@ Antigravity, Grok asks the broker on every call: its approval axis is a fixed
 `on-request` projection, so no setting allows an autonomous reset. Grok did
 not ask before kaoiro MCP calls on the measured host configuration, so the
 gate is the only approval. The wait is bounded at 300 s, or at
-`permission_timeout_ms` when that is shorter, and a timeout denies: Grok
-waited for a blocked kaoiro MCP call for the full 600 s in one measured run,
-and its own timeout is unmeasured, so the wrapper answers first. The
+`permission_timeout_ms` when that is shorter, and a timeout denies. In one
+measured run Grok waited for a blocked kaoiro MCP call for the full 600 s,
+longer than the bound; its own timeout is unmeasured, so the bound does not
+guarantee that the wrapper answers before Grok gives up. A call that ended
+before the answer reserves nothing. The
 reservation is sent only when the reserving turn's prompt returns with a stop
 reason other than `cancelled`. See the
 [Grok engine reference](../reference/engines/grok-acp.md#session-reset).

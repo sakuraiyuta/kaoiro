@@ -40,9 +40,10 @@ import { GrokLaunchError } from "./grok/errors.js";
 import { readGrokHistory } from "./history.js";
 
 /** Upper bound on the operator's answer to a `request_session_reset` call.
- *  Grok waited a blocked kaoiro MCP call for the full 600 s in the measured
- *  run (issue #658, M6); its own timeout is unmeasured, so the wrapper must
- *  answer first or a late allow could reserve for a call Grok gave up on. */
+ *  Grok waited a blocked kaoiro MCP call for the full 600 s in one measured
+ *  run (issue #658, M6); its own timeout is unmeasured, so this limits the
+ *  wait without promising an answer before Grok gives up. A call that ended
+ *  before the answer reserves nothing (the gate checks its signal). */
 export const GROK_RESET_APPROVAL_TIMEOUT_MS = 300_000;
 
 export interface GrokCliDependencies {
