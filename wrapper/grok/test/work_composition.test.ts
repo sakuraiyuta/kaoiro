@@ -71,7 +71,6 @@ async function fixture(
       } as unknown as ServerLink;
     },
     createHost: o => {
-      if (earlyNotice) expect(send).not.toHaveBeenCalled();
       descriptors = o.toolDescriptors ?? [];
       return {
         state: "waiting_input", statusSnapshot: () => ({}),
@@ -92,7 +91,7 @@ async function fixture(
   } finally { finish(); await run; }
 }
 
-it("wires work tools and sends operations under server authority", async () => {
+it("wires work tools and surfaces server operation results", async () => {
   await fixture(true, async ({ options, descriptors, outbound, requests }) => {
     expect(options.workControl).toBe("v1");
     expect(options.interAgentDeliveryModes).toEqual({
@@ -193,5 +192,37 @@ it("negotiates work control on the ServerLink wire", async () => {
         version: "v1", early: "none", yield: "none", stage_reports: false,
       } });
     server.push("persona_prompt", { prompt: "Persona" });
+  } finally { finish(); await run; await server.close(); }
+});
+
+it("sends early intent after the server negotiates delivery modes", async () => {
+  const server = await phoenixLoopback(() => ({ work_control: "v1",
+    inter_agent_delivery_modes: "v1" }));
+  let descriptors!: ToolDescriptor[];
+  let finish!: () => void;
+  const finished = new Promise<void>(resolve => { finish = resolve; });
+  const run = runGrokCli({
+    platform: "darwin",
+    parseCliArgs: () => ({ configPath: "fixture" }),
+    loadConfig: () => ({ ...config, server_url: server.url }),
+    createHost: options => {
+      descriptors = options.toolDescriptors ?? [];
+      return { state: "waiting_input", statusSnapshot: () => ({}),
+        activeInterAgentTurnToken: () => null,
+        run: () => finished, close: () => finish(), closed: finished } as never;
+    },
+  });
+  void run.catch(() => {});
+  try {
+    await vi.waitFor(() => expect(server.joins).toBe(1));
+    server.push("persona_prompt", { prompt: "Persona" });
+    await vi.waitFor(() => expect(descriptors).toBeDefined());
+    const result = await descriptors.find(d => d.name === "send_to_agent")!
+      .handler({ to: "peer", kind: "inform", body: "early probe",
+        delivery_intent: "early" });
+    expect(result.isError).not.toBe(true);
+    expect(server.received.some(x => x.event === "envelope" &&
+      (x.payload.payload as Record<string, unknown>)?.delivery_intent ===
+        "early")).toBe(true);
   } finally { finish(); await run; await server.close(); }
 });

@@ -102,8 +102,10 @@ directory, and one that is not a string literal counts as outside.
 The adapter supports text turns, conversation continuity while the wrapper
 is resident, cancellation, operator permission requests, user questions,
 normal peer messages, dispatch confirmation and shared work tools. Work
-operations follow the server's existing authority rules. The declared
-receiving modes remain `early: "none"` and `yield: "none"`.
+operations follow the server's existing authority rules. Grok can request
+early and yield delivery as a sender; the server applies the recipient's
+modes and work authority. The declared receiving modes remain
+`early: "none"` and `yield: "none"`.
 
 Receiving early input remains unsupported. Grok 1.0.52 accepts
 `_x.ai/interject` and may apply the text within the running prompt. A queued
@@ -131,6 +133,11 @@ See the [turn-origin measurements][origin-evidence]
 for the version boundary and controlled-delay conditions.
 
 [origin-evidence]: ../../evidence/grok/2026-11-15-reply-basis-origin.md
+
+In a 2026-11-15 review of 17 Grok Build 1.0.52 sessions, auto mode blocked an
+assignment acceptance requested by a peer in one session. The conditions for
+this refusal and its source are not known; a refused assignment remains
+nominated.
 
 The runner's launch catalog is read from a short-lived `initialize` (see
 [Launch catalog](#launch-catalog)). A launch pick or a resumed pair is
