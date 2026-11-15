@@ -538,7 +538,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("hosts", %{"hosts" => hosts}, socket) when is_map(hosts) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push_versioned(socket, "hosts", hosts_payload(hosts))
+      current = HostRegistry.snapshot(PersonaAssets.all_personas())
+      push_versioned(socket, "hosts", hosts_payload(current))
     end
 
     {:noreply, socket}
