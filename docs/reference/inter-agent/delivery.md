@@ -449,7 +449,9 @@ and turn inactivity-watchdog limits still apply; there is no new total MCP
 wait limit. If the old owner reaches its terminal before this reserved cut
 is pushed, its queued urgent root records downgraded:no_work_input once.
 Close or fail-stop retains existing cancellation behavior and does not
-promise a successor root.
+promise a successor root. A local policy change does not itself wake an MCP
+wait: the reserved slot and claim may remain until MCP completion or owner
+termination, even if policy is re-enabled before that next scheduler wake.
 
 At most `urgent_overtake_limit` consecutive
 urgent peer root boundaries (default 2) may pass an older ordinary one, and

@@ -150,6 +150,9 @@ describe("Claude claimed-cut receipt chain", () => {
       expect(decisions.filter(decision => decision.pushKind === "cut")).toHaveLength(1);
       expect(dispositions).toMatchObject([{ outcome: "cut" }]);
       expect(claimCalls).toBe(1);
+      expect(stages).toContainEqual(expect.objectContaining({
+        delivery_seq: 2, stage: "submitted", handoff: "prompt_hook",
+      }));
     } finally {
       releaseFirstHook.resolve();
       host?.close();

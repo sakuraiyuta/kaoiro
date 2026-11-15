@@ -511,6 +511,10 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     { name: "receipt chain expires", eligibility: null, claim: "chain expires", reason: "receipt_wait_timeout", cuts: 0 },
     { name: "transfer after claim", eligibility: null, claim: "transfer", reason: undefined, cuts: 1 },
     { name: "granted claim waits for prior receipt", eligibility: null, claim: "pending", reason: undefined, cuts: 1 },
+    { name: "owner ends during MCP wait", eligibility: null,
+      claim: "mcp owner ends", reason: "no_work_input", cuts: 0 },
+    { name: "owner ends during receipt wait", eligibility: null,
+      claim: "receipt owner ends", reason: "no_work_input", cuts: 0 },
   ] as const)("decides yield from the final live input and claim result ($name)", async scenario => {
     vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
     const dispositions: Array<Record<string, unknown>> = [];
@@ -524,6 +528,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     let releaseReceipt!: (value: boolean) => void;
     let receiptPending = scenario.claim === "pending" || scenario.claim === "chain timeout" || scenario.claim === "chain expires";
     let sameContext = true;
+    let owner = "T";
+    if (scenario.claim === "receipt owner ends") receiptPending = true;
     const receiptWaitTimeouts: number[] = [];
     const receiptResolved = new Promise<boolean>(resolve => {
       releaseReceipt = value => { receiptPending = false; resolve(value); };
@@ -565,16 +571,20 @@ describe("Claude CLI delivery composition (issue #247)", () => {
           if (policy?.source === "peer") queued.add(token);
           else if (text.startsWith("Work notice:")) deliveredNotices.push(text);
         },
-        activeInterAgentTurnToken: () => "T",
+        activeInterAgentTurnToken: () => owner,
         canPushLiveInput: () => true, canFoldLiveInput: () => false,
         reserveYieldCut: () => ({}), releaseYieldCut: () => {},
-        hasRunningMcp: () => false,
+        hasRunningMcp: () => scenario.claim === "mcp owner ends",
+        waitForMcp: async () => { owner = "operator"; sameContext = false; },
         captureLiveInputContext: () => ({}),
         matchesLiveInputContext: () => sameContext,
         hasPendingPushedReceipt: () => receiptPending,
         waitForPushedReceipt: async (_ownerToken: string, timeoutMs: number) => {
           receiptWaitCalls += 1;
           receiptWaitTimeouts.push(timeoutMs);
+          if (scenario.claim === "receipt owner ends") {
+            owner = "operator"; sameContext = false; return false;
+          }
           if (scenario.claim === "chain timeout") {
             if (receiptWaitCalls === 1) {
               await new Promise(resolve => setTimeout(resolve, 25));
@@ -606,7 +616,9 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       await linkOptions.onInterAgentMessage(yieldMessage);
       if (scenario.claim === "changed" || scenario.claim === "context changed" || scenario.claim === "render changed" ||
           scenario.claim === "chain timeout" || scenario.claim === "chain expires" ||
-          scenario.claim === "transfer" || scenario.claim === "pending") {
+          scenario.claim === "transfer" || scenario.claim === "pending" ||
+          scenario.claim === "mcp owner ends" ||
+          scenario.claim === "receipt owner ends") {
         await vi.waitFor(() => expect(claimCalls).toBe(1));
         if (scenario.claim === "changed") eligibility = "mixed_turn";
         else if (scenario.claim === "context changed") sameContext = false;
