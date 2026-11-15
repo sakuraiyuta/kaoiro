@@ -112,8 +112,6 @@ it("reserves the push slot until all MCP results", async () => {
     expect(push(f.host, "cut", cut).kind).toBe("declined");
     let ready = false;
     const waiting = f.host.waitForMcp(cut).then(() => { ready = true; });
-    await f.hook("PostToolUse", { tool_use_id: "a" });
-    expect(f.host.hasRunningMcp(cut)).toBe(true);
     f.result("a");
     await vi.waitFor(() => expect(f.host.hasRunningMcp(cut)).toBe(true));
     expect(ready).toBe(false);
@@ -188,10 +186,67 @@ it.each(["ownerToken", "sessionId", "query", "generation"] as const)(
   "a stale reservation cannot block push (%s)", async field => {
     const f = await fixture();
     try {
+      await f.pre("running");
       const cut = f.reserve();
       Object.assign(cut, { [field]: field === "query" ? {} : "stale" });
+      expect(f.host.hasRunningMcp(cut)).toBe(false);
       expect(f.host.canFoldLiveInput()).toBe(true);
       expect(push(f.host, "fold").kind).toBe("pushed");
     } finally { await f.close(); }
   },
 );
+
+it("PostToolUse alone cannot release the only running MCP", async () => {
+  const f = await fixture();
+  try {
+    await f.pre("a"); const cut = f.reserve();
+    await f.hook("PostToolUse", { tool_use_id: "a",
+      tool_name: "mcp__external__slow", tool_input: {}, tool_response: {} });
+    expect(f.host.hasRunningMcp(cut)).toBe(true);
+    expect(push(f.host, "cut", cut).kind).toBe("declined");
+  } finally { await f.close(); }
+});
+
+it("wakes an already waiting cut at permission entry", async () => {
+  const f = await fixture();
+  try {
+    await f.pre("asking"); const cut = f.reserve();
+    const waiting = f.host.waitForMcp(cut);
+    const decision = f.allow("asking");
+    await waiting;
+    expect(push(f.host, "cut", cut).kind).toBe("pushed");
+    f.approval.resolve({ allow: true });
+    expect((await decision)?.behavior).toBe("deny");
+  } finally { await f.close(); }
+});
+
+it("clears the retiring owner's MCP records", async () => {
+  const f = await fixture();
+  try {
+    await f.pre("old"); const old = f.reserve();
+    await f.terminal();
+    expect(f.host.hasRunningMcp(old)).toBe(false);
+    await f.nextRoot(); await f.pre("new");
+    expect(f.host.hasRunningMcp(old)).toBe(false);
+  } finally { await f.close(); }
+});
+
+it("rejects duplicate reservations and foreign input contexts", async () => {
+  const f = await fixture();
+  try {
+    const cut = f.reserve();
+    expect(f.host.reserveYieldCut(cut.ownerToken, cut)).toBeNull();
+    f.host.releaseYieldCut(cut);
+    expect(f.host.reserveYieldCut("foreign", cut)).toBeNull();
+  } finally { await f.close(); }
+});
+
+it("close wakes MCP waiters even before their tool result", async () => {
+  const f = await fixture();
+  try {
+    await f.pre("running"); const cut = f.reserve();
+    const waiting = f.host.waitForMcp(cut);
+    void f.host.close(); await waiting;
+    expect(f.host.hasRunningMcp(cut)).toBe(true);
+  } finally { await f.close(); }
+});

@@ -45,6 +45,7 @@ Reproduce with `pnpm exec vitest run test/cli_mcp_yield_native.test.ts` in
 repository's test isolation environment and normal candidate CI procedure.
 The adjacent host/composition regressions cover reservation liveness,
 parallel calls, permission exclusion, result-boundary wakeup, receipt
-expiry, and queued early input. Removing individual guards makes the
-corresponding regressions fail; the intentional leaked-old-reservation
+expiry, and queued early input. Targeted mutations check the corresponding
+regressions; redundant fast paths and cleanup are distinguished in the
+implementation review record. The intentional leaked-old-reservation
 control still permits the next owner's fold and yield.
