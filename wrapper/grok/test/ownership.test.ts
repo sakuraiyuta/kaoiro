@@ -59,6 +59,22 @@ describe("prompt ownership", () => {
     expect(ownership.permissionIsOwn("call")).toBe(false);
   });
 
+  it("never opens an id it issued, even after its turn ended, as a self-started turn", () => {
+    const ownership = owning("kaoiro-earlier");
+    ownership.end();
+    ownership.begin("kaoiro-now");
+    expect(ownership.isOpenForeign("kaoiro-earlier")).toBe(false);
+    expect(ownership.isOpenForeign("kaoiro-now")).toBe(false);
+    expect(ownership.isOpenForeign("task-completed-1")).toBe(true);
+  });
+
+  it("does not reopen a self-started turn once closed", () => {
+    const ownership = owning();
+    ownership.closeForeign("task-completed-1");
+    expect(ownership.isOpenForeign("task-completed-1")).toBe(false);
+    expect(ownership.isOpenForeign("task-completed-2")).toBe(true);
+  });
+
   it("gives a reading only to the prompt that was running when it was taken", () => {
     const ownership = owning();
     ownership.setRunning("task-completed-1");

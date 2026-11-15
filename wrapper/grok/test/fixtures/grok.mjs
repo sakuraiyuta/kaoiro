@@ -539,8 +539,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (text === "arm-foreign" || text === "arm-foreign-hold") {
           finish(msg.id, "armed");
           setTimeout(() => void (async () => {
+            if (text === "arm-foreign-hold") {
+              // Only the queue notification announces this turn.
+              startForeign("task-completed-fixture");
+              foreignHold = true;
+              return;
+            }
+            // The first update comes before the queue notification that
+            // announces its prompt, as handling order can deliver it.
+            running = "task-completed-fixture";
+            textChunk("FOREIGN_TEXT");
             startForeign("task-completed-fixture");
-            if (text === "arm-foreign-hold") { textChunk("FOREIGN_TEXT"); foreignHold = true; return; }
             await foreignBody(true);
             endForeign();
           })(), 20);
