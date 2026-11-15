@@ -2,7 +2,7 @@
 title: Grok Build ACP engine
 description: Resident ACP host, tools, permissions and unsupported operations.
 status: accepted
-last_updated: 2026-10-18
+last_updated: 2026-11-15
 ---
 
 # Grok Build ACP engine
@@ -102,8 +102,20 @@ directory, and one that is not a string literal counts as outside.
 The adapter supports text turns, conversation continuity while the wrapper
 is resident, cancellation, operator permission requests, user questions,
 normal peer messages and dispatch confirmation. Early and yield delivery
-are explicitly `none`. Reply-basis v1 is not negotiated: Grok MCP calls do
-not carry turn-origin identity, so the MCP server cannot prove it.
+are explicitly `none`.
+
+Reply-basis v1 is not negotiated. With Grok 1.0.52, MCP `tools/call`
+requests carry a progress token but no proven turn-origin identity in
+their metadata or HTTP headers. Supplying `_meta.promptId` on ACP
+`session/prompt` makes that ID available on ACP completion events, but
+does not propagate it to MCP calls. The active wrapper turn, request
+order and tool arguments are not substitutes: a delayed call can be
+dispatched after its owner has ended, while another turn is active.
+An idle-time aborted signal alone does not protect that transition.
+See the [turn-origin measurements][origin-evidence]
+for the version boundary and controlled-delay conditions.
+
+[origin-evidence]: ../../evidence/grok/2026-11-15-reply-basis-origin.md
 
 The runner's launch catalog is read from a short-lived `initialize` (see
 [Launch catalog](#launch-catalog)). A launch pick or a resumed pair is
