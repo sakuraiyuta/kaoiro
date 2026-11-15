@@ -113,6 +113,8 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
   back to sprite-less rendering (CSS face in the reference implementation).
 - **Auto-watch**: the server watches the intake directory with Elixir `FileSystem`, detects zip
   additions/updates/deletions, and rebuilds the manifest ([ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md) F6).
+  If the launch list still does not update, restart the server and reload the dashboard;
+  restarting discards in-memory inter-agent conversations.
 
 Operator-only `hosts` pushes follow runtime persona rebuilds and include `ingest_warnings` alongside `hosts`; absence means diagnostics are unknown on older servers. At most one bounded warning is shown; an ellipsis indicates omitted text or additional warnings. Diagnostics are independent of the sprite manifest version.
 
