@@ -134,10 +134,23 @@ for the version boundary and controlled-delay conditions.
 
 [origin-evidence]: ../../evidence/grok/2026-11-15-reply-basis-origin.md
 
-In a 2026-11-15 review of 17 Grok Build 1.0.52 sessions, auto mode blocked an
-assignment acceptance requested by a peer in one session. The conditions for
-this refusal and its source are not known; a refused assignment remains
-nominated.
+Grok's auto mode can refuse, before it runs, a tool call that only a peer's
+message asked for, such as an assignment acceptance through `send_to_agent`.
+The call never reaches the wrapper, so a refused acceptance leaves the work
+`nominated`. A known trigger is an earlier human turn that forbids tools
+without a scope (for example "No tools."), which auto mode gave as its
+reason; other refusals said that only the peer's message, not the user,
+asked for the action. See the [auto mode observations][auto-mode-evidence]
+for counts and how they were taken.
+
+[auto-mode-evidence]: ../../evidence/grok/2026-11-15-auto-mode-peer-acceptance.md
+
+A native check whose requested call was refused this way is
+`INDETERMINATE`, neither a pass nor a failure; `test/native.test.ts` fails
+with that label. Rerun it in a new Grok session, at most three runs for each
+check, without changing the prompt or the configuration, and never retry
+inside the session that refused. Record every run and its outcome. If every
+run is `INDETERMINATE`, the check did not take place.
 
 The runner's launch catalog is read from a short-lived `initialize` (see
 [Launch catalog](#launch-catalog)). A launch pick or a resumed pair is
