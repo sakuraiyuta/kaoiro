@@ -1440,6 +1440,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       turnWatchdog.dispose();
       permissionBroker?.close();
       questionBroker?.close();
+      interAgent?.close();
       try {
         if (!recovery.failure) await link?.reportDisconnectIntent?.(disconnectReason);
       } finally {

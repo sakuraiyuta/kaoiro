@@ -1771,6 +1771,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     } finally {
       broker?.close();
       questionBroker?.close();
+      interAgent?.close();
       try {
         if (!recovery.failure) await link?.reportDisconnectIntent?.(disconnectReason);
       } finally {

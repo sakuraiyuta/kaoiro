@@ -851,6 +851,7 @@ export async function runAntigravityCli(
       turnWatchdog.dispose();
       questionBroker.close();
       permissionBroker.close();
+      interAgent.close();
       try {
         if (!recovery.failure) await link.reportDisconnectIntent?.(disconnectReason);
       } finally {
