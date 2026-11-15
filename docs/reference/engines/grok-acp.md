@@ -172,10 +172,12 @@ Limits, measured on Grok Build 1.0.52
 - A Grok configuration whose hooks ask before MCP calls adds Grok's own
   permission requests before the wrapper's dialog (two per call with a
   `PreToolUse` ask hook).
-- Grok waited for a blocked kaoiro MCP call for the full 600 s in the
-  measured run. Its own timeout and whether it closes the HTTP request when
-  that timeout fires are not measured; the 300 s bound keeps the wrapper's
-  answer ahead of it.
+- Grok waited for a blocked kaoiro MCP call for the full 600 s in one
+  measured run, longer than the 300 s bound. Its own timeout and whether it
+  closes the HTTP request when that timeout fires are not measured, so the
+  bound limits the wrapper's wait but does not guarantee that the wrapper
+  answers before Grok gives up. A call that ended before the answer still
+  reserves nothing.
 - Grok's `use_tool` accepts only the qualified name
   (`kaoiro__request_session_reset`); an unqualified call fails inside Grok
   and never reaches the ToolHost.
