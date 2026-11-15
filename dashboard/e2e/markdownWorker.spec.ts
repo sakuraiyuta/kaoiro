@@ -159,7 +159,10 @@ test("delayed asset is pending time; blocked CSP fails until reload", async ({ p
 for (const [count, size, limit] of [[200, 72, 1500], [200, 2000, 1500], [2000, 72, 4000], [2000, 2000, 22000]]) {
   test(`FIFO mounted batch ${count} x ${size}`, async ({ page }, info) => {
     await page.goto(origin!); await open(page);
-    history(Array.from({ length: count! }, (_, i) => `${i} ` + "abc ".repeat(Math.ceil(size! / 4))));
+    history(Array.from({ length: count! }, (_, i) =>
+      `Reply **${i}** with \`code\` and a [link](https://example.org).\n\n- one\n- two\n`
+      + (size === 2000
+        ? "A normal sentence of prose with *emphasis* here.\n".repeat(40) : "")));
     if (count! > 200) await page.locator(".load-earlier").click();
     await expect(page.locator(".async-markdown")).toHaveCount(count!);
     const start = Date.now();
