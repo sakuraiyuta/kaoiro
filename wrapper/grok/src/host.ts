@@ -723,26 +723,27 @@ export class GrokHost implements EngineAdapter {
    *  also end without a turn: dropped by an interrupt or close, or refused
    *  while it is built; both resolve. Bare upload ids (the EngineAdapter
    *  shape) are refused: uploads reach a turn only through the intake. */
-  async send(
+  send(
     text: string,
     attachments?: StagedRecord | readonly string[],
     conversations: string[] = [],
     token: string = randomUUID(),
   ): Promise<void> {
     if (Array.isArray(attachments) && attachments.length > 0)
-      throw new Error("grok attachments must be staged by the upload intake");
+      return Promise.reject(new Error("grok attachments must be staged by the upload intake"));
     const record = Array.isArray(attachments) ? undefined : attachments as StagedRecord | undefined;
-    if (!record) {
-      if (this.#closing) throw new Error("grok host is closed");
-      const size = this.#promptBytes(text, []);
-      if (size > PROMPT_BYTE_LIMIT) {
-        this.#options.send(makeInstructionRejected(this.#options.config, this.state,
-          new Date().toISOString(),
-          { reason: "total_request_over", detail: `bytes=${size} limit=${PROMPT_BYTE_LIMIT}` }));
-        throw new Error("grok instruction is over the size limit");
-      }
-      return this.#enqueue({ text, token, conversations });
+    if (record) return this.#sendStaged(text, record, conversations, token);
+    if (this.#closing) return Promise.reject(new Error("grok host is closed"));
+    const size = this.#promptBytes(text, []);
+    if (size > PROMPT_BYTE_LIMIT) {
+      this.#options.send(makeInstructionRejected(this.#options.config, this.state,
+        new Date().toISOString(),
+        { reason: "total_request_over", detail: `bytes=${size} limit=${PROMPT_BYTE_LIMIT}` }));
+      return Promise.reject(new Error("grok instruction is over the size limit"));
     }
+    return this.#enqueue({ text, token, conversations });
+  }
+  async #sendStaged(text: string, record: StagedRecord, conversations: string[], token: string) {
     let built: BuildResult;
     try {
       built = await buildAttachmentParts(record.uploads, this.#officeExtractor);
