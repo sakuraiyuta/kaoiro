@@ -37,7 +37,8 @@ remain private. This page keeps what the retained probe outputs show.
   `grok-4.7`. Code words are random (`KX-`, six letters, four digits) and
   appear only inside their fixture, never in a prompt or URI. The runs and
   thresholds were fixed before the first live run: three runs per image
-  case, two per Office case, one per PDF route and profile. A permission
+  case, two per Office case, one per PDF route and profile. A second round
+  added one `resource_link` run per profile. A permission
   request would have been answered with the first `allow_once` option and
   recorded; none was raised.
 - The Office text came from the Claude Code adapter's
@@ -55,6 +56,7 @@ remain private. This page keeps what the retained probe outputs show.
 | JPEG 600×200, live | 3 of 3 runs returned the image's code word with 0 tool calls. PNG positive control: 3 of 3. The same prompt without an image (negative control): 0 of 3, each `NO_IMAGE`. |
 | Small PNGs, wire | Dropped with an `image_dropped` update and a prompt notice: 7×7, 7×8, 8×7 (`images must be at least 8×8 pixels`); 8×8, 8×63, 16×31 and 22×23 (`images must have at least 512 total pixels`). Sent: 8×64, 64×8, 16×32 and 23×23. The 8×64 to 22×23 cases ran under `workspace` and `read-only`; the rest under all three profiles. |
 | Small JPEGs, wire | 7×7 and 8×8 dropped with the same notices. |
+| `image_dropped` message, wire (`workspace`, 7×7 PNG) | `{"jsonrpc":"2.0","method":"_x.ai/session_notification","params":{"sessionId":"<session id>","update":{"sessionUpdate":"image_dropped","notes":["Image 1 was dropped before send: too small (7×7); images must be at least 8×8 pixels."]},"_meta":{"eventId":"<session id>-5","agentTimestampMs":<ms>}}}`; `sessionId` is the prompt's session. |
 | Large PNGs, wire | An 8,674,718-byte and a 20,289,761-byte PNG were sent as JPEG, 1,682,268 and 1,912,820 base64 characters, with no `image_dropped`. The output resolution was not recorded. |
 | Stored copies | Each sent image was saved in the session's `assets` directory (directory `0700`, files `0664`). The session's `updates.jsonl` holds the image block with its base64: one line of 15,449 bytes for a 15,084-character image. |
 
@@ -76,17 +78,21 @@ word with 0 tool calls. The same prompt without the resource: 0 of 2, each
 
 ### PDF
 
-The prompt allowed tools. Each route below returned the PDF's code word in
-its single run, through a `read_file` call on the file's path, with 0
-permission requests.
+The prompt allowed tools. Every run below returned the PDF's code word
+through a `read_file` call on the file's path, with 0 permission requests.
 
 | Route | `off` | `workspace` | `read-only` |
 | --- | --- | --- | --- |
 | `resource` with `blob`, `TMPDIR` set to a `0700` directory | 1 of 1 | 1 of 1 | 1 of 1 |
-| `resource_link` to a `0600` file in a `0700` directory under `/tmp`, written by the client | not run | 1 of 1 | 1 of 1 |
+| `resource_link` to a `0600` file in a `0700` directory under `/tmp`, written by the client | 1 of 1 | 2 of 2 | 2 of 2 |
 
 The same prompt without an attachment (`workspace`) listed the cwd and
 `/tmp` and replied `NO_PDF`.
+
+In the second round (one `resource_link` run per profile), the client wrote
+the file right before opening the session and sending the prompt, and
+removed its directory as soon as the prompt returned. At that moment the directory was `0700` and the file `0600`, the
+`read_file` call had ended `completed`, and the removal left nothing.
 
 ### Files written for a `blob`
 
@@ -139,6 +145,15 @@ Node's compile cache (`node-compile-cache/`).
   27,053,016 base64 characters and a `blob` of 40,000,000 base64 characters
   caused no incoming line over 1,000,000 bytes.
 - A 30,000,000-byte `blob` was written to disk in full.
+- Each `_x.ai/queue/changed` line was 217 or 218 bytes longer than
+  `JSON.stringify` of the prompt's text, for a 1,000,008-character ASCII text
+  and for a text mixing quotes, backslashes, newlines, tabs, control
+  characters, DEL, Japanese, an emoji and U+2028 (2,411,786 bytes as JSON).
+- With the SDK's default limit, a prompt whose blocks serialize to
+  33,488,896 bytes (32 MiB minus 64 KiB) produced notifications of 33,489,088
+  and 33,489,089 bytes and no client error. A prompt of 33,554,359 bytes
+  (negative control) produced a 33,554,551-byte notification and the client
+  error above.
 
 ## Interpretation and limits
 
