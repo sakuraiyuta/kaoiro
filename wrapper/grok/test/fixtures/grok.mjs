@@ -420,7 +420,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         prompt = msg.id;
         promptIds.set(msg.id, msg.params._meta?.promptId ?? String(msg.id));
         record("prompt_id", { promptId: msg.params._meta?.promptId ?? null });
-        if (!/^foreign-(during|interrupt)$/.test(msg.params.prompt[0].text))
+        if (!/^foreign-(during|interrupt|interrupt-early)$/.test(msg.params.prompt[0].text))
           queueChanged(promptIds.get(msg.id));
         turnCalls = 0;
         turnModel = process.env.KAOIRO_TEST_GROK_REPORT_MODEL ?? model;
@@ -553,6 +553,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             await foreignBody(true);
             endForeign();
           })(), 20);
+          break;
+        }
+        if (text === "foreign-interrupt-early") {
+          // The self-started turn is known only from its update: the queue
+          // notification that would announce it has not been handled yet.
+          ownQueued = promptIds.get(msg.id);
+          foreign = "task-completed-fixture";
+          running = foreign;
+          foreignHold = true;
+          textChunk("FOREIGN_TEXT");
           break;
         }
         if (text === "foreign-during" || text === "foreign-interrupt") {

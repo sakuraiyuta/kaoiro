@@ -1128,7 +1128,10 @@ export class GrokHost implements EngineAdapter {
   }
   async interrupt() {
     const running = this.#ownership.running;
-    const foreignRunning = running !== undefined && !this.#ownership.isOwn(running);
+    // An update can open a self-started turn before the queue notice that
+    // makes it the running prompt; the open turn counts as running too.
+    const foreignRunning = (running !== undefined && !this.#ownership.isOwn(running)) ||
+      (this.#foreign !== undefined && !this.#ownership.isOwn(this.#foreign));
     if (!this.#active) {
       // Stops a turn Grok started on its own; nothing of kaoiro's to wait for.
       if (foreignRunning) await this.#current?.session.cancel();

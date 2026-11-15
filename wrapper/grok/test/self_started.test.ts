@@ -155,6 +155,19 @@ describe("a turn Grok starts while the operator's prompt waits", () => {
     await t.host.send("still-open");
     expect(t.results().at(-1)?.payload.text).toBe("still-open");
   });
+
+  it("treats a turn opened by its update as running when interrupted before the queue notice", async () => {
+    const t = await started();
+    const turn = t.host.send("foreign-interrupt-early");
+    await vi.waitFor(() => expect(t.texts("system")).toContain(STARTED));
+    await t.host.interrupt();
+    await turn;
+    expect(t.rows().filter((r) => r.event === "cancel").map((r) => r.target)).toEqual(["foreign", "own"]);
+    expect(t.results().at(-1)?.ext).toMatchObject({ stop_reason: "cancelled", interrupted: true });
+    await new Promise((resolve) => setTimeout(resolve, 3_300));
+    await t.host.send("still-open");
+    expect(t.results().at(-1)?.payload.text).toBe("still-open");
+  });
 });
 
 describe("permission ownership", () => {
