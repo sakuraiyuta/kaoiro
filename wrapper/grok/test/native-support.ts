@@ -88,6 +88,40 @@ export function answerPermissions(
   );
 }
 
+/** Why a requested tool never reached the wrapper. Under the operator's
+ *  decision on issue 1123, a run counts as `indeterminate` only when that tool
+ *  never ran and the session's `updates.jsonl` records Grok's auto mode
+ *  refusing a call; anything else, including an unreadable record, is
+ *  `failed`. Neither verdict passes the test. */
+export function classifyMissingSend(input: {
+  toolRan: boolean;
+  updates: string | undefined;
+}): { verdict: "indeterminate" | "failed"; refusals: string[] } {
+  const refusals: string[] = [];
+  for (const line of input.updates?.split("\n") ?? []) {
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const update = (entry as {
+      params?: { update?: { sessionUpdate?: unknown; status?: unknown; content?: unknown } };
+    } | null)?.params?.update;
+    if (update?.sessionUpdate !== "tool_call_update" || update.status !== "failed" ||
+      !Array.isArray(update.content)) continue;
+    for (const item of update.content as { content?: { text?: unknown } }[]) {
+      const text = item?.content?.text;
+      if (typeof text === "string" && /was not executed: Auto mode blocked this action/.test(text))
+        refusals.push(text);
+    }
+  }
+  return {
+    verdict: !input.toolRan && refusals.length > 0 ? "indeterminate" : "failed",
+    refusals,
+  };
+}
+
 export async function nativeRun(
   config: WrapperConfig,
   cwd: string,
