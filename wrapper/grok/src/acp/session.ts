@@ -73,11 +73,12 @@ export class AcpSession {
     return this.newSession(cwd, mcpServers, newSessionMeta);
   }
 
-  prompt(text: string, meta?: Record<string, unknown>) {
+  /** A string is sent as one `text` block. */
+  prompt(content: string | acp.ContentBlock[], meta?: Record<string, unknown>) {
     if (!this.sessionId) throw new Error("ACP session is not initialized");
     return this.connection.agent.request(acp.methods.agent.session.prompt, {
       sessionId: this.sessionId,
-      prompt: [{ type: "text", text }],
+      prompt: typeof content === "string" ? [{ type: "text", text: content }] : content,
       ...(meta ? { _meta: meta } : {}),
     });
   }

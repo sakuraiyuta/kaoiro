@@ -1,6 +1,9 @@
 import { RequestError } from "@agentclientprotocol/sdk";
 import type { RecoveryReporter } from "@kaoiro/wrapper-core";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PermissionSelection as Selection, PermissionSubmission, PermissionSyncMessage,
   PermissionGateExt, SwitchErrorExt, WrapperPermissionLifecycleMessage } from "@kaoiro/protocol";
 import { createPermissionState, setPermissionSyncSupport, requestPermission,
@@ -15,6 +18,7 @@ import {
   effectiveStatusWhoamiFields,
   initialMachineState,
   logEntryToPayload,
+  makeInstructionRejected,
   makeLog,
   makeResult,
   permissionSyncFailure,
@@ -40,6 +44,7 @@ import { connectAcp } from "./acp/connection.js";
 import { GrokProcess } from "./grok/process.js";
 import {
   cancellationKind,
+  imageDroppedNotes,
   promptIdOf,
   queueRunning,
   selfStartedReason,
@@ -74,6 +79,21 @@ import {
   type GrokModel,
 } from "./grok/usage.js";
 import { MCP_NOT_CONNECTED, ToolHost, type ToolHostStats } from "./toolhost.js";
+import {
+  attachmentDirPrefix,
+  buildAttachmentParts,
+  DefaultOfficeTextExtractor,
+  isPdfPart,
+  pdfLink,
+  PROMPT_BYTE_LIMIT,
+  removeAttachmentDir,
+  sweepAttachmentDirs,
+  type BuildResult,
+  type OfficeTextExtractor,
+  type PromptPart,
+  type StagedRecord,
+  type UploadIntake,
+} from "./upload.js";
 
 export interface GrokHostOptions {
   recovery?: RecoveryReporter;
@@ -104,6 +124,13 @@ export interface GrokHostOptions {
    *  fails; the request normally answers in milliseconds. */
   switchTimeoutMs?: number;
   onPermissionLifecycle?: (event: WrapperPermissionLifecycleMessage) => void;
+  /** The CLI's upload intake. `interrupt` and `close` drop what it holds
+   *  before anything else (ADR-0025 F11). */
+  intake?: UploadIntake;
+  officeExtractor?: OfficeTextExtractor;
+  /** Where a running turn's PDFs are written; the OS temp directory unless
+   *  a test points it elsewhere. */
+  attachmentRoot?: string;
   /** A synchronization seam for lifecycle tests; production has no observer. */
   onLaneStep?: (step: LaneStep, pid?: number) => Promise<void> | void;
   onSessionId?: (id: string) => void;
@@ -165,6 +192,9 @@ interface Turn {
   text: string;
   token: string;
   conversations: string[];
+  /** The attachment blocks after the text block, PDFs still in memory. */
+  parts?: PromptPart[];
+  record?: StagedRecord;
   resolve: () => void;
   reject: (error: Error) => void;
 }
@@ -227,6 +257,9 @@ export class GrokHost implements EngineAdapter {
   #rateLimits: GrokRateLimits | undefined;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #abortTimer: ReturnType<typeof setTimeout> | undefined;
+  // The running turn's PDF directory.
+  #attachmentDir: string | undefined;
+  readonly #officeExtractor: OfficeTextExtractor;
   #resolveClosed!: () => void;
   readonly closed = new Promise<void>((resolve) => {
     this.#resolveClosed = resolve;
@@ -236,6 +269,7 @@ export class GrokHost implements EngineAdapter {
 
   constructor(options: GrokHostOptions) {
     this.#options = options;
+    this.#officeExtractor = options.officeExtractor ?? new DefaultOfficeTextExtractor();
     this.#platform = options.platform ?? process.platform;
     const sandbox = options.config.sandbox ?? "workspace-write";
     this.#ceiling = { revision: 0, requested: { sandbox,
@@ -298,7 +332,7 @@ export class GrokHost implements EngineAdapter {
         supports_effort_switch: this.#switchable,
         supports_permission_switch: switching,
         supports_permission_mode_switch: false,
-        supports_attachments: false,
+        supports_attachments: true,
         supports_user_input_dialog: true,
         supports_session_reset: true,
         session_reset_modes: ["new", "clear"],
@@ -474,6 +508,7 @@ export class GrokHost implements EngineAdapter {
     const config = this.#options.config;
     if (config.permission_mode)
       throw new Error("grok permission mode is unsupported");
+    sweepAttachmentDirs(this.#attachmentRoot(), config.agent_id, writeRedactedStderr);
     try {
       this.#starting = true;
       sandboxProfile(config, this.#options.cwd, this.#options.env ?? process.env, this.#platform);
@@ -684,20 +719,105 @@ export class GrokHost implements EngineAdapter {
     }
   }
 
-  send(
+  /** Resolves when the turn settles. An instruction with a staged record can
+   *  also end without a turn: dropped by an interrupt or close, or refused
+   *  while it is built; both resolve. Bare upload ids (the EngineAdapter
+   *  shape) are refused: uploads reach a turn only through the intake. */
+  async send(
     text: string,
-    attachmentIds?: string[],
+    attachments?: StagedRecord | readonly string[],
     conversations: string[] = [],
     token: string = randomUUID(),
   ): Promise<void> {
-    if (attachmentIds?.length)
-      return Promise.reject(new Error("grok attachments are unsupported"));
-    if (this.#closing) return Promise.reject(new Error("grok host is closed"));
+    if (Array.isArray(attachments) && attachments.length > 0)
+      throw new Error("grok attachments must be staged by the upload intake");
+    const record = Array.isArray(attachments) ? undefined : attachments as StagedRecord | undefined;
+    if (!record) {
+      if (this.#closing) throw new Error("grok host is closed");
+      const size = this.#promptBytes(text, []);
+      if (size > PROMPT_BYTE_LIMIT) {
+        this.#options.send(makeInstructionRejected(this.#options.config, this.state,
+          new Date().toISOString(),
+          { reason: "total_request_over", detail: `bytes=${size} limit=${PROMPT_BYTE_LIMIT}` }));
+        throw new Error("grok instruction is over the size limit");
+      }
+      return this.#enqueue({ text, token, conversations });
+    }
+    let built: BuildResult;
+    try {
+      built = await buildAttachmentParts(record.uploads, this.#officeExtractor);
+    } catch {
+      built = { ok: false, reason: "sdk_error", detail: "attachment rendering failed" };
+    }
+    // G1: an instruction dropped while it waited or was built is never queued.
+    if (record.dropped) return;
+    if (!built.ok) {
+      record.refuse(built.reason, built.detail);
+      return;
+    }
+    const size = this.#promptBytes(text, built.parts);
+    if (size > PROMPT_BYTE_LIMIT) {
+      record.refuse("total_request_over", `bytes=${size} limit=${PROMPT_BYTE_LIMIT}`);
+      return;
+    }
+    return this.#enqueue({ text, token, conversations, parts: built.parts, record });
+  }
+  #enqueue(fields: Omit<Turn, "resolve" | "reject">): Promise<void> {
     const promise = new Promise<void>((resolve, reject) => {
-      this.#queue.push({ text, token, conversations, resolve, reject });
+      const turn: Turn = { ...fields, resolve, reject };
+      this.#queue.push(turn);
+      // Only #drain removes the turn from the queue; a drop settles it here.
+      if (turn.record) turn.record.onDrop = () => {
+        resolve();
+        this.#options.onTurnEnd?.({ turnToken: turn.token, conversationIds: turn.conversations,
+          error: { detail: "grok instruction interrupted" } });
+      };
     });
     if (this.#started) void this.#drain();
     return promise;
+  }
+  // A PDF counts as its link. Its directory does not exist yet, so a name of
+  // the same length stands in for the six characters mkdtemp adds.
+  #promptBytes(text: string, parts: readonly PromptPart[]): number {
+    const dir = join(this.#attachmentRoot(),
+      `${attachmentDirPrefix(this.#options.config.agent_id)}XXXXXX`);
+    const blocks = [{ type: "text", text },
+      ...parts.map((part) => isPdfPart(part) ? pdfLink(join(dir, part.file), part.name) : part)];
+    return Buffer.byteLength(JSON.stringify(blocks));
+  }
+  #attachmentRoot() {
+    return this.#options.attachmentRoot ?? tmpdir();
+  }
+  // Synchronous, so nothing runs between creating the directory and sending
+  // the prompt; the event loop waits for the writes.
+  #promptBlocks(text: string, parts: readonly PromptPart[]): acp.ContentBlock[] {
+    const blocks: acp.ContentBlock[] = [{ type: "text", text }];
+    let dir: string | undefined;
+    for (const part of parts) {
+      if (!isPdfPart(part)) {
+        blocks.push(part);
+        continue;
+      }
+      dir ??= this.#attachmentDir = mkdtempSync(join(this.#attachmentRoot(),
+        attachmentDirPrefix(this.#options.config.agent_id)));
+      const path = join(dir, part.file);
+      writeFileSync(path, part.bytes, { mode: 0o600 });
+      blocks.push(pdfLink(path, part.name));
+    }
+    if (dir) this.#progress();
+    return blocks;
+  }
+  #removeAttachments() {
+    const dir = this.#attachmentDir;
+    this.#attachmentDir = undefined;
+    if (dir) removeAttachmentDir(dir, writeRedactedStderr);
+  }
+  // G3: a queued turn that will not run is reported and settled once. A
+  // dropped record's instruction was reported as interrupted when dropped.
+  #reportsUnrun(turn: Turn): boolean {
+    if (turn.record?.dropped) return false;
+    turn.record?.finish();
+    return true;
   }
 
   async #awaitDispatch(): Promise<boolean> {
@@ -755,12 +875,15 @@ export class GrokHost implements EngineAdapter {
           this.#queue.shift();
           const reason = syncTimeout ? "permission_sync_timeout" : "permission_gate_blocked";
           const error = syncTimeout ? new PermissionSyncTimeoutError() : new Error(reason);
-          this.#options.send(makeResult(this.#options.config, new Date().toISOString(),
+          const reports = this.#reportsUnrun(turn);
+          if (reports) this.#options.send(makeResult(this.#options.config, new Date().toISOString(),
             syncTimeout ? permissionSyncFailure() : { text: "", is_error: true, error_code: reason }));
           if (syncTimeout) this.#state("error");
-          this.#options.onTurnEnd?.({ turnToken: turn.token, conversationIds: turn.conversations,
-            error: { detail: reason, reason } });
-          turn.reject(error);
+          if (reports) {
+            this.#options.onTurnEnd?.({ turnToken: turn.token, conversationIds: turn.conversations,
+              error: { detail: reason, reason } });
+            turn.reject(error);
+          }
           this.#state("waiting_input");
           continue;
         }
@@ -793,11 +916,18 @@ export class GrokHost implements EngineAdapter {
         await this.#applyPending();
         if (this.#closing) return;
         this.#queue.shift();
+        // G2: a turn dropped while it waited in the queue never runs.
+        if (turn.record?.dropped) {
+          if (!this.#queue.length) this.#state("waiting_input");
+          continue;
+        }
         await this.#execute(turn, submission);
       }
     } finally { this.#draining = false; }
   }
   async #execute(turn: Turn, submission: PermissionSubmission) {
+    // From here the uploads go to Grok and an interrupt no longer drops them.
+    turn.record?.finish();
     this.#permissions = beginPermissionExecution(this.#permissions, submission);
     this.#active = turn;
     this.#signal = new AbortController();
@@ -824,7 +954,8 @@ export class GrokHost implements EngineAdapter {
     const promptId = `kaoiro-${randomUUID()}`;
     this.#ownership.begin(promptId);
     try {
-      const response = await this.#current!.session.prompt(turn.text, grokPromptMeta(promptId));
+      const prompt = turn.parts ? this.#promptBlocks(turn.text, turn.parts) : turn.text;
+      const response = await this.#current!.session.prompt(prompt, grokPromptMeta(promptId));
       if (promptIdOf(response._meta) !== promptId)
         writeRedactedStderr("[kaoiro] grok answered under another prompt id; its updates were not attributed to the turn\n");
       this.#observe(submission, promptIdOf(response._meta));
@@ -889,6 +1020,7 @@ export class GrokHost implements EngineAdapter {
       );
       turn.reject(error);
     } finally {
+      this.#removeAttachments();
       clearTimeout(this.#timer);
       clearTimeout(this.#abortTimer);
       this.#signal?.abort();
@@ -1046,6 +1178,8 @@ export class GrokHost implements EngineAdapter {
     }
   }
   #vendor(notification: Record<string, unknown>) {
+    for (const note of imageDroppedNotes(notification, this.#sessionId))
+      this.#systemLog(`Grok: ${note}`);
     const completion = turnCompletion(notification, this.#sessionId);
     if (completion) this.#completion = completion;
     const sessionId = notification.sessionId ?? notification.session_id;
@@ -1127,6 +1261,8 @@ export class GrokHost implements EngineAdapter {
       : { outcome: { outcome: "cancelled" } };
   }
   async interrupt() {
+    // The drop step runs before the first await; a queued text-only turn stays.
+    this.#options.intake?.interrupt();
     const running = this.#ownership.running;
     // An update can open a self-started turn before the queue notice that
     // makes it the running prompt; the open turn counts as running too.
@@ -1157,11 +1293,14 @@ export class GrokHost implements EngineAdapter {
   close() {
     if (this.#closing) return;
     this.#closing = true;
+    this.#options.intake?.close();
+    this.#removeAttachments();
     this.#lifetime.abort();
     clearTimeout(this.#timer);
     clearTimeout(this.#abortTimer);
     this.#signal?.abort();
     for (const turn of this.#queue.splice(0)) {
+      if (!this.#reportsUnrun(turn)) continue;
       turn.reject(new Error("grok host is closed"));
       this.#options.onTurnEnd?.({
         turnToken: turn.token,

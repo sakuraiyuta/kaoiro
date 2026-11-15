@@ -18,10 +18,12 @@
     "test": "python3 ../../scripts/run-grok-test-namespace.py -- vitest run"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.8.0",
     "@kaoiro/agent-common": "workspace:*",
     "@kaoiro/wrapper-core": "workspace:*",
-    "@agentclientprotocol/sdk": "1.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "fflate": "^0.8.3",
+    "officeparser": "^7.2.2",
     "zod": "^3.25.0"
   },
   "devDependencies": {

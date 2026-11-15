@@ -30,6 +30,7 @@ const MAX_GROUPS = 10_000;
 const MAX_GROUP_NAME_BYTES = 255;
 // A session id is a path component: letters, digits and hyphens only.
 const SESSION_ID = /^[A-Za-z0-9-]{1,128}$/;
+const ATTACHMENT_CHUNKS: ReadonlySet<string> = new Set(["image", "resource", "resource_link"]);
 
 export type SkipReason =
   | "invalid_json"
@@ -239,6 +240,9 @@ export function reconstructHistory(
         case "user_message_chunk":
         case "agent_message_chunk": {
           const content = update.content;
+          // An instruction's attachments are recorded as user chunks of their own.
+          if (update.sessionUpdate === "user_message_chunk" && plainObject(content) &&
+            ATTACHMENT_CHUNKS.has(content.type as string)) break;
           if (!plainObject(content) || content.type !== "text" || typeof content.text !== "string") {
             skip("invalid_chunk");
             break;

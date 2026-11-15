@@ -601,7 +601,7 @@ describe("resident ACP host", () => {
       "unsupported",
     );
     await expect(host.send("image", ["attachment"])).rejects.toThrow(
-      "unsupported",
+      "must be staged",
     );
     expect(host.state).toBe("waiting_input");
   });

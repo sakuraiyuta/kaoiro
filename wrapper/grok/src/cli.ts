@@ -38,6 +38,7 @@ import { GrokHost, type GrokHostOptions } from "./host.js";
 import type { GrokWireMetadata } from "./grok/wire.js";
 import { GrokLaunchError } from "./grok/errors.js";
 import { readGrokHistory } from "./history.js";
+import { UploadIntake, type StagedRecord } from "./upload.js";
 
 /** Upper bound on the operator's answer to a `request_session_reset` call.
  *  Grok waited a blocked kaoiro MCP call for the full 600 s in one measured
@@ -92,6 +93,8 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
   const deliveries = new Map<string, Envelope[]>();
   const send = (envelope: Envelope) => link?.send(envelope);
   const cwd = dependencies.cwd ?? process.cwd();
+  // attach_* can arrive before the host exists.
+  const intake = new UploadIntake({ config, send, state: () => host?.state ?? "idle" });
   // ADR-0051 D2. Built before the link: the join reply, and with it the
   // hydration verdict, can land before the host exists, so the replayer holds
   // the verdict until markReady().
@@ -275,17 +278,26 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     onPersonaPrompt: resolvePersona,
     onHydration: (verdict: Parameters<HistoryReplayer["onVerdict"]>[0]) => replayer.onVerdict(verdict),
     onInstruction: (text: string, attachments?: string[]) => {
+      // Staged at arrival, so an interrupt drops the instruction wherever it
+      // waits; a refused one is not chained.
+      let record: StagedRecord | undefined;
+      if (attachments?.length) {
+        record = intake.stage(attachments);
+        if (!record) return;
+      }
       chain = chain
         .then(async () => {
           await hostReady;
-          await host!.send(text, attachments);
+          await host!.send(text, record);
         })
         .catch((error: unknown) => {
           if (error instanceof PermissionSyncTimeoutError) return;
-          if (attachments?.length) controlFailure("attachment input");
-          else turnFailure();
+          turnFailure();
         });
     },
+    onAttachOpen: (meta) => intake.attachOpen(meta),
+    onAttachChunk: (payload) => intake.attachChunk(payload),
+    onAttachClose: (uploadId) => intake.attachClose(uploadId),
     onPermissionDecision: (
       decision: Parameters<PermissionBroker["resolve"]>[0],
     ) => permission.resolve(decision),
@@ -295,7 +307,8 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     onQuestionResponse: (answer: Parameters<QuestionBroker["resolve"]>[0]) =>
       question.resolve(answer),
     onInterrupt: () => {
-      void host?.interrupt().catch(() => host?.close());
+      if (host) void host.interrupt().catch(() => host?.close());
+      else intake.interrupt();
     },
     onSetModel: (value: string) => {
       if (host) void host.setModel(value).catch(() => controlFailure("model switching", "failed"));
@@ -386,6 +399,7 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
         waitForPermissionSync: () => link?.waitForPermissionSync?.() ?? Promise.resolve(),
         onPermissionLifecycle: (event: WrapperPermissionLifecycleMessage) => link?.reportPermissionLifecycle(event),
         cwd,
+        intake,
         personaPrompt: rules,
         ...(args.resume ? { resumeSessionId: args.resume } : {}),
         ...(config.resume_snapshot ? { resumeSnapshot: config.resume_snapshot } : {}),
@@ -486,6 +500,8 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     question.close();
     permission.close();
     interAgent.close();
+    // Also when the host never started; idempotent after host.close().
+    intake.close();
     host?.close();
     await host?.closed;
     try {

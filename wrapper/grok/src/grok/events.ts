@@ -58,6 +58,18 @@ export function turnCompletion(
   return undefined;
 }
 
+/** The notes of an `image_dropped` update for the current session: Grok
+ *  drops an image with a side under 8 pixels or under 512 pixels in all. */
+export function imageDroppedNotes(
+  params: Record<string, unknown>,
+  currentSessionId: string | undefined,
+): string[] {
+  const update = params.update as Record<string, unknown> | null | undefined;
+  if (typeof params.sessionId !== "string" || params.sessionId !== currentSessionId ||
+    update?.sessionUpdate !== "image_dropped" || !Array.isArray(update.notes)) return [];
+  return update.notes.filter((note): note is string => typeof note === "string");
+}
+
 /** The prompt id Grok puts in a `session/update` `_meta`, if any. */
 export function updatePromptId(notification: SessionNotification): string | undefined {
   const id = (notification._meta as Record<string, unknown> | null | undefined)?.promptId;
