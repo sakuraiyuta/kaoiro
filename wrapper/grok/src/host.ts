@@ -108,6 +108,9 @@ export interface GrokHostOptions {
     turnToken: string;
     conversationIds: string[];
     error?: { detail: string; reason?: string };
+    /** Present for a turn that was sent to Grok. `authoritative` only when
+     *  Grok answered the prompt with a stop reason other than `cancelled`. */
+    settled?: { authoritative: boolean; why?: string };
   }) => void;
 }
 /** Grok connects to the MCP server within about a second of session/new
@@ -284,7 +287,8 @@ export class GrokHost implements EngineAdapter {
         supports_permission_mode_switch: false,
         supports_attachments: false,
         supports_user_input_dialog: true,
-        supports_session_reset: false,
+        supports_session_reset: true,
+        session_reset_modes: ["new", "clear"],
         supports_context_usage: this.#switchable,
         permission_switch_axes: switching ? { sandbox: { max: pair.sandbox }, network_access: { max: pair.network_access } } : {},
       },
@@ -715,7 +719,9 @@ export class GrokHost implements EngineAdapter {
       while (!this.#closing) {
         // An empty queue is an idle boundary: send what the operator chose.
         if (!this.#queue.length) {
-          if (!await this.#applyPending()) break;
+          // A send() during this await saw #draining and did not start a
+          // pass, so its turn is picked up here or it would wait for the next.
+          if (!await this.#applyPending() && !this.#queue.length) break;
           continue;
         }
         const turn = this.#queue[0]!;
@@ -793,6 +799,10 @@ export class GrokHost implements EngineAdapter {
     this.#progress();
     let error: Error | undefined;
     let permissionRejected = false;
+    let settled: { authoritative: boolean; why?: string } = {
+      authoritative: false,
+      why: "the turn failed",
+    };
     try {
       const response = await this.#current!.session.prompt(turn.text);
       this.#observe(submission, promptIdOf(response._meta));
@@ -811,6 +821,9 @@ export class GrokHost implements EngineAdapter {
         this.#options.recovery?.confirm(this.#sessionId);
         if (this.#options.recovery?.failure) return;
       }
+      settled = interrupted
+        ? { authoritative: false, why: "the turn was interrupted" }
+        : { authoritative: true };
       this.#event({
         kind: "result",
         subtype: rejected ? "error_during_execution" : "success",
@@ -834,6 +847,11 @@ export class GrokHost implements EngineAdapter {
       turn.resolve();
     } catch (cause) {
       error = cause instanceof Error ? cause : new Error("grok turn failed");
+      if (permissionRejected)
+        settled = {
+          authoritative: false,
+          why: "a permission request in the turn was rejected",
+        };
       if (this.#permissions.current?.submission.execution_id === submission.execution_id &&
         this.#permissions.current.status === "applying") this.#observe(submission, undefined);
       this.#flushAssistantLog();
@@ -858,6 +876,9 @@ export class GrokHost implements EngineAdapter {
         turnToken: turn.token,
         conversationIds: turn.conversations,
         ...(error ? { error: { detail: "grok turn failed" } } : {}),
+        settled: this.#closing
+          ? { authoritative: false, why: "the wrapper is shutting down" }
+          : settled,
       });
       if (!this.#closing) this.#state("waiting_input");
       const generation = this.#current;

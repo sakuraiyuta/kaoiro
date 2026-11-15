@@ -674,6 +674,42 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           finish(msg.id, JSON.stringify(result));
           break;
         }
+        // reset:<mode>:<end> calls request_session_reset, then ends the turn
+        // with end_turn, cancelled or a JSON-RPC error.
+        const reset = /^reset:(new|clear):(end|cancel|fail)$/.exec(text);
+        if (reset) {
+          await connecting;
+          const result = await client.callTool({
+            name: "request_session_reset",
+            arguments: { mode: reset[1], reason: "fixture reset" },
+          });
+          if (prompt !== msg.id) break;
+          if (reset[2] === "fail") {
+            process.stdout.write(JSON.stringify({
+              jsonrpc: "2.0", id: msg.id,
+              error: { code: -32603, message: "fixture turn failure" },
+            }) + "\n");
+            prompt = undefined;
+          } else if (reset[2] === "cancel") {
+            finish(msg.id, JSON.stringify(result), "cancelled", "MidTurnAbort");
+          } else finish(msg.id, JSON.stringify(result));
+          break;
+        }
+        // reset-late calls request_session_reset after its turn has ended.
+        if (text === "reset-late") {
+          finish(msg.id, "");
+          await connecting;
+          setTimeout(() => {
+            void client.callTool({
+              name: "request_session_reset",
+              arguments: { mode: "new" },
+            }).then((result) => record("late-reset", {
+              isError: result.isError === true,
+              text: result.content?.[0]?.text ?? "",
+            }));
+          }, 100);
+          break;
+        }
         if (text.startsWith("[Inter-agent message")) {
           if (process.env.KAOIRO_TEST_GROK_FAIL_PEER === "1") process.exit(9);
           const match = /conversation_id="([^"]+)"/.exec(text);

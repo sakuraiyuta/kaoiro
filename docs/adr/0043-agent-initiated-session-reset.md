@@ -140,6 +140,21 @@ turn-bound reservation and server checks. Claude is unchanged; Antigravity
 continues to ask on every reset. Codex compaction registration is separate
 ([issue #662](https://github.com/sakuraiyuta/kaoiro/issues/662)).
 
+### D4 Addendum (2026-11-15 — Grok asks on every reset, with a bound)
+
+[Issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658) registers
+`request_session_reset` on Grok behind the same wrapper-side gate. Like
+Antigravity, Grok asks the broker on every call: its approval axis is a fixed
+`on-request` projection, so no setting allows an autonomous reset. Grok did
+not ask before kaoiro MCP calls on the measured host configuration, so the
+gate is the only approval. The wait is bounded at 300 s, or at
+`permission_timeout_ms` when that is shorter, and a timeout denies: Grok
+waited for a blocked kaoiro MCP call for the full 600 s in one measured run,
+and its own timeout is unmeasured, so the wrapper answers first. The
+reservation is sent only when the reserving turn's prompt returns with a stop
+reason other than `cancelled`. See the
+[Grok engine reference](../reference/engines/grok-acp.md#session-reset).
+
 ### D5 — Do not mechanize handoff; encourage externalization in the tool description
 
 Do not create a mechanism that stores a handoff summary before reset in the
