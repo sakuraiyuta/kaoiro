@@ -23,6 +23,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServerWeb.PeerConnectivity
   alias KaoiroServer.WorkStore
 
+  test "late hosts payload cannot restore an older host snapshot" do
+    register_host("old-host")
+    _operator = join_as(:operator)
+    assert_push "hosts", %{"hosts" => old}
+    register_host("new-host")
+
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => old})
+    assert_push "hosts", %{"hosts" => current}
+    assert Map.has_key?(current, "new-host")
+  end
+
   @tag :tmp_dir
   test "watcher refreshes connected hosts and rejects stale host payloads", %{tmp_dir: tmp} do
     alias KaoiroServer.{PersonaAssets, PersonaPackFixture, PersonaWatcher}
