@@ -1,6 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -8,12 +8,14 @@ import type { ServerLink, ServerLinkOptions } from "@kaoiro/wrapper-core";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runGrokCli } from "../src/cli.js";
 import { GrokHost } from "../src/host.js";
+import { sessionDirectory } from "../src/history.js";
 import { childEnvironment, parsePermissionPolicy } from "../src/grok/policy.js";
 import type { GrokWireMetadata as WireMetadata } from "../src/grok/wire.js";
 import { checkToolRoundTrip, type ToolEvidence } from "./acceptance.js";
 import {
   answerPermissions,
   allowedByRule,
+  classifyMissingSend,
   liveEnv,
   liveExecutable,
   type PermissionDecisionRecord,
@@ -57,6 +59,7 @@ it.skipIf(!live)(
     const decisions: PermissionDecisionRecord[] = [];
     let callbacks!: ServerLinkOptions;
     let probe!: Promise<void>;
+    let sessionId: string | undefined;
     const startedAt = Date.now();
     try {
       const run = runGrokCli({
@@ -81,7 +84,9 @@ it.skipIf(!live)(
               answerPermissions(e, options,
                 (payload) => allowedByRule(payload, rule), decisions);
             },
-            setSessionId: () => {},
+            setSessionId: (id: string) => {
+              sessionId = id;
+            },
             requestDirectory: async () => ({
               agents: [
                 {
@@ -181,7 +186,12 @@ it.skipIf(!live)(
               expect(envelopes.some((e) => e.state === "tool_running")).toBe(
                 true,
               );
-              await host.send("No tools. Reply with the remembered name.");
+              // Scoped to this turn: the next turn asks for a tool call, and an
+              // unscoped "No tools." was given by Grok's auto mode as the reason
+              // to refuse it (issue #1123).
+              await host.send(
+                "For this reply only, use no tools: reply with the remembered name.",
+              );
               expect(
                 envelopes.filter((e) => e.type === "result").at(-1)?.payload
                   .text,
@@ -216,10 +226,33 @@ it.skipIf(!live)(
                 },
                 ext: {},
               } as Envelope);
-              await vi.waitFor(
-                () => expect(outbound.length).toBeGreaterThan(start),
-                { timeout: 120_000 },
-              );
+              try {
+                await vi.waitFor(
+                  () => expect(outbound.length).toBeGreaterThan(start),
+                  { timeout: 120_000 },
+                );
+              } catch (error) {
+                const directory =
+                  sessionId && sessionDirectory(dir, sessionId, liveEnv(rule));
+                let updates: string | undefined;
+                try {
+                  updates = directory
+                    ? readFileSync(join(directory, "updates.jsonl"), "utf8")
+                    : undefined;
+                } catch {
+                  updates = undefined;
+                }
+                const missing = classifyMissingSend({
+                  toolRan: calls.some((call) => call.name === "send_to_agent"),
+                  updates,
+                });
+                if (missing.verdict !== "indeterminate") throw error;
+                throw new Error(
+                  "INDETERMINATE: Grok's auto mode refused the requested " +
+                    "send_to_agent before it ran; rerun in a new session " +
+                    `(issue #1123). Refusal: ${missing.refusals[0]?.slice(0, 500)}`,
+                );
+              }
               await vi.waitFor(() => expect(host.state).toBe("waiting_input"), {
                 timeout: 120_000,
               });
