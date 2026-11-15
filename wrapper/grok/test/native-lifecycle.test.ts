@@ -11,8 +11,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import type { WrapperConfig } from "@kaoiro/agent-common";
-import { nativeRun } from "./native-support.js";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { nativeRun, type PermissionDecisionRecord } from "./native-support.js";
 import * as grokEvents from "../src/grok/events.js";
 import { checkForegroundTool } from "./acceptance.js";
 
@@ -253,4 +253,99 @@ await runGrokCli({
     }
   },
   180_000,
+);
+// Turns Grok starts on its own (issue 1128). The live plugin asks for every
+// command carrying the marker and the rule would allow them, so only the
+// wrapper's ownership check keeps the self-started command from the operator.
+const SELF_STARTED = "Grok started a turn on its own";
+const OWN_TURN_ENDED = "Grok's own turn ended";
+function systemTexts(envelopes: Envelope[]) {
+  return envelopes.filter((e) => e.type === "log" && e.payload.kind === "system")
+    .map((e) => String(e.payload.text));
+}
+function askedCommands(envelopes: Envelope[]) {
+  return envelopes.filter((e) => e.type === "permission_request")
+    .map((e) => String((e.payload.input as Record<string, unknown> | undefined)?.command ?? ""));
+}
+it.skipIf(!live)(
+  "native self-started turn: its permission never reaches the operator's next turn",
+  async () => {
+    const root = mkdtempSync(join(homedir(), ".kaoiro-grok-1128-"));
+    const marker = "KAOIRO1128LIVE";
+    const decisions: PermissionDecisionRecord[] = [];
+    try {
+      await nativeRun(config, root, async (host, _link, envelopes) => {
+        await vi.waitFor(() => expect(host.state).toBe("waiting_input"), { timeout: 40_000 });
+        await host.send(
+          `Start \`sleep 6 # ${marker}\` with run_terminal_command as a background task ` +
+            "(is_background true) and do not wait for it. When that background task finishes, " +
+            `run \`printf done-${marker}\` with run_terminal_command.`,
+        );
+        // Positive control: the own marker command did ask the operator.
+        expect(askedCommands(envelopes).some((c) => c.startsWith("sleep 6"))).toBe(true);
+        await vi.waitFor(() => expect(systemTexts(envelopes).some((t) => t.startsWith(SELF_STARTED)))
+          .toBe(true), { timeout: 60_000 });
+        // A turn sent one microtask after the previous one ends is never
+        // dispatched; that race in the drain loop predates this test.
+        await delay(100);
+        const from = envelopes.length;
+        await host.send("What is 2 + 2? Answer in one short sentence and use no tools.");
+        await vi.waitFor(() => expect(systemTexts(envelopes)).toContain(OWN_TURN_ENDED), { timeout: 60_000 });
+        expect(askedCommands(envelopes).filter((c) => c.includes("printf done-"))).toEqual([]);
+        const result = envelopes.slice(from).filter((e) => e.type === "result").at(-1);
+        const opened = envelopes.findIndex((e) => e.type === "log" && e.payload.kind === "system" &&
+          String(e.payload.text).startsWith(SELF_STARTED));
+        const closed = envelopes.findIndex((e) => e.type === "log" && e.payload.kind === "system" &&
+          e.payload.text === OWN_TURN_ENDED);
+        for (const log of envelopes.slice(opened, closed)) {
+          if (log.type === "log" && log.payload.kind === "assistant" && String(log.payload.text).length > 8)
+            expect(String(result?.payload.text)).not.toContain(String(log.payload.text));
+        }
+        if (process.env.KAOIRO_LIVE_GROK_1128_REPORT)
+          writeFileSync(process.env.KAOIRO_LIVE_GROK_1128_REPORT, JSON.stringify({
+            asked: askedCommands(envelopes), system: systemTexts(envelopes), result: result?.payload,
+            decisions,
+          }, null, 1));
+      }, undefined, { rule: { marker }, decisions });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+  240_000,
+);
+it.skipIf(!live)(
+  "native interrupt while the own prompt waits behind a self-started turn does not close the agent",
+  async () => {
+    const root = mkdtempSync(join(homedir(), ".kaoiro-grok-1128i-"));
+    const marker = "KAOIRO1128LIVE";
+    try {
+      await nativeRun(config, root, async (host, _link, envelopes) => {
+        await vi.waitFor(() => expect(host.state).toBe("waiting_input"), { timeout: 40_000 });
+        await host.send(
+          `Start \`sleep 6 # ${marker}\` with run_terminal_command as a background task ` +
+            "(is_background true) and do not wait for it. Then reply 'started'.",
+        );
+        await vi.waitFor(() => expect(systemTexts(envelopes).some((t) => t.startsWith(SELF_STARTED)))
+          .toBe(true), { timeout: 60_000 });
+        const grokPid = host.processId;
+        const from = envelopes.length;
+        const waiting = host.send("Count slowly from one to twenty, one number per line.");
+        void waiting.catch(() => {});
+        await delay(300);
+        const startedAt = Date.now();
+        await host.interrupt();
+        await waiting;
+        expect(Date.now() - startedAt).toBeLessThan(15_000);
+        expect(envelopes.slice(from).filter((e) => e.type === "result").at(-1)?.ext)
+          .toMatchObject({ stop_reason: "cancelled", interrupted: true });
+        await delay(3_500);
+        expect(host.processId).toBe(grokPid);
+        await host.send("Reply with the single word OK and use no tools.");
+        expect(envelopes.filter((e) => e.type === "result").at(-1)?.payload.is_error).toBe(false);
+      }, undefined, { rule: { marker } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+  240_000,
 );

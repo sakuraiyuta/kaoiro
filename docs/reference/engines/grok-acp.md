@@ -2,7 +2,7 @@
 title: Grok Build ACP engine
 description: Resident ACP host, tools, permissions and unsupported operations.
 status: accepted
-last_updated: 2026-10-18
+last_updated: 2026-11-15
 ---
 
 # Grok Build ACP engine
@@ -452,6 +452,11 @@ on the new model, and an effort change keeps it. The reading is also
 withdrawn, with a stderr line, when the prompt result's `_meta.modelId`
 differs from the selected model.
 
+A turn Grok starts on its own publishes its reading when its
+`turn_completed` arrives; a reading is counted only for the prompt that was
+running when it was taken (see
+[Turns Grok starts on its own](#turns-grok-starts-on-its-own)).
+
 Limit: the TUI's `/context-window` can change the window of a session's model
 and ACP does not expose it, so such a session shows the default window.
 
@@ -530,6 +535,47 @@ See the [dated rate-limit evidence](../../evidence/grok/2026-10-15-rate-limits.m
 
 These are reference notes; no upstream report is part of this work.
 
+## Turns Grok starts on its own
+
+Grok starts prompts without input from kaoiro, for example
+`task-completed-<taskId>` when a background task ends, `notifications-<id>`,
+and `interject-fallback-<id>`. Input sent meanwhile waits in Grok's queue.
+The wrapper owns a prompt only by its id:
+
+- Every `session/prompt` carries `_meta.promptId: "kaoiro-<uuid>"`, and Grok
+  uses that id for the prompt's queue entry, updates, `turn_completed` and
+  response. Only the id of the turn in flight is own; every other prompt is
+  foreign. If a response carries another id, the wrapper writes one stderr
+  line and keeps the turn's updates unattributed.
+- A `session/update` belongs to its `_meta.promptId`; one without it belongs
+  to the prompt `_x.ai/queue/changed` last reported as running, else to none.
+- A permission request carries no prompt id. It is the operator's only when
+  a `tool_call` update with the same `toolCallId` and an own
+  `_meta.promptId` arrived first. A call recorded under two prompts stays
+  ownerless, and a refused call is never allowed later.
+
+A foreign prompt that `_x.ai/queue/changed` reports as running is shown as
+logs: a `system` line `Grok started a turn on its own (<reason>)`, its
+assistant text and tool calls, and `Grok's own turn ended`. It never enters a
+kaoiro turn's result, events or state, and starts or ends no kaoiro turn. Its
+permission requests, and any request whose call has no own `tool_call`, are
+answered `cancelled` without a `permission_request` envelope and logged as a
+`system` line. A tool that needs no permission can still run in such a turn.
+
+An operator turn queued behind a foreign one stays active; the foreign
+updates keep its inactivity timer alive. `session/cancel` stops only the
+running prompt, so an interrupt while the own prompt waits cancels the
+foreign turn and cancels again when `_x.ai/queue/changed` reports the own
+prompt as running; the abort timer starts with that second cancel. With no
+operator turn active, an interrupt cancels a running foreign turn and starts
+no timer.
+
+What is not guaranteed: that a self-started turn calls no tool, and that it
+asks for no permission; both depend on the model and on the prompt that
+started the background work. Measured on Grok Build 1.0.52; see the
+[dated evidence](../../evidence/grok/2026-11-15-self-started-turns.md) and
+[issue #1128](https://github.com/sakuraiyuta/kaoiro/issues/1128).
+
 ## Cancellation and background tasks
 
 On Grok Build 1.0.52, `session/cancel` ends the turn with `cancelled` and
@@ -543,6 +589,9 @@ after cancel. Close and wrapper SIGTERM remove active tool children.
 The wrapper preserves the resident session and does not discover or kill
 tool PGIDs. Background survival is recorded as a vendor behavior; tests do
 not assert it because the model chooses whether to background a task.
+When the own prompt waits behind a turn Grok started on its own, an
+interrupt follows
+[Turns Grok starts on its own](#turns-grok-starts-on-its-own).
 Per-task cancellation through `_x.ai/task/kill` is tracked in
 [issue #594](https://github.com/sakuraiyuta/kaoiro/issues/594).
 See the [dated evidence](../../evidence/grok/2026-10-14-premises.md).
