@@ -2,7 +2,7 @@
 title: Attachment rendering by engine
 description: Per-engine SDK content-block mapping and fit-to-SDK size/limit handling for attachments.
 status: accepted
-last_updated: 2026-10-08
+last_updated: 2026-11-15
 related: [protocol, adapter-contract]
 ---
 
@@ -29,8 +29,17 @@ The table above is the policy of the Claude Code adapter
 policy; the **Codex adapter (`wrapper/codex/src/upload.ts`) accepts images
 only**. It advertises `attachment_types: ["image"]` in
 `ext.session_capabilities`, and restricts the UI picker / paste / drop to
-images accordingly ([plugin-model](../protocol/capabilities.md)). Protocol limits (128 MB /
-20 in flight / five-minute TTL) are common to both engines.
+images accordingly ([plugin-model](../protocol/capabilities.md)). The **Grok
+adapter (`wrapper/grok/src/upload.ts`)** accepts all four kinds with no
+`attachment_types`: images as ACP `image` blocks, text and code and Office
+text (the same officeparser extraction and zip-bomb guard) as `resource`
+blocks with `text`, and PDFs as a `resource_link` to a wrapper-private file
+written when the turn starts (the issue 1143 addendum to ADR-0025 F3). It
+does not fit images or PDFs; its total limit is 33,488,896 bytes of
+serialized blocks (the issue 1143 addendum to F10). See the
+[Grok engine reference](grok-acp.md#prompt-content-blocks-and-attachments).
+Protocol limits (128 MB / 20 in flight / five-minute TTL) are common to every
+engine.
 
 ### Fit-to-SDK
 

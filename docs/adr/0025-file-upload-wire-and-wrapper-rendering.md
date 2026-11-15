@@ -65,6 +65,10 @@ Codex SDK 0.144.1 accepts image input only as a path through a `local_image` blo
 
 Always delete the file and directory when a turn completes, including success, failure, and interrupt. Leave cleanup failures loudly as stderr warnings, and recover them with a prefix-scoped sweep at the next startup. F11’s interrupt-drop semantics include this temporary-file cleanup. This is a limited acceptance based on the fact that the SDK accepts only path input and that the conversation itself is already persisted to disk by the SDK rollout; the maintainer approved it on 2026-07-23.
 
+#### #1143 addendum (2026-11-15, operator approval): Grok PDF `resource_link` exception
+
+Grok Build 1.0.52 reaches a PDF only through a file on disk. An embedded `blob` is written by Grok itself, `0664` under a per-process directory that its descendants share through `TMPDIR`, and kept after Grok exits; a `resource_link` to a file the client wrote reaches the model through `read_file` ([measurements](../evidence/grok/2026-11-15-attachment-delivery-routes.md)). Therefore, only in the Grok wrapper and only for PDFs, keep the bytes in memory until the turn starts, then write them into a wrapper-private temporary directory and send a `resource_link`, under the Codex addendum's conditions: `mkdtemp` (0700), files 0600, the full SHA-256 of `agent_id` in the prefix, removal when the turn ends (success, failure, interrupt) and at once on shutdown, stderr warnings for cleanup failures, and a prefix-scoped sweep at the next startup. An instruction that has not started has no file, and F11 drops it from memory. The operator approved this on 2026-11-15 ([issue #1143](https://github.com/sakuraiyuta/kaoiro/issues/1143)).
+
 ### F4: Per-file limit = uniformly 128 MB
 
 Accept diverse inputs—UI screenshots, design data, large papers, and so on—“up to the resource limit.” F10 (fit-to-SDK) absorbs the gap from the SDK’s hard limits.
@@ -126,6 +130,10 @@ Absorb the gap between the 128 MB protocol limit and the SDK hard limits (image 
 Reject totals over 32 MB with `instruction_rejected{reason="total_request_over"}`. Reject individually impossible items with F9’s dedicated reasons (`unfittable_image` / `unfittable_pdf` / `text_too_large`). See [attachment rendering by engine](../reference/engines/attachment-rendering.md#fit-to-sdk) for the table.
 
 Practical use of a single file over 32 MB is possible through the Files API path (reference a `file_id`, up to 500 MB per file). The adoption decision is Q9 ([file-upload-files-api-route](../open-questions/file-upload-files-api-route.md)).
+
+#### #1143 addendum (2026-11-15, operator approval): the Grok total limit
+
+The Grok adapter refuses an instruction whose ACP prompt blocks serialize to more than 33,488,896 bytes (32 MiB less 64 KiB) with `total_request_over`. Grok repeats a prompt's text blocks in `_x.ai/queue/changed`, and the ACP SDK closes the connection on an incoming message over 32 MiB; the 64 KiB covers that envelope. A PDF counts as its `resource_link`. Grok re-encodes large images itself, so the adapter neither downsizes images nor extracts PDF pages; Office text and text truncation follow the Claude Code adapter. See the [Grok engine reference](../reference/engines/grok-acp.md#size-limit).
 
 Rejected: only “return the SDK rejection as-is”—the gap between the 128 MB cap and the SDK’s smaller limits would break the UX.
 
