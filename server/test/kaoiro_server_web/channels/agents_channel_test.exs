@@ -66,11 +66,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert Enum.map(initial["live-refresh"].personas, & &1["id"]) == ["default"]
     {:ok, watcher} = GenServer.start_link(PersonaWatcher, dir: ingest)
     assert :sys.get_state(watcher).watcher != nil
-    on_exit(fn -> if Process.alive?(watcher), do: GenServer.stop(watcher) end)
+    on_exit(fn -> stop_quietly(watcher) end)
 
     pack = PersonaPackFixture.write!(stage, "a.zip", "live-a", "live-a")
     File.cp!(pack.path, Path.join(ingest, "a.zip"))
-    assert_push "hosts", %{"hosts" => added}, 10_000
+    assert_push "hosts", %{"hosts" => added}, TestTimeouts.file_event(1_000)
     assert Enum.any?(added["live-refresh"].personas, &(&1["id"] == "live-a"))
 
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => initial})
@@ -79,28 +79,32 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     second = PersonaPackFixture.write!(stage, "b.tmp", "live-b", "live-b")
     File.rename!(second.path, Path.join(ingest, "b.zip"))
-    assert_push "hosts", %{"hosts" => renamed}, 10_000
+    assert_push "hosts", %{"hosts" => renamed}, TestTimeouts.file_event(1_000)
     assert Enum.any?(renamed["live-refresh"].personas, &(&1["id"] == "live-b"))
     File.touch!(Path.join(ingest, "b.zip"))
-    assert_push "hosts", %{"hosts" => touched}, 10_000
+    assert_push "hosts", %{"hosts" => touched}, TestTimeouts.file_event(1_000)
     assert touched == renamed
 
     replacement =
       PersonaPackFixture.write!(stage, "replacement.tmp", "live-b", "live-b", name: "New name")
 
     File.rename!(replacement.path, Path.join(ingest, "b.zip"))
-    assert_push "hosts", %{"hosts" => replaced}, 10_000
+    assert_push "hosts", %{"hosts" => replaced}, TestTimeouts.file_event(1_000)
     assert Enum.any?(replaced["live-refresh"].personas, &(&1["name"] == "New name"))
 
     duplicate = PersonaPackFixture.write!(stage, "duplicate.tmp", "live-c", "live-b")
     File.rename!(duplicate.path, Path.join(ingest, "c.zip"))
-    assert_push "hosts", %{"hosts" => _, "ingest_warnings" => [warning]}, 10_000
+
+    assert_push "hosts",
+                %{"hosts" => _, "ingest_warnings" => [warning]},
+                TestTimeouts.file_event(1_000)
+
     assert warning =~ "live-c"
     File.rm!(Path.join(ingest, "c.zip"))
-    assert_push "hosts", %{"ingest_warnings" => []}, 10_000
+    assert_push "hosts", %{"ingest_warnings" => []}, TestTimeouts.file_event(1_000)
 
     File.rm!(Path.join(ingest, "a.zip"))
-    assert_push "hosts", %{"hosts" => removed}, 10_000
+    assert_push "hosts", %{"hosts" => removed}, TestTimeouts.file_event(1_000)
     refute Enum.any?(removed["live-refresh"].personas, &(&1["id"] == "live-a"))
 
     bad_cache = Path.join(tmp, "not-a-directory")
@@ -117,7 +121,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert_push "snapshot", %{}
     @endpoint.subscribe("agents:lobby")
     File.touch!(Path.join(ingest, "b.zip"))
-    assert_receive %Phoenix.Socket.Broadcast{event: "hosts"}, 10_000
+    assert_receive %Phoenix.Socket.Broadcast{event: "hosts"}, TestTimeouts.file_event(1_000)
     refute_push "hosts", %{}, 1_000
   end
 
