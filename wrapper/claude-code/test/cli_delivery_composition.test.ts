@@ -511,6 +511,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     { name: "receipt chain expires", eligibility: null, claim: "chain expires", reason: "receipt_wait_timeout", cuts: 0 },
     { name: "transfer after claim", eligibility: null, claim: "transfer", reason: undefined, cuts: 1 },
     { name: "granted claim waits for prior receipt", eligibility: null, claim: "pending", reason: undefined, cuts: 1 },
+    { name: "successor yield after reserved downgrade", eligibility: null,
+      claim: "successor", reason: undefined, cuts: 1 },
     { name: "owner ends during MCP wait", eligibility: null,
       claim: "mcp owner ends", reason: "no_work_input", cuts: 0 },
     { name: "owner ends during receipt wait", eligibility: null,
@@ -528,7 +530,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     let releaseReceipt!: (value: boolean) => void;
     let receiptPending = scenario.claim === "pending" || scenario.claim === "chain timeout" || scenario.claim === "chain expires";
     let sameContext = true;
-    let owner = "T";
+    let owner = "T", reserved = false;
     if (scenario.claim === "receipt owner ends") receiptPending = true;
     const receiptWaitTimeouts: number[] = [];
     const receiptResolved = new Promise<boolean>(resolve => {
@@ -572,8 +574,11 @@ describe("Claude CLI delivery composition (issue #247)", () => {
           else if (text.startsWith("Work notice:")) deliveredNotices.push(text);
         },
         activeInterAgentTurnToken: () => owner,
-        canPushLiveInput: () => true, canFoldLiveInput: () => false,
-        reserveYieldCut: () => ({}), releaseYieldCut: () => {},
+        canPushLiveInput: (cap?: unknown) => scenario.claim !== "successor" ||
+          !reserved || cap !== undefined, canFoldLiveInput: () => false,
+        reserveYieldCut: () => { reserved = true; return {}; },
+        releaseYieldCut: () => { reserved = false;
+          if (scenario.claim === "successor") sameContext = true; },
         hasRunningMcp: () => scenario.claim === "mcp owner ends",
         waitForMcp: async () => { owner = "operator"; sameContext = false; },
         captureLiveInputContext: () => ({}),
@@ -618,7 +623,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
           scenario.claim === "chain timeout" || scenario.claim === "chain expires" ||
           scenario.claim === "transfer" || scenario.claim === "pending" ||
           scenario.claim === "mcp owner ends" ||
-          scenario.claim === "receipt owner ends") {
+          scenario.claim === "receipt owner ends" ||
+          scenario.claim === "successor") {
         await vi.waitFor(() => expect(claimCalls).toBe(1));
         if (scenario.claim === "changed") eligibility = "mixed_turn";
         else if (scenario.claim === "context changed") sameContext = false;
@@ -626,6 +632,14 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         else if (scenario.claim === "transfer") {
           linkOptions.onWorkNotice({ version: "0", work: { work_id: "W" }, op: "transfer" });
           await vi.waitFor(() => expect(deliveredNotices).toHaveLength(1));
+        }
+        if (scenario.claim === "successor") {
+          const next = inboundEnvelope(2);
+          next.payload.delivery_authority = { requested: "yield", granted: "yield",
+            work_id: "W", authority_epoch: 1, yield_token: "next-token" };
+          await linkOptions.onInterAgentMessage(next);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          sameContext = false;
         }
         resolveClaim({ granted: true });
         if (scenario.claim === "pending") {
@@ -639,7 +653,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       const last = [...dispositions].reverse().find(report => report.yield_disposition !== undefined)!.yield_disposition as { reason?: string };
       expect(last.reason).toBe(scenario.reason);
       expect(pushes.filter(kind => kind === "cut")).toHaveLength(scenario.cuts);
-      expect(claimCalls).toBe(scenario.claim === "none" ? 0 : 1);
+      expect(claimCalls).toBe(scenario.claim === "none" ? 0
+        : scenario.claim === "successor" ? 2 : 1);
       if (scenario.claim === "chain timeout") {
         expect(receiptWaitTimeouts).toHaveLength(2);
         expect(receiptWaitTimeouts[1]!).toBeLessThan(receiptWaitTimeouts[0]! - 15);

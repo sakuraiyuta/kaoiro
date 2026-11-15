@@ -250,3 +250,19 @@ it("close wakes MCP waiters even before their tool result", async () => {
     expect(f.host.hasRunningMcp(cut)).toBe(true);
   } finally { await f.close(); }
 });
+
+it("leaves non-MCP tools and tainted owners outside the fence", async () => {
+  const f = await fixture();
+  try {
+    const cut = f.reserve();
+    const bash = await f.pre("bash", { tool_name: "Bash" });
+    expect(bash.hookSpecificOutput).toBeUndefined();
+    expect(f.host.hasRunningMcp(cut)).toBe(false);
+    f.host.releaseYieldCut(cut);
+    await f.hook("UserPromptSubmit", {
+      prompt: "<task-notification>x</task-notification>" });
+    expect(f.host.canPushLiveInput()).toBe(false);
+    const tainted = await f.pre("mcp");
+    expect(tainted.hookSpecificOutput).toBeUndefined();
+  } finally { await f.close(); }
+});
