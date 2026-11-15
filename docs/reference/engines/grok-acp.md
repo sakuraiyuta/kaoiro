@@ -151,9 +151,11 @@ lists its configuration options (see
 [Context usage](#context-usage)). The dashboard history of a resumed session
 is replayed from Grok's log (see
 [Dashboard history on resume](#dashboard-history-on-resume)). Attachments are
-unsupported. Weekly account allowance reporting is available through
-`rate_limits` (see [Account rate limits](#account-rate-limits)). Unsupported
-controls reject explicitly.
+unsupported (see [Prompt content blocks
+and attachments](#prompt-content-blocks-and-attachments)). Weekly account
+allowance reporting is available through `rate_limits` (see
+[Account rate limits](#account-rate-limits)). Unsupported controls reject
+explicitly.
 
 Session reset is supported (see [Session reset](#session-reset)): the adapter
 advertises `supports_session_reset: true` with `session_reset_modes: ["new",
@@ -214,6 +216,41 @@ Limits, measured on Grok Build 1.0.52
 - Grok's `use_tool` accepts only the qualified name
   (`kaoiro__request_session_reset`); an unqualified call fails inside Grok
   and never reaches the ToolHost.
+
+## Prompt content blocks and attachments
+
+Attachments are unsupported. The adapter advertises
+`supports_attachments: false`, builds every ACP prompt from a single `text`
+block, and rejects a send that carries attachment ids; the wrapper reports the
+rejection as a system log line. The notes below record how Grok Build 1.0.52
+treats the other ACP prompt content blocks. See the
+[content-block measurements][attachment-evidence] for the cases, the stated
+limits and what was not measured.
+
+`initialize` returns `promptCapabilities` `image: false`, `audio: false` and
+`embeddedContext: true`.
+
+- `image`: accepted although `image: false`. PNG, WebP and GIF (sent on as PNG)
+  reached the model as an image; JPEG delivery was not established. Grok
+  states an 8×8 pixel minimum. A smaller image, or bytes it cannot decode, is
+  dropped before the model call: the RPC still succeeds, Grok sends an
+  `image_dropped` update on `_x.ai/session_notification` and adds a notice to
+  the prompt text.
+- `resource` with `text`: the supplied `text` is inlined as attached file
+  contents, also when the URI names no existing file.
+- `resource` with `blob`: not inlined. Grok writes the bytes under a
+  per-process directory in the temp directory and adds a binary-file tag with
+  the path, MIME type and size to the prompt. For a PDF, the measured route to
+  the model was a `read_file` call on that path. In the measured run the files
+  were still present after `grok` received `SIGTERM`.
+- `resource_link`: adds `@<path>` and a referenced-resources reminder, and
+  inlines the content only for an existing text file on disk. Existing images
+  and PDFs, and missing paths, get the reminder alone.
+- `audio`: rejected before any model request, with JSON-RPC error `-32602`
+  (unsupported content block in prompt).
+
+[attachment-evidence]:
+  ../../evidence/grok/2026-11-15-attachment-content-blocks.md
 
 ## Cold resume and session discovery
 
