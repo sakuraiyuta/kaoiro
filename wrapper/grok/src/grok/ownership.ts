@@ -1,3 +1,11 @@
+const RECENT_IDS = 32;
+
+function remember(list: string[], id: string): void {
+  if (list.includes(id)) return;
+  list.push(id);
+  if (list.length > RECENT_IDS) list.shift();
+}
+
 /**
  * Which Grok prompt owns an update, a permission request or a token reading.
  *
@@ -14,6 +22,10 @@ export class PromptOwnership {
   readonly #calls = new Map<string, string | null>();
   readonly #refused = new Set<string>();
   #reading: { prompt: string | undefined; tokens: number } | undefined;
+  // Recent own ids (late updates of a finished own prompt are not foreign)
+  // and recent foreign ids already closed (late updates do not reopen them).
+  readonly #issued: string[] = [];
+  readonly #closed: string[] = [];
 
   /** The id of the operator's prompt in flight, if any. */
   get own(): string | undefined {
@@ -27,6 +39,19 @@ export class PromptOwnership {
 
   begin(id: string): void {
     this.#own = id;
+    remember(this.#issued, id);
+  }
+
+  /**
+   * Whether a prompt with this id is one Grok started on its own and is not
+   * yet closed: not an id this wrapper issued, and not closed before.
+   */
+  isOpenForeign(id: string): boolean {
+    return !this.#issued.includes(id) && !this.#closed.includes(id);
+  }
+
+  closeForeign(id: string): void {
+    remember(this.#closed, id);
   }
 
   end(): void {

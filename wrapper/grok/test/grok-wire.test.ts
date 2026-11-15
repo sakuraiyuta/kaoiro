@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import { connectAcp } from "../src/acp/connection.js";
 import { promptIdOf, turnCompletion } from "../src/grok/events.js";
 import {
+  GROK_QUEUE_CHANGED,
   GROK_SESSION_NOTIFICATION,
   grokExtension,
+  grokPromptMeta,
   grokSessionMeta,
   grokWireFields,
   type GrokWireMetadata,
@@ -95,16 +97,24 @@ describe("grok session meta and extension", () => {
   it("wraps the rules as the session/new _meta value", () => {
     expect(grokSessionMeta("persona")).toEqual({ rules: "persona" });
   });
-  it("registers the _x.ai session notification", () => {
+  it("names the prompt in the session/prompt _meta value", () => {
+    expect(grokPromptMeta("kaoiro-1")).toEqual({ promptId: "kaoiro-1" });
+  });
+  it("registers the _x.ai session and queue notifications", () => {
     const handle = vi.fn();
-    const extension = grokExtension(handle);
+    const queue = vi.fn();
+    const extension = grokExtension(handle, queue);
     expect(extension.notifications?.map((n) => n.method)).toEqual([
       GROK_SESSION_NOTIFICATION,
+      GROK_QUEUE_CHANGED,
     ]);
-    const entry = extension.notifications![0]!;
+    const [entry, queueEntry] = extension.notifications!;
     const payload = { sessionId: "s", update: {} };
-    entry.handle(entry.parse(payload));
+    entry!.handle(entry!.parse(payload));
     expect(handle).toHaveBeenCalledWith(payload);
+    const changed = { sessionId: "s", entries: [], runningPromptId: "p" };
+    queueEntry!.handle(queueEntry!.parse(changed));
+    expect(queue).toHaveBeenCalledWith(changed);
     expect(extension.wireFields).toBe(grokWireFields);
   });
   it("delivers the notification and grok metadata through connectAcp", async () => {

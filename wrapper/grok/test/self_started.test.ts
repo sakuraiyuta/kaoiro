@@ -94,7 +94,7 @@ describe("a turn Grok starts while kaoiro is idle", () => {
       "Refused a permission request from a turn Grok started on its own: foreign tool",
       ENDED,
     ]);
-    expect(t.texts("assistant")).toContain("FOREIGN_TEXT");
+    expect(t.texts("assistant").join("")).toContain("FOREIGN_TEXT");
     expect(t.texts("tool_use")).toContain("foreign tool");
     expect(t.row("foreign-permission-response")?.outcome).toBe("cancelled");
     expect(t.asked).toEqual([]);
@@ -139,7 +139,7 @@ describe("a turn Grok starts while the operator's prompt waits", () => {
       "Refused a permission request from a turn Grok started on its own: foreign tool",
       ENDED,
     ]);
-    expect(t.texts("assistant")).toContain("FOREIGN_TEXT");
+    expect(t.texts("assistant").join("")).toContain("FOREIGN_TEXT");
   });
 
   it("cancels the self-started turn, then the own prompt once it runs, without closing", async () => {

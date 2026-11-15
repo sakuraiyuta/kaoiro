@@ -56,6 +56,11 @@ export function grokWireFields(
   };
 }
 
+/** The `session/prompt` `_meta` that names the prompt. */
+export function grokPromptMeta(promptId: string): Record<string, unknown> {
+  return { promptId };
+}
+
 /** The `session/new` `_meta` that injects persona and footer rules. */
 export function grokSessionMeta(rules: string): Record<string, unknown> {
   return { rules };

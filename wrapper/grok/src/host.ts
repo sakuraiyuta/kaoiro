@@ -50,6 +50,7 @@ import {
 import { PromptOwnership } from "./grok/ownership.js";
 import {
   grokExtension,
+  grokPromptMeta,
   grokSessionMeta,
   type GrokWireMetadata,
 } from "./grok/wire.js";
@@ -813,7 +814,7 @@ export class GrokHost implements EngineAdapter {
     const promptId = `kaoiro-${randomUUID()}`;
     this.#ownership.begin(promptId);
     try {
-      const response = await this.#current!.session.prompt(turn.text, promptId);
+      const response = await this.#current!.session.prompt(turn.text, grokPromptMeta(promptId));
       if (promptIdOf(response._meta) !== promptId)
         writeRedactedStderr("[kaoiro] grok answered under another prompt id; its updates were not attributed to the turn\n");
       this.#observe(submission, promptIdOf(response._meta));
@@ -913,6 +914,10 @@ export class GrokHost implements EngineAdapter {
       this.#ownership.recordToolCall(notification.update.toolCallId, explicit);
     const prompt = this.#ownership.promptOf(explicit);
     if (!this.#ownership.isOwn(prompt)) {
+      // An update can be handled before the queue notification that
+      // announced its prompt, so an explicit foreign id opens the display too.
+      if (explicit !== undefined && explicit !== this.#foreign && this.#ownership.isOpenForeign(explicit))
+        this.#openForeign(explicit);
       if (prompt !== undefined && prompt === this.#foreign) this.#foreignUpdate(notification);
       return;
     }
@@ -968,9 +973,15 @@ export class GrokHost implements EngineAdapter {
     if (text) this.#options.send(makeLog(this.#options.config, this.state, new Date().toISOString(),
       logEntryToPayload({ kind: "assistant", text }, new Map())));
   }
+  #openForeign(id: string) {
+    this.#closeForeign();
+    this.#foreign = id;
+    this.#systemLog(`Grok started a turn on its own (${selfStartedReason(id)})`);
+  }
   #closeForeign() {
     if (this.#foreign === undefined) return;
     this.#flushForeignText();
+    this.#ownership.closeForeign(this.#foreign);
     this.#foreign = undefined;
     this.#systemLog("Grok's own turn ended");
   }
@@ -987,9 +998,8 @@ export class GrokHost implements EngineAdapter {
       }
       return;
     }
-    if (queue.running === this.#foreign) return;
-    this.#foreign = queue.running;
-    this.#systemLog(`Grok started a turn on its own (${selfStartedReason(queue.running)})`);
+    if (queue.running !== this.#foreign && this.#ownership.isOpenForeign(queue.running))
+      this.#openForeign(queue.running);
   }
   // Grok sends the session_start hook after the session/new or session/load
   // response, often while the generation is still loading (issue #633). Its
