@@ -1605,7 +1605,8 @@ export class GrokHost implements EngineAdapter {
     this.#wake?.();
   }
   #reportFailed(selection: Selection, reason: string) {
-    if (selection.revision > 0) this.#options.onPermissionLifecycle?.({ version: "0",
+    if (selection.revision > 0 || reason === "observation_unavailable")
+      this.#options.onPermissionLifecycle?.({ version: "0",
       kind: "permission_failed", at: new Date().toISOString(),
       details: { revision: selection.revision, requested: selection.requested, reason } });
   }
@@ -1621,8 +1622,18 @@ export class GrokHost implements EngineAdapter {
       if (applied.emitAudit) this.#options.onPermissionLifecycle?.({ version: "0",
         kind: "permission_applied", at: new Date().toISOString(), details: observation });
     } else {
+      const previousGate = this.#permissions.gate;
       this.#permissions = permissionObservationFailed(this.#permissions, submission, new Date().toISOString());
       this.#reportFailed(submission, "observation_unavailable");
+      const gate = this.#permissions.gate;
+      if (!this.#closing && previousGate === null &&
+        gate?.status === "blocked" && gate.reason === "observation_unavailable" &&
+        gate.revision === submission.revision) {
+        this.#systemLog("Grok could not confirm the permission outcome. " +
+          "Later turns are held until you select permission again. " +
+          "Resend any instruction that is rejected with permission_gate_blocked; " +
+          "resend the failed turn too if needed.");
+      }
     }
     this.#state(this.state);
   }

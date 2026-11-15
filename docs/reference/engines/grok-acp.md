@@ -563,6 +563,16 @@ after 30 seconds with `permission_gate_blocked` and is not resent. A missing
 observation requires a newer revision; rejoining with the same revision does
 not lift that block.
 
+An unavailable observation emits `permission_failed`, including at launch
+revision 0. Other revision-0 failure reasons retain their audit suppression;
+this baseline reporting rule is specific to Grok. When an observation creates
+an `observation_unavailable` gate, the adapter emits one system log explaining
+that later turns are held until permission is selected again. Instructions
+subsequently rejected with `permission_gate_blocked` must be resent, as must
+the failed turn if needed. Closing the adapter and reconstructing a gate from
+sync/rejoin do not emit that notice. These notifications neither clear the
+gate nor establish an applied permission or rollback.
+
 Every Linux control, including an `off` baseline, has fixed constraints
 `{approval: "on-request", enforcement: "os"}`. These constraints describe the
 adapter, not an observed execution's badge. Off Linux, the adapter requests

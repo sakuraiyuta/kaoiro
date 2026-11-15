@@ -43,6 +43,132 @@ async function started(extra: Partial<GrokHostOptions> = {}) {
   const events = () => readFileSync(path, "utf8").trim().split("\n").map(line => JSON.parse(line));
   return { host, run, envelopes, lifecycle, events, root };
 }
+describe("permission observation failure notices", () => {
+  const notice = "Grok could not confirm the permission outcome. " +
+    "Later turns are held until you select permission again. " +
+    "Resend any instruction that is rejected with permission_gate_blocked; " +
+    "resend the failed turn too if needed.";
+  const notices = (envelopes: Envelope[]) => envelopes.filter(e =>
+    e.type === "log" && e.payload.kind === "system" &&
+    String(e.payload.text).startsWith("Grok could not confirm"));
+
+  it.each([0, 2])("reports revision %s once and keeps dispatch blocked", async revision => {
+    const { host, envelopes, lifecycle, events } = await started();
+    if (revision) await host.setPermission(choose(revision, "workspace-write", true));
+    await expect(host.send("fail-turn")).rejects.toThrow();
+    expect(host.statusExtSnapshot().permission_control).toMatchObject({ status: "unknown" });
+    expect(host.statusExtSnapshot().permission_gate).toMatchObject({
+      status: "blocked", reason: "observation_unavailable", revision,
+    });
+    expect(lifecycle.filter(e => e.kind === "permission_failed")).toEqual([
+      expect.objectContaining({ details: { revision,
+        requested: { sandbox: "workspace-write", network_access: true },
+        reason: "observation_unavailable" } }),
+    ]);
+    expect(notices(envelopes).map(e => e.payload.text)).toEqual([notice]);
+    for (const text of ["blocked-one", "blocked-two"]) {
+      await expect(host.send(text)).rejects.toThrow("permission_gate_blocked");
+      expect(notices(envelopes)).toHaveLength(1);
+    }
+    expect(events().filter(e => e.event === "session/prompt")).toHaveLength(1);
+    const selection = choose(revision, "workspace-write", true);
+    host.applyPermissionSync({ version: "0", next: selection, control: {
+      ...selection, status: "unknown", reason: "observation_unavailable",
+      submitted: { ...selection, execution_id: "same-revision" },
+      constraints: { approval: "on-request", enforcement: "os" },
+    } });
+    expect(host.statusExtSnapshot()).toHaveProperty("permission_gate");
+    expect(notices(envelopes)).toHaveLength(1);
+    await host.setPermission(choose(revision + 1, "workspace-write", true));
+    await host.send("recovered");
+    expect(host.statusExtSnapshot()).not.toHaveProperty("permission_gate");
+    expect(events().filter(e => e.event === "session/prompt")).toHaveLength(2);
+    expect(notices(envelopes)).toHaveLength(1);
+  });
+  it("notifies when a resolved prompt lacks its observation id", async () => {
+    const { host, envelopes, lifecycle } = await started();
+    await host.send("no-prompt-id");
+    expect(notices(envelopes).map(e => e.payload.text)).toEqual([notice]);
+    expect(lifecycle).toContainEqual(expect.objectContaining({
+      kind: "permission_failed", details: expect.objectContaining({ revision: 0 }),
+    }));
+  });
+  it("does not warn for an older failure with a newer selection pending", async () => {
+    const { host, envelopes, lifecycle } = await started();
+    vi.spyOn(AcpSession.prototype, "prompt").mockImplementationOnce(async () => {
+      await host.setPermission(choose(1, "workspace-write", true));
+      throw new Error("older prompt failed");
+    });
+    await expect(host.send("older")).rejects.toThrow("older prompt failed");
+    expect(lifecycle).toContainEqual(expect.objectContaining({
+      kind: "permission_failed", details: expect.objectContaining({ revision: 0 }),
+    }));
+    expect(host.statusExtSnapshot().permission_control).toMatchObject({
+      revision: 1, status: "pending",
+    });
+    expect(host.statusExtSnapshot()).not.toHaveProperty("permission_gate");
+    expect(notices(envelopes)).toEqual([]);
+    await host.send("newer");
+  });
+  it("does not warn while closing a failed prompt", async () => {
+    const { host, envelopes, lifecycle } = await started();
+    vi.spyOn(AcpSession.prototype, "prompt").mockImplementationOnce(async () => {
+      host.close();
+      throw new Error("closing prompt");
+    });
+    await expect(host.send("closing")).rejects.toThrow();
+    await host.closed;
+    expect(lifecycle).toContainEqual(expect.objectContaining({
+      kind: "permission_failed", details: expect.objectContaining({ revision: 0 }),
+    }));
+    expect(notices(envelopes)).toEqual([]);
+  });
+  it.each([false, true])("does not repeat a synced gate notice (active=%s)", async active => {
+    const { host, envelopes, lifecycle } = await started();
+    const selection = choose(0, "workspace-write", true);
+    const sync = () => host.applyPermissionSync({ version: "0", next: selection, control: {
+      ...selection, status: "unknown", reason: "observation_unavailable",
+      submitted: { ...selection, execution_id: "prior-execution" },
+      constraints: { approval: "on-request", enforcement: "os" },
+    } });
+    if (active) {
+      vi.spyOn(AcpSession.prototype, "prompt").mockImplementationOnce(async () => {
+        sync();
+        throw new Error("failed after rejoin");
+      });
+      await expect(host.send("active-rejoin")).rejects.toThrow();
+    } else sync();
+    expect(host.statusExtSnapshot()).toHaveProperty("permission_gate");
+    expect(notices(envelopes)).toEqual([]);
+    expect(lifecycle.filter(e => e.kind === "permission_failed"))
+      .toHaveLength(active ? 1 : 0);
+  });
+  it("keeps success and observed interruption free of failure notices", async () => {
+    const { host, envelopes, lifecycle } = await started();
+    await host.send("success");
+    const turn = host.send("sleep");
+    await vi.waitFor(() => expect(host.state).toBe("tool_running"));
+    await host.interrupt(); await turn;
+    expect(host.statusExtSnapshot().permission_control).toMatchObject({ status: "applied" });
+    expect(host.statusExtSnapshot()).not.toHaveProperty("permission_gate");
+    expect(notices(envelopes)).toEqual([]);
+    expect(lifecycle.filter(e => e.kind === "permission_failed")).toEqual([]);
+  });
+  it("keeps non-observation baseline failures suppressed", async () => {
+    const { host, envelopes, lifecycle } = await started();
+    const selection = choose(0, "workspace-write", false);
+    host.applyPermissionSync({ version: "0", next: selection, control: {
+      ...selection, status: "pending",
+      constraints: { approval: "on-request", enforcement: "os" },
+    } });
+    await expect(host.send("unsupported")).rejects.toThrow("permission_gate_blocked");
+    expect(host.statusExtSnapshot().permission_gate).toMatchObject({
+      status: "blocked", reason: "awaiting_server_next", revision: 0,
+    });
+    expect(lifecycle).toEqual([]);
+    expect(notices(envelopes)).toEqual([]);
+  });
+});
 describe("permission switch at the queued head boundary", () => {
   it.each([
     ["workspace-write", true, "workspace", true],
