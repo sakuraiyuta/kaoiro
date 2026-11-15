@@ -52,6 +52,16 @@ describe("prompt ownership", () => {
     expect(ownership.permissionIsOwn("call")).toBe(false);
   });
 
+  it("names the prompt a call was recorded for, null once two prompts claimed it", () => {
+    const ownership = owning();
+    ownership.recordToolCall("own-call", "kaoiro-own");
+    ownership.recordToolCall("shared", "kaoiro-own");
+    ownership.recordToolCall("shared", "task-completed-1");
+    expect(ownership.promptOfCall("own-call")).toBe("kaoiro-own");
+    expect(ownership.promptOfCall("shared")).toBeNull();
+    expect(ownership.promptOfCall("never-seen")).toBeUndefined();
+  });
+
   it("never allows a refused call, even after an own tool_call records it", () => {
     const ownership = owning();
     ownership.refuse("call");

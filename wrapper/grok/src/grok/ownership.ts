@@ -82,6 +82,11 @@ export class PromptOwnership {
     else if (known !== promptId) this.#calls.set(toolCallId, null);
   }
 
+  /** The prompt recorded for a call: undefined if never seen, null if two prompts claimed it. */
+  promptOfCall(toolCallId: string): string | null | undefined {
+    return this.#calls.get(toolCallId);
+  }
+
   /** Whether a permission request for this call may reach the operator. */
   permissionIsOwn(toolCallId: string): boolean {
     if (this.#refused.has(toolCallId)) return false;

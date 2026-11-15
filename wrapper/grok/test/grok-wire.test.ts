@@ -3,11 +3,13 @@ import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { connectAcp } from "../src/acp/connection.js";
-import { promptIdOf, turnCompletion } from "../src/grok/events.js";
+import { backgroundedTask, promptIdOf, taskKilled, turnCompletion } from "../src/grok/events.js";
 import {
   GROK_QUEUE_CHANGED,
   GROK_SESSION_NOTIFICATION,
+  GROK_TASK_BACKGROUNDED,
   grokExtension,
+  grokKillTask,
   grokPromptMeta,
   grokSessionMeta,
   grokWireFields,
@@ -100,15 +102,20 @@ describe("grok session meta and extension", () => {
   it("names the prompt in the session/prompt _meta value", () => {
     expect(grokPromptMeta("kaoiro-1")).toEqual({ promptId: "kaoiro-1" });
   });
-  it("registers the _x.ai session and queue notifications", () => {
+  it("registers the _x.ai session, queue and task_backgrounded notifications", () => {
     const handle = vi.fn();
     const queue = vi.fn();
-    const extension = grokExtension(handle, queue);
+    const backgrounded = vi.fn();
+    const extension = grokExtension(handle, queue, backgrounded);
     expect(extension.notifications?.map((n) => n.method)).toEqual([
       GROK_SESSION_NOTIFICATION,
       GROK_QUEUE_CHANGED,
+      GROK_TASK_BACKGROUNDED,
     ]);
-    const [entry, queueEntry] = extension.notifications!;
+    const [entry, queueEntry, taskEntry] = extension.notifications!;
+    const task = { sessionId: "s", update: { task_id: "t", tool_call_id: "c" } };
+    taskEntry!.handle(taskEntry!.parse(task));
+    expect(backgrounded).toHaveBeenCalledWith(task);
     const payload = { sessionId: "s", update: {} };
     entry!.handle(entry!.parse(payload));
     expect(handle).toHaveBeenCalledWith(payload);
@@ -192,6 +199,35 @@ describe("turnCompletion", () => {
     ["no update", { sessionId: "s1" }, "s1"],
   ])("ignores %s", (_label, notification, current) => {
     expect(turnCompletion(notification, current)).toBeUndefined();
+  });
+});
+
+describe("background tasks", () => {
+  it("asks for _x.ai/task/kill with the session and task", async () => {
+    const request = vi.fn(async () => ({ result: { taskId: "t", outcome: "killed" } }));
+    await expect(grokKillTask({ agent: { request } }, "s", "t")).resolves
+      .toEqual({ result: { taskId: "t", outcome: "killed" } });
+    expect(request).toHaveBeenCalledWith("_x.ai/task/kill", { sessionId: "s", taskId: "t" });
+  });
+  it("reads the session, task and tool call of task_backgrounded", () => {
+    expect(backgroundedTask({ sessionId: "s", update: { task_id: "t", tool_call_id: "c" } }))
+      .toEqual({ sessionId: "s", taskId: "t", toolCallId: "c" });
+  });
+  it.each([
+    ["no session", { update: { task_id: "t", tool_call_id: "c" } }],
+    ["no update", { sessionId: "s" }],
+    ["a non-string task id", { sessionId: "s", update: { task_id: 1, tool_call_id: "c" } }],
+    ["no tool call", { sessionId: "s", update: { task_id: "t" } }],
+  ])("ignores task_backgrounded with %s", (_label, params) => {
+    expect(backgroundedTask(params as Record<string, unknown>)).toBeUndefined();
+  });
+  // Grok 1.0.52 nests the kill answer inside the JSON-RPC result.
+  it("counts only a nested killed outcome as a kill", () => {
+    expect(taskKilled({ result: { taskId: "t", outcome: "killed" } })).toBe(true);
+    expect(taskKilled({ taskId: "t", outcome: "killed" })).toBe(false);
+    expect(taskKilled({ result: { taskId: "t", outcome: "not_found" } })).toBe(false);
+    expect(taskKilled(undefined)).toBe(false);
+    expect(taskKilled({ result: null })).toBe(false);
   });
 });
 

@@ -719,17 +719,46 @@ returns the wrapper to `waiting_input`. A foreground shell tool with actual
 trials, with and without `--no-leader`. Native acceptance verifies the actual
 arguments and asserts foreground-child termination.
 
-A tool moved to the background (`_x.ai/task_backgrounded`) can remain alive
-after cancel. Close and wrapper SIGTERM remove active tool children.
-The wrapper preserves the resident session and does not discover or kill
-tool PGIDs. Background survival is recorded as a vendor behavior; tests do
-not assert it because the model chooses whether to background a task.
+A tool moved to the background (`_x.ai/task_backgrounded`) survives
+`session/cancel`. Close and wrapper SIGTERM remove active tool children.
 When the own prompt waits behind a turn Grok started on its own, an
 interrupt follows
 [Turns Grok starts on its own](#turns-grok-starts-on-its-own).
-Per-task cancellation through `_x.ai/task/kill` is tracked in
-[issue #594](https://github.com/sakuraiyuta/kaoiro/issues/594).
-See the [dated evidence](../../evidence/grok/2026-10-14-premises.md).
+
+An operator interrupt also asks Grok to stop the background tasks of the
+interrupted turn ([issue #594](https://github.com/sakuraiyuta/kaoiro/issues/594)):
+
+- Trigger: the operator interrupted the turn, and its prompt returned
+  `cancelled` (not `PermissionRejected`). A cancel the operator did not ask
+  for, a normal end and a session reset kill nothing.
+- Ownership: `_x.ai/task_backgrounded` carries no prompt id. A task counts
+  only if its `tool_call_id` is recorded, by the `tool_call` update's
+  `_meta.promptId`, for the interrupted prompt. The check runs when the kill
+  is sent, so a call whose prompt is unknown or claimed by two prompts is left
+  alone. A conflict that arrives after the kill was sent cannot recall it.
+  Tasks moved to the background after the prompt returned are not killed.
+- The wrapper sends `_x.ai/task/kill {sessionId, taskId}` per task while it
+  ends the turn and does not wait for the answers, so the result can arrive a
+  few milliseconds before the tasks are gone. Grok answers
+  `{ result: { taskId, outcome: "killed" } }` inside the JSON-RPC result. Any
+  other answer, an error or no answer within 2 s writes one stderr line and
+  the system log line `Could not stop a background task of the interrupted
+  turn (<reason>)`; the turn's result does not change. Nothing is written
+  once the host is closing or the Grok process was replaced.
+- The 2 s timer is cleared when the request settles. A closing connection
+  makes the ACP SDK reject pending requests (measured with SDK 1.8.0 on an
+  explicit close and on Grok's exit), so a pending kill does not keep the
+  wrapper alive.
+
+After a kill, Grok starts one `task-completed-*` turn per killed task, within
+milliseconds, and the next input waits behind them. Measured: such a turn can
+call tools and ask for permission. Guaranteed by the wrapper: it is handled
+after the interrupted turn's result, never joins that result or the kill set,
+and its permission requests are refused ([Turns Grok starts on its
+own](#turns-grok-starts-on-its-own)). Not guaranteed: that it calls no tool,
+or that Grok itself refuses its commands. See the [dated
+evidence](../../evidence/grok/2026-11-15-background-task-kill.md) and the
+[earlier premises](../../evidence/grok/2026-10-14-premises.md).
 
 ## Result text
 

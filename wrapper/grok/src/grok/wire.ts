@@ -66,9 +66,21 @@ export function grokSessionMeta(rules: string): Record<string, unknown> {
   return { rules };
 }
 
+export const GROK_TASK_BACKGROUNDED = "_x.ai/task_backgrounded";
+
+/** Asks Grok to stop one background task. */
+export function grokKillTask(
+  connection: { agent: { request(method: string, params: Record<string, unknown>): Promise<unknown> } },
+  sessionId: string,
+  taskId: string,
+): Promise<unknown> {
+  return connection.agent.request("_x.ai/task/kill", { sessionId, taskId });
+}
+
 export function grokExtension(
   onSessionNotification: (notification: Record<string, unknown>) => void,
   onQueueChanged: (params: Record<string, unknown>) => void = () => {},
+  onTaskBackgrounded: (params: Record<string, unknown>) => void = () => {},
 ): AcpExtension<GrokWireMetadata> {
   return {
     notifications: [
@@ -81,6 +93,11 @@ export function grokExtension(
         GROK_QUEUE_CHANGED,
         (params) => params as Record<string, unknown>,
         onQueueChanged,
+      ),
+      notification(
+        GROK_TASK_BACKGROUNDED,
+        (params) => params as Record<string, unknown>,
+        onTaskBackgrounded,
       ),
     ],
     wireFields: grokWireFields,

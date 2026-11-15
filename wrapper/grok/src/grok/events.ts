@@ -86,6 +86,26 @@ export function selfStartedReason(promptId: string): string {
   return "unknown reason";
 }
 
+/** A `_x.ai/task_backgrounded` notification's session, task and tool call. */
+export function backgroundedTask(
+  params: Record<string, unknown>,
+): { sessionId: string; taskId: string; toolCallId: string } | undefined {
+  const update = params.update as Record<string, unknown> | null | undefined;
+  const sessionId = params.sessionId;
+  const taskId = update?.task_id;
+  const toolCallId = update?.tool_call_id;
+  if (typeof sessionId !== "string" || typeof taskId !== "string" || typeof toolCallId !== "string")
+    return undefined;
+  return { sessionId, taskId, toolCallId };
+}
+
+/** Whether a `_x.ai/task/kill` result reports the task killed. Grok nests
+ *  the answer: `{ result: { taskId, outcome } }`. */
+export function taskKilled(result: unknown): boolean {
+  const inner = (result as Record<string, unknown> | null | undefined)?.result;
+  return (inner as Record<string, unknown> | null | undefined)?.outcome === "killed";
+}
+
 /** The prompt id Grok puts in a `session/prompt` result `_meta`. */
 export function promptIdOf(meta: unknown): unknown {
   return (meta as Record<string, unknown> | null | undefined)?.promptId;

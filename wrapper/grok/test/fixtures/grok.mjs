@@ -425,6 +425,30 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         turnCalls = 0;
         turnModel = process.env.KAOIRO_TEST_GROK_REPORT_MODEL ?? model;
         const text = msg.params.prompt[0].text;
+        // Tool calls Grok moves to the background (issue 594); `task/kill`
+        // below answers per KAOIRO_TEST_GROK_KILL.
+        const backgrounded = (call, task, session = sid) => {
+          update({ sessionUpdate: "tool_call", toolCallId: call, title: "bg", status: "in_progress", kind: "execute" });
+          notification("_x.ai/task_backgrounded", { sessionId: session,
+            update: { sessionUpdate: "task_backgrounded", tool_call_id: call, task_id: task } });
+        };
+        if (text === "bg-earlier") { backgrounded("c0", "t0"); finish(msg.id, "earlier"); break; }
+        if (text === "bg-two") { backgrounded("c1", "t1"); backgrounded("c2", "t2"); textChunk("OWN_TEXT"); break; }
+        if (text === "bg-late") {
+          notification("_x.ai/task_backgrounded", { sessionId: sid,
+            update: { sessionUpdate: "task_backgrounded", tool_call_id: "c0", task_id: "t0-late" } });
+          backgrounded("c1", "t1");
+          break;
+        }
+        if (text === "bg-conflict") {
+          backgrounded("c1", "t1");
+          notification("session/update", { sessionId: sid, _meta: { promptId: "task-completed-x" },
+            update: { sessionUpdate: "tool_call", toolCallId: "c1", title: "bg", status: "in_progress", kind: "execute" } });
+          backgrounded("c2", "t2");
+          break;
+        }
+        if (text === "bg-self-cancel") { backgrounded("c1", "t1"); finish(msg.id, "", "cancelled", "MidTurnAbort"); break; }
+        if (text === "bg-other-session") { backgrounded("c1", "t1", "other-session"); backgrounded("c2", "t2"); break; }
         const calls = /^calls-(\d+)$/.exec(text);
         if (calls) {
           for (let n = 1; n <= Number(calls[1]); n++) {
@@ -875,6 +899,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         );
         break;
       }
+      case "_x.ai/task/kill": {
+        record("task_kill", { taskId: msg.params.taskId });
+        const mode = process.env.KAOIRO_TEST_GROK_KILL ?? "ok";
+        if (mode === "hang") break;
+        if (mode === "exit") process.exit(0);
+        const fail = () => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id,
+          error: { code: -32603, message: "fixture kill failure" } }) + "\n");
+        if (mode === "error") { fail(); break; }
+        if (mode === "late-error") { setTimeout(fail, 2_500); break; }
+        reply(msg.id, { result: { taskId: msg.params.taskId, outcome: mode === "other" ? "not_found" : "killed" } });
+        if (process.env.KAOIRO_TEST_GROK_KILL_WAKE === "1" && foreign === undefined) {
+          startForeign(`task-completed-${msg.params.taskId}`);
+          await foreignBody(true);
+          endForeign();
+        }
+        break;
+      }
       case "session/cancel":
         // Like Grok, a cancel stops only the running prompt.
         if (foreign !== undefined) {
@@ -883,8 +924,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           break;
         }
         record("cancel", { target: prompt === undefined ? "none" : "own" });
-        if (prompt !== undefined)
-          finish(prompt, "", "cancelled", "MidTurnAbort");
+        // KAOIRO_TEST_GROK_CANCEL_ANSWER: a cancel answered as a permission
+        // rejection, or a turn that ended normally despite the cancel.
+        if (prompt !== undefined && process.env.KAOIRO_TEST_GROK_CANCEL_ANSWER === "end_turn")
+          finish(prompt, "");
+        else if (prompt !== undefined)
+          finish(prompt, "", "cancelled", process.env.KAOIRO_TEST_GROK_CANCEL_ANSWER === "rejected"
+            ? "PermissionRejected" : "MidTurnAbort");
         break;
       default:
         if (waiters.has(msg.id)) {

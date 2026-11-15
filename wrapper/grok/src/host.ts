@@ -39,10 +39,12 @@ import { AcpSession } from "./acp/session.js";
 import { connectAcp } from "./acp/connection.js";
 import { GrokProcess } from "./grok/process.js";
 import {
+  backgroundedTask,
   cancellationKind,
   promptIdOf,
   queueRunning,
   selfStartedReason,
+  taskKilled,
   turnCompletion,
   updateEvents,
   updatePromptId,
@@ -50,6 +52,7 @@ import {
 import { PromptOwnership } from "./grok/ownership.js";
 import {
   grokExtension,
+  grokKillTask,
   grokPromptMeta,
   grokSessionMeta,
   type GrokWireMetadata,
@@ -196,6 +199,10 @@ export class GrokHost implements EngineAdapter {
   // An interrupt that arrived while the own prompt waited behind a
   // self-started one: cancel again once the own prompt runs.
   #cancelOnStart = false;
+  // Tasks the own prompt moved to the background, and whether the operator
+  // interrupted it; a cancelled turn asks Grok to kill only these.
+  #tasks: { taskId: string; toolCallId: string }[] = [];
+  #interruptRequested = false;
   readonly #lifetime = new AbortController();
   #starting = false;
   #pendingPermission: PendingPermissionExt | null = null;
@@ -598,6 +605,7 @@ export class GrokHost implements EngineAdapter {
       }, grokExtension(
         (notification) => { if (generation?.role === "current") this.#vendor(notification); },
         (params) => { if (generation?.role === "current") this.#queueChanged(params); },
+        (params) => { if (generation?.role === "current") this.#taskBackgrounded(params); },
       ));
       generation = { role: "loading", process: childProcess, session: new AcpSession(connection), toolHost,
         profile, policy, failed, fail, held: [], heldDropped: 0, models: [],
@@ -822,6 +830,8 @@ export class GrokHost implements EngineAdapter {
       why: "the turn failed",
     };
     const promptId = `kaoiro-${randomUUID()}`;
+    this.#tasks = [];
+    this.#interruptRequested = false;
     this.#ownership.begin(promptId);
     try {
       const response = await this.#current!.session.prompt(turn.text, grokPromptMeta(promptId));
@@ -838,6 +848,7 @@ export class GrokHost implements EngineAdapter {
       permissionRejected = rejected;
       if (rejected) throw new Error("grok permission rejected");
       const interrupted = response.stopReason === "cancelled" && !rejected;
+      if (interrupted && this.#interruptRequested) this.#requestKills(promptId);
       this.#flushAssistantLog();
       if (!rejected && !interrupted && this.#sessionId !== undefined) {
         this.#options.recovery?.confirm(this.#sessionId);
@@ -1006,6 +1017,41 @@ export class GrokHost implements EngineAdapter {
     this.#foreign = undefined;
     this.#systemLog("Grok's own turn ended");
   }
+  #taskBackgrounded(params: Record<string, unknown>) {
+    const task = backgroundedTask(params);
+    if (!task || task.sessionId !== this.#sessionId || this.#ownership.own === undefined) return;
+    this.#tasks.push({ taskId: task.taskId, toolCallId: task.toolCallId });
+  }
+  // Sends the kills and returns at once: the turn's ending has no await, so
+  // nothing of the turn can interleave with a kill. The ownership check and
+  // the sends share this synchronous step; a conflict that arrives later
+  // cannot recall a kill already sent.
+  #requestKills(promptId: string) {
+    const generation = this.#current;
+    const sessionId = this.#sessionId;
+    if (!generation || sessionId === undefined) return;
+    for (const { taskId, toolCallId } of this.#tasks) {
+      if (this.#ownership.promptOfCall(toolCallId) !== promptId) continue;
+      let done = false;
+      const report = (failure: string | undefined) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (failure === undefined || this.#closing || this.#current !== generation) return;
+        writeRedactedStderr(`[kaoiro] grok could not stop a background task: ${failure}\n`);
+        this.#systemLog(`Could not stop a background task of the interrupted turn (${failure})`);
+      };
+      const timer = setTimeout(() => report("no answer within 2 s"), 2_000);
+      try {
+        grokKillTask(generation.session.connection, sessionId, taskId).then(
+          (result) => report(taskKilled(result) ? undefined : "unexpected answer"),
+          () => report("the request failed"),
+        );
+      } catch {
+        report("the request failed");
+      }
+    }
+  }
   #queueChanged(params: Record<string, unknown>) {
     const queue = queueRunning(params, this.#sessionId);
     if (!queue) return;
@@ -1137,6 +1183,7 @@ export class GrokHost implements EngineAdapter {
       if (foreignRunning) await this.#current?.session.cancel();
       return;
     }
+    this.#interruptRequested = true;
     if (foreignRunning) {
       // session/cancel stops only the running prompt; the own prompt waits
       // behind it and is cancelled when it starts.

@@ -349,3 +349,77 @@ it.skipIf(!live)(
   },
   240_000,
 );
+// Background tasks of an interrupted turn (issue 594). Throwaway Grok
+// settings with one file deny rule make the self-started turn's follow-up
+// command (a redirect to a path in a variable) ask for permission at once.
+function procStat(pid: number) {
+  expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return { comm: stat.slice(stat.indexOf("("), stat.lastIndexOf(")") + 1),
+      start: stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] };
+  } catch { return undefined; }
+}
+it.skipIf(!live)(
+  "native interrupt kills the turn's background tasks and spares an earlier turn's",
+  async () => {
+    const root = mkdtempSync(join(homedir(), ".kaoiro-grok-594-"));
+    const home = mkdtempSync(join(homedir(), ".kaoiro-grok-594-home-"));
+    const marker = "KAOIRO594LIVE";
+    const pidFile = (name: string) => join(root, `${name}.pid`);
+    const background = (name: string) => `printf '%s' "$$" > ${pidFile(name)}; exec sleep 300 # ${marker}`;
+    let a: number | undefined;
+    try {
+      mkdirSync(join(home, ".claude"));
+      writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ permissions: {
+        defaultMode: "auto", deny: ["Read(**/.env)", "Edit(**/.env)"] } }));
+      const env = Object.assign({}, process.env, { HOME: home, GROK_HOME: join(homedir(), ".grok") });
+      await nativeRun(config, root, async (host, _link, envelopes) => {
+        await vi.waitFor(() => expect(host.state).toBe("waiting_input"), { timeout: 40_000 });
+        await host.send("Start this command with run_terminal_command as a background task " +
+          `(is_background true) and do not wait for it: ${background("A")}. Then reply 'started'.`);
+        a = Number(readFileSync(pidFile("A"), "utf8"));
+        const aStart = procStat(a)?.start;
+        expect(procStat(a)?.comm).toBe("(sleep)");
+        await delay(100);
+        const turn = host.send("Start these two commands with run_terminal_command, each as its own " +
+          `background task (is_background true): ${background("B1")}  and  ${background("B2")}. ` +
+          "Then run `sleep 100` in the foreground with block_until_ms 120000 and wait for it. " +
+          "When the background tasks finish or stop for any reason, run exactly this with " +
+          `run_terminal_command: OUT=${root}; printf done > "$OUT/done-file" # ${marker}`);
+        void turn.catch(() => {});
+        await vi.waitFor(() => expect(existsSync(pidFile("B1")) && existsSync(pidFile("B2"))).toBe(true),
+          { timeout: 120_000 });
+        await delay(8_000);
+        const b = ["B1", "B2"].map((name) => Number(readFileSync(pidFile(name), "utf8")));
+        for (const pid of b) expect(procStat(pid)?.comm).toBe("(sleep)");
+        const from = envelopes.length;
+        await host.interrupt();
+        await turn;
+        const result = envelopes.slice(from).filter((e) => e.type === "result").at(-1)!;
+        expect(result.ext).toMatchObject({ stop_reason: "cancelled", interrupted: true });
+        await vi.waitFor(() => { for (const pid of b) expect(procStat(pid)).toBeUndefined(); },
+          { timeout: 5_000, interval: 100 });
+        expect(procStat(a!)).toEqual({ comm: "(sleep)", start: aStart });
+        await vi.waitFor(() => expect(envelopes.some((e) => e.type === "log" && e.payload.kind === "system" &&
+          String(e.payload.text).startsWith("Refused a permission request from a turn Grok started on its own")))
+          .toBe(true), { timeout: 90_000 });
+        const opened = envelopes.findIndex((e) => e.type === "log" && e.payload.kind === "system" &&
+          String(e.payload.text).startsWith("Grok started a turn on its own"));
+        expect(opened).toBeGreaterThan(envelopes.indexOf(result));
+        expect(envelopes.slice(from).filter((e) => e.type === "permission_request")).toEqual([]);
+        expect(host.state).toBe("waiting_input");
+        if (process.env.KAOIRO_LIVE_GROK_594_REPORT)
+          writeFileSync(process.env.KAOIRO_LIVE_GROK_594_REPORT, JSON.stringify({
+            system: envelopes.filter((e) => e.type === "log" && e.payload.kind === "system")
+              .map((e) => e.payload.text),
+            result: result.payload, ext: result.ext }, null, 1));
+      }, env, { rule: { marker } });
+      await vi.waitFor(() => expect(procStat(a!)).toBeUndefined(), { timeout: 10_000 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+  300_000,
+);
