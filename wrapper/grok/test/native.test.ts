@@ -202,11 +202,17 @@ it.skipIf(!live)(
                   kind: "request",
                   body:
                     "Send once to native-peer here via kaoiro send_to_agent. " +
-                    "Use work_control accept_assignment with work_id " +
-                    "wrk_AbCdEfGhIjKlMnOpQrStUv, kind=response, " +
+                    "Set to=native-peer and work_control={" +
+                    '"op":"accept_assignment",' +
+                    '"work_id":"wrk_AbCdEfGhIjKlMnOpQrStUv"}, ' +
+                    "kind=response, " +
                     "body=received, done=true, wait_for_response=false; " +
                     "empty propose_next.",
                   meta: { done: false, propose_next: "" },
+                  work: { work_id: "wrk_AbCdEfGhIjKlMnOpQrStUv",
+                    revision: 0, authority_epoch: 1, state: "nominated" },
+                  work_control_result: { op: "assign", outcome: "applied",
+                    operation_id: "op_1_AAAAAAAAAAAAAAAAAAAAAA" },
                 },
                 ext: {},
               } as Envelope);
