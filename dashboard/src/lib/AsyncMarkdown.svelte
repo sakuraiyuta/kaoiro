@@ -17,6 +17,7 @@
     text: string; scope: string; profile: string;
     rendered: UntrustedRender; unavailable: boolean;
   } | null>(null);
+  const renderIdentity = $derived([text, scope, profile]);
   const currentResult = $derived(result?.text === text &&
     result.scope === scope && result.profile === profile ? result : null);
 
@@ -57,7 +58,7 @@
   });
 </script>
 
-{#key currentResult}
+{#key renderIdentity}
   <div bind:this={root} class="async-markdown"
     class:untrusted-markdown={profile === "full"}
     class:plain={currentResult?.rendered.kind !== "html"}
