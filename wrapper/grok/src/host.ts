@@ -41,9 +41,13 @@ import { GrokProcess } from "./grok/process.js";
 import {
   cancellationKind,
   promptIdOf,
+  queueRunning,
+  selfStartedReason,
   turnCompletion,
   updateEvents,
+  updatePromptId,
 } from "./grok/events.js";
+import { PromptOwnership } from "./grok/ownership.js";
 import {
   grokExtension,
   grokSessionMeta,
@@ -180,6 +184,14 @@ export class GrokHost implements EngineAdapter {
   #revision = 0;
   #failure: Error | undefined;
   #completion: { sessionId: string; promptId: string } | undefined;
+  readonly #ownership = new PromptOwnership();
+  // The prompt Grok started on its own whose open log was sent, and its
+  // assistant text not yet logged.
+  #foreign: string | undefined;
+  #foreignText = "";
+  // An interrupt that arrived while the own prompt waited behind a
+  // self-started one: cancel again once the own prompt runs.
+  #cancelOnStart = false;
   readonly #lifetime = new AbortController();
   #starting = false;
   #pendingPermission: PendingPermissionExt | null = null;
@@ -578,7 +590,10 @@ export class GrokHost implements EngineAdapter {
           if (generation?.role === "current") this.#options.onMetadata?.(metadata);
           else if (generation?.role === "loading") this.#hold(generation, metadata);
         },
-      }, grokExtension((notification) => { if (generation?.role === "current") this.#vendor(notification); }));
+      }, grokExtension(
+        (notification) => { if (generation?.role === "current") this.#vendor(notification); },
+        (params) => { if (generation?.role === "current") this.#queueChanged(params); },
+      ));
       generation = { role: "loading", process: childProcess, session: new AcpSession(connection), toolHost,
         profile, policy, failed, fail, held: [], heldDropped: 0, models: [],
         rateLimitsReader: new GrokRateLimitReader({
@@ -632,6 +647,8 @@ export class GrokHost implements EngineAdapter {
       this.#loading = undefined;
       this.#sessionId = generation.session.sessionId;
       this.#completion = undefined;
+      this.#ownership.setRunning(undefined);
+      this.#closeForeign();
       this.#adoptGeneration(generation);
       this.#flushHeld(generation);
       this.#options.onSessionId?.(this.#sessionId!);
@@ -793,8 +810,12 @@ export class GrokHost implements EngineAdapter {
     this.#progress();
     let error: Error | undefined;
     let permissionRejected = false;
+    const promptId = `kaoiro-${randomUUID()}`;
+    this.#ownership.begin(promptId);
     try {
-      const response = await this.#current!.session.prompt(turn.text);
+      const response = await this.#current!.session.prompt(turn.text, promptId);
+      if (promptIdOf(response._meta) !== promptId)
+        writeRedactedStderr("[kaoiro] grok answered under another prompt id; its updates were not attributed to the turn\n");
       this.#observe(submission, promptIdOf(response._meta));
       this.#settleContext(response._meta);
       const completed =
@@ -854,6 +875,8 @@ export class GrokHost implements EngineAdapter {
       this.#signal?.abort();
       this.#signal = undefined;
       this.#active = undefined;
+      this.#ownership.end();
+      this.#cancelOnStart = false;
       this.#options.onTurnEnd?.({
         turnToken: turn.token,
         conversationIds: turn.conversations,
@@ -883,6 +906,14 @@ export class GrokHost implements EngineAdapter {
     if (notification.update.sessionUpdate === "config_option_update") {
       const selection = parseSelection(notification.update.configOptions);
       if (selection) this.#confirmSelection(selection.model, selection.effort);
+      return;
+    }
+    const explicit = updatePromptId(notification);
+    if (notification.update.sessionUpdate === "tool_call" && explicit !== undefined)
+      this.#ownership.recordToolCall(notification.update.toolCallId, explicit);
+    const prompt = this.#ownership.promptOf(explicit);
+    if (!this.#ownership.isOwn(prompt)) {
+      if (prompt !== undefined && prompt === this.#foreign) this.#foreignUpdate(notification);
       return;
     }
     if (!this.#active) return;
@@ -917,6 +948,49 @@ export class GrokHost implements EngineAdapter {
       ),
     );
   }
+  #systemLog(text: string) {
+    this.#options.send(makeLog(this.#options.config, this.state, new Date().toISOString(),
+      logEntryToPayload({ kind: "system", text }, new Map())));
+  }
+  // A self-started turn is shown as logs only: it never enters a kaoiro
+  // turn's result, events or state.
+  #foreignUpdate(notification: acp.SessionNotification) {
+    this.#progress();
+    const update = updateEvents(notification);
+    if (update.text) this.#foreignText += update.text;
+    if (!update.log) return;
+    this.#flushForeignText();
+    this.#options.send(makeLog(this.#options.config, this.state, new Date().toISOString(), update.log));
+  }
+  #flushForeignText() {
+    const text = this.#foreignText;
+    this.#foreignText = "";
+    if (text) this.#options.send(makeLog(this.#options.config, this.state, new Date().toISOString(),
+      logEntryToPayload({ kind: "assistant", text }, new Map())));
+  }
+  #closeForeign() {
+    if (this.#foreign === undefined) return;
+    this.#flushForeignText();
+    this.#foreign = undefined;
+    this.#systemLog("Grok's own turn ended");
+  }
+  #queueChanged(params: Record<string, unknown>) {
+    const queue = queueRunning(params, this.#sessionId);
+    if (!queue) return;
+    this.#ownership.setRunning(queue.running);
+    if (this.#foreign !== undefined && queue.running !== this.#foreign) this.#closeForeign();
+    if (queue.running === undefined) return;
+    if (this.#ownership.isOwn(queue.running)) {
+      if (this.#cancelOnStart) {
+        this.#cancelOnStart = false;
+        void this.#cancelOwn();
+      }
+      return;
+    }
+    if (queue.running === this.#foreign) return;
+    this.#foreign = queue.running;
+    this.#systemLog(`Grok started a turn on its own (${selfStartedReason(queue.running)})`);
+  }
   // Grok sends the session_start hook after the session/new or session/load
   // response, often while the generation is still loading (issue #633). Its
   // metadata is held and published only if the generation is promoted. The
@@ -946,7 +1020,16 @@ export class GrokHost implements EngineAdapter {
     const sessionId = notification.sessionId ?? notification.session_id;
     if (sessionId !== this.#sessionId) return;
     const tokens = promptTokens(notification);
-    if (tokens !== undefined && this.#active) this.#turnTokens = tokens;
+    if (tokens !== undefined) this.#ownership.recordReading(tokens);
+    if (completion) {
+      const reading = this.#ownership.takeReading(completion.promptId);
+      if (this.#ownership.isOwn(completion.promptId)) {
+        if (reading !== undefined && this.#active) this.#turnTokens = reading;
+      } else {
+        if (reading !== undefined) this.#settleReading(reading, undefined);
+        if (completion.promptId === this.#foreign) this.#closeForeign();
+      }
+    }
     const reported = reportedSelection(notification);
     if (reported) this.#confirmSelection(reported.model, reported.effort);
   }
@@ -964,8 +1047,11 @@ export class GrokHost implements EngineAdapter {
   #settleContext(meta: unknown) {
     const tokens = this.#turnTokens;
     this.#turnTokens = undefined;
+    if (tokens !== undefined) this.#settleReading(tokens, meta);
+  }
+  #settleReading(tokens: number, meta: unknown) {
     const model = this.#selection?.model;
-    if (tokens === undefined || !this.#switchable || model === undefined) return;
+    if (!this.#switchable || model === undefined) return;
     const reported = (meta as Record<string, unknown> | null | undefined)?.modelId;
     if (typeof reported === "string" && reported !== model) {
       writeRedactedStderr("[kaoiro] grok ran a turn on a model other than the selected one; its context reading is withdrawn\n");
@@ -980,6 +1066,15 @@ export class GrokHost implements EngineAdapter {
     request: acp.RequestPermissionRequest,
     signal: AbortSignal,
   ): Promise<acp.RequestPermissionResponse> {
+    const toolCallId = request.toolCall.toolCallId;
+    if (!this.#ownership.permissionIsOwn(toolCallId)) {
+      // A request no own tool_call accounts for never reaches the operator,
+      // and a refused call is never allowed later.
+      this.#ownership.refuse(toolCallId);
+      if (request.sessionId === this.#sessionId)
+        this.#systemLog(`Refused a permission request from a turn Grok started on its own: ${request.toolCall.title ?? "grok tool"}`);
+      return { outcome: { outcome: "cancelled" } };
+    }
     if (!this.#active || request.sessionId !== this.#sessionId) {
       return { outcome: { outcome: "cancelled" } };
     }
@@ -1001,12 +1096,29 @@ export class GrokHost implements EngineAdapter {
       : { outcome: { outcome: "cancelled" } };
   }
   async interrupt() {
-    if (!this.#active) return;
+    const running = this.#ownership.running;
+    const foreignRunning = running !== undefined && !this.#ownership.isOwn(running);
+    if (!this.#active) {
+      // Stops a turn Grok started on its own; nothing of kaoiro's to wait for.
+      if (foreignRunning) await this.#current?.session.cancel();
+      return;
+    }
+    if (foreignRunning) {
+      // session/cancel stops only the running prompt; the own prompt waits
+      // behind it and is cancelled when it starts.
+      this.#cancelOnStart = true;
+      await this.#current?.session.cancel();
+      return;
+    }
+    await this.#cancelOwn();
+  }
+  #cancelOwn() {
+    clearTimeout(this.#abortTimer);
     this.#abortTimer = setTimeout(
       () => this.close(),
       Math.min(this.#settings.abortGraceMs, 3_000),
     );
-    await this.#current?.session.cancel();
+    return this.#current?.session.cancel() ?? Promise.resolve();
   }
   close() {
     if (this.#closing) return;

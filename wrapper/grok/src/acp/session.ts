@@ -73,11 +73,13 @@ export class AcpSession {
     return this.newSession(cwd, mcpServers, newSessionMeta);
   }
 
-  prompt(text: string) {
+  /** `promptId` names the prompt; Grok uses it in every record of the turn. */
+  prompt(text: string, promptId: string) {
     if (!this.sessionId) throw new Error("ACP session is not initialized");
     return this.connection.agent.request(acp.methods.agent.session.prompt, {
       sessionId: this.sessionId,
       prompt: [{ type: "text", text }],
+      _meta: { promptId },
     });
   }
 

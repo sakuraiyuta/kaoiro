@@ -482,9 +482,9 @@ describe("resident ACP host", () => {
   it.each([
     { scene: "permission", beforeWaitTexts: [], toolNames: ["write fixture"] },
     {
-      scene: "permission-no-tool-call",
+      scene: "permission-after-text",
       beforeWaitTexts: ["Before permission"],
-      toolNames: [],
+      toolNames: ["write fixture"],
     },
   ])("waits for the broker and reports rejection ($scene)", async ({
     scene, beforeWaitTexts, toolNames,
