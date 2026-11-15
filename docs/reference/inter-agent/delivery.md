@@ -422,7 +422,36 @@ timeout leaves the message as early input and records a downgraded
 rechecks the same live owner, work eligibility, and overtake budget before
 pushing `priority: "now"`. The running tool completes before the current turn
 ends; the yielded message starts the next root. A transfer after a granted
-claim does not revoke that cut. At most `urgent_overtake_limit` consecutive
+claim does not revoke that cut.
+
+For wrapper-fed Claude roots, an admitted MCP call keeps the cut waiting
+until its SDK user tool result is received. A handler returning or a
+PostToolUse hook alone does not release it. Permission-dialog waits are not
+execution: a cut may abort an unstarted permission request with a definite
+permission-aborted result, and a late allow cannot start that retired call.
+This MCP fence covers root calls, including external stdio MCP; it makes no
+additional promise about MCP inside subagents or SDK notification roots.
+
+A granted cut reserves the push slot while it waits, without delaying its
+claim or reporting a cut before an actual push. New peer early inputs stay
+queued and may fold into a later eligible root. Operator early input that
+cannot fold becomes an operator root; it is not retried as a fold. This is
+the same distinction as an actual pending cut receipt. Operator interrupt
+remains available. A stale reservation cannot block a different owner,
+session, query, or host generation. The owning cut exchanges its reservation
+for the actual receipt atomically.
+
+MCP execution waiting does not consume the pending-receipt deadline. An
+actual receipt already in flight during the claim still uses the original
+single deadline and may cause receipt_wait_timeout; the reservation prevents
+new folds from introducing a later competing receipt. Existing send timeout
+and turn inactivity-watchdog limits still apply; there is no new total MCP
+wait limit. If the old owner reaches its terminal before this reserved cut
+is pushed, its queued urgent root records downgraded:no_work_input once.
+Close or fail-stop retains existing cancellation behavior and does not
+promise a successor root.
+
+At most `urgent_overtake_limit` consecutive
 urgent peer root boundaries (default 2) may pass an older ordinary one, and
 at most `folds_per_turn` fold batches (default 3) may enter one turn. A fold
 whose pushed receipt becomes void or unknown still consumes its reserved

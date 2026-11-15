@@ -48,7 +48,7 @@ function deferred<T>() {
 }
 
 describe("Claude claimed-cut receipt chain", () => {
-  it.each([0, 1, 2, 3])("cuts once after %i successor receipts within the fold bound", async successorCount => {
+  it.each([0, 1, 2, 3])("reserves the cut before %i queued successor folds", async successorCount => {
     vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
     const ready = deferred<void>();
     const claimRequested = deferred<void>();
@@ -56,6 +56,7 @@ describe("Claude claimed-cut receipt chain", () => {
     const firstFoldWritten = deferred<void>();
     const releaseFirstHook = deferred<void>();
     const priorities: Array<string | null> = [];
+    const delivered = new Set<number>();
     const decisions: Array<{ kind: string; pushKind: string }> = [];
     const dispositions: Array<{ outcome: string; reason?: string }> = [];
     const stages: unknown[] = [];
@@ -99,21 +100,22 @@ describe("Claude claimed-cut receipt chain", () => {
             await hook({ hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: root.message.content as string }, undefined, signal);
             yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
             ready.resolve();
-            for (let n = 0; n < successorCount + 2; n++) {
+            let promptId = "p1";
+            for (let n = 0; delivered.size < successorCount + 2; n++) {
               const pushed = (await input.next()).value!;
               priorities.push(pushed.priority ?? null);
+              for (const match of (pushed.message.content as string).matchAll(/input (\d+)/g))
+                delivered.add(Number(match[1]));
               if (n === 0) { firstFoldWritten.resolve(); await releaseFirstHook.promise; }
               if (pushed.priority === "now") {
                 yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
+                promptId = "p2";
               }
               await hook({
                 hook_event_name: "UserPromptSubmit", session_id: "s",
-                prompt_id: pushed.priority === "now" ? "p2" : n > successorCount ? "p3" : "p1",
+                prompt_id: promptId,
                 prompt: pushed.message.content as string,
               }, undefined, signal);
-              if (pushed.priority === "now" && n < successorCount + 1) {
-                yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "F done" } as SDKMessage;
-              }
             }
             yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "done" } as SDKMessage;
           })(), { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query) as never,
@@ -138,20 +140,16 @@ describe("Claude claimed-cut receipt chain", () => {
       await vi.waitFor(() => expect(claimCalls).toBe(1));
       releaseFirstHook.resolve();
       await running;
-      const foldedCount = Math.min(successorCount + 1, 3);
-      expect(priorities).toEqual([
-        ...Array(foldedCount).fill(null), "now",
-        ...Array(successorCount + 1 - foldedCount).fill(null),
-      ]);
-      expect(decisions.filter(decision => decision.kind === "fold")).toHaveLength(foldedCount);
+      expect(priorities.slice(0, 2)).toEqual([null, "now"]);
+      expect(priorities.slice(2).every(priority => priority === null)).toBe(true);
+      expect([...delivered].sort((a, b) => a - b)).toEqual(
+        Array.from({ length: successorCount + 2 }, (_, n) => n + 2),
+      );
+      expect(decisions.filter(decision => decision.kind === "fold"))
+        .toHaveLength(priorities.length - 1);
       expect(decisions.filter(decision => decision.pushKind === "cut")).toHaveLength(1);
       expect(dispositions).toMatchObject([{ outcome: "cut" }]);
       expect(claimCalls).toBe(1);
-      if (successorCount === 3) {
-        expect(stages).toContainEqual(expect.objectContaining({
-          delivery_seq: 6, stage: "submitted", handoff: "prompt_hook",
-        }));
-      }
     } finally {
       releaseFirstHook.resolve();
       host?.close();
