@@ -60,7 +60,10 @@ cannot represent.
     `session_reset_modes: ["new", "clear"]` (unconditional,
     [issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658); both modes
     drive the same fresh relaunch, as for Antigravity — see the
-    [engine reference](../engines/grok-acp.md#session-reset))
+    [engine reference](../engines/grok-acp.md#session-reset)) /
+    `supports_attachments: true` (unconditional; omit `attachment_types` = no
+    type restriction,
+    [issue #1143](https://github.com/sakuraiyuta/kaoiro/issues/1143))
 - **`supports_model_switch` / `supports_effort_switch`** (implemented in
   phase-16, 2026-07-13, [ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md)
   F4): Advertise whether `set_model` / `set_effort` are accepted mid-session.
@@ -99,5 +102,6 @@ normal peer delivery are supported; early and yield are `none`. Model,
 effort and permission switching, attachments, reset, cold resume, history
 and context reporting are unsupported. Reply-basis v1 is not negotiated.
 Session reset was added later by
-[issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658); the current
-values are in the list above. See the [engine reference](../engines/grok-acp.md).
+[issue #658](https://github.com/sakuraiyuta/kaoiro/issues/658) and
+attachments by [issue #1143](https://github.com/sakuraiyuta/kaoiro/issues/1143);
+the current values are in the list above. See the [engine reference](../engines/grok-acp.md).

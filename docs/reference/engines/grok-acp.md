@@ -163,8 +163,8 @@ lists its configuration options (see
 [Model and effort switching](#model-and-effort-switching) and
 [Context usage](#context-usage)). The dashboard history of a resumed session
 is replayed from Grok's log (see
-[Dashboard history on resume](#dashboard-history-on-resume)). Attachments are
-unsupported (see [Prompt content blocks
+[Dashboard history on resume](#dashboard-history-on-resume)). Image, text and
+code, Office and PDF attachments are accepted (see [Prompt content blocks
 and attachments](#prompt-content-blocks-and-attachments)). Weekly account
 allowance reporting is available through `rate_limits` (see
 [Account rate limits](#account-rate-limits)). Unsupported controls reject
@@ -232,23 +232,93 @@ Limits, measured on Grok Build 1.0.52
 
 ## Prompt content blocks and attachments
 
-Attachments are unsupported. The adapter advertises
-`supports_attachments: false`, builds every ACP prompt from a single `text`
-block, and rejects a send that carries attachment ids; the wrapper reports the
-rejection as a system log line. The notes below record how Grok Build 1.0.52
-treats the other ACP prompt content blocks. See the
-[content-block measurements][attachment-evidence] for the cases, the stated
-limits and what was not measured.
+The adapter advertises `supports_attachments: true` with no
+`attachment_types` and accepts the protocol's image, text and code, Office and
+PDF uploads ([issue #1143](https://github.com/sakuraiyuta/kaoiro/issues/1143)).
+The [attachment-route measurements][attachment-routes] hold the evidence for
+this section; a text-only instruction is still one `text` block.
+
+### Blocks
+
+The instruction text is the first block, and each attachment adds one block
+in the instruction's order.
+
+| Upload | ACP block |
+| --- | --- |
+| PNG, JPEG, WebP, GIF | `image` with the uploaded MIME type and base64. Grok re-encodes a large image as JPEG itself. |
+| Text and code | `resource` `{ uri: "attachment:///<name>", mimeType, text }`: UTF-8 with replacement characters, the first 1 MB, and a truncation note. |
+| `.docx`, `.xlsx`, `.pptx` | The text extracted as in the Claude Code adapter (64 MiB uncompressed limit, 8 Mi characters), sent as the same `resource` with `text/plain`. A failed extraction refuses the instruction with `sdk_error`. |
+| PDF | A `resource_link` to a file the wrapper writes when the turn starts (see [PDF files](#pdf-files)). |
+
+`<name>` is the filename with path separators and control characters
+replaced.
+
+### Size limit
+
+Under ADR-0025 F10, an instruction whose blocks serialize (`JSON.stringify`)
+to more than 33,488,896 bytes (32 MiB less 64 KiB) is refused with
+`instruction_rejected` `total_request_over`, and Grok keeps running. Grok
+repeats a prompt's `text` blocks in `_x.ai/queue/changed` with the same
+escaping plus 217 or 218 bytes, the ACP SDK closes the connection on an
+incoming message over 32 MiB, and Grok exits on an incoming message over
+64 MiB. A PDF counts as its link. The server holds an instruction's text to
+65,536 bytes, so a text-only instruction does not reach the limit.
+
+### Staging and interrupt
+
+An instruction's uploads leave the pending set when the instruction arrives,
+before it waits behind earlier input. ADR-0025 F11 then holds wherever it
+waits: an interrupt sends `attach_rejected` `interrupted` for every pending
+upload and for each upload of an instruction whose turn has not started, and
+`instruction_rejected` `interrupted` for that instruction, which never runs. A
+queued text-only turn still runs. A turn that has started keeps its uploads,
+which Grok already has, and ends with an interrupted result. Shutdown drops
+the same set.
+
+### Small images
+
+Grok drops an image with a side under 8 pixels or with fewer than 512 pixels,
+sends an `image_dropped` update on `_x.ai/session_notification`, and adds a
+notice to the prompt. The adapter logs each note of an update for the current
+session as a system line `Grok: <note>`.
+
+### PDF files
+
+When a turn with PDFs starts, the wrapper creates
+`<OS temp>/kaoiro-grok-attach-<SHA-256 of agent_id>-XXXXXX` (`0700`), writes
+each PDF there as `<index>-<uuid>.pdf` (`0600`) without yielding to the event
+loop, and sends the prompt. The directory is removed when the turn ends
+(success, failure or interrupt) and at once on shutdown; a start removes what
+an earlier run of the same agent left. Grok reads the file with `read_file`,
+with no permission request under `off`, `workspace` or `read-only`. A `blob`
+resource is not used: Grok writes its bytes `0664` under a per-process
+directory that its descendants share through `TMPDIR`, and keeps them after
+it exits.
+
+### Grok's own copies
+
+Grok keeps each sent image in the session's `assets` directory (`0700`, files
+`0664`) and writes the image's base64 into the session's `updates.jsonl` as
+one line. The [dashboard history replay](#dashboard-history-on-resume) reads
+the last 8 MiB of that file and skips a line over 1 MiB, so large images
+shorten the replayed history; attachment chunks of a user message are skipped
+without being counted as invalid. `.xlsx`, `.pptx`, WebP and GIF delivery was
+not measured against the live model.
+
+### Other content blocks
+
+These notes record how Grok Build 1.0.52 treats the ACP prompt content
+blocks. See the [content-block measurements][attachment-evidence] for the
+cases, the stated limits and what was not measured.
 
 `initialize` returns `promptCapabilities` `image: false`, `audio: false` and
 `embeddedContext: true`.
 
-- `image`: accepted although `image: false`. PNG, WebP and GIF (sent on as PNG)
-  reached the model as an image; JPEG delivery was not established. Grok
-  states an 8×8 pixel minimum. A smaller image, or bytes it cannot decode, is
-  dropped before the model call: the RPC still succeeds, Grok sends an
-  `image_dropped` update on `_x.ai/session_notification` and adds a notice to
-  the prompt text.
+- `image`: accepted although `image: false`. PNG, JPEG and WebP reach the
+  model request as an image of their own type, and GIF as PNG. An image under
+  the thresholds
+  above, or bytes Grok cannot decode, is dropped before the model call: the
+  RPC still succeeds.
 - `resource` with `text`: the supplied `text` is inlined as attached file
   contents, also when the URI names no existing file.
 - `resource` with `blob`: not inlined. Grok writes the bytes under a
@@ -264,6 +334,8 @@ limits and what was not measured.
 
 [attachment-evidence]:
   ../../evidence/grok/2026-11-15-attachment-content-blocks.md
+[attachment-routes]:
+  ../../evidence/grok/2026-11-15-attachment-delivery-routes.md
 
 ## Cold resume and session discovery
 
