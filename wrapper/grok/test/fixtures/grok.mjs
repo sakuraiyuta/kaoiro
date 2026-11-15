@@ -123,6 +123,55 @@ let transport;
 // Settles when the MCP connection attempt has ended, whatever its outcome.
 let connecting = Promise.resolve();
 let prompt;
+// The prompt id Grok uses: the client's `_meta.promptId`, else the JSON-RPC id.
+const promptIds = new Map();
+let running;
+const queueChanged = (id) => {
+  running = id;
+  notification("_x.ai/queue/changed", { sessionId: sid, entries: [],
+    ...(id === undefined ? {} : { runningPromptId: id, runningKind: "prompt" }) });
+};
+// Prompts Grok starts on its own (issue 1128), scripted by the scenes below.
+const waiters = new Map();
+const awaitResponse = (id) => new Promise((resolve) => waiters.set(id, resolve));
+let foreign;
+let foreignHold = false;
+let ownQueued;
+const FOREIGN_TOKENS = 7000;
+const startForeign = (id) => {
+  foreign = id;
+  running = id;
+  notification("_x.ai/queue/changed", { sessionId: sid,
+    entries: ownQueued === undefined ? [] : [{ id: ownQueued, kind: "prompt" }],
+    runningPromptId: id, runningKind: "prompt" });
+};
+const endForeign = (category) => {
+  notification("_x.ai/session_notification", { sessionId: sid,
+    update: { sessionUpdate: "turn_completed", prompt_id: foreign },
+    ...(category ? { _meta: { cancellationCategory: category } } : {}) });
+  foreign = undefined;
+  foreignHold = false;
+  if (ownQueued === undefined) queueChanged(undefined);
+  else { const own = ownQueued; ownQueued = undefined; queueChanged(own); }
+};
+const foreignBody = async (withPermission) => {
+  textChunk("FOREIGN_TEXT");
+  update({ sessionUpdate: "tool_call", toolCallId: "foreign-tool", title: "foreign tool",
+    status: "in_progress", kind: "execute" });
+  if (withPermission) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: "foreign-permission",
+      method: "session/request_permission", params: { sessionId: sid,
+        toolCall: { toolCallId: "foreign-tool", title: "foreign tool" },
+        options: [{ optionId: "yes", name: "Allow", kind: "allow_once" },
+          { optionId: "no", name: "Reject", kind: "reject_once" }] } }) + "\n");
+    const answer = await awaitResponse("foreign-permission");
+    record("foreign-permission-response", { outcome: answer.result?.outcome?.outcome });
+  }
+  notification("_x.ai/session_notification", { sessionId: sid, update: {
+    sessionUpdate: "response_completed", signature: "fixture",
+    usage: { input_tokens: FOREIGN_TOKENS, output_tokens: 5, cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0, reasoning_tokens: 1 } } });
+};
 let memory = "";
 let rules = "";
 const reply = (id, result) =>
@@ -145,6 +194,7 @@ const update = (data) =>
   notification("session/update", {
     sessionId: sid,
     update: data,
+    ...(running === undefined ? {} : { _meta: { promptId: running } }),
   });
 const textChunk = (text) =>
   update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
@@ -155,14 +205,17 @@ const finish = (id, text, stopReason = "end_turn", category, noCall = false) => 
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text },
     });
+  const promptId = promptIds.get(id) ?? String(id);
+  promptIds.delete(id);
   notification("_x.ai/session_notification", {
     sessionId: sid,
-    update: { sessionUpdate: "turn_completed", prompt_id: String(id) },
+    update: { sessionUpdate: "turn_completed", prompt_id: promptId },
   });
+  queueChanged(undefined);
   reply(id, {
     stopReason,
     _meta: {
-      ...(text === "no-prompt-id" ? {} : { promptId: String(id) }),
+      ...(text === "no-prompt-id" ? {} : { promptId }),
       requestId: String(id),
       modelId: turnModel,
       ...(turnCalls > 0 ? { inputTokens: 1110 * turnCalls } : {}),
@@ -365,6 +418,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       }
       case "session/prompt": {
         prompt = msg.id;
+        promptIds.set(msg.id, msg.params._meta?.promptId ?? String(msg.id));
+        record("prompt_id", { promptId: msg.params._meta?.promptId ?? null });
+        if (!/^foreign-(during|interrupt)$/.test(msg.params.prompt[0].text))
+          queueChanged(promptIds.get(msg.id));
         turnCalls = 0;
         turnModel = process.env.KAOIRO_TEST_GROK_REPORT_MODEL ?? model;
         const text = msg.params.prompt[0].text;
@@ -479,6 +536,63 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (text === "exit") {
           process.exit(9);
         }
+        if (text === "arm-foreign" || text === "arm-foreign-hold") {
+          finish(msg.id, "armed");
+          setTimeout(() => void (async () => {
+            startForeign("task-completed-fixture");
+            if (text === "arm-foreign-hold") { textChunk("FOREIGN_TEXT"); foreignHold = true; return; }
+            await foreignBody(true);
+            endForeign();
+          })(), 20);
+          break;
+        }
+        if (text === "foreign-during" || text === "foreign-interrupt") {
+          ownQueued = promptIds.get(msg.id);
+          startForeign("task-completed-fixture");
+          if (text === "foreign-interrupt") { textChunk("FOREIGN_TEXT"); foreignHold = true; break; }
+          await foreignBody(true);
+          endForeign();
+          update({ sessionUpdate: "tool_call", toolCallId: "own-tool", title: "own tool",
+            status: "in_progress", kind: "edit" });
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: "own-permission",
+            method: "session/request_permission", params: { sessionId: sid,
+              toolCall: { toolCallId: "own-tool", title: "own tool" },
+              options: [{ optionId: "yes", name: "Allow", kind: "allow_once" },
+                { optionId: "no", name: "Reject", kind: "reject_once" }] } }) + "\n");
+          const answer = await awaitResponse("own-permission");
+          record("own-permission-response", { outcome: answer.result?.outcome?.outcome });
+          finish(msg.id, "OWN_TEXT");
+          break;
+        }
+        if (text === "permission-update-only" || text === "permission-bare-tool-call") {
+          // A preceding record that must not establish ownership: an update
+          // other than tool_call, or a tool_call without a prompt id.
+          if (text === "permission-update-only")
+            update({ sessionUpdate: "tool_call_update", toolCallId: "weak-tool", status: "in_progress" });
+          else
+            notification("session/update", { sessionId: sid, update: { sessionUpdate: "tool_call",
+              toolCallId: "weak-tool", title: "weak tool", status: "in_progress", kind: "edit" } });
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: "weak-permission",
+            method: "session/request_permission", params: { sessionId: sid,
+              toolCall: { toolCallId: "weak-tool", title: "weak tool" },
+              options: [{ optionId: "yes", name: "Allow", kind: "allow_once" },
+                { optionId: "no", name: "Reject", kind: "reject_once" }] } }) + "\n");
+          const answer = await awaitResponse("weak-permission");
+          record("weak-permission-response", { outcome: answer.result?.outcome?.outcome });
+          finish(msg.id, "WEAK_DONE");
+          break;
+        }
+        if (text === "permission-unknown") {
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: "unknown-permission",
+            method: "session/request_permission", params: { sessionId: sid,
+              toolCall: { toolCallId: "ghost-tool", title: "ghost tool" },
+              options: [{ optionId: "yes", name: "Allow", kind: "allow_once" },
+                { optionId: "no", name: "Reject", kind: "reject_once" }] } }) + "\n");
+          const answer = await awaitResponse("unknown-permission");
+          record("unknown-permission-response", { outcome: answer.result?.outcome?.outcome });
+          finish(msg.id, "UNKNOWN_DONE");
+          break;
+        }
         if (text === "canary") {
           // A value the test planted, carried through the real paths: the
           // assistant text (an envelope) and a notification's prompt_id (a
@@ -560,13 +674,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           }
           break;
         }
-        if (text === "permission-no-tool-call") {
+        if (text === "permission-after-text") {
           notification("_x.ai/session_notification", {
             session_id: sid,
             notification: { type: "pending_interaction", kind: "permission" },
           });
           textChunk("Before");
           textChunk(" permission");
+          update({
+            sessionUpdate: "tool_call",
+            toolCallId: "permission-tool",
+            title: "write fixture",
+            status: "in_progress",
+            kind: "edit",
+          });
           process.stdout.write(
             JSON.stringify({
               jsonrpc: "2.0",
@@ -736,10 +857,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         break;
       }
       case "session/cancel":
+        // Like Grok, a cancel stops only the running prompt.
+        if (foreign !== undefined) {
+          record("cancel", { target: "foreign" });
+          endForeign("MidTurnAbort");
+          break;
+        }
+        record("cancel", { target: prompt === undefined ? "none" : "own" });
         if (prompt !== undefined)
           finish(prompt, "", "cancelled", "MidTurnAbort");
         break;
       default:
+        if (waiters.has(msg.id)) {
+          const resolve = waiters.get(msg.id);
+          waiters.delete(msg.id);
+          resolve(msg);
+          break;
+        }
         if (msg.id === "replay-permission") record("replay-permission-response", { outcome: msg.result?.outcome?.outcome });
         if (msg.id === "permission" && msg.result && prompt !== undefined) {
           finish(prompt, "", "cancelled", "PermissionRejected");

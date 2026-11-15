@@ -6,6 +6,7 @@ import {
 } from "../acp/connection.js";
 
 export const GROK_SESSION_NOTIFICATION = "_x.ai/session_notification";
+export const GROK_QUEUE_CHANGED = "_x.ai/queue/changed";
 
 export interface GrokWireMetadata extends WireMetadata {
   vendor_kind?: string;
@@ -62,6 +63,7 @@ export function grokSessionMeta(rules: string): Record<string, unknown> {
 
 export function grokExtension(
   onSessionNotification: (notification: Record<string, unknown>) => void,
+  onQueueChanged: (params: Record<string, unknown>) => void = () => {},
 ): AcpExtension<GrokWireMetadata> {
   return {
     notifications: [
@@ -69,6 +71,11 @@ export function grokExtension(
         GROK_SESSION_NOTIFICATION,
         (params) => params as Record<string, unknown>,
         onSessionNotification,
+      ),
+      notification(
+        GROK_QUEUE_CHANGED,
+        (params) => params as Record<string, unknown>,
+        onQueueChanged,
       ),
     ],
     wireFields: grokWireFields,
