@@ -40,5 +40,35 @@ retried with the qualified one; the `agent_busy` failure was not inspected.
 The prompt now names `kaoiro__request_session_reset`, and the next run passed
 all four scenarios.
 
+## Operator reset on a local stack
+
+A local dev server (`mix phx.server`, fresh stores per run) and a runner, both
+built from commit `4ecf9d4b84090cdb73f21cd475e34f711f8c6e30` (the wrapper and
+runner build records name it, clean), ran a real Grok agent. A scratch driver
+outside the repository joined the dashboard channel as the operator, launched
+the agent through the runner, switched its effort from `high` (default) to
+`xhigh` while idle, and read the server's session-start and clear-watermark
+records over a loopback Erlang RPC. Each step waited for the previous one to
+settle. Outcomes of the final run:
+
+| Step | Observed |
+|---|---|
+| Capability | The first `state_change` advertised `supports_session_reset: true` and `["new", "clear"]`. |
+| Operator `new` | Reply `ok`. `session_reset_started` (`origin: "operator"`), then `session_reset_completed` 839 ms later with `to_session_id: null` and no `clear_watermark`. The old wrapper process exited 374 ms after `started`; the new session id was reported 1342 ms after it. The history kept the earlier result and gained one `session_boundary` marker, whose `to_session_id` was filled with the new session id. The session-start record moved to the new session id. |
+| Operator `clear` | The same sequence (completion 738 ms, old wrapper exit 363 ms, new session id 1216 ms after `started`), with `clear_watermark` in the completion. That value equalled the clear-watermark record and the new session-start record. A fresh join's history held only the boundary marker; the results of both earlier sessions were gone. |
+| Selection after each reset | The fresh wrapper first reported effort `high` (`default`) and 11 ms (`new`) and 3 ms (`clear`) later `xhigh` (`config`); the model stayed `grok-4.7`. Until the first turn, the permission was reported only as the carried `last_effective` (workspace-write, network on); after that turn it was effective with the same values. Only the default sandbox was used; a non-default one is covered by M7 and the native relaunch test. |
+| Reset during a turn | Sent 4.0 s after the instruction, outside the server's 2 s dispatch cooldown, while the agent was `thinking`: refused with `agent_busy`. No `session_reset_started` followed, the turn finished in the same session, and the session-start record was unchanged. |
+| Lifecycle and stop | The lifecycle record listed started (`operator`), `reconnecting` and completed for each reset. After `stop`, the runner had no child process left. |
+
+Three earlier runs stopped on errors in the scratch driver (a wrong health
+path, reading the effort from the wrong field, and waiting for the ready state
+after the result, although Grok publishes it just before). A fourth run, on
+the build of the parent commit `82e2aea9`, which differs only in comments and
+docs, completed the same steps with the same outcomes, but its RPC failed, so
+it has no session-start rows. The old wrapper had no pending inter-agent wait
+in these runs, so the shutdown delay of
+[issue #1130](https://github.com/sakuraiyuta/kaoiro/issues/1130) was not
+exercised. Timings are single observations on one host.
+
 These are observations of the measured version and host configuration, not
 guarantees for later Grok versions.
