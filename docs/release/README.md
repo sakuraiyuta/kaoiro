@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-11-14
+last_updated: 2026-11-15
 ---
 
 # Release notes
@@ -66,6 +66,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.15.1](v2026.11.15.1.md) | 2026-11-15 | v2026.11.14.2 | Grok peers gain work tools, session reset, ownership of the turns Grok starts on its own and background-task kill on interrupt; a stopping wrapper releases pending reply waits on every engine. |
 | [v2026.11.14.2](v2026.11.14.2.md) | 2026-11-14 | v2026.11.14.1 | Browser caching, composer send feedback, supervised Claude probes, Codex reply guidance, and pinned rollback archives. |
 | [v2026.11.14.1](v2026.11.14.1.md) | 2026-11-14 | v2026.11.10.3 | Room cleanup, collapsible room groups in the detail strip, browser-local room ordering, and dashboard layout fixes. |
 | [v2026.11.10.3](v2026.11.10.3.md) | 2026-11-11 | v2026.11.10.2 | The operator picks a new agent's room at launch, a director's peer session reset stays within its room, and the dashboard pins the gauges and status line, splits agent details into engine and kaoiro tabs and groups the settings drawer into tabs. |
