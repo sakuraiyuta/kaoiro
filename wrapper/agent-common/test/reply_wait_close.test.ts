@@ -114,9 +114,8 @@ describe("wait_for_response waiters at wrapper stop", () => {
     const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
       handler: () => void,
       delay?: number,
-      ...rest: unknown[]
     ) => {
-      const timer = realSetTimeout(handler, delay, ...rest);
+      const timer = realSetTimeout(handler, delay);
       created.push({ delay, timer });
       return timer;
     }) as typeof setTimeout);
