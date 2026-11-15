@@ -262,6 +262,33 @@ Use `600` only for:
 
 Do not tokenize this rule; usage depends on location.
 
+## Asynchronous Markdown bodies
+
+Chat and expanded status history share one lazy lexer worker per dashboard.
+Pending bodies display complete source as text nodes with preserved whitespace.
+The worker posts a start notification before lexing; handling it arms a single
+1,000 ms main-thread watchdog. Current results received before its callback
+retain the existing parser/sanitizer policy. Timeout, excessive nesting or
+execution failure retains source with an explanation, without retrying it.
+Startup/transport failure disables formatting until page reload. Bounded card,
+panel and collapsed-history previews remain synchronous.
+
+The queue is FIFO, with one active job and the latest request per mounted body.
+It has no maximum completion-time promise for arbitrary expanded histories.
+Startup/asset loading is outside the watchdog; a busy or suspended main thread
+can delay both starting it and termination. Parsing, sanitizing, token transfer,
+Mermaid and layout remain on the main thread and have no execution-time bound.
+Successful jobs reuse the worker until dashboard teardown. Cancellation of an
+active job terminates it; removed or superseded owners cannot receive its output.
+
+Each successful chat body owns its diagrams and checks ownership after awaits.
+Initial navigation does not wait for formatting. Late layout preserves the
+current bottom pin, remembered row/offset, show-earlier anchor, timeline body
+at the 24 px gap, or centered tool partner. New pointer, wheel, touch or keyboard
+navigation supersedes that correction. Native anchoring handles ordinary reading.
+The browser gate is documented in the
+[dashboard e2e guide](../../../dashboard/e2e/README.md).
+
 ## Layout
 
 Use a one-column flex shell that fits the viewport height, with a fixed header,

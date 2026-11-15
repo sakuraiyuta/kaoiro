@@ -37,7 +37,7 @@ export default defineConfig({
     // Keep Vitest out of e2e/ — those are Playwright specs (31-10) with
     // their own runner (`pnpm exec playwright test`).
     include: ["test/**/*.test.ts"],
-    setupFiles: ["test/isolation.setup.ts", "test/locale.setup.ts"],
+    setupFiles: ["test/isolation.setup.ts", "test/locale.setup.ts", "test/markdownWorker.setup.ts"],
     // Listed order: the isolation guard loads before the locale pin.
     sequence: { setupFiles: "list" },
   },

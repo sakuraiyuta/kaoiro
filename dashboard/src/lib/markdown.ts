@@ -4,19 +4,13 @@
 // into HTML, then DOMPurify strips scripts, event handlers, and
 // javascript: URLs before the string is ever inserted as HTML.
 //
-// renderMarkdown runs inside templates, so it never throws: a failure anywhere
-// in the pipeline, or block quote / list nesting deeper than the limit the
-// strict renderer uses (untrustedMarkdown.ts), shows the source as escaped text
-// instead. A few thousand nested quotes overflow marked's lexer, and the limit
-// makes the result of anything deeper the same whatever the engine's stack.
+// Full chat bodies use worker tokens. The synchronous entry is retained for
+// reference tests; it is never the unavailable-worker fallback.
 
-import { marked } from "marked";
+import { marked, type TokensList } from "marked";
 import DOMPurify from "dompurify";
-import {
-  escapeHtml,
-  MAX_NESTING_DEPTH,
-  nestingDepth,
-} from "./untrustedMarkdown";
+import { escapeHtml } from "./untrustedMarkdown";
+import { lexMarkdown, LEXER_OPTIONS } from "./markdownTokens";
 
 const MARKDOWN_SANITIZER_POLICY = {
   // Untrusted markdown must not be able to cover controls in the surrounding
@@ -45,22 +39,20 @@ function plainText(text: string): string {
  *  throws; see the header for what it returns instead. */
 export function renderMarkdown(text: string): string {
   try {
-    // The lexer and the parser are called directly so the tokens can be
-    // measured between them. marked.parse merges marked's defaults (gfm among
-    // them) into the options it is given and the direct pair does not, so the
-    // merged options are built here and given to both. A direct pair also skips
-    // the hooks and walkTokens stages of marked.parse; the global `marked` has
-    // neither configured. breaks turns single newlines into <br> for chat text.
-    const options = { ...marked.defaults, async: false, breaks: true };
-    const tokens = marked.lexer(text, options);
-    if (nestingDepth(tokens) > MAX_NESTING_DEPTH) return plainText(text);
-    return DOMPurify.sanitize(
-      marked.parser(tokens, options),
-      MARKDOWN_SANITIZER_POLICY,
-    );
+    const result = lexMarkdown(text);
+    return result.kind === "tokens"
+      ? renderMarkdownTokens(result.tokens) : plainText(text);
   } catch {
     return plainText(text);
   }
+}
+
+/** Parse and sanitize worker tokens; callers retain source on failure. */
+export function renderMarkdownTokens(tokens: TokensList): string {
+  return DOMPurify.sanitize(
+    marked.parser(tokens, { ...marked.defaults, ...LEXER_OPTIONS }),
+    MARKDOWN_SANITIZER_POLICY,
+  );
 }
 
 /** Sanitizes Mermaid's generated SVG under its narrowly-scoped style policy. */
@@ -101,18 +93,23 @@ function loadMermaid(): Promise<typeof import("mermaid").default> {
  * element, so re-running after each transcript update only renders new ones.
  * A diagram that fails to parse is left as its source code block.
  */
-export async function renderMermaidIn(container: HTMLElement): Promise<void> {
+export async function renderMermaidIn(
+  container: HTMLElement,
+  current: () => boolean = () => true,
+): Promise<void> {
   const blocks = container.querySelectorAll<HTMLElement>(
     "code.language-mermaid",
   );
   if (blocks.length === 0) return;
   const mermaid = await loadMermaid();
+  if (!current()) return;
   for (const code of blocks) {
     const pre = code.closest("pre");
     if (pre === null) continue;
     const id = `kaoiro-mmd-${mermaidSeq++}`;
     try {
       const { svg } = await mermaid.render(id, code.textContent ?? "");
+      if (!current()) return;
       const figure = document.createElement("div");
       figure.className = "mermaid-rendered";
       // Defence-in-depth: mermaid sanitizes internally under securityLevel

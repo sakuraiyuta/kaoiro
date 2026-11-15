@@ -7,6 +7,7 @@
   // `inline` is the agent card's profile: the text sits inside a button, so the
   // output is phrasing content in span wrappers only, and the plain fallback
   // carries no explanatory note.
+  import AsyncMarkdown from "./AsyncMarkdown.svelte";
   import { msg } from "./i18n/index.svelte";
   import {
     inlineLineCount,
@@ -17,10 +18,12 @@
   let {
     text,
     variant = "full",
+    execution = "sync",
     lines = $bindable(0),
   }: {
     text: string;
     variant?: "full" | "inline";
+    execution?: "sync" | "worker";
     /** The number of lines the inline variant draws, for a caller that says
      *  "more" past a limit. It is reported from the one render this component
      *  does, so the caller never parses the text again. 0 for the full variant. */
@@ -28,14 +31,17 @@
   } = $props();
 
   const inline = $derived(variant === "inline");
-  const rendered = $derived(inline ? renderUntrustedInline(text) : renderUntrustedMarkdown(text));
+  const rendered = $derived(execution === "worker" && !inline
+    ? { kind: "plain" as const } : inline ? renderUntrustedInline(text) : renderUntrustedMarkdown(text));
 
   $effect.pre(() => {
     lines = inline ? inlineLineCount(rendered, text) : 0;
   });
 </script>
 
-{#if rendered.kind === "html"}
+{#if execution === "worker" && !inline}
+  <AsyncMarkdown {text} profile="full" />
+{:else if rendered.kind === "html"}
   <svelte:element this={inline ? "span" : "div"} class="untrusted-markdown" class:inline>{@html rendered.html}</svelte:element>
 {:else}
   {#if !inline}
