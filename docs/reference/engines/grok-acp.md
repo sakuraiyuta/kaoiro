@@ -101,8 +101,22 @@ directory, and one that is not a string literal counts as outside.
 
 The adapter supports text turns, conversation continuity while the wrapper
 is resident, cancellation, operator permission requests, user questions,
-normal peer messages and dispatch confirmation. Early and yield delivery
-are explicitly `none`.
+normal peer messages and dispatch confirmation. The declared receiving
+modes remain `early: "none"` and `yield: "none"`.
+
+Receiving early input remains unsupported. Grok 1.0.52 accepts
+`_x.ai/interject` and may apply the text within the running prompt. A queued
+response and the echoed `interjectionId` confirm receipt, not consumption
+by that prompt, completion or interruption. An interjection racing
+completion can start a separate `interject-fallback-*` prompt whose
+identity is not bound to the caller's interjection ID. A missing RPC
+response also does not prove non-delivery. The wrapper therefore neither
+infers ownership from the active turn or fallback prefix nor retries a
+possibly delivered interjection automatically. See the
+[early-interjection measurements][early-evidence] for the observed cases
+and the limits of the current delivery contract.
+
+[early-evidence]: ../../evidence/grok/2026-11-15-early-interject.md
 
 Reply-basis v1 is not negotiated. With Grok 1.0.52, MCP `tools/call`
 requests carry a progress token but no proven turn-origin identity in
