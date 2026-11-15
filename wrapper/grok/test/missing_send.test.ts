@@ -58,20 +58,25 @@ describe("classifyMissingSend (issue #1123)", () => {
     ).toBe("failed");
   });
 
-  it("ignores a refusal text outside a failed tool_call_update", () => {
-    const thought = JSON.stringify({
-      params: {
-        update: {
-          sessionUpdate: "agent_thought_chunk",
-          content: {
-            type: "text",
-            text: "was not executed: Auto mode blocked this action",
+  it("ignores the refusal text outside a failed tool_call_update", () => {
+    const entry = (sessionUpdate: string, status: string) =>
+      JSON.stringify({
+        params: {
+          update: {
+            sessionUpdate,
+            status,
+            content: [{ type: "content", content: { type: "text",
+              text: "was not executed: Auto mode blocked this action" } }],
           },
         },
-      },
-    });
-    expect(
-      classifyMissingSend({ toolRan: false, updates: thought }).verdict,
-    ).toBe("failed");
+      });
+    for (const updates of [
+      entry("agent_thought_chunk", "failed"),
+      entry("tool_call_update", "completed"),
+    ]) {
+      expect(classifyMissingSend({ toolRan: false, updates }).verdict).toBe(
+        "failed",
+      );
+    }
   });
 });
