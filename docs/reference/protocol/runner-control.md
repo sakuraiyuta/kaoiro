@@ -131,6 +131,23 @@ channels; channel rejoin alone does not resend host registration. The
 partition failure itself does not terminate wrapper channels or agents. See the
 [manual recovery procedure](../../operations/codex-backend-switch.md#read-only-supervisor-observation).
 
+Runner transport recovery is local to the runner, not the wrapper adapter.
+A wire `phx_error` on the current runner topic followed by socket close 1000
+allows one delayed socket replacement. A successful channel join, socket
+open, or wire `phx_close` clears that evidence and cancels a pending recovery.
+Other topics and Phoenix's synthetic channel errors do not qualify; plain
+1000 remains terminal. Other close codes retain Phoenix's retry policy.
+Automatic replacements wait 1 second, then 2 seconds, then 5 seconds each;
+successful registration does not reset this progression. An explicit
+configuration reconnect resets it. Intentional close and configuration
+replacement retire the old connection and cancel its recovery first.
+
+This also covers a paused runner that receives the channel error and 1000
+after a server VM restart. It does not clear the old VM's Registry refusal,
+replay missed lifecycle broadcasts, or establish a successful observation.
+The manual VM recovery procedure and its registration/observation checks
+still apply.
+
 **Authentication**: The runner connects with per-host tokens (a server-configured
 `host_id:token` list, extending ADR-0011's per-entity token principle). host_id is fixed in
 configuration and is not server-assigned; this is separate from per-agent wrapper tokens

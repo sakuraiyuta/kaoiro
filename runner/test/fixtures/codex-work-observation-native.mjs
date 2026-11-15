@@ -8,11 +8,14 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { observeSupervisor } from '../../../scripts/codex-backend-compatibility.mjs';
 
 const [releaseArg, currentArg, oldArg] = process.argv.slice(2);
 assert.ok(releaseArg && currentArg && oldArg, 'release executable, current tree, old tree required');
 const release = resolve(releaseArg), current = resolve(currentArg), old = resolve(oldArg);
+const pausedRecovery = process.argv[5] === 'paused-recovery';
+const backend = pausedRecovery ? 'app-server' : 'exec';
 const root = await mkdtemp(join(tmpdir(), 'kogane910-native-'));
 const exec = promisify(execFile), delay = ms => new Promise(r => setTimeout(r, ms));
 const report = { builds: {}, observations: [], turns: [], controls: [], processes: [] };
@@ -20,7 +23,9 @@ const children = [], launched = [], logs = new Map(), recordedLogs = new Map();
 let provider, server, pausedRunner, providerRequests = 0, toolResults = 0;
 const env = { PATH: dirname(process.execPath) + ':/usr/local/bin:/usr/bin:/bin', HOME: root, TMPDIR: root,
   ERL_FLAGS: '+S 3:3', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', RELEASE_NODE: 'kogane910@127.0.0.1', RELEASE_DISTRIBUTION: 'name',
-  RELEASE_COOKIE: 'isolated-observation-test', PHX_SERVER: 'true', PORT: '44019', KAOIRO_RUNNER_TOKENS: 'observation-current:isolated-current,observation-old:isolated-old' };
+  RELEASE_COOKIE: 'isolated-observation-test', PHX_SERVER: 'true', PORT: '44019', KAOIRO_RUNNER_TOKENS: 'observation-current:isolated-current,observation-old:isolated-old',
+  PHX_HOST: 'localhost', KAOIRO_BIND_IP: '127.0.0.1',
+  SECRET_KEY_BASE: randomBytes(48).toString('base64') };
 async function waitFor(f, label, timeout = 30_000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) { const value = await f(); if (value) return value; await delay(50); }
@@ -79,12 +84,14 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
   server = start(release, ['start']);
   await waitFor(async () => { try { return await rpc('true'); } catch { return false; } }, 'release ready');
   report.server_ready = true;
-  for (const [label, tree] of [['current', current], ['old', old]]) {
+  const builds = pausedRecovery ? [['current', current]] :
+    [['current', current], ['old', old]];
+  for (const [label, tree] of builds) {
     const host = 'observation-' + label, agent = host + '.existing', state = join(root, label);
     for (const directory of ['home', 'config', 'codex', 'work', 'tmp']) await mkdir(join(state, directory), { recursive: true });
     await writeFile(join(state, 'codex/config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local"\n[model_providers.local]\nname = "Isolated observation"\nbase_url = "http://127.0.0.1:${provider.address().port}/v1"\nwire_api = "responses"\n[features]\nshell_snapshot = false\nplugins = false\n[analytics]\nenabled = false\n`);
     await writeFile(join(state, 'config/runner.config.json'), JSON.stringify({ host_id: host, server_url: 'ws://127.0.0.1:44019/runner',
-      cwd_allowlist: [join(state, 'work')], capabilities: ['codex'], codex: { backend: "exec", auth_mode: 'apikey', internal_subagents: false } }));
+      cwd_allowlist: [join(state, 'work')], capabilities: ['codex'], codex: { backend, auth_mode: 'apikey', internal_subagents: false } }));
     const runnerEnv = { KAOIRO_RUNNER_TOKEN: 'isolated-' + label, HOME: join(state, 'home'), TMPDIR: join(state, 'tmp'),
       KAOIRO_NODE: process.execPath, KAOIRO_RUNNER_DIR: join(state, 'config'), CODEX_HOME: join(state, 'codex'),
       NODE_OPTIONS: '--import=' + join(root, 'observer.mjs'), KOGANE_OBSERVATION_LOG: join(root, 'processes.jsonl') };
@@ -97,7 +104,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
     if (label === 'current') {
       const empty = await observe(host);
       assert.equal(empty.pid, runner.pid); assert.equal(empty.build_revision, build.revision);
-      assert.deepEqual(empty.children, []); assert.equal(empty.applied_backend, 'exec');
+      assert.deepEqual(empty.children, []); assert.equal(empty.applied_backend, backend);
       report.observations.push({ label, stage: 'empty', value: empty });
     }
     const initialTools = toolResults;
@@ -117,7 +124,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
       assert.equal(value.pid, runner.pid);
       assert.deepEqual(value.children, [{ agent_id: agent, stopping: false, restarting: false, reset_pending: false }]);
       assert.deepEqual(value.pending_spawns, []); assert.deepEqual(value.pending_switches, []);
-      assert.equal(value.applied_backend, 'exec');
+      assert.equal(value.applied_backend, backend);
     } else {
       assert.equal(value.error, 'runner_observation_timeout'); assert.ok(elapsed >= 5000);
     }
@@ -170,13 +177,18 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
         const prior = server, oldVmPid = await rpc('System.pid()');
         const shutdownLogStart = recordedLogs.get(runner).length;
         const restartVm = async () => {
+          if (pausedRecovery) {
+            pausedRunner = runner;
+            assert.equal(runner.kill('SIGSTOP'), true);
+          }
           await exec(release, ['stop'], { env, timeout: 30_000 });
           await waitFor(() => prior.exitCode !== null || prior.signalCode !== null, 'release VM exit');
-          // Pausing before close handling changes Phoenix's reconnect behavior.
-          await waitFor(() => recordedLogs.get(runner).slice(shutdownLogStart).some(x => x.text.includes('runner: socket closed')),
-            'runner observed old VM socket close');
-          pausedRunner = runner;
-          assert.equal(runner.kill('SIGSTOP'), true);
+          if (!pausedRecovery) {
+            await waitFor(() => recordedLogs.get(runner).slice(shutdownLogStart).some(x => x.text.includes('runner: socket closed')),
+              'runner observed old VM socket close');
+            pausedRunner = runner;
+            assert.equal(runner.kill('SIGSTOP'), true);
+          }
           server = start(release, ['start']);
           await waitFor(async () => { try { return await rpc('true'); } catch { return false; } }, 'new VM ready');
         };
@@ -236,7 +248,8 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
     await stopOwned(runner);
   }
   report.processes = await records();
-  assert.ok(report.processes.filter(x => x.kind === 'native').length >= 4);
+  assert.ok(report.processes.filter(x => x.kind === 'native').length >=
+    (pausedRecovery ? 1 : 4));
   report.result = 'pass';
 } catch (error) {
   report.result = 'fail'; report.error = error.stack;
@@ -253,6 +266,9 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
   catch (error) { report.cleanup_error = error.message; }
   for (const child of [...children].reverse()) await stopOwned(child);
   if (provider) { provider.closeAllConnections(); await new Promise(r => provider.close(r)); }
+  await waitFor(async () => (await records())
+    .filter(x => x.kind === 'node' || x.kind === 'native')
+    .every(x => !existsSync('/proc/' + x.pid)), 'observed children exit');
   report.processes = await records();
   report.native_turns = report.processes.filter(x => x.kind === "native" && x.exec_turn).length;
   report.all_observed_processes_gone = report.processes.filter(x => x.kind === 'node' || x.kind === 'native').every(x => !existsSync('/proc/' + x.pid));

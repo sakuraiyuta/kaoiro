@@ -321,6 +321,8 @@ export class RunnerLink {
   #channel: Channel;
   #hostId: string;
   #register: RunnerRegister;
+  #retireWire: () => void;
+  #recoveryStep = 0;
   readonly #token: string | undefined;
   readonly #logHeartbeats: () => boolean;
   readonly #callbacks: ChannelCallbacks;
@@ -350,6 +352,7 @@ export class RunnerLink {
     const wired = this.#wire(serverUrl, hostId);
     this.#socket = wired.socket;
     this.#channel = wired.channel;
+    this.#retireWire = wired.retire;
 
     // Liveness only while connected: pushing on a dead socket would just
     // pile up in the buffer to flush as a burst on reconnect. Reads
@@ -366,13 +369,23 @@ export class RunnerLink {
    *  Callbacks come from `this.#callbacks` and the register payload from
    *  `this.#register`, so a reconnect uses the values current AT the moment
    *  the reconnect fires — not the ones captured in the constructor. */
-  #wire(serverUrl: string, hostId: string): { socket: Socket; channel: Channel } {
+  #wire(serverUrl: string, hostId: string): {
+    socket: Socket; channel: Channel; retire: () => void;
+  } {
     // Capture the host id for THIS wire() call: reconnect() (below) reassigns
     // this.#hostId synchronously while the old socket's teardown callbacks
     // (onError/onClose) fire asynchronously — reading the live field would
     // mislabel the OLD socket's closure with the NEW host id.
     const wiredHostId = hostId;
     const channelTopic = `runner:${hostId}`;
+    let active = true;
+    let failedChannel = false;
+    let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+    const cancelRecovery = () => {
+      failedChannel = false;
+      clearTimeout(recoveryTimer);
+      recoveryTimer = undefined;
+    };
     const socket = createPhoenixSocket(serverUrl, {
       params: this.#token === undefined ? {} : { token: this.#token },
       // Surface Phoenix transport / channel state to runner.log so silent
@@ -390,6 +403,13 @@ export class RunnerLink {
     });
     socket.connect();
     const channel = socket.channel(channelTopic);
+    socket.onMessage((message) => {
+      const wire = message as { topic?: unknown; event?: unknown };
+      if (!active || wire.topic !== channelTopic) return;
+      // channel.onError also fires on ordinary socket closure.
+      if (wire.event === "phx_error") failedChannel = true;
+      if (wire.event === "phx_close") cancelRecovery();
+    });
 
     // Silent-disconnect guard (ADR-0023 observability gap): the phoenix
     // client auto-reconnects, but persistent failures (invalid token,
@@ -405,6 +425,15 @@ export class RunnerLink {
       process.stderr.write(
         `runner: socket closed host=${wiredHostId} code=${event.code} reason=${JSON.stringify(event.reason)}\n`,
       );
+      if (!active || event.code !== 1000 || !failedChannel ||
+          recoveryTimer !== undefined) return;
+      failedChannel = false;
+      recoveryTimer = setTimeout(() => {
+        recoveryTimer = undefined;
+        if (!active) return;
+        this.#recoveryStep = Math.min(this.#recoveryStep + 1, 2);
+        this.#replaceConnection(serverUrl, wiredHostId, this.#register);
+      }, [1_000, 2_000, 5_000][this.#recoveryStep]);
     });
 
     // Re-register on every socket (re)open: the server holds host state in
@@ -413,6 +442,9 @@ export class RunnerLink {
     // ServerLink re-announce). Reads `this.#register` on every open so a
     // mid-connection updateRegister rides the next re-announce too.
     socket.onOpen(() => {
+      if (!active) return;
+      // Phoenix can reopen this socket after its own heartbeat timeout.
+      cancelRecovery();
       channel
         .push("register", this.#register)
         .receive("ok", () => {
@@ -433,6 +465,7 @@ export class RunnerLink {
 
     channel
       .join()
+      .receive("ok", cancelRecovery)
       .receive("error", (reason: unknown) => {
         process.stderr.write(
           `RunnerLink join error: ${JSON.stringify(reason)}\n`,
@@ -442,7 +475,10 @@ export class RunnerLink {
         process.stderr.write("RunnerLink join timeout\n");
       });
 
-    return { socket, channel };
+    return { socket, channel, retire: () => {
+      active = false;
+      cancelRecovery();
+    } };
   }
 
   sendCodexWorkObserved(result: CodexWorkObserved): void {
@@ -516,6 +552,14 @@ export class RunnerLink {
    *  released by RunnerChannel.terminate when the disconnect propagates
    *  (`HostRegistry.drop` under owner fencing). */
   reconnect(serverUrl: string, hostId: string, register: RunnerRegister): void {
+    this.#recoveryStep = 0;
+    this.#replaceConnection(serverUrl, hostId, register);
+  }
+
+  #replaceConnection(
+    serverUrl: string, hostId: string, register: RunnerRegister,
+  ): void {
+    this.#retireWire();
     this.#channel.leave();
     this.#socket.disconnect();
     this.#hostId = hostId;
@@ -523,10 +567,12 @@ export class RunnerLink {
     const wired = this.#wire(serverUrl, hostId);
     this.#socket = wired.socket;
     this.#channel = wired.channel;
+    this.#retireWire = wired.retire;
   }
 
   /** Stops heartbeating, leaves the channel and closes the socket. */
   close(): void {
+    this.#retireWire();
     clearInterval(this.#heartbeat);
     this.#channel.leave();
     this.#socket.disconnect();
