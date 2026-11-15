@@ -30,7 +30,7 @@ describe("classifyMissingSend (issue #1123)", () => {
   it("counts an auto mode refusal of a tool that never ran as indeterminate", () => {
     const result = classifyMissingSend({
       toolRan: false,
-      updates: `not json\n${hookDenied}\n${autoMode}\n`,
+      updates: `not json\nnull\n${hookDenied}\n${autoMode}\n`,
     });
     expect(result.verdict).toBe("indeterminate");
     expect(result.refusals).toHaveLength(1);
@@ -73,6 +73,8 @@ describe("classifyMissingSend (issue #1123)", () => {
     for (const updates of [
       entry("agent_thought_chunk", "failed"),
       entry("tool_call_update", "completed"),
+      JSON.stringify({ params: { update: {
+        sessionUpdate: "tool_call_update", status: "failed" } } }),
     ]) {
       expect(classifyMissingSend({ toolRan: false, updates }).verdict).toBe(
         "failed",
