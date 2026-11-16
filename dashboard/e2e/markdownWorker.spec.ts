@@ -560,11 +560,14 @@ test.describe("operator scrolls during formatting", () => {
       expect(writes.filter((x: any) => x.gap <= 8)).toEqual([]);
     });
   }
+  // These repeat the input, and each run needs bodies still waiting, so they
+  // use a slower lexer and a longer test timeout than the single-shot cases.
   test("ArrowUp at the tail while bodies wait moves about 40 px", async ({ page }) => {
+    test.setTimeout(120_000);
     let overlapped = 0;
     for (let n = 0; n < 5; n++) {
       await page.goto(origin!); await open(page);
-      await instrument(page, 15);
+      await instrument(page, 25);
       history(waiting());
       await expect(page.locator(".msg.assistant")).toHaveCount(200);
       // Focus a body near the tail without moving the log.
@@ -585,9 +588,10 @@ test.describe("operator scrolls during formatting", () => {
     expect(overlapped).toBeGreaterThan(0);
   });
   test("small wheel steps at the tail while bodies wait leave the tail", async ({ page }) => {
+    test.setTimeout(120_000);
     for (let n = 0; n < 3; n++) {
       await page.goto(origin!); await open(page);
-      await instrument(page, 15);
+      await instrument(page, 25);
       history(waiting());
       await expect(page.locator(".msg.assistant")).toHaveCount(200);
       await page.locator(".log").hover();
