@@ -2494,7 +2494,8 @@
     if (!logEl) return;
     if (layoutIntent?.flight) awaitScrollEnd();
     if (layoutIntent && operatorMoved(layoutIntent)) releaseToOperator(layoutIntent);
-    else if (layoutIntent && !layoutIntent.flight) return;
+    // Our own writes are read like any other scroll: a jump the correction
+    // lands at the end of the log follows later output.
     const distance = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
     stickToBottom = distance <= STICK_THRESHOLD_PX;
     if (stickToBottom) {

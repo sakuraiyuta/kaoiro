@@ -499,6 +499,17 @@ test.describe("operator scrolls during formatting", () => {
     send("envelope", entry("**later**", 400)); await settle(page);
     expect(await bodyGap(page, 100)).toBeLessThan(-1000);
   });
+  test("a timeline jump that lands at the end of the log follows later output", async ({ page }) => {
+    // The newest body lands in the tail padding, which is the end of the log.
+    await timeline(page, 149); await settle(page);
+    expect(Math.abs(await bodyGap(page, 149) - 24)).toBeLessThanOrEqual(2);
+    expect(await gapOf(page)).toBeLessThanOrEqual(8);
+    // More output than the padding and the viewport hold, with no scroll.
+    for (let i = 400; i < 412; i++) send("envelope", entry(tall(i), i));
+    await expect(page.locator(".log")).toContainText("marker-411");
+    await settle(page);
+    expect(await gapOf(page)).toBeLessThanOrEqual(8);
+  });
   test("P9: a scroll without input after returning to an agent stays", async ({ page }) => {
     await page.goto(origin!); await open(page);
     send("history", { agents: {

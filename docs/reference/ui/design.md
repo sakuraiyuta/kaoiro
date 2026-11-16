@@ -308,7 +308,11 @@ scroll of its own; scrolls during it are not judged until it ends. It ends on
 `scrollend`, or, in a browser without that event (Safari before 26.2), once
 the log has not scrolled for 150 ms; a jump that stopped short of its
 destination was stopped by the operator. A jump to where the log already is
-does not start one. A click that moves nothing does not stop a timeline jump,
+does not start one. Every scroll, the correction's own included, records
+whether the log is within 8 px of its end; when it is, the next output pins
+the log to the bottom, so a jump to one of the newest bodies, which lands at
+the end, follows later output instead of keeping that body at the gap.
+A click that moves nothing does not stop a timeline jump,
 and a script or extension that scrolls inside `requestAnimationFrame` while
 formatting still applies is returned to the tail.
 The browser gate is documented in the
