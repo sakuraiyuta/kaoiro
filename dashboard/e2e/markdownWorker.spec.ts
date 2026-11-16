@@ -315,6 +315,18 @@ for (const [name, text] of [
   });
 }
 
+test("a body too deep to transfer back stays plain; the next one formats", async ({ page }) => {
+  await page.goto(origin!); await open(page);
+  const deep = "*a _b ".repeat(600) + "x" + " b_ a*".repeat(600);
+  send("envelope", entry(deep, 1));
+  const body = page.locator(".async-markdown").last();
+  await expect(body).toHaveAttribute("data-markdown-state", "plain", { timeout: 5000 });
+  await expect(body.locator(".markdown-source")).toHaveText(deep);
+  send("envelope", entry("**after**", 2));
+  await expect(page.locator(".msg.assistant strong", { hasText: "after" })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).md.created)).toBe(2);
+});
+
 test("switching agents during a backlog starts at most one new worker", async ({ page }) => {
   await page.goto(origin!); await open(page);
   send("history", { agents: {
