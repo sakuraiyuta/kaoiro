@@ -296,8 +296,17 @@ applied at once meanwhile.
 Each successful chat body owns its diagrams and checks ownership after awaits.
 Initial navigation does not wait for formatting. Late layout preserves the
 current bottom pin, remembered row/offset, show-earlier anchor, timeline body
-at the 24 px gap, or centered tool partner. New pointer, wheel, touch or keyboard
-navigation supersedes that correction. Native anchoring handles ordinary reading.
+at the 24 px gap, or centered tool partner. While one of these holds, browser
+scroll anchoring is off and the correction runs in the ResizeObserver callback
+of the frame that changed the layout. A scroll that leaves the log more than
+0.5 px from where the correction last put it (other than the browser clamping at
+the end after content shrank) is the operator's: the correction it still owed is
+applied, the operator's movement is kept on top of it, and native anchoring
+handles ordinary reading from there. The bottom pin resumes only when the
+operator reaches the end (within 1 px). Two differences from the synchronous
+renderer remain: a click that moves nothing does not stop a timeline jump, and
+a script or extension that scrolls inside `requestAnimationFrame` while
+formatting still applies is returned to the tail.
 The browser gate is documented in the
 [dashboard e2e guide](../../../dashboard/e2e/README.md).
 

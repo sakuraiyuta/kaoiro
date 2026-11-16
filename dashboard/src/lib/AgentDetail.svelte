@@ -1136,7 +1136,7 @@
     if (!el) return;
     const anchor = readingAnchor();
     const generation = ++scrollEffectGeneration;
-    layoutIntent = anchor ? { kind: "anchor", anchor } : null;
+    holdLayout(anchor ? { kind: "anchor", anchor } : null);
     const prevScrollHeight = el.scrollHeight;
     const prevScrollTop = el.scrollTop;
     frozenWindow = { start: 0, mode: "explicit-expanded", anchorLength: logs.length };
@@ -2172,12 +2172,26 @@
   let scrollEffectGeneration = 0;
 
   type ReadingAnchor = { key: string; offset: number };
-  type LayoutIntent =
+  // While an intent holds, only its corrections and the operator move the
+  // log (browser scroll anchoring is off). `at` is where the intent last
+  // left the log; `flight` is our own smooth scroll on its way to `to`.
+  type LayoutIntent = (
     | { kind: "pin" }
     | { kind: "anchor"; anchor: ReadingAnchor }
     | { kind: "timeline"; key: string }
-    | { kind: "tool"; key: string; toolKind: string };
+    | { kind: "tool"; key: string; toolKind: string }
+  ) & {
+    at?: number | undefined;
+    flight?: { to: number } | undefined;
+  };
+  const LAYOUT_TOLERANCE_PX = 2;
+  // `at` is read back after each write, so only sub-pixel noise is ours. The
+  // end is compared with whole-pixel scrollHeight and clientHeight, which can
+  // leave a zoomed page short of the end by up to a pixel.
+  const OWN_WRITE_TOLERANCE_PX = 0.5;
+  const END_TOLERANCE_PX = 1;
   let layoutIntent: LayoutIntent | null = null;
+  let ownsLayout = $state(false);
   let layoutFrame: number | null = null;
   let layoutReadyGeneration = -1;
 
@@ -2192,20 +2206,59 @@
     }
   }
 
+  function holdLayout(intent: LayoutIntent | null): void {
+    if (intent) intent.at = logEl?.scrollTop;
+    layoutIntent = intent;
+    ownsLayout = intent !== null;
+  }
+
+  // Anything but our own write, or the browser clamping at the end, is the
+  // operator's scroll.
+  function operatorMoved(intent: LayoutIntent): boolean {
+    if (intent.flight || !logEl || intent.at === undefined) return false;
+    const top = logEl.scrollTop;
+    const clamped = top < intent.at &&
+      top >= logEl.scrollHeight - logEl.clientHeight - END_TOLERANCE_PX;
+    return !clamped && Math.abs(top - intent.at) > OWN_WRITE_TOLERANCE_PX;
+  }
+
+  // The operator moved, possibly in the frame of a layout change the intent
+  // has not corrected yet: keep the operator's movement from the corrected
+  // position (one write, none when nothing was owed), then end the intent.
+  function releaseToOperator(intent: LayoutIntent): void {
+    if (logEl && intent.at !== undefined &&
+      (intent.kind === "pin" || layoutReady())) {
+      const top = intendedTop(intent);
+      if (top !== undefined) {
+        const wanted = top + logEl.scrollTop - intent.at;
+        if (Math.abs(logEl.scrollTop - wanted) > OWN_WRITE_TOLERANCE_PX) {
+          logEl.scrollTop = wanted;
+        }
+      }
+    }
+    leaveLayoutIntent();
+  }
+
+  function layoutReady(): boolean {
+    return layoutIntent !== null && layoutReadyGeneration === scrollEffectGeneration;
+  }
+
   function rowFor(key: string): HTMLElement | undefined {
     return [...(logEl?.querySelectorAll<HTMLElement>("[data-envelope-key]") ?? [])]
       .find((row) => row.dataset.envelopeKey === key);
   }
 
-  function correctLayout(): void {
-    if (!logEl || !layoutIntent) return;
-    if (layoutIntent.kind === "pin") {
-      logEl.scrollTop = logEl.scrollHeight;
-    } else if (layoutIntent.kind === "anchor") {
-      const row = rowFor(layoutIntent.anchor.key);
-      if (row) logEl.scrollTop = row.offsetTop - layoutIntent.anchor.offset;
-    } else if (layoutIntent.kind === "timeline") {
-      const row = rowFor(layoutIntent.key);
+  // Where the intent puts the log now. The timeline intent also sizes its
+  // tail padding so that position can be reached.
+  function intendedTop(intent: LayoutIntent): number | undefined {
+    if (!logEl) return;
+    if (intent.kind === "pin") return logEl.scrollHeight - logEl.clientHeight;
+    if (intent.kind === "anchor") {
+      const row = rowFor(intent.anchor.key);
+      return row ? row.offsetTop - intent.anchor.offset : undefined;
+    }
+    if (intent.kind === "timeline") {
+      const row = rowFor(intent.key);
       const target = row?.querySelector<HTMLElement>(".msg") ?? row;
       if (!target) return;
       resetTimelineScrollTail();
@@ -2213,20 +2266,29 @@
       timelineScrollTailPx = Math.max(0,
         top - Math.max(0, logEl.scrollHeight - logEl.clientHeight));
       logEl.style.setProperty("--timeline-scroll-tail", `${timelineScrollTailPx}px`);
-      logEl.scrollTop = top;
-    } else {
-      const intent = layoutIntent;
-      const target = logEl.querySelector<HTMLElement>(
-        `[data-tuid="${CSS.escape(intent.key)}"][data-kind="${intent.toolKind}"]`,
-      );
-      if (target) logEl.scrollTop = target.offsetTop + target.offsetHeight / 2
-        - logEl.clientHeight / 2;
+      return top;
     }
+    const target = logEl.querySelector<HTMLElement>(
+      `[data-tuid="${CSS.escape(intent.key)}"][data-kind="${intent.toolKind}"]`,
+    );
+    return target
+      ? target.offsetTop + target.offsetHeight / 2 - logEl.clientHeight / 2
+      : undefined;
+  }
+
+  function correctLayout(): void {
+    if (!logEl || !layoutIntent) return;
+    const top = intendedTop(layoutIntent);
+    if (top === undefined && layoutIntent.kind === "timeline") return;
+    // The pin writes past the end so the browser clamps to the exact end.
+    if (layoutIntent.kind === "pin") logEl.scrollTop = logEl.scrollHeight;
+    else if (top !== undefined) logEl.scrollTop = top;
+    layoutIntent.flight = undefined;
+    layoutIntent.at = logEl.scrollTop;
   }
 
   function scheduleLayoutCorrection(): void {
-    if (!layoutIntent || layoutReadyGeneration !== scrollEffectGeneration ||
-      layoutFrame !== null) return;
+    if (!layoutReady() || layoutFrame !== null) return;
     const el = logEl, agent = envelope.agent_id;
     const generation = scrollEffectGeneration;
     layoutFrame = requestAnimationFrame(() => {
@@ -2237,14 +2299,28 @@
     });
   }
 
-  function manualLogNavigation(event: Event): void {
-    if (event instanceof KeyboardEvent &&
-      !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]
-        .includes(event.key)) return;
-    layoutIntent = null;
+  function leaveLayoutIntent(): void {
+    holdLayout(null);
     ++scrollEffectGeneration;
     if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
     layoutFrame = null;
+  }
+
+  // A smooth jump that stopped short of its destination was stopped by the
+  // operator.
+  function settleScroll(): void {
+    const intent = layoutIntent, flight = intent?.flight;
+    if (intent && flight && logEl) {
+      // An earlier scroll can still end after the jump has started.
+      if (Math.abs(logEl.scrollTop - (intent.at ?? 0)) <= LAYOUT_TOLERANCE_PX) return;
+      intent.flight = undefined;
+      if (Math.abs(logEl.scrollTop - flight.to) > LAYOUT_TOLERANCE_PX) {
+        leaveLayoutIntent();
+        handleLogScroll();
+        return;
+      }
+    }
+    scheduleLayoutCorrection();
   }
 
   $effect(() => {
@@ -2252,16 +2328,17 @@
     void visibleLogs;
     if (!el) return;
     const observer = typeof ResizeObserver === "undefined" ? null
-      : new ResizeObserver(scheduleLayoutCorrection);
+      // Corrects within the frame that changed the layout, before paint. The
+      // tail restores no geometry, so it need not wait for its navigation.
+      : new ResizeObserver(() => {
+        if (layoutIntent?.kind === "pin" || layoutReady()) correctLayout();
+      });
     observer?.observe(el);
     el.querySelectorAll("[data-envelope-key]").forEach((row) => observer?.observe(row));
-    el.addEventListener("scrollend", scheduleLayoutCorrection);
-    const inputs = ["wheel", "touchstart", "pointerdown", "keydown"];
-    inputs.forEach((name) => el.addEventListener(name, manualLogNavigation));
+    el.addEventListener("scrollend", settleScroll);
     return () => {
       observer?.disconnect();
-      inputs.forEach((name) => el.removeEventListener(name, manualLogNavigation));
-      el.removeEventListener("scrollend", scheduleLayoutCorrection);
+      el.removeEventListener("scrollend", settleScroll);
       if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
       layoutFrame = null;
     };
@@ -2338,7 +2415,8 @@
       0,
       settledEntry.offsetTop - TIMELINE_SCROLL_TOP_GAP_PX,
     );
-    layoutIntent = { kind: "timeline", key: targetKey };
+    holdLayout({ kind: "timeline", key: targetKey,
+      flight: { to: Math.min(top, logEl.scrollHeight - logEl.clientHeight) } });
     layoutReadyGeneration = scrollEffectGeneration;
     logEl.scrollTo({ top, behavior: "smooth" });
     stickToBottom = false;
@@ -2386,7 +2464,8 @@
 
   function handleLogScroll(): void {
     if (!logEl) return;
-    if (layoutIntent) return;
+    if (layoutIntent && operatorMoved(layoutIntent)) releaseToOperator(layoutIntent);
+    else if (layoutIntent && !layoutIntent.flight) return;
     const distance = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
     stickToBottom = distance <= STICK_THRESHOLD_PX;
     if (stickToBottom) {
@@ -2430,6 +2509,12 @@
           anchorLength: logs.length,
         };
       }
+    }
+    // The pin resumes only at the end; resuming within the 8-px stick
+    // distance would correct each small step back to the end.
+    if (!layoutIntent && distance <= END_TOLERANCE_PX) {
+      holdLayout({ kind: "pin" });
+      layoutReadyGeneration = scrollEffectGeneration;
     }
     scrollMemory.set(envelope.agent_id, {
       top: logEl.scrollTop,
@@ -2560,7 +2645,7 @@
     // also prevents this effect from re-firing on every user scroll.
     let shouldStick = untrack(() => stickToBottom);
     let restoreTop: number | null = null;
-    if (switching || shrinkInvalidated) layoutIntent = null;
+    if (switching || shrinkInvalidated) holdLayout(null);
     if (switching) {
       scrollAgent = agentId;
       // Adopt the incoming agent's pin intent (unseen agent => bottom), and
@@ -2577,7 +2662,7 @@
       stickToBottom = shouldStick;
       restoreTop = effectiveMem && !effectiveMem.stick ? effectiveMem.top : null;
       if (effectiveMem?.anchor && !shouldStick) {
-        layoutIntent = { kind: "anchor", anchor: effectiveMem.anchor };
+        holdLayout({ kind: "anchor", anchor: effectiveMem.anchor });
       }
     }
     // ふじ review round 3 must-fix 1: this specific effect run's identity.
@@ -2586,7 +2671,9 @@
     // `scrollEffectGeneration` and make this continuation detect it is no
     // longer the latest — at both of its async resume points, before any
     // DOM mutation.
-    if (shouldStick && !shouldScrollTimelineTarget) layoutIntent = { kind: "pin" };
+    if (shouldStick && !shouldScrollTimelineTarget) {
+      holdLayout({ kind: "pin" });
+    }
     const myScrollEffectGeneration = ++scrollEffectGeneration;
     void afterLogUpdate().then(async () => {
       if (!logEl) return;
@@ -3058,13 +3145,13 @@
       `[data-tuid="${CSS.escape(id)}"][data-kind="${toKind}"]`,
     );
     if (!target) return;
-    layoutIntent = { kind: "tool", key: id, toolKind: toKind };
-    layoutReadyGeneration = generation;
-    stickToBottom = false;
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
     const row = target.closest<HTMLElement>("[data-envelope-key]");
     const top = Math.max(0, Math.min(logEl.scrollHeight - logEl.clientHeight,
       target.offsetTop + target.offsetHeight / 2 - logEl.clientHeight / 2));
+    holdLayout({ kind: "tool", key: id, toolKind: toKind, flight: { to: top } });
+    layoutReadyGeneration = generation;
+    stickToBottom = false;
+    logEl.scrollTo({ top, behavior: "smooth" });
     scrollMemory.set(agent, { top, stick: false, frozenWindow,
       anchor: row ? { key: row.dataset.envelopeKey!, offset: row.offsetTop - top }
         : undefined });
@@ -4148,7 +4235,8 @@
         class="log"
         bind:this={logEl}
         onscroll={handleLogScroll}
-        style={`--timeline-scroll-tail: ${timelineScrollTailPx}px`}
+        style={`--timeline-scroll-tail: ${timelineScrollTailPx}px;` +
+          (ownsLayout ? " overflow-anchor: none" : "")}
       >
         {#if logs.length === 0}
           <p class="empty">{msg().agentDetail.logEmpty}</p>
