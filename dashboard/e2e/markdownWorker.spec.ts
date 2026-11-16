@@ -111,7 +111,11 @@ test("built App isolates hostile bodies, preserves text, reuses and recovers", a
   const count = await page.evaluate(() => (window as any).md.created);
   send("envelope", entry("next **normal**", 5)); await settled(page);
   expect(await page.evaluate(() => (window as any).md.created)).toBe(count);
-  const worker = page.workers().find(w => w.url().includes("markdown.worker"))!;
+  // Terminated workers can stay listed and close at any time, so wait for
+  // every listed one, attached in the same tick as the listing.
+  const workers = page.workers().filter(w => w.url().includes("markdown.worker"));
+  const closed = Promise.all(workers.map(w => w.waitForEvent("close")));
+  const worker = workers.at(-1)!;
   expect(worker).toBeTruthy();
   const asset = await page.request.get(worker.url());
   expect(asset.status()).toBe(200);
@@ -119,7 +123,6 @@ test("built App isolates hostile bodies, preserves text, reuses and recovers", a
   expect(asset.headers()["x-content-type-options"]).toBe("nosniff");
   expect(new URL(worker.url()).origin).toBe(new URL(origin!).origin);
   await info.attach("browser", { body: browser.version(), contentType: "text/plain" });
-  const closed = worker.waitForEvent("close");
   await page.goto("about:blank"); await closed;
 });
 
@@ -156,11 +159,13 @@ test("delayed asset is pending time; blocked CSP fails until reload", async ({ p
   expect(await page.evaluate(() => (window as any).md.created)).toBe(1);
 });
 
+const short = (i: number) =>
+  `Reply **${i}** with \`code\` and a [link](https://example.org).\n\n- one\n- two\n`;
+
 for (const [count, size, limit] of [[200, 72, 1500], [200, 2000, 1500], [2000, 72, 4000], [2000, 2000, 22000]]) {
   test(`FIFO mounted batch ${count} x ${size}`, async ({ page }, info) => {
     await page.goto(origin!); await open(page);
-    history(Array.from({ length: count! }, (_, i) =>
-      `Reply **${i}** with \`code\` and a [link](https://example.org).\n\n- one\n- two\n`
+    history(Array.from({ length: count! }, (_, i) => short(i)
       + (size === 2000
         ? "A normal sentence of prose with *emphasis* here.\n".repeat(40) : "")));
     if (count! > 200) await page.locator(".load-earlier").click();
@@ -176,6 +181,23 @@ for (const [count, size, limit] of [[200, 72, 1500], [200, 2000, 1500], [2000, 7
     await info.attach("timing", { body: JSON.stringify({ elapsed, gaps }), contentType: "application/json" });
   });
 }
+
+test("three hostile predecessors, then 197 normal bodies", async ({ page }, info) => {
+  await page.goto(origin!); await open(page);
+  const hostile = "*a _b ".repeat(6000);
+  history([hostile, hostile, hostile, ...Array.from({ length: 197 }, (_, i) => short(i))]);
+  await expect(page.locator(".async-markdown")).toHaveCount(200);
+  const start = Date.now();
+  await page.evaluate(() => { (window as any).md.gaps = []; });
+  await expect(page.locator('[data-markdown-state="html"]')).toHaveCount(197, { timeout: 4000 });
+  const elapsed = Date.now() - start;
+  await expect(page.locator('[data-markdown-state="plain"]')).toHaveCount(3);
+  const gaps = await page.evaluate(() => Math.max(...(window as any).md.gaps));
+  expect(elapsed).toBeLessThan(4000);
+  expect(gaps).toBeLessThan(250);
+  expect(await page.evaluate(() => (window as any).md.terminated)).toBe(3);
+  await info.attach("timing", { body: JSON.stringify({ elapsed, gaps }), contentType: "application/json" });
+});
 
 test("tail pin survives late formatting and reading away never repins", async ({ page }) => {
   await page.goto(origin!); await open(page);

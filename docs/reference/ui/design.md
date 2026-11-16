@@ -280,6 +280,11 @@ can delay both starting it and termination. Parsing, sanitizing, token transfer,
 Mermaid and layout remain on the main thread and have no execution-time bound.
 Successful jobs reuse the worker until dashboard teardown. Cancellation of an
 active job terminates it; removed or superseded owners cannot receive its output.
+While a later job runs, settled results wait and are applied together 50 ms
+after the first of them; when the worker is idle they are applied at once.
+Removed or superseded owners' waiting results are dropped. One application
+parses and commits everything collected in its window without a time budget,
+so a draining backlog can keep the main thread busy once per window.
 
 Each successful chat body owns its diagrams and checks ownership after awaits.
 Initial navigation does not wait for formatting. Late layout preserves the
