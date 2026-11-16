@@ -10761,7 +10761,7 @@ describe("reserved resume receipt", () => {
       expect(host.tickPendingReceiptRootTimeout()).toBe(false);
       await hook("late");
       await expect(host.send("blocked")).rejects.toThrow();
-    }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
+    }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptIdleFloorMs: 1, resumeReceiptMaxWaitMs: 100 });
     expect(r.logs).toContain(mode === "idle" ? 'missing_hook' : 'starved');
     expect(r.logs.match(/resume_receipt_rejected/g)).toHaveLength(1);
     expect(r.starts).toHaveLength(1);
@@ -10843,7 +10843,7 @@ describe("reserved resume receipt", () => {
         await vi.advanceTimersByTimeAsync(now);
         expect(host.state).toBe("error");
         expect(host.receiptDiagnostics().root_hook_timeout).toBe(1);
-      }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
+      }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptIdleFloorMs: 1, resumeReceiptMaxWaitMs: 100 });
       expect(r.events.find(e => e.event === "root_hook_timeout")).toMatchObject({
         reason: occupied ? "starved" : "missing_hook", submitted: true, elapsed_ms: now,
         total_limit_ms: 100, occupancy_kind: occupied ? "foreign" : "none", pause_count: occupied ? 1 : 0,
@@ -10898,7 +10898,7 @@ describe("reserved resume receipt", () => {
       if (action === "fresh") {await new Promise(resolve=>setTimeout(resolve,0));expect(host.activeInterAgentTurnToken()).not.toBeNull();}
       if (action === "admit" || action === "fresh") { await (waiting ?? hook("note")); yield result("success"); }
       else expect(host.state).toBe("error");
-    }, { nativeContinuations: false, nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
+    }, { nativeContinuations: false, nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptIdleFloorMs: 1, resumeReceiptMaxWaitMs: 100 });
     expect(r.starts).toHaveLength(action === "admit" || action === "fresh" ? 3 : 2);
     if (action === "starve") expect(r.events.find(e => e.event === "root_hook_timeout").occupancy_kind).toBe("sdk_notification");
     if (action === "fold") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
@@ -10920,7 +10920,7 @@ describe("reserved resume receipt", () => {
       await exercise(async function* ({ host }) {
         now = 4; await vi.advanceTimersByTimeAsync(5); expect(host.state).not.toBe("error");
         now = 5; await vi.advanceTimersByTimeAsync(1); expect(host.state).toBe("error");
-      }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5 });
+      }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptIdleFloorMs: 1 });
     } finally { vi.useRealTimers(); }
   });
 
@@ -10930,8 +10930,46 @@ describe("reserved resume receipt", () => {
       now = 5; await hook("N", "native work");
       now = 50; yield result("success", { origin: { kind: "task-notification" } });
       await hook("note"); expect(host.state).toBe("error");
-    }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
+    }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptIdleFloorMs: 1, resumeReceiptMaxWaitMs: 100 });
     expect(r.events.find(e => e.event === "root_hook_timeout").reason).toBe("missing_hook");
+  });
+
+  // Issue #1158: in production the CLI reads a note 1.1-2.4 s after yield.
+  it("admits a resume hook that arrives after the default two-second push budget", async () => {
+    let now = 0;
+    const r = await exercise(async function* ({ host, hook }) {
+      now = 2_500; expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+      await hook("note"); expect(host.state).not.toBe("error");
+      yield result("success");
+    }, { nowMs: () => now });
+    expect(r.events.find(e => e.event === "resume_pending").idle_limit_ms).toBe(30_000);
+    expect(r.events.find(e => e.event === "admitted_root")).toMatchObject({ prompt_id: "note" });
+    expect(r.logs).not.toContain("resume_receipt_rejected");
+  });
+
+  it("still fail-stops a missing resume hook at the 30-second idle floor", async () => {
+    let now = 0;
+    const r = await exercise(async function* ({ host, hook }) {
+      now = 29_999; expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+      now = 30_000; expect(host.tickPendingReceiptRootTimeout()).toBe(true);
+      expect(host.state).toBe("error");
+      await hook("late");
+      await expect(host.send("blocked")).rejects.toThrow();
+    }, { nowMs: () => now });
+    expect(r.events.find(e => e.event === "root_hook_timeout").reason).toBe("missing_hook");
+    expect(r.logs.match(/resume_receipt_rejected/g)).toHaveLength(1);
+    expect(r.events.some(e => e.event === "admitted_root")).toBe(false);
+  });
+
+  it("uses a configured root timeout above the floor for the resume idle budget", async () => {
+    let now = 0;
+    const r = await exercise(async function* ({ host, hook }) {
+      now = 40_000; expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+      await hook("note"); expect(host.state).not.toBe("error");
+      yield result("success");
+    }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 45_000 });
+    expect(r.events.find(e => e.event === "resume_pending").idle_limit_ms).toBe(45_000);
+    expect(r.events.find(e => e.event === "admitted_root")).toMatchObject({ prompt_id: "note" });
   });
 
   it("retains foreign-frame backpressure after an admitted resume completes", async () => {

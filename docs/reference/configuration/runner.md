@@ -155,7 +155,7 @@ hidden by a variable.
 | Variable | Config key | Type | Range | Default | Reader | Precedence |
 | --- | --- | --- | --- | --- | --- | --- |
 | `KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS` | `claude_code.yield_claim_timeout_ms` | integer | 1..60000 | 2000 | Claude wrapper (`parseConfig`) | variable > file > default |
-| `KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS` | `claude_code.pending_receipt_root_timeout_ms` | integer | 1..60000 | 2000 | Claude wrapper (`parseConfig`) | variable > file > default |
+| `KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS` | `claude_code.pending_receipt_root_timeout_ms` | integer | 1..60000 | 2000 (a resume note after compaction uses at least 30000) | Claude wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT` | `claude_code.urgent_overtake_limit` | integer | 1..64 | 2 | Claude wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CLAUDE_FOLDS_PER_TURN` | `claude_code.folds_per_turn` | integer | 1..64 | 3 | Claude wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_GROK_TURN_WATCHDOG_INACTIVITY_MS` | `grok.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Grok wrapper (`readTurnWatchdogSettings`) | variable > file > default |

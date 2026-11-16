@@ -19,8 +19,11 @@ const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
 // The built CLI constructs the real Host, transport, SDK and bundled CLI.
 // Only external services are fixtures; production input, hooks and results remain intact.
 it.each([... ["native", "legacy"].flatMap(ownership =>
-  ["text", "tool", "root", "two", "starved", "queued"].map(scenario => ({ ownership, scenario }))), { ownership: "native", scenario: "post" }])(
+  ["text", "tool", "root", "two", "starved", "queued"].map(scenario => ({ ownership, scenario }))), { ownership: "native", scenario: "post" },
+  // Issue #1158: the CLI reads the note late; the stdin relay below delays it.
+  { ownership: "native", scenario: "slow" }, { ownership: "native", scenario: "slow-unfloored" }])(
   "compact resume $ownership $scenario", async ({ownership,scenario}) => {
+    const rootLike = ["root","post","slow","slow-unfloored"].includes(scenario);
     const sdkPath = dirname(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"));
     const sdk = JSON.parse(await readFile(join(sdkPath, "package.json"), "utf8"));
     expect([sdk.version, sdk.claudeCodeVersion]).toEqual(["0.3.321", "2.1.321"]);
@@ -60,7 +63,7 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
       if (compactRequest && !compactSeen) {
         compactSeen = true;
         if (!taskBarrier) throw Error("compact before Monitor barrier");
-        if(!["root","post"].includes(scenario)){taskBarrier.writeHead(200); taskBarrier.end("release"); taskBarrier = undefined;}
+        if(!rootLike){taskBarrier.writeHead(200); taskBarrier.end("release"); taskBarrier = undefined;}
         await delay(1500);
       }
       for (const message of payload.messages ?? []) for (const part of Array.isArray(message.content) ? message.content : []) {
@@ -137,13 +140,28 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
     await writeFile(cli, `
       import {runClaudeCli} from ${JSON.stringify(new URL("../dist/cli.js",import.meta.url).href)};
       import {AgentHost} from ${JSON.stringify(new URL("../dist/host.js",import.meta.url).href)};
+      import {spawn} from "node:child_process";
+      import {Writable} from "node:stream";
       const record=(event,data)=>console.error('AUTH_TRACE '+JSON.stringify({event,...data}));
       await runClaudeCli({createHost:(config,options)=>{
-        const wrapped={...options,...(process.env.PROBE_SCENARIO==='starved'?{resumeReceiptMaxWaitMs:200}:{})};
+        const scenario=process.env.PROBE_SCENARIO;
+        const wrapped={...options,...(scenario==='starved'?{resumeReceiptMaxWaitMs:200}:{}),
+          ...(scenario==='slow-unfloored'?{resumeReceiptIdleFloorMs:1}:{})};
+        const relay=scenario?.startsWith('slow')?{spawnClaudeCodeProcess:o=>{
+          const child=spawn(o.command,o.args,{cwd:o.cwd,env:o.env,signal:o.signal,stdio:['pipe','pipe','pipe']});
+          child.stderr.on('data',chunk=>process.stderr.write(chunk));
+          let chain=Promise.resolve(),buffered='';
+          // Holds the note's line, and every line after it in order, for 2.4 s.
+          const stdin=new Writable({write(chunk,_encoding,done){buffered+=chunk.toString();let end;
+            while((end=buffered.indexOf('\\n'))>=0){const line=buffered.slice(0,end+1);buffered=buffered.slice(end+1);
+              chain=chain.then(async()=>{if(line.includes('[kaoiro-resume:'))await new Promise(r=>setTimeout(r,2400));child.stdin.write(line);});}
+            done();},final(done){chain.then(()=>{child.stdin.end();done();});}});
+          return new Proxy(child,{get(target,key){if(key==='stdin')return stdin;const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;}});
+        }}:{};
         record('mode',{nativeContinuations:options.nativeContinuations});
         const hooks={...options.queryOptions?.hooks};
         hooks.UserPromptSubmit=[...(hooks.UserPromptSubmit??[]),{hooks:[async input=>{record('hook',{input});return {};}]}];
-        wrapped.queryOptions={...options.queryOptions,hooks};
+        wrapped.queryOptions={...options.queryOptions,hooks,...relay};
         for(const name of ['onTurnStart','onTurnEnd','onPromptAdmitted'])wrapped[name]=(...args)=>{record(name,{args});return options[name]?.(...args);};
         const host=new AgentHost(config,wrapped),resolve=host.resolveToolOrigin.bind(host);
         host.resolveToolOrigin=async id=>{const origin=await resolve(id);record('resolved_origin',{id,token:origin?.token,aborted:origin?.signal?.aborted});return origin;};
@@ -180,6 +198,13 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
       input(1, "START-991");
       await wait(()=>compactSeen);
       if(scenario==="queued") input(2,"QUEUED-991");
+      if(scenario==="slow-unfloored"){
+        await wait(()=>output.includes('"reason":"missing_hook"'));
+        await wait(()=>wire.received.some(x=>x.event==="envelope" && x.payload.type==="state_change" && x.payload.state==="error"));
+        expect(output).not.toContain('"event":"admitted_root"');
+        expect(sends()).toHaveLength(0);
+        return;
+      }
       if(scenario==="starved"){
         await wait(()=>output.includes('"reason":"starved"'));
         await wait(()=>wire.received.some(x=>x.event==="envelope" && x.payload.type==="state_change" && x.payload.state==="error"));
@@ -188,7 +213,7 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
         return;
       }
       await wait(()=>issued.length===3 && toolResults.some((r:any)=>r.tool_use_id===issued[2].id));
-      await wait(()=>results().length>=(["root","post"].includes(scenario)?3:scenario==="two"?5:4));
+      await wait(()=>results().length>=(rootLike?3:scenario==="two"?5:4));
       const trace=output.split("\n").filter(l=>l.startsWith("AUTH_TRACE ")).map(l=>JSON.parse(l.slice(11)));
       expect(trace.find(x=>x.event==="mode").nativeContinuations).toBe(ownership==="native");
       const hooks=trace.filter(x=>x.event==="hook" && x.input.hook_event_name==="UserPromptSubmit").map(x=>x.input);
@@ -196,9 +221,14 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
       expect(noteHook.prompt).toContain("[kaoiro-resume:");
       expect(noteHook.prompt.endsWith(resumeNote)).toBe(true);
       const noticeHooks=hooks.filter(x=>x.prompt.startsWith("<task-notification>"));
-      expect(noticeHooks).toHaveLength(["root","post"].includes(scenario)?0:scenario==="two"?2:1);
+      expect(noticeHooks).toHaveLength(rootLike?0:scenario==="two"?2:1);
       expect(noticeHooks.every(x=>x.prompt_id!==noteHook.prompt_id)).toBe(true);
       expect(output).toContain('"event":"admitted_root"');
+      if(scenario==="slow"){
+        const receipt=[...output.matchAll(/\[kaoiro\]\[claude-code-receipt\] (\{[^\n]*\})/g)].map(m=>JSON.parse(m[1]!));
+        expect(receipt.find(x=>x.event==="resume_pending").idle_limit_ms).toBe(30000);
+        expect(receipt.find(x=>x.event==="admitted_root").elapsed_ms).toBeGreaterThan(2000);
+      }
       expect(sends()).toHaveLength(2);
       expect(sends()[0]!.payload.payload).toMatchObject({kind:"response",in_reply_to:1});
       expect(sends()[1]!.payload.payload).toMatchObject({kind:"request",in_reply_to:0});
@@ -209,7 +239,7 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
       expect(await readFile(join(cwd,"resumed.txt"),"utf8")).toBe("WORK-RESUMED");
       expect(output).not.toContain("notification result fail-stop");
       expect(requests.some((x:any)=>x.delivered && x.noteExact)).toBe(true);
-      if (!["root","post"].includes(scenario)) expect(requests.some((x:any)=>x.notice && !x.delivered)).toBe(true);
+      if (!rootLike) expect(requests.some((x:any)=>x.notice && !x.delivered)).toBe(true);
       if(scenario==="two"){
         expect(requests.some((x:any)=>x.noticeN2 && !x.delivered)).toBe(true);
         const rows=(await queueRows()).filter(q=>q.operation==="enqueue");

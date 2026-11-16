@@ -482,6 +482,11 @@ export interface AgentHostOptions {
   phase2RootScheduling?: () => boolean;
   pendingReceiptRootTimeoutMs?: number;
   resumeReceiptMaxWaitMs?: number;
+  /** Lower bound of a resume note's idle budget, which is
+   *  `max(pendingReceiptRootTimeoutMs, this)`. The CLI can take more than two
+   *  seconds to read the note after compaction (issue #1158). Absent or
+   *  invalid falls back to 30 seconds. */
+  resumeReceiptIdleFloorMs?: number;
   /** Synchronous final check before an input is yielded to the SDK. Undefined
    * keeps the queued input; null consumes it without starting a turn. */
   prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
@@ -1413,6 +1418,12 @@ export class AgentHost implements EngineAdapter {
   get resumeReceiptMaxWaitMs(): number {
     const value = this.#options.resumeReceiptMaxWaitMs;
     return Number.isSafeInteger(value) && value! > 0 && value! <= 2_147_483_647 ? value! : 1_800_000;
+  }
+
+  get resumeReceiptIdleLimitMs(): number {
+    const floor = this.#options.resumeReceiptIdleFloorMs;
+    return Math.max(this.pendingReceiptRootTimeoutMs,
+      Number.isSafeInteger(floor) && floor! > 0 && floor! <= 2_147_483_647 ? floor! : 30_000);
   }
 
   canFoldLiveInput(): boolean {
@@ -2830,7 +2841,8 @@ export class AgentHost implements EngineAdapter {
   #startPendingRootClock(): void {
     if (this.#pendingPushedReceipt === null || this.#admissionFailStopped) return;
     if (this.#pendingRootRemaining === null) {
-      this.#pendingRootRemaining = this.pendingReceiptRootTimeoutMs;
+      this.#pendingRootRemaining = this.#pendingPushedReceipt.kind === "resume"
+        ? this.resumeReceiptIdleLimitMs : this.pendingReceiptRootTimeoutMs;
     }
     this.#resumePendingRootClock();
   }
@@ -5446,7 +5458,7 @@ export class AgentHost implements EngineAdapter {
             sessionId: this.#sessionId ?? "", query: this.#query!, generation: this.#hostRunGeneration,
             deadline: this.#receiptNow() + this.resumeReceiptMaxWaitMs };
           this.#pendingPushedReceipt = receipt;
-          this.#recordResume(receipt, "resume_pending");
+          this.#recordResume(receipt, "resume_pending", { idle_limit_ms: this.resumeReceiptIdleLimitMs });
           this.#startPendingRootClock();
           yield turn.message;
           continue;

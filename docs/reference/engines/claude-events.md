@@ -303,8 +303,15 @@ that overtake in a text-only schedule but can fold at a foreground tool boundary
 so it does not preserve ordinary-root authority. Stop persistent Monitors before
 compaction when possible. There are two receipt budgets, both starting at yield:
 
-- The idle budget is `pending_receipt_root_timeout_ms` (default 2 seconds).
-  It pauses under tracked native or foreign occupancy and resumes afterwards.
+- The idle budget is `max(pending_receipt_root_timeout_ms, 30 seconds)`, so
+  30 seconds by default. A live push keeps the plain setting, but the CLI can
+  take more than 2 seconds to read a note after compaction
+  ([issue #1158](https://github.com/sakuraiyuta/kaoiro/issues/1158),
+  [measurements](../../evidence/claude/2026-11-16-compact-resume-latency.md)).
+  The setting can lengthen the note's budget but not shorten it below the
+  floor; raising it also lengthens live pushes. `resume_pending` records the
+  value as `idle_limit_ms`. The budget pauses under tracked native or foreign
+  occupancy and resumes afterwards, without restoring spent time.
 - The total budget uses the resolved Claude watchdog `inactivityMs` (default
   30 minutes). Unlike the watchdog, it counts occupied time and never renews
   on SDK progress or notification changes. A shorter watchdog setting can
