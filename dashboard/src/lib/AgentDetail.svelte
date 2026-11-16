@@ -2333,7 +2333,6 @@
       Math.abs(logEl.scrollTop - to) <= LAYOUT_TOLERANCE_PX) return;
     layoutIntent.flight = { to };
     logEl.scrollTo({ top: to, behavior: "smooth" });
-    awaitScrollEnd();
   }
 
   // A smooth jump that stopped short of its destination was stopped by the
