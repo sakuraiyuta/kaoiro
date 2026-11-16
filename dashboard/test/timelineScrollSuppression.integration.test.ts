@@ -947,11 +947,76 @@ describe("issue #617: the end of a timeline jump (scrollend)", () => {
     expect(owns(logEl)).toBe(false);
   });
 
-  it("a scrollend at the destination keeps the jump", async () => {
+  it("a scrollend at the destination keeps the jump; the next scroll is the operator's", async () => {
     const { logEl, to } = await startJump();
     scrollLogTo(logEl, to);
     await scrollEnd(logEl);
     expect(owns(logEl)).toBe(true);
+    scrollLogTo(logEl, to + 400);
+    await tick();
+    expect(owns(logEl)).toBe(false);
+  });
+
+  it("a jump the operator stops at the end of the log resumes the pin", async () => {
+    const { logEl } = await startJump();
+    scrollLogTo(logEl, naturalBottom(logEl));
+    await scrollEnd(logEl);
+    expect(owns(logEl)).toBe(true);
+  });
+
+  it("where scrollend exists, a pause in the jump does not end it", async () => {
+    const { logEl, to } = await startJump();
+    scrollLogTo(logEl, to + 400);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(owns(logEl)).toBe(true);
+  });
+
+  // Models a browser without scrollend (Safari before 26.2).
+  function withoutScrollend(): () => void {
+    const saved = [window, Window.prototype, Document.prototype, HTMLElement.prototype,
+      Element.prototype].flatMap((owner) => {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, "onscrollend");
+      return descriptor ? [[owner, descriptor] as const] : [];
+    });
+    for (const [owner] of saved) delete (owner as { onscrollend?: unknown }).onscrollend;
+    expect("onscrollend" in document.createElement("div")).toBe(false);
+    return () => {
+      for (const [owner, descriptor] of saved) Object.defineProperty(owner, "onscrollend", descriptor);
+    };
+  }
+
+  it("without scrollend, a jump stopped short ends 150 ms after its last scroll", async () => {
+    const restore = withoutScrollend();
+    try {
+      const { logEl, to } = await startJump();
+      scrollLogTo(logEl, to + 400);
+      await vi.advanceTimersByTimeAsync(149);
+      expect(owns(logEl)).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(owns(logEl)).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it("without scrollend, each scroll keeps a jump going; at its destination it keeps the target", async () => {
+    const restore = withoutScrollend();
+    try {
+      const { logEl, to } = await startJump();
+      for (const top of [to + 600, to + 300, to + 100]) {
+        scrollLogTo(logEl, top);
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      expect(owns(logEl)).toBe(true);
+      scrollLogTo(logEl, to);
+      await vi.advanceTimersByTimeAsync(150);
+      expect(owns(logEl)).toBe(true);
+      scrollLogTo(logEl, to + 400);
+      await tick();
+      expect(owns(logEl)).toBe(false);
+    } finally {
+      restore();
+    }
   });
 
   it("a jump that need not move holds no flight, so the next scroll is the operator's", async () => {
