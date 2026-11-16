@@ -303,9 +303,13 @@ of the frame that changed the layout. A scroll that leaves the log more than
 the end after content shrank) is the operator's: the correction it still owed is
 applied, the operator's movement is kept on top of it, and native anchoring
 handles ordinary reading from there. The bottom pin resumes only when the
-operator reaches the end (within 1 px). Two differences from the synchronous
-renderer remain: a click that moves nothing does not stop a timeline jump, and
-a script or extension that scrolls inside `requestAnimationFrame` while
+operator reaches the end (within 1 px). A timeline or tool jump is a smooth
+scroll of its own; scrolls during it are not judged until it ends. It ends on
+`scrollend`, or, in a browser without that event (Safari before 26.2), once
+the log has not scrolled for 150 ms; a jump that stopped short of its
+destination was stopped by the operator. A jump to where the log already is
+does not start one. A click that moves nothing does not stop a timeline jump,
+and a script or extension that scrolls inside `requestAnimationFrame` while
 formatting still applies is returned to the tail.
 The browser gate is documented in the
 [dashboard e2e guide](../../../dashboard/e2e/README.md).

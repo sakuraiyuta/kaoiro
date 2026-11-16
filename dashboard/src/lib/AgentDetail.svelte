@@ -2228,9 +2228,10 @@
   function releaseToOperator(intent: LayoutIntent): void {
     if (logEl && intent.at !== undefined &&
       (intent.kind === "pin" || layoutReady())) {
+      const moved = logEl.scrollTop - intent.at;
       const top = intendedTop(intent);
       if (top !== undefined) {
-        const wanted = top + logEl.scrollTop - intent.at;
+        const wanted = top + moved;
         if (Math.abs(logEl.scrollTop - wanted) > OWN_WRITE_TOLERANCE_PX) {
           logEl.scrollTop = wanted;
         }
@@ -2248,8 +2249,8 @@
       .find((row) => row.dataset.envelopeKey === key);
   }
 
-  // Where the intent puts the log now. The timeline intent also sizes its
-  // tail padding so that position can be reached.
+  // Where the intent puts the log now. Only reads: releasing to the operator
+  // computes it after their scroll, which a layout change here would move.
   function intendedTop(intent: LayoutIntent): number | undefined {
     if (!logEl) return;
     if (intent.kind === "pin") return logEl.scrollHeight - logEl.clientHeight;
@@ -2260,13 +2261,9 @@
     if (intent.kind === "timeline") {
       const row = rowFor(intent.key);
       const target = row?.querySelector<HTMLElement>(".msg") ?? row;
-      if (!target) return;
-      resetTimelineScrollTail();
-      const top = Math.max(0, target.offsetTop - TIMELINE_SCROLL_TOP_GAP_PX);
-      timelineScrollTailPx = Math.max(0,
-        top - Math.max(0, logEl.scrollHeight - logEl.clientHeight));
-      logEl.style.setProperty("--timeline-scroll-tail", `${timelineScrollTailPx}px`);
-      return top;
+      return target
+        ? Math.max(0, target.offsetTop - TIMELINE_SCROLL_TOP_GAP_PX)
+        : undefined;
     }
     const target = logEl.querySelector<HTMLElement>(
       `[data-tuid="${CSS.escape(intent.key)}"][data-kind="${intent.toolKind}"]`,
@@ -2276,10 +2273,22 @@
       : undefined;
   }
 
+  // Sizes the tail padding so the timeline target's position can be reached.
+  function fitTimelineTail(top: number): void {
+    if (!logEl) return;
+    resetTimelineScrollTail();
+    timelineScrollTailPx = Math.max(0,
+      top - Math.max(0, logEl.scrollHeight - logEl.clientHeight));
+    logEl.style.setProperty("--timeline-scroll-tail", `${timelineScrollTailPx}px`);
+  }
+
   function correctLayout(): void {
     if (!logEl || !layoutIntent) return;
     const top = intendedTop(layoutIntent);
-    if (top === undefined && layoutIntent.kind === "timeline") return;
+    if (layoutIntent.kind === "timeline") {
+      if (top === undefined) return;
+      fitTimelineTail(top);
+    }
     // The pin writes past the end so the browser clamps to the exact end.
     if (layoutIntent.kind === "pin") logEl.scrollTop = logEl.scrollHeight;
     else if (top !== undefined) logEl.scrollTop = top;
@@ -2304,6 +2313,27 @@
     ++scrollEffectGeneration;
     if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
     layoutFrame = null;
+  }
+
+  // Browsers without scrollend (Safari before 26.2) take a log that has not
+  // scrolled for this long as stopped.
+  const SCROLL_STILL_MS = 150;
+  let stillTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function awaitScrollEnd(): void {
+    if (!logEl || "onscrollend" in logEl) return;
+    clearTimeout(stillTimer);
+    stillTimer = setTimeout(settleScroll, SCROLL_STILL_MS);
+  }
+
+  // Our own smooth scroll to `to`. A log already there raises no scroll and
+  // no scrollend that would end a flight, so it takes none.
+  function flyTo(to: number): void {
+    if (!logEl || !layoutIntent ||
+      Math.abs(logEl.scrollTop - to) <= LAYOUT_TOLERANCE_PX) return;
+    layoutIntent.flight = { to };
+    logEl.scrollTo({ top: to, behavior: "smooth" });
+    awaitScrollEnd();
   }
 
   // A smooth jump that stopped short of its destination was stopped by the
@@ -2415,10 +2445,9 @@
       0,
       settledEntry.offsetTop - TIMELINE_SCROLL_TOP_GAP_PX,
     );
-    holdLayout({ kind: "timeline", key: targetKey,
-      flight: { to: Math.min(top, logEl.scrollHeight - logEl.clientHeight) } });
+    holdLayout({ kind: "timeline", key: targetKey });
     layoutReadyGeneration = scrollEffectGeneration;
-    logEl.scrollTo({ top, behavior: "smooth" });
+    flyTo(Math.min(top, logEl.scrollHeight - logEl.clientHeight));
     stickToBottom = false;
     scrollMemory.set(envelope.agent_id, {
       top, stick: false, frozenWindow,
@@ -2464,6 +2493,7 @@
 
   function handleLogScroll(): void {
     if (!logEl) return;
+    if (layoutIntent?.flight) awaitScrollEnd();
     if (layoutIntent && operatorMoved(layoutIntent)) releaseToOperator(layoutIntent);
     else if (layoutIntent && !layoutIntent.flight) return;
     const distance = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
@@ -3148,10 +3178,10 @@
     const row = target.closest<HTMLElement>("[data-envelope-key]");
     const top = Math.max(0, Math.min(logEl.scrollHeight - logEl.clientHeight,
       target.offsetTop + target.offsetHeight / 2 - logEl.clientHeight / 2));
-    holdLayout({ kind: "tool", key: id, toolKind: toKind, flight: { to: top } });
+    holdLayout({ kind: "tool", key: id, toolKind: toKind });
     layoutReadyGeneration = generation;
     stickToBottom = false;
-    logEl.scrollTo({ top, behavior: "smooth" });
+    flyTo(top);
     scrollMemory.set(agent, { top, stick: false, frozenWindow,
       anchor: row ? { key: row.dataset.envelopeKey!, offset: row.offsetTop - top }
         : undefined });
