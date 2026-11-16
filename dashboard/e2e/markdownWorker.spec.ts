@@ -315,6 +315,20 @@ for (const [name, text] of [
   });
 }
 
+test("switching agents during a backlog starts at most one new worker", async ({ page }) => {
+  await page.goto(origin!); await open(page);
+  send("history", { agents: {
+    "host.p": Array.from({ length: 2000 }, (_, i) => entry(`Reply **${i}**\n`, i)),
+    "host.q": [entry("**q reply**", 0, "assistant", "host.q")],
+  } });
+  await page.locator(".load-earlier").click();
+  await expect(page.locator(".async-markdown")).toHaveCount(2000);
+  expect(await page.locator('[data-markdown-state="pending"]').count()).toBeGreaterThan(0);
+  await page.getByRole("button", { name: /^Go to the next agent/ }).click();
+  await expect(page.locator(".msg strong", { hasText: "q reply" })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).md.created)).toBeLessThanOrEqual(2);
+});
+
 test("tail pin survives late formatting and reading away never repins", async ({ page }) => {
   await page.goto(origin!); await open(page);
   history(Array.from({ length: 40 }, (_, i) => `row ${i}\n\n` + "paragraph\n\n".repeat(6)));

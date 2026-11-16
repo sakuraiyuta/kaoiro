@@ -16,6 +16,7 @@ export class MarkdownWorker {
   private applyTimer: ReturnType<typeof setTimeout> | null = null;
   private sequence = 0;
   private disabled = false;
+  private deferred = false;
 
   constructor(private create: () => LexerPort = () => new Worker(
     new URL("./markdown.worker.ts", import.meta.url), { type: "module" },
@@ -42,6 +43,13 @@ export class MarkdownWorker {
     this.ready.delete(owner);
     if (this.active?.owner === owner) {
       this.clear(true);
+      // An unmount or re-render cancels many owners in one task; dispatching
+      // after each termination would create one worker per pending owner.
+      // This bounds workers per task, not per unit of time.
+      if (!this.deferred) {
+        this.deferred = true;
+        queueMicrotask(() => { this.deferred = false; this.drain(); });
+      }
     }
   }
 
@@ -60,9 +68,10 @@ export class MarkdownWorker {
     }
   }
 
-  /** Dispatch the next job, then apply settled results: at once when the
-   *  worker is idle, otherwise together after a window, because applying
-   *  them one by one costs one rendered frame per worker round trip. */
+  /** Dispatch the next job (one microtask later after an owner terminated
+   *  the active job), then apply settled results: at once when no job is
+   *  active, otherwise together after a window, because applying them one by
+   *  one costs one rendered frame per worker round trip. */
   private drain(): void {
     this.dispatch();
     if (this.ready.size === 0) return;
@@ -80,7 +89,7 @@ export class MarkdownWorker {
   }
 
   private dispatch(): void {
-    if (this.active) return;
+    if (this.active || this.deferred) return;
     for (const [owner, job] of this.pending) {
       this.pending.delete(owner);
       if (this.disabled) {
