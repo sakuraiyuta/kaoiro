@@ -560,6 +560,37 @@ test.describe("operator scrolls during formatting", () => {
       expect(writes.filter((x: any) => x.gap <= 8)).toEqual([]);
     });
   }
+  test("the tail pin corrects an unannounced layout change before that frame paints", async ({ page }) => {
+    await pinnedLog(page);
+    const nextFrameGap = await page.evaluate(() => new Promise<number>(resolve => {
+      const log = document.querySelector(".log")!;
+      requestAnimationFrame(() => {
+        const bodies = document.querySelectorAll<HTMLElement>(".msg.assistant");
+        bodies[bodies.length - 1].style.minHeight = "1800px";
+        // Requested before this frame's ResizeObserver callback runs, so it
+        // runs first in the next frame.
+        requestAnimationFrame(() => resolve(log.scrollHeight - log.clientHeight - log.scrollTop));
+      });
+    }));
+    expect(nextFrameGap).toBeLessThanOrEqual(8);
+  });
+  test("the tail pin holds at every frame between batches while bodies wait", async ({ page }) => {
+    await page.goto(origin!); await open(page);
+    await instrument(page, 15);
+    history(waiting());
+    await expect(page.locator(".msg.assistant")).toHaveCount(200);
+    await settle(page);
+    const f = (await record(page)).frames;
+    // Frames with no batch since the previous frame show the layout after that
+    // frame's corrections; check them from the first one at the tail.
+    const landed = f.findIndex((x: any, i: number) =>
+      i > 0 && x.seq === f[i - 1].seq && x.gap <= 8 && x.p > 0);
+    expect(landed).toBeGreaterThan(0);
+    const stable = f.slice(landed).filter((x: any, i: number, all: any[]) =>
+      i > 0 && x.seq === all[i - 1].seq);
+    expect(stable.length).toBeGreaterThan(50);
+    expect(stable.filter((x: any) => x.gap > 8)).toEqual([]);
+  });
   // These repeat the input, and each run needs bodies still waiting, so they
   // use a slower lexer and a longer test timeout than the single-shot cases.
   test("ArrowUp at the tail while bodies wait moves about 40 px", async ({ page }) => {
