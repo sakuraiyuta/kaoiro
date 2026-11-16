@@ -938,12 +938,31 @@ describe("issue #617: the end of a timeline jump (scrollend)", () => {
     return { logEl, to, props, mermaid };
   }
 
-  it("a scrollend short of the destination ends the jump", async () => {
+  it("a scrollend short of the destination ends the jump where the operator stopped it", async () => {
     const { logEl, to } = await startJump();
     scrollLogTo(logEl, to + 400);
     await tick();
     expect(owns(logEl)).toBe(true);
     await scrollEnd(logEl);
+    expect(owns(logEl)).toBe(false);
+    expect(logEl.scrollTop).toBe(to + 400);
+  });
+
+  it("a correction during a jump ends its flight, so the next scroll is the operator's", async () => {
+    const { logEl, to, props, mermaid } = await startJump();
+    props.logs = [...props.logs, ...buildLogs("agent-a", 251).slice(250)];
+    await tick();
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    await tick();
+    // The appended entry moved the window by a row; the correction follows.
+    const row = [...logEl.querySelectorAll<HTMLElement>("[data-envelope-key]")]
+      .find((r) => r.dataset.envelopeKey === props.scrollToEntryKey)!;
+    const corrected = row.offsetTop - 24;
+    expect(Math.abs(corrected - to)).toBeLessThanOrEqual(30);
+    expect(logEl.scrollTop).toBe(corrected);
+    scrollLogTo(logEl, corrected + 400);
+    await tick();
     expect(owns(logEl)).toBe(false);
   });
 
