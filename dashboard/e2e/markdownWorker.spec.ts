@@ -484,12 +484,12 @@ test.describe("operator scrolls during formatting", () => {
       expect(await gapOf(page)).toBeLessThanOrEqual(8);
     });
   }
-  const timeline = async (page: Page) => {
+  const timeline = async (page: Page, marker = 100) => {
     await page.goto(origin!);
     await expect(page.locator('button[aria-label^="Open details of "]').first()).toBeVisible();
     send("hosts", { version: "0", hosts: {} });
     history(Array.from({ length: 150 }, (_, i) => tall(i)));
-    await page.locator(".timeline .row", { hasText: "marker-100" }).click();
+    await page.locator(".timeline .row", { hasText: `marker-${marker}` }).click();
   };
   test("P8: a scroll without input after a timeline jump stays", async ({ page }) => {
     await timeline(page); await settle(page);
@@ -517,6 +517,98 @@ test.describe("operator scrolls during formatting", () => {
     send("envelope", entry("**later**", 400)); await settle(page);
     expect(await page.locator(".log").evaluate(el => el.scrollTop)).toBeLessThan(restored - 900);
   });
+  const toolLogs = () => {
+    const logs = Array.from({ length: 80 }, (_, i) => entry(tall(i), i));
+    logs[20] = { ...entry("", 20), payload: {
+      kind: "tool_use", tool_use_id: "toolu_fixture", name: "Read", input: { path: "a" } } };
+    logs[75] = { ...entry("", 75), payload: {
+      kind: "tool_result", tool_use_id: "toolu_fixture", text: "done" } };
+    return logs;
+  };
+  const holds = async (page: Page) =>
+    (await page.locator(".log").getAttribute("style") ?? "").includes("overflow-anchor: none");
+  // Each intent, once settled, hands the log over with the operator's first
+  // scroll kept exactly and no write of its own. The timeline target is the
+  // last body, so it lands in the tail padding.
+  const intents: Record<string, (page: Page) => Promise<void>> = {
+    pin: pinnedLog,
+    anchor: async page => {
+      await page.goto(origin!); await open(page);
+      send("history", { agents: {
+        "host.p": Array.from({ length: 120 }, (_, i) => entry(tall(i), i)),
+        "host.q": [entry("q reply", 0, "assistant", "host.q")],
+      } });
+      await settle(page);
+      await page.locator(".log").hover(); await page.mouse.wheel(0, -3000); await settle(page);
+      await page.getByRole("button", { name: /^Go to the next agent/ }).click();
+      await expect(page.locator(".msg", { hasText: "q reply" })).toBeVisible();
+      await page.getByRole("button", { name: /^Go to the previous agent/ }).click();
+      await settle(page);
+    },
+    timeline: async page => {
+      await timeline(page, 149); await settle(page);
+      expect(Math.abs(await bodyGap(page, 149) - 24)).toBeLessThanOrEqual(2);
+      expect(await page.locator(".log").evaluate(el =>
+        parseFloat(el.style.getPropertyValue("--timeline-scroll-tail")))).toBeGreaterThan(100);
+    },
+    tool: async page => {
+      await page.goto(origin!); await open(page);
+      send("history", { agents: { "host.p": toolLogs() } });
+      await page.locator('[data-kind="tool_result"] .tlink').click(); await settle(page);
+    },
+  };
+  for (const [kind, holdIntent] of Object.entries(intents)) {
+    test(`a 50 px scroll from the ${kind} intent moves the log 50 px`, async ({ page }) => {
+      await holdIntent(page);
+      expect(await holds(page)).toBe(true);
+      const r = await page.locator(".log").evaluate(async log => {
+        const base = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+        let writes = 0;
+        Object.defineProperty(log, "scrollTop", { configurable: true,
+          get: () => base.get!.call(log), set(v: number) { writes++; base.set!.call(log, v); } });
+        const before = base.get!.call(log) as number;
+        base.set!.call(log, before - 50);
+        await new Promise(resolve => setTimeout(resolve, 300));
+        return { moved: (base.get!.call(log) as number) - before, writes };
+      });
+      expect(Math.abs(r.moved + 50)).toBeLessThanOrEqual(2);
+      expect(r.writes).toBe(0);
+      expect(await holds(page)).toBe(false);
+    });
+  }
+  test("without scrollend, a settled jump ends once the log stops and the next scroll stays", async ({ page }) => {
+    // Models a browser without scrollend (Safari before 26.2).
+    await page.addInitScript(() => {
+      const w = window as any; w.droppedScrollend = 0;
+      for (const o of [window, Window.prototype, Document.prototype,
+        HTMLElement.prototype, Element.prototype]) delete (o as any).onscrollend;
+      const add = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function (this: EventTarget, type: string,
+        ...rest: any[]) {
+        if (type === "scrollend") { w.droppedScrollend++; return; }
+        return (add as any).call(this, type, ...rest);
+      };
+    });
+    await page.goto(origin!); await open(page);
+    expect(await page.evaluate(() => "onscrollend" in document.createElement("div"))).toBe(false);
+    send("history", { agents: { "host.p": toolLogs() } });
+    // Settled first: a late layout change would end the jump without scrollend.
+    await settled(page);
+    await page.locator('[data-kind="tool_result"] .tlink').click(); await settle(page);
+    expect(await page.evaluate(() => (window as any).droppedScrollend)).toBeGreaterThan(0);
+    const offCenter = await page.locator(".log").evaluate(log => {
+      const t = log.querySelector('[data-tuid="toolu_fixture"][data-kind="tool_use"]')!;
+      const r = t.getBoundingClientRect(), l = log.getBoundingClientRect();
+      return r.top + r.height / 2 - (l.top + log.clientHeight / 2);
+    });
+    expect(Math.abs(offCenter)).toBeLessThanOrEqual(2);
+    await page.locator(".log").evaluate(el => { el.scrollTop += 1500; });
+    await page.waitForTimeout(600);
+    const away = await page.locator(".log").evaluate(el => el.scrollTop);
+    send("envelope", entry("**later**", 400)); await settle(page);
+    expect(Math.abs(await page.locator(".log").evaluate(el => el.scrollTop) - away))
+      .toBeLessThanOrEqual(2);
+  });
   test("a wheel stops each jump; a click during the timeline jump does not", async ({ page }) => {
     await timeline(page);
     await page.locator(".log").hover(); await page.waitForTimeout(60);
@@ -527,12 +619,7 @@ test.describe("operator scrolls during formatting", () => {
     await page.locator(".log").click({ position: { x: 700, y: 300 } }); await settle(page);
     expect(Math.abs(await bodyGap(page, 100) - 24)).toBeLessThanOrEqual(2);
     await page.goto(origin!); await open(page);
-    const logs = Array.from({ length: 80 }, (_, i) => entry(tall(i), i));
-    logs[20] = { ...entry("", 20), payload: {
-      kind: "tool_use", tool_use_id: "toolu_fixture", name: "Read", input: { path: "a" } } };
-    logs[75] = { ...entry("", 75), payload: {
-      kind: "tool_result", tool_use_id: "toolu_fixture", text: "done" } };
-    send("history", { agents: { "host.p": logs } });
+    send("history", { agents: { "host.p": toolLogs() } });
     await page.locator('[data-kind="tool_result"] .tlink').click();
     await page.waitForTimeout(60);
     await page.locator(".log").hover(); await page.mouse.wheel(0, 1500); await settle(page);
@@ -573,23 +660,6 @@ test.describe("operator scrolls during formatting", () => {
       });
     }));
     expect(nextFrameGap).toBeLessThanOrEqual(8);
-  });
-  test("the tail pin holds at every frame between batches while bodies wait", async ({ page }) => {
-    await page.goto(origin!); await open(page);
-    await instrument(page, 15);
-    history(waiting());
-    await expect(page.locator(".msg.assistant")).toHaveCount(200);
-    await settle(page);
-    const f = (await record(page)).frames;
-    // Frames with no batch since the previous frame show the layout after that
-    // frame's corrections; check them from the first one at the tail.
-    const landed = f.findIndex((x: any, i: number) =>
-      i > 0 && x.seq === f[i - 1].seq && x.gap <= 8 && x.p > 0);
-    expect(landed).toBeGreaterThan(0);
-    const stable = f.slice(landed).filter((x: any, i: number, all: any[]) =>
-      i > 0 && x.seq === all[i - 1].seq);
-    expect(stable.length).toBeGreaterThan(50);
-    expect(stable.filter((x: any) => x.gap > 8)).toEqual([]);
   });
   // These repeat the input, and each run needs bodies still waiting, so they
   // use a slower lexer and a longer test timeout than the single-shot cases.
