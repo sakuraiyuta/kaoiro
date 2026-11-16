@@ -49,11 +49,16 @@ it("times out at 1000 ms, ignores retired callbacks and recovers", () => {
   const old = ports[0]!, callback = old.onmessage!;
   old.start();
   vi.advanceTimersByTime(999); old.start();
+  expect(old.terminate).not.toHaveBeenCalled();
+  expect(ports).toHaveLength(1);
   expect(a).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1);
-  expect(a).toHaveBeenCalledWith({ kind: "plain", reason: "timeout" });
+  // Settlement happens at 1,000 ms; the successor keeps the result in the window.
   expect(old.terminate).toHaveBeenCalledTimes(1);
   expect(ports).toHaveLength(2);
+  expect(a).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(50);
+  expect(a).toHaveBeenCalledWith({ kind: "plain", reason: "timeout" });
   callback.call(old as unknown as Worker, { data: { id: ports[1]!.id,
     ...lexMarkdown("stale") } } as MessageEvent);
   expect(b).not.toHaveBeenCalled();
@@ -130,6 +135,63 @@ it("releases a refused job and its timer before a fresh worker", () => {
   expect(vi.getTimerCount()).toBe(0);
   service.request({}, "normal", vi.fn());
   ports[1]!.succeed();
+});
+
+it("applies backlog results together 50 ms after the first, in order; idle at once", () => {
+  const applied: string[] = [];
+  for (const t of ["a", "b", "c"]) service.request({}, t, () => applied.push(t));
+  ports[0]!.succeed();
+  vi.advanceTimersByTime(20);
+  ports[0]!.succeed();
+  vi.advanceTimersByTime(29);
+  expect(applied).toEqual([]);
+  vi.advanceTimersByTime(1);
+  expect(applied).toEqual(["a", "b"]);
+  ports[0]!.succeed();
+  expect(applied).toEqual(["a", "b", "c"]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("re-arms the window for a result settled after it fires", () => {
+  const applied: string[] = [];
+  for (const t of ["a", "b", "c"]) service.request({}, t, () => applied.push(t));
+  ports[0]!.succeed();
+  vi.advanceTimersByTime(50);
+  expect(applied).toEqual(["a"]);
+  ports[0]!.succeed();
+  vi.advanceTimersByTime(49);
+  expect(applied).toEqual(["a"]);
+  vi.advanceTimersByTime(1);
+  expect(applied).toEqual(["a", "b"]);
+});
+
+it("drops cancelled and replaced ready results and still applies others", () => {
+  const a = {}, b = {}, applied: string[] = [];
+  const cancelA = service.request(a, "a", () => applied.push("a"));
+  service.request(b, "b", () => applied.push("b"));
+  service.request({}, "c", () => applied.push("c"));
+  ports[0]!.succeed();
+  ports[0]!.succeed();
+  cancelA();
+  service.request(b, "new-b", () => applied.push("new-b"));
+  vi.advanceTimersByTime(50);
+  expect(applied).toEqual([]);
+  ports[0]!.succeed();
+  vi.advanceTimersByTime(50);
+  ports[0]!.succeed();
+  expect(applied).toEqual(["c", "new-b"]);
+});
+
+it("applies nothing settled before disposal", () => {
+  const receive = vi.fn();
+  service.request({}, "a", receive);
+  service.request({}, "b", receive);
+  ports[0]!.succeed();
+  service.dispose();
+  expect(vi.getTimerCount()).toBe(0);
+  service.request({}, "late", receive);
+  vi.advanceTimersByTime(100);
+  expect(receive.mock.calls).toEqual([[{ kind: "plain", reason: "unavailable" }]]);
 });
 
 it("runs the actual handler and depth boundary without a DOM", () => {
