@@ -14,7 +14,8 @@ export type LexMessage = { id: number } & (
 /** DOM-free worker operation; token arrays retain their reference-link map. */
 export function lexMarkdown(text: string): LexResult {
   try {
-    const tokens = marked.lexer(text, LEXER_OPTIONS);
+    // The Lexer writes its tokenizer into the options it receives.
+    const tokens = marked.lexer(text, { ...LEXER_OPTIONS });
     return nestingDepth(tokens) > MAX_NESTING_DEPTH
       ? { kind: "plain", reason: "depth" }
       : { kind: "tokens", tokens };

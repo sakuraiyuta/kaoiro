@@ -1,7 +1,10 @@
 import "./isolation.setup";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MarkdownWorker, type LexerPort } from "../src/lib/markdownWorker";
-import { handleLexRequest, lexMarkdown, type LexMessage, type LexRequest } from "../src/lib/markdownTokens";
+import {
+  handleLexRequest, LEXER_OPTIONS, lexMarkdown,
+  type LexMessage, type LexRequest,
+} from "../src/lib/markdownTokens";
 
 class Port {
   onmessage: LexerPort["onmessage"] = null;
@@ -134,6 +137,24 @@ it.each(["constructor", "post", "error", "messageerror"])(
   },
 );
 
+it.each(["error", "messageerror"] as const)(
+  "keeps formatting after a worker %s on a started body", (fault) => {
+    const receive = vi.fn();
+    service.request({}, "first", receive);
+    const port = ports[0]!;
+    const worker = port as unknown as Worker;
+    port.start();
+    if (fault === "error") port.onerror!.call(worker, {} as ErrorEvent);
+    else port.onmessageerror!.call(worker, {} as MessageEvent);
+    expect(receive).toHaveBeenCalledWith({ kind: "plain", reason: "lexer" });
+    expect(port.terminate).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    service.request({}, "second", receive);
+    ports[1]!.succeed();
+    expect(receive.mock.lastCall![0].kind).toBe("tokens");
+  },
+);
+
 it("releases a refused job and its timer before a fresh worker", () => {
   service.request({}, "deep", vi.fn());
   ports[0]!.start();
@@ -229,4 +250,5 @@ it("runs the actual handler and depth boundary without a DOM", () => {
   expect(send.mock.calls[1]![0].kind).toBe("tokens");
   expect(lexMarkdown("> ".repeat(33) + "ok")).toEqual({ kind: "plain", reason: "depth" });
   expect(lexMarkdown(">".repeat(100000))).toEqual({ kind: "plain", reason: "lexer" });
+  expect(LEXER_OPTIONS).toEqual({ async: false, breaks: true, gfm: true });
 });

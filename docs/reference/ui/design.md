@@ -270,8 +270,11 @@ The worker posts a start notification before lexing; handling it arms a single
 1,000 ms main-thread watchdog. Current results received before its callback
 retain the existing parser/sanitizer policy. Timeout, excessive nesting or
 execution failure retains source with an explanation, without retrying it.
-Startup/transport failure disables formatting until page reload. Bounded card,
-panel and collapsed-history previews remain synchronous.
+A worker `error` or `messageerror` after the start notification is that
+body's execution failure (for example a token tree too deep to transfer back);
+the worker is replaced for the next body. Before the start notification it is
+a startup/transport failure, which disables formatting until page reload.
+Bounded card, panel and collapsed-history previews remain synchronous.
 
 The queue is FIFO, with one active job and the latest request per mounted body.
 It has no maximum completion-time promise for arbitrary expanded histories.

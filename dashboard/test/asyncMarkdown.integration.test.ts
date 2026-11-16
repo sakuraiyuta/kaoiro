@@ -9,6 +9,7 @@ import { lexMarkdown, type LexResult } from "../src/lib/markdownTokens";
 import { renderMarkdown, renderMarkdownTokens, renderMermaidIn } from "../src/lib/markdown";
 import { renderUntrustedMarkdown, renderUntrustedTokens } from "../src/lib/untrustedMarkdown";
 import { reactiveObject } from "./reactiveObject.svelte";
+import { msg } from "../src/lib/i18n/index.svelte";
 
 vi.mock("../src/lib/markdown", async (original) => ({
   ...await original<typeof import("../src/lib/markdown")>(),
@@ -67,6 +68,21 @@ it("keeps source as text and rejects old callback after text/scope/profile chang
   callbacks[1]!(lexMarkdown("resurrect")); await tick();
   expect(document.querySelector(".async-markdown")).toBeNull();
 });
+
+it("keeps formatting after a body whose tokens cannot be cloned back",
+  async () => {
+    const deep = "*a _b ".repeat(600) + "x" + " b_ a*".repeat(600);
+    expect(() => structuredClone(lexMarkdown(deep))).toThrow(RangeError);
+    const props = mountBody(deep);
+    const text = (selector: string) =>
+      document.querySelector(selector)?.textContent;
+    await vi.waitFor(() => expect(document.querySelector(".async-markdown")
+      ?.getAttribute("data-markdown-state")).toBe("plain"));
+    expect(text(".markdown-note")).toBe(msg().untrustedMarkdown.plainNote);
+    expect(text(".markdown-source")).toBe(deep);
+    props.text = "**after**";
+    await vi.waitFor(() => expect(text("strong")).toBe("after"));
+  });
 
 it("does not reuse old HTML while the changed source waits", async () => {
   const callbacks: ((r: LexResult) => void)[] = [];

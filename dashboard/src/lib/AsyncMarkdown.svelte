@@ -23,9 +23,9 @@
 
   $effect(() => {
     const source = text, identity = scope, policy = profile;
-    let alive = true;
-    const cancel = markdownWorker.request(owner, source, (lexed) => {
-      if (!alive || text !== source || scope !== identity || profile !== policy) return;
+    // The service drops a cancelled request's result, and currentResult
+    // ignores any result for other props.
+    return markdownWorker.request(owner, source, (lexed) => {
       let rendered: UntrustedRender = { kind: "plain" };
       if (lexed.kind === "tokens") {
         try {
@@ -37,7 +37,6 @@
       result = { text: source, scope: identity, profile: policy, rendered,
         unavailable: lexed.kind === "plain" && lexed.reason === "unavailable" };
     });
-    return () => { alive = false; cancel(); };
   });
 
   $effect(() => {

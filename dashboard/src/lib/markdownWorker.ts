@@ -100,20 +100,25 @@ export class MarkdownWorker {
       try {
         const worker = this.worker ??= this.create();
         const current = () => this.active === job && this.worker === worker;
+        let started = false;
         worker.onmessage = ({ data }: MessageEvent<LexMessage>) => {
           if (!current() || data.id !== job.id) return;
           if (data.kind === "started") {
-            if (this.timer === null) {
-              this.timer = setTimeout(() => {
-                if (current()) this.finish({ kind: "plain", reason: "timeout" });
-              }, 1000);
-            }
+            started = true;
+            // clear() cancels this timer whenever the job stops being active.
+            this.timer ??= setTimeout(
+              () => this.finish({ kind: "plain", reason: "timeout" }), 1000);
           } else {
             this.finish(data);
           }
         };
+        // After `started`, an error comes from running this body (a token
+        // tree too deep to clone back throws in the worker), so only this
+        // body stays plain. Before it, the worker failed to start.
         worker.onerror = worker.onmessageerror = () => {
-          if (current()) this.fail();
+          if (!current()) return;
+          if (started) this.finish({ kind: "plain", reason: "lexer" });
+          else this.fail();
         };
         worker.postMessage({ id: job.id, text: job.text });
       } catch {
