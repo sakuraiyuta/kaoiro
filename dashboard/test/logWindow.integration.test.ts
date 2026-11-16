@@ -214,7 +214,6 @@ function installScrollGeometry(): void {
 }
 
 function scrollLogTo(logEl: HTMLElement, top: number): void {
-  logEl.dispatchEvent(new Event("wheel"));
   logEl.scrollTop = top;
   logEl.dispatchEvent(new Event("scroll"));
 }
@@ -360,7 +359,10 @@ describe("AgentDetail log render window (#174)", () => {
 
     // Scroll away from the bottom (distance from bottom = scrollHeight(200*30)
     // - 0 - clientHeight(400) = 5600, well past the 8px threshold) to freeze
-    // the window at its current boundary (absolute index 50 of 250).
+    // the window at its current boundary (absolute index 50 of 250). Let the
+    // initial pin land first: a scroll event that does not move the log is
+    // not a departure.
+    await vi.waitFor(() => expect(logEl.scrollTop).toBe(5600));
     scrollLogTo(logEl, 0);
     await tick();
 
@@ -979,5 +981,71 @@ describe("AgentDetail log render window (#174)", () => {
     button!.click();
     await tick();
     expect(sendInstruction).toHaveBeenCalledWith(agentId, "original prompt");
+  });
+});
+
+describe("issue #617: the tail pin and the operator's scroll", () => {
+  // The pin turns browser scroll anchoring off while it holds.
+  const pinned = (logEl: HTMLElement) =>
+    (logEl.getAttribute("style") ?? "").includes("overflow-anchor: none");
+
+  async function pinnedLog() {
+    installScrollGeometry();
+    const { target } = await renderReactive({
+      envelope: state("agent-a"),
+      logs: buildLogs("agent-a", 250),
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    const logEl = target.querySelector(".log") as HTMLElement;
+    await vi.waitFor(() => expect(logEl.scrollTop).toBe(5600));
+    await tick();
+    expect(pinned(logEl)).toBe(true);
+    // Records the product's writes; the operator's scrolls below bypass it.
+    const base = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTop")!;
+    const writes: number[] = [];
+    Object.defineProperty(logEl, "scrollTop", {
+      configurable: true,
+      get() { return base.get!.call(logEl); },
+      set(value: number) { writes.push(value); base.set!.call(logEl, value); },
+    });
+    const operatorScrollsTo = async (top: number) => {
+      base.set!.call(logEl, top);
+      logEl.dispatchEvent(new Event("scroll"));
+      await tick();
+    };
+    return { logEl, writes, operatorScrollsTo };
+  }
+
+  it("keeps the pin on a scroll at its own position; a 2-px step ends it without a write and only the end resumes it", async () => {
+    const { logEl, writes, operatorScrollsTo } = await pinnedLog();
+    await operatorScrollsTo(5600);
+    expect(pinned(logEl)).toBe(true);
+    await operatorScrollsTo(5598);
+    expect(pinned(logEl)).toBe(false);
+    await operatorScrollsTo(5597);
+    expect(pinned(logEl)).toBe(false);
+    expect(writes).toEqual([]);
+    await operatorScrollsTo(5600);
+    expect(pinned(logEl)).toBe(true);
+  });
+
+  it("keeps the operator's movement from the corrected end when content grew uncorrected, in one write", async () => {
+    const { logEl, writes, operatorScrollsTo } = await pinnedLog();
+    Object.defineProperty(logEl, "scrollHeight", { configurable: true, get: () => 6300 });
+    await operatorScrollsTo(5560);
+    expect(writes).toEqual([5860]);
+    expect(logEl.scrollTop).toBe(5860);
+    expect(pinned(logEl)).toBe(false);
+  });
+
+  it("takes the browser's clamp after content shrank as its own and keeps the pin", async () => {
+    const { logEl, writes, operatorScrollsTo } = await pinnedLog();
+    Object.defineProperty(logEl, "scrollHeight", { configurable: true, get: () => 5900 });
+    await operatorScrollsTo(5500);
+    expect(writes).toEqual([]);
+    expect(logEl.scrollTop).toBe(5500);
+    expect(pinned(logEl)).toBe(true);
   });
 });

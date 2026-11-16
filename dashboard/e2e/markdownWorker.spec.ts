@@ -27,7 +27,19 @@ const settled = async (page: Page) => {
   await page.waitForTimeout(100);
 };
 
+let resizeObserverLoops: string[] = [];
+test.afterEach(() => {
+  expect(resizeObserverLoops).toEqual([]);
+});
+
 test.beforeEach(async ({ page }) => {
+  resizeObserverLoops = [];
+  page.on("console", m => {
+    if (m.text().includes("ResizeObserver loop")) resizeObserverLoops.push(m.text());
+  });
+  page.on("pageerror", e => {
+    if (e.message.includes("ResizeObserver loop")) resizeObserverLoops.push(e.message);
+  });
   await page.route("**/session/**", route => route.fulfill({ json: {
     ticket: "fixture", token: true, oauth: [],
   } }));
@@ -354,4 +366,244 @@ test("tail pin survives late formatting and reading away never repins", async ({
   const before = await page.locator(".log").evaluate(el => el.scrollTop);
   send("envelope", entry("**later**\n\n".repeat(20), 50)); await settled(page);
   expect(await page.locator(".log").evaluate(el => el.scrollTop)).toBeCloseTo(before, 0);
+});
+
+// Issue #617: the operator's scroll is judged by position, never pulled back
+// to the tail, and never shifted by a layout change it coincides with.
+test.describe("operator scrolls during formatting", () => {
+  test.beforeEach(async ({ page }) => {
+    // Optional delay of each lexer result, modelling a slower lexer so the
+    // drain spans about 50 batches; the product path is unchanged.
+    await page.addInitScript(() => {
+      const w = window as any; w.slowMs = 0;
+      const Base = w.Worker;
+      w.Worker = class extends Base {
+        set onmessage(fn: ((event: MessageEvent) => void) | null) {
+          super.onmessage = fn === null ? null : (event: MessageEvent) => {
+            if (w.slowMs > 0 && event.data?.kind !== "started") setTimeout(() => fn(event), w.slowMs);
+            else fn(event);
+          };
+        }
+      };
+    });
+  });
+  const gapOf = (page: Page) => page.locator(".log").evaluate(
+    el => el.scrollHeight - el.clientHeight - el.scrollTop);
+  const bodyGap = (page: Page, n: number) => page.locator(".log").evaluate((log, k) => {
+    const body = log.querySelector(`[data-envelope-key*="|${k}|log|"] .msg`)!;
+    return body.getBoundingClientRect().top - log.getBoundingClientRect().top;
+  }, n);
+  const waiting = () => Array.from({ length: 200 }, (_, i) => `row ${i}\n\n` +
+    `# Big heading ${i}\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\n`.repeat(4));
+  // Records frames, lexer batches (mutation callbacks in which pending bodies
+  // dropped, i.e. the task that applied them), the product's scrollTop writes
+  // and scroll events. Optionally leaves (scrollTop -= 1500) inside batch k.
+  const instrument = (page: Page, slowMs: number, leaveAt = -1) => page.evaluate(([slow, k]) => {
+    const w = window as any, log = document.querySelector(".log") as HTMLElement;
+    const base = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+    const R = w.r = { frames: [] as any[], batches: [] as any[], writes: [] as any[],
+      scrolls: [] as any[], keys: [] as number[], leave: null as any, seq: 0, last: 200 };
+    w.slowMs = slow;
+    const top = () => base.get!.call(log) as number;
+    const gap = () => log.scrollHeight - log.clientHeight - top();
+    const pending = () => document.querySelectorAll('[data-markdown-state="pending"]').length;
+    Object.defineProperty(log, "scrollTop", { configurable: true, get: top, set(v: number) {
+      base.set!.call(log, v); R.writes.push({ t: performance.now(), gap: gap() });
+    } });
+    log.addEventListener("scroll", () => R.scrolls.push({ t: performance.now(), gap: gap() }));
+    window.addEventListener("keydown", () => R.keys.push(performance.now()), { capture: true });
+    window.addEventListener("wheel", () => R.keys.push(performance.now()), { capture: true });
+    const frame = () => {
+      R.frames.push({ seq: R.seq, gap: gap(), p: pending() }); requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    new MutationObserver(() => {
+      const p = pending();
+      if (document.querySelectorAll(".msg.assistant").length < 200 || p >= R.last) return;
+      R.last = p; R.batches.push({ t: performance.now(), seq: ++R.seq });
+      if (R.seq !== k) return;
+      const f = R.frames, i = f.length - 1;
+      R.leave = { t: performance.now(), stable: f[i].seq === f[i - 1]?.seq ? f[i].gap : null };
+      base.set!.call(log, top() - 1500);
+    }).observe(document.body, { subtree: true, attributes: true,
+      attributeFilter: ["data-markdown-state"] });
+  }, [slowMs, leaveAt] as const);
+  const record = (page: Page) => page.evaluate(() => (window as any).r);
+  // Premise of the inputs below: the pin holds at the tail over three frames
+  // with no batch between them while bodies still wait.
+  const atTailWhileWaiting = (page: Page) => page.waitForFunction(() => {
+    const f = (window as any).r.frames, [a, b, c] = f.slice(-3);
+    return c && a.seq === c.seq && a.gap <= 8 && b.gap <= 8 && c.gap <= 8 &&
+      a.p > 20 && (window as any).r.seq >= 2;
+  });
+
+  const pinnedLog = async (page: Page) => {
+    await page.goto(origin!); await open(page);
+    history(Array.from({ length: 40 }, (_, i) =>
+      `row ${i} [link ${i}](https://example.org/${i})\n\n` + "paragraph\n\n".repeat(6)));
+    await settled(page);
+    await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(8);
+  };
+  const awayAfterEnvelope = async (page: Page) => {
+    await page.waitForTimeout(600);
+    expect(await gapOf(page)).toBeGreaterThan(200);
+    send("envelope", entry("**later**\n\n".repeat(20), 60)); await settled(page);
+    await page.waitForTimeout(400);
+    expect(await gapOf(page)).toBeGreaterThan(200);
+  };
+  test("M2: PageUp after a click and an envelope leaves the tail", async ({ page }) => {
+    await pinnedLog(page);
+    await page.locator(".msg.assistant").last().click({ position: { x: 300, y: 10 } });
+    send("envelope", entry("append one", 50)); await settled(page);
+    await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(8);
+    for (let i = 0; i < 3; i++) await page.keyboard.press("PageUp");
+    await awayAfterEnvelope(page);
+  });
+  test("M2: focus moving to a link in an earlier row leaves the tail", async ({ page }) => {
+    await pinnedLog(page);
+    await page.locator(".msg.assistant a").nth(3).evaluate((a: HTMLElement) => a.focus());
+    await awayAfterEnvelope(page);
+  });
+  test("M2: a scroll without input events leaves the tail", async ({ page }) => {
+    await pinnedLog(page);
+    await page.locator(".log").evaluate(el => { el.scrollTop = 200; });
+    await awayAfterEnvelope(page);
+  });
+  for (const input of ["wheel", "click"] as const) {
+    test(`M3: a ${input} that moves nothing at the tail keeps the pin`, async ({ page }) => {
+      await page.goto(origin!); await open(page);
+      await page.locator(".log").hover();
+      history(waiting());
+      await expect(page.locator(".msg.assistant")).toHaveCount(200);
+      expect(await page.locator('[data-markdown-state="pending"]').count()).toBeGreaterThan(0);
+      if (input === "wheel") await page.mouse.wheel(0, 400);
+      else await page.locator(".log").click({ position: { x: 700, y: 400 } });
+      await settle(page);
+      expect(await gapOf(page)).toBeLessThanOrEqual(8);
+      send("envelope", entry("**later**\n\n".repeat(20), 500)); await settle(page);
+      expect(await gapOf(page)).toBeLessThanOrEqual(8);
+    });
+  }
+  const timeline = async (page: Page) => {
+    await page.goto(origin!);
+    await expect(page.locator('button[aria-label^="Open details of "]').first()).toBeVisible();
+    send("hosts", { version: "0", hosts: {} });
+    history(Array.from({ length: 150 }, (_, i) => tall(i)));
+    await page.locator(".timeline .row", { hasText: "marker-100" }).click();
+  };
+  test("P8: a scroll without input after a timeline jump stays", async ({ page }) => {
+    await timeline(page); await settle(page);
+    expect(Math.abs(await bodyGap(page, 100) - 24)).toBeLessThanOrEqual(2);
+    await page.locator(".log").evaluate(el => { el.scrollTop += 1500; });
+    await page.waitForTimeout(600);
+    send("envelope", entry("**later**", 400)); await settle(page);
+    expect(await bodyGap(page, 100)).toBeLessThan(-1000);
+  });
+  test("P9: a scroll without input after returning to an agent stays", async ({ page }) => {
+    await page.goto(origin!); await open(page);
+    send("history", { agents: {
+      "host.p": Array.from({ length: 120 }, (_, i) => entry(tall(i), i)),
+      "host.q": [entry("q reply", 0, "assistant", "host.q")],
+    } });
+    await settle(page);
+    await page.locator(".log").hover(); await page.mouse.wheel(0, -3000); await settle(page);
+    await page.getByRole("button", { name: /^Go to the next agent/ }).click();
+    await expect(page.locator(".msg", { hasText: "q reply" })).toBeVisible();
+    await page.getByRole("button", { name: /^Go to the previous agent/ }).click();
+    await settle(page);
+    const restored = await page.locator(".log").evaluate(el => el.scrollTop);
+    await page.locator(".log").evaluate(el => { el.scrollTop -= 1000; });
+    await page.waitForTimeout(600);
+    send("envelope", entry("**later**", 400)); await settle(page);
+    expect(await page.locator(".log").evaluate(el => el.scrollTop)).toBeLessThan(restored - 900);
+  });
+  test("a wheel stops each jump; a click during the timeline jump does not", async ({ page }) => {
+    await timeline(page);
+    await page.locator(".log").hover(); await page.waitForTimeout(60);
+    await page.mouse.wheel(0, 1500); await settle(page);
+    expect(Math.abs(await bodyGap(page, 100) - 24)).toBeGreaterThan(200);
+    await timeline(page);
+    await page.waitForTimeout(60);
+    await page.locator(".log").click({ position: { x: 700, y: 300 } }); await settle(page);
+    expect(Math.abs(await bodyGap(page, 100) - 24)).toBeLessThanOrEqual(2);
+    await page.goto(origin!); await open(page);
+    const logs = Array.from({ length: 80 }, (_, i) => entry(tall(i), i));
+    logs[20] = { ...entry("", 20), payload: {
+      kind: "tool_use", tool_use_id: "toolu_fixture", name: "Read", input: { path: "a" } } };
+    logs[75] = { ...entry("", 75), payload: {
+      kind: "tool_result", tool_use_id: "toolu_fixture", text: "done" } };
+    send("history", { agents: { "host.p": logs } });
+    await page.locator('[data-kind="tool_result"] .tlink').click();
+    await page.waitForTimeout(60);
+    await page.locator(".log").hover(); await page.mouse.wheel(0, 1500); await settle(page);
+    const offCenter = await page.locator(".log").evaluate(log => {
+      const t = log.querySelector('[data-tuid="toolu_fixture"][data-kind="tool_use"]')!;
+      const r = t.getBoundingClientRect(), l = log.getBoundingClientRect();
+      return r.top + r.height / 2 - (l.top + log.clientHeight / 2);
+    });
+    expect(Math.abs(offCenter)).toBeGreaterThan(200);
+  });
+  for (const [lexer, slowMs, leaveAt] of [["fast", 0, 1], ["slow", 15, 20]] as const) {
+    test(`a leave in the same task as a batch keeps the operator's 1,500 px (${lexer} lexer)`, async ({ page }) => {
+      await page.goto(origin!); await open(page);
+      await instrument(page, slowMs, leaveAt);
+      history(waiting());
+      await expect(page.locator(".msg.assistant")).toHaveCount(200);
+      await settle(page);
+      const r = await record(page);
+      expect(r.leave).not.toBeNull();
+      expect(r.leave.stable).not.toBeNull();
+      expect(r.leave.stable).toBeLessThanOrEqual(8);
+      const after = r.scrolls.find((s: any) => s.t > r.leave.t);
+      expect(Math.abs(after.gap - 1500)).toBeLessThanOrEqual(2);
+      const writes = r.writes.filter((x: any) => x.t > r.leave.t);
+      expect(writes.filter((x: any) => x.gap <= 8)).toEqual([]);
+    });
+  }
+  test("ArrowUp at the tail while bodies wait moves about 40 px", async ({ page }) => {
+    let overlapped = 0;
+    for (let n = 0; n < 5; n++) {
+      await page.goto(origin!); await open(page);
+      await instrument(page, 15);
+      history(waiting());
+      await expect(page.locator(".msg.assistant")).toHaveCount(200);
+      // Focus a body near the tail without moving the log.
+      await page.locator(".msg.assistant").last().click({ position: { x: 300, y: 5 } });
+      await atTailWhileWaiting(page);
+      const seq = (await record(page)).seq;
+      await page.waitForFunction(s => (window as any).r.seq > s, seq, { polling: "raf" });
+      await page.waitForTimeout(n * 14);
+      await page.keyboard.press("ArrowUp");
+      await page.waitForTimeout(700);
+      const r = await record(page);
+      const t0 = r.keys.at(-1), out = r.scrolls.find((s: any) => s.t > t0 && s.gap > 8);
+      if (out && r.batches.some((b: any) => b.t >= t0 && b.t <= out.t)) overlapped++;
+      const gap = await gapOf(page);
+      expect(gap).toBeGreaterThanOrEqual(30);
+      expect(gap).toBeLessThanOrEqual(50);
+    }
+    expect(overlapped).toBeGreaterThan(0);
+  });
+  test("small wheel steps at the tail while bodies wait leave the tail", async ({ page }) => {
+    for (let n = 0; n < 3; n++) {
+      await page.goto(origin!); await open(page);
+      await instrument(page, 15);
+      history(waiting());
+      await expect(page.locator(".msg.assistant")).toHaveCount(200);
+      await page.locator(".log").hover();
+      await atTailWhileWaiting(page);
+      for (let i = 0; i < 8; i++) { await page.mouse.wheel(0, -2); await page.waitForTimeout(16); }
+      await page.waitForTimeout(700);
+      expect(await gapOf(page)).toBeGreaterThan(8);
+    }
+  });
+  test("returning to the end resumes the pin", async ({ page }) => {
+    await pinnedLog(page);
+    await page.locator(".log").hover(); await page.mouse.wheel(0, -800);
+    await expect.poll(() => gapOf(page)).toBeGreaterThan(200);
+    await page.mouse.wheel(0, 100_000);
+    await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1);
+    await page.locator(".msg.assistant").last().evaluate(el => { el.style.minHeight = "1800px"; });
+    await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(8);
+  });
 });

@@ -229,7 +229,6 @@ function installRowGeometry(): void {
 }
 
 function scrollLogTo(logEl: HTMLElement, top: number): void {
-  logEl.dispatchEvent(new Event("wheel"));
   logEl.scrollTop = top;
   logEl.dispatchEvent(new Event("scroll"));
 }
@@ -896,5 +895,67 @@ describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     // The pin: OLD's stale restore (100) must not have overwritten NEW's
     // landing (200).
     expect(logEl.scrollTop).toBe(200);
+  });
+});
+
+describe("issue #617: the end of a timeline jump (scrollend)", () => {
+  const owns = (logEl: HTMLElement) =>
+    (logEl.getAttribute("style") ?? "").includes("overflow-anchor: none");
+  const scrollEnd = async (logEl: HTMLElement) => {
+    logEl.dispatchEvent(new Event("scrollend"));
+    await tick();
+  };
+
+  async function startJump() {
+    const scrollTo = stubScrollTo();
+    installScrollGeometry();
+    installRowGeometry();
+    const mermaid = installControllableMermaid();
+    const logs = buildLogs("agent-a", 250);
+    const { target, props } = await renderReactive({
+      envelope: state("agent-a"),
+      logs,
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    const logEl = target.querySelector(".log") as HTMLElement;
+    props.scrollToEntryKey = conversationEntryKey(logs[100]);
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    await tick();
+    const call = scrollTo.mock.calls.at(-1)![0] as { top: number };
+    const to = Math.min(call.top, naturalBottom(logEl));
+    expect(owns(logEl)).toBe(true);
+    expect(Math.abs(logEl.scrollTop - to)).toBeGreaterThan(500);
+    return { logEl, to };
+  }
+
+  it("a scrollend short of the destination ends the jump", async () => {
+    const { logEl, to } = await startJump();
+    scrollLogTo(logEl, to + 400);
+    await tick();
+    expect(owns(logEl)).toBe(true);
+    await scrollEnd(logEl);
+    expect(owns(logEl)).toBe(false);
+  });
+
+  it("a scrollend at the destination keeps the jump", async () => {
+    const { logEl, to } = await startJump();
+    scrollLogTo(logEl, to);
+    await scrollEnd(logEl);
+    expect(owns(logEl)).toBe(true);
+  });
+
+  it("ignores a scrollend that arrives before the jump has moved", async () => {
+    const { logEl, to } = await startJump();
+    await scrollEnd(logEl);
+    scrollLogTo(logEl, to + 400);
+    await tick();
+    expect(owns(logEl)).toBe(true);
   });
 });
