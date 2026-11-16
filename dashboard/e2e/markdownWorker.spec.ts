@@ -199,6 +199,122 @@ test("three hostile predecessors, then 197 normal bodies", async ({ page }, info
   await info.attach("timing", { body: JSON.stringify({ elapsed, gaps }), contentType: "application/json" });
 });
 
+// Formatting changes these bodies' heights, so every geometry case below is
+// checked after all late layout has settled (r2 settled-scroll contracts).
+const tall = (i: number) =>
+  `marker-${i}\n\n## Heading ${i}\n\n` + "- item with **bold** text\n".repeat(8);
+const settle = async (page: Page) => {
+  await expect(page.locator('[data-markdown-state="pending"]')).toHaveCount(0,
+    { timeout: 25000 });
+  let previous = -1;
+  for (let i = 0; i < 50; i++) {
+    const top = await page.locator(".log").evaluate(el => el.scrollTop);
+    if (top === previous) return;
+    previous = top; await page.waitForTimeout(150);
+  }
+  throw new Error("scrollTop did not settle");
+};
+const firstVisibleRow = (page: Page) => page.locator(".log").evaluate(log => {
+  const top = log.getBoundingClientRect().top;
+  const row = [...log.querySelectorAll<HTMLElement>("[data-envelope-key]")]
+    .find(r => r.getBoundingClientRect().bottom > top + 1)!;
+  return { key: row.dataset.envelopeKey!, offset: row.getBoundingClientRect().top - top };
+});
+const rowOffset = (page: Page, key: string) => page.locator(".log").evaluate((log, k) => {
+  const row = [...log.querySelectorAll<HTMLElement>("[data-envelope-key]")]
+    .find(r => r.dataset.envelopeKey === k);
+  return row ? row.getBoundingClientRect().top - log.getBoundingClientRect().top : null;
+}, key);
+
+test("show-earlier keeps the previously visible row through late formatting", async ({ page }) => {
+  await page.goto(origin!); await open(page);
+  history(Array.from({ length: 260 }, (_, i) => tall(i)));
+  await settle(page);
+  await page.locator(".log").hover(); await page.mouse.wheel(0, -1_000_000);
+  await settle(page);
+  const before = await firstVisibleRow(page);
+  await page.locator(".load-earlier").click();
+  await expect(page.locator(".async-markdown")).toHaveCount(260);
+  await settle(page);
+  expect(Math.abs((await rowOffset(page, before.key))! - before.offset)).toBeLessThanOrEqual(2);
+});
+
+test("returning to an agent restores its row and offset through late formatting", async ({ page }) => {
+  await page.goto(origin!); await open(page);
+  send("history", { agents: {
+    "host.p": Array.from({ length: 120 }, (_, i) => entry(tall(i), i)),
+    "host.q": [entry("q reply", 0, "assistant", "host.q")],
+  } });
+  await settle(page);
+  await page.locator(".log").hover(); await page.mouse.wheel(0, -3000);
+  await settle(page);
+  const before = await firstVisibleRow(page);
+  await page.getByRole("button", { name: /^Go to the next agent/ }).click();
+  await expect(page.locator(".msg", { hasText: "q reply" })).toBeVisible();
+  await settle(page);
+  await page.getByRole("button", { name: /^Go to the previous agent/ }).click();
+  await expect(page.locator(".async-markdown")).toHaveCount(120);
+  await settle(page);
+  expect(Math.abs((await rowOffset(page, before.key))! - before.offset)).toBeLessThanOrEqual(2);
+});
+
+test("timeline jump lands the body at the 24 px gap through late formatting", async ({ page }) => {
+  await page.goto(origin!);
+  await expect(page.locator('button[aria-label^="Open details of "]').first()).toBeVisible();
+  send("hosts", { version: "0", hosts: {} }); // operator-only response timeline
+  history(Array.from({ length: 150 }, (_, i) => tall(i)));
+  await page.locator(".timeline .row", { hasText: "marker-130" }).click();
+  await settle(page);
+  const gap = await page.locator(".log").evaluate(log => {
+    const body = log.querySelector('[data-envelope-key*="|130|log|"] .msg');
+    return body!.getBoundingClientRect().top - log.getBoundingClientRect().top;
+  });
+  expect(Math.abs(gap - 24)).toBeLessThanOrEqual(2);
+});
+
+test("tool jump centers the partner through late formatting", async ({ page }) => {
+  await page.goto(origin!); await open(page);
+  const logs = Array.from({ length: 80 }, (_, i) => entry(tall(i), i));
+  logs[20] = { ...entry("", 20), payload: {
+    kind: "tool_use", tool_use_id: "toolu_fixture", name: "Read", input: { path: "a" } } };
+  logs[75] = { ...entry("", 75), payload: {
+    kind: "tool_result", tool_use_id: "toolu_fixture", text: "done" } };
+  send("history", { agents: { "host.p": logs } });
+  await page.locator('[data-kind="tool_result"] .tlink').click();
+  await settle(page);
+  const offCenter = await page.locator(".log").evaluate(log => {
+    const target = log.querySelector('[data-tuid="toolu_fixture"][data-kind="tool_use"]')!;
+    const r = target.getBoundingClientRect(), l = log.getBoundingClientRect();
+    return r.top + r.height / 2 - (l.top + log.clientHeight / 2);
+  });
+  expect(Math.abs(offCenter)).toBeLessThanOrEqual(2);
+});
+
+for (const [name, text] of [
+  ["flat emphasis 4 KB", "*a _b ".repeat(683)],
+  ["flat emphasis 8 KB", "*a _b ".repeat(1366)],
+  ["flat emphasis 16 KB", "*a _b ".repeat(2731)],
+  ["flat emphasis 36 KB", "*a _b ".repeat(6000)],
+  ["strike 60 KB", "~~a ".repeat(15000)],
+  ["100,000 nested quotes", ">".repeat(100000) + " q"],
+  ["normal 36 KB prose (control)", "A normal sentence of prose here\n".repeat(1125)],
+] as const) {
+  test(`hostile series: ${name}`, async ({ page }, info) => {
+    await page.goto(origin!); await open(page);
+    await page.evaluate(() => { (window as any).md.gaps = []; });
+    send("envelope", entry(text, 1));
+    const body = page.locator(".async-markdown").last();
+    await expect(body).not.toHaveAttribute("data-markdown-state", "pending", { timeout: 5000 });
+    const state = await body.getAttribute("data-markdown-state");
+    if (state === "plain") await expect(body.locator(".markdown-source")).toHaveText(text);
+    const gaps = await page.evaluate(() => Math.max(...(window as any).md.gaps));
+    const stopped = await page.evaluate(() => (window as any).md.stopped.at(-1) ?? null);
+    await info.attach("outcome", { body: JSON.stringify({ state, gaps, stopped }), contentType: "application/json" });
+    expect(gaps).toBeLessThan(250);
+    if (name.startsWith("normal")) expect(state).toBe("html");
+  });
+}
+
 test("tail pin survives late formatting and reading away never repins", async ({ page }) => {
   await page.goto(origin!); await open(page);
   history(Array.from({ length: 40 }, (_, i) => `row ${i}\n\n` + "paragraph\n\n".repeat(6)));
