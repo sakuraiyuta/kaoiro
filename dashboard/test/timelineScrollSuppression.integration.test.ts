@@ -1070,3 +1070,144 @@ describe("issue #617: the end of a timeline jump (scrollend)", () => {
     expect(owns(logEl)).toBe(true);
   });
 });
+
+describe("issue #617: releasing and correcting layout intents", () => {
+  const owns = (logEl: HTMLElement) =>
+    (logEl.getAttribute("style") ?? "").includes("overflow-anchor: none");
+
+  async function mounted(count = 250) {
+    stubScrollTo();
+    installScrollGeometry();
+    installRowGeometry();
+    const mermaid = installControllableMermaid();
+    const logs = buildLogs("agent-a", count);
+    const { target, props } = await renderReactive({
+      envelope: state("agent-a"),
+      logs,
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(50);
+    const logEl = target.querySelector(".log") as HTMLElement;
+    return { logEl, props, mermaid, logs };
+  }
+
+  // Records the product's writes; scrollLogTo above is the operator's.
+  function recordWrites(logEl: HTMLElement): number[] {
+    const base = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTop")!;
+    const writes: number[] = [];
+    Object.defineProperty(logEl, "scrollTop", {
+      configurable: true,
+      get() { return base.get!.call(logEl); },
+      set(value: number) { writes.push(value); base.set!.call(logEl, value); },
+    });
+    return writes;
+  }
+  const operatorScrollsTo = async (logEl: HTMLElement, top: number) => {
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTop")!.set!.call(logEl, top);
+    logEl.dispatchEvent(new Event("scroll"));
+    await tick();
+  };
+  const grow = (logEl: HTMLElement, px: number) => {
+    const height = logEl.scrollHeight + px;
+    Object.defineProperty(logEl, "scrollHeight", { configurable: true, get: () => height });
+  };
+
+  async function landedJump() {
+    const setup = await mounted();
+    const { logEl, props, mermaid, logs } = setup;
+    props.scrollToEntryKey = conversationEntryKey(logs[100]);
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    await tick();
+    const row = [...logEl.querySelectorAll<HTMLElement>("[data-envelope-key]")]
+      .find((r) => r.dataset.envelopeKey === props.scrollToEntryKey)!;
+    const to = row.offsetTop - 24;
+    await operatorScrollsTo(logEl, to);
+    logEl.dispatchEvent(new Event("scrollend"));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(owns(logEl)).toBe(true);
+    expect(logEl.scrollTop).toBe(to);
+    return { ...setup, row, to };
+  }
+
+  it("applies a timeline correction it still owed, then keeps the operator's movement", async () => {
+    const { logEl, row, to } = await landedJump();
+    const msg = row.querySelector<HTMLElement>(".msg") ?? row;
+    // A body above grew by 30 px in the frame of the operator's scroll.
+    Object.defineProperty(msg, "offsetTop", { configurable: true, get: () => to + 24 + 30 });
+    const writes = recordWrites(logEl);
+    await operatorScrollsTo(logEl, to + 400);
+    expect(writes).toEqual([to + 430]);
+    expect(owns(logEl)).toBe(false);
+  });
+
+  it("a scroll down to the end from a timeline target is the operator's", async () => {
+    const { logEl } = await landedJump();
+    const end = logEl.scrollHeight - logEl.clientHeight;
+    await operatorScrollsTo(logEl, end);
+    logEl.dispatchEvent(new Event("scrollend"));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(logEl.scrollTop).toBe(end);
+  });
+
+  it("a pin held again by an update keeps the operator's movement from the grown end", async () => {
+    const { logEl, props } = await mounted();
+    const end = logEl.scrollHeight - logEl.clientHeight;
+    expect(logEl.scrollTop).toBe(end);
+    props.logs = [...props.logs, ...buildLogs("agent-a", 251).slice(250)];
+    await tick();
+    grow(logEl, 300);
+    const writes = recordWrites(logEl);
+    await operatorScrollsTo(logEl, end - 40);
+    expect(writes).toEqual([end + 300 - 40]);
+  });
+
+  it("a pin resumed at the end corrects growth on its next correction pass", async () => {
+    const { logEl } = await mounted();
+    const end = logEl.scrollHeight - logEl.clientHeight;
+    await operatorScrollsTo(logEl, end - 100);
+    expect(owns(logEl)).toBe(false);
+    await operatorScrollsTo(logEl, end);
+    expect(owns(logEl)).toBe(true);
+    grow(logEl, 300);
+    logEl.dispatchEvent(new Event("scrollend"));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(logEl.scrollTop).toBe(end + 300);
+  });
+
+  it("corrections asked for within one frame are applied once", async () => {
+    const { logEl } = await mounted();
+    const writes = recordWrites(logEl);
+    logEl.dispatchEvent(new Event("scrollend"));
+    logEl.dispatchEvent(new Event("scrollend"));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(writes).toHaveLength(1);
+  });
+
+  it("the operator's scroll during a pending restore is kept and the restore is dropped", async () => {
+    const { logEl, props, mermaid, logs } = await mounted();
+    await operatorScrollsTo(logEl, 1000);
+    props.envelope = state("agent-b");
+    props.logs = buildLogs("agent-b", 3);
+    await tick();
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(50);
+    props.envelope = state("agent-a");
+    props.logs = logs;
+    await tick();
+    expect(owns(logEl)).toBe(true);
+    const shown = logEl.scrollTop;
+    expect(Math.abs(shown - 1000)).toBeGreaterThan(300);
+    await operatorScrollsTo(logEl, shown + 300);
+    expect(owns(logEl)).toBe(false);
+    expect(logEl.scrollTop).toBe(shown + 300);
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(logEl.scrollTop).toBe(shown + 300);
+  });
+});

@@ -525,6 +525,11 @@ test.describe("operator scrolls during formatting", () => {
       kind: "tool_result", tool_use_id: "toolu_fixture", text: "done" } };
     return logs;
   };
+  const toolOffCenter = (page: Page) => page.locator(".log").evaluate(log => {
+    const t = log.querySelector('[data-tuid="toolu_fixture"][data-kind="tool_use"]')!;
+    const r = t.getBoundingClientRect(), l = log.getBoundingClientRect();
+    return r.top + r.height / 2 - (l.top + log.clientHeight / 2);
+  });
   const holds = async (page: Page) =>
     (await page.locator(".log").getAttribute("style") ?? "").includes("overflow-anchor: none");
   // Each intent, once settled, hands the log over with the operator's first
@@ -596,12 +601,7 @@ test.describe("operator scrolls during formatting", () => {
     await settled(page);
     await page.locator('[data-kind="tool_result"] .tlink').click(); await settle(page);
     expect(await page.evaluate(() => (window as any).droppedScrollend)).toBeGreaterThan(0);
-    const offCenter = await page.locator(".log").evaluate(log => {
-      const t = log.querySelector('[data-tuid="toolu_fixture"][data-kind="tool_use"]')!;
-      const r = t.getBoundingClientRect(), l = log.getBoundingClientRect();
-      return r.top + r.height / 2 - (l.top + log.clientHeight / 2);
-    });
-    expect(Math.abs(offCenter)).toBeLessThanOrEqual(2);
+    expect(Math.abs(await toolOffCenter(page))).toBeLessThanOrEqual(2);
     await page.locator(".log").evaluate(el => { el.scrollTop += 1500; });
     await page.waitForTimeout(600);
     const away = await page.locator(".log").evaluate(el => el.scrollTop);
@@ -660,6 +660,44 @@ test.describe("operator scrolls during formatting", () => {
       });
     }));
     expect(nextFrameGap).toBeLessThanOrEqual(8);
+  });
+  test("a tool jump made while bodies wait keeps the partner centered", async ({ page }) => {
+    await page.goto(origin!); await open(page);
+    await page.evaluate(() => { (window as any).slowMs = 25; });
+    send("history", { agents: { "host.p": toolLogs() } });
+    await expect(page.locator('[data-kind="tool_result"] .tlink')).toBeVisible();
+    expect(await page.locator('[data-markdown-state="pending"]').count()).toBeGreaterThan(20);
+    await page.locator('[data-kind="tool_result"] .tlink').click(); await settle(page);
+    expect(Math.abs(await toolOffCenter(page))).toBeLessThanOrEqual(2);
+  });
+  test("a settled tool jump corrects an unannounced layout change above it before that frame paints", async ({ page }) => {
+    await page.goto(origin!); await open(page);
+    send("history", { agents: { "host.p": toolLogs() } });
+    await settled(page);
+    await page.locator('[data-kind="tool_result"] .tlink').click(); await settle(page);
+    const offCenter = await page.evaluate(() => new Promise<number>(resolve => {
+      const log = document.querySelector(".log") as HTMLElement;
+      requestAnimationFrame(() => {
+        document.querySelectorAll<HTMLElement>(".msg.assistant")[5].style.minHeight = "1800px";
+        requestAnimationFrame(() => {
+          const t = log.querySelector('[data-tuid="toolu_fixture"][data-kind="tool_use"]')!;
+          const r = t.getBoundingClientRect(), l = log.getBoundingClientRect();
+          resolve(r.top + r.height / 2 - (l.top + log.clientHeight / 2));
+        });
+      });
+    }));
+    expect(Math.abs(offCenter)).toBeLessThanOrEqual(2);
+  });
+  test("the tail pin corrects a shorter log before that frame paints", async ({ page }) => {
+    await pinnedLog(page);
+    const gap = await page.evaluate(() => new Promise<number>(resolve => {
+      const log = document.querySelector(".log") as HTMLElement;
+      requestAnimationFrame(() => {
+        log.style.maxHeight = `${log.clientHeight - 300}px`;
+        requestAnimationFrame(() => resolve(log.scrollHeight - log.clientHeight - log.scrollTop));
+      });
+    }));
+    expect(gap).toBeLessThanOrEqual(8);
   });
   // These repeat the input, and each run needs bodies still waiting, so they
   // use a slower lexer and a longer test timeout than the single-shot cases.
