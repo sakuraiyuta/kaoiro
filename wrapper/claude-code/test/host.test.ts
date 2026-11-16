@@ -10961,6 +10961,13 @@ describe("reserved resume receipt", () => {
     expect(r.events.some(e => e.event === "admitted_root")).toBe(false);
   });
 
+  it.each([0, -1, 1.5, Number.NaN, 2_147_483_648])("falls back to the 30-second floor for an invalid floor %s", async floor => {
+    const r = await exercise(async function* ({ hook }) {
+      await hook("note"); yield result("success");
+    }, { resumeReceiptIdleFloorMs: floor });
+    expect(r.events.find(e => e.event === "resume_pending").idle_limit_ms).toBe(30_000);
+  });
+
   it("uses a configured root timeout above the floor for the resume idle budget", async () => {
     let now = 0;
     const r = await exercise(async function* ({ host, hook }) {
