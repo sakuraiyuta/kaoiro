@@ -2326,13 +2326,14 @@
     stillTimer = setTimeout(settleScroll, SCROLL_STILL_MS);
   }
 
-  // Our own smooth scroll to `to`. A log already there raises no scroll and
+  // Our own smooth scroll to `top`. A log already there raises no scroll and
   // no scrollend that would end a flight, so it takes none.
-  function flyTo(to: number): void {
-    if (!logEl || !layoutIntent ||
-      Math.abs(logEl.scrollTop - to) <= LAYOUT_TOLERANCE_PX) return;
+  function flyTo(top: number): void {
+    if (!logEl || !layoutIntent) return;
+    const to = Math.min(top, logEl.scrollHeight - logEl.clientHeight);
+    if (Math.abs(logEl.scrollTop - to) <= LAYOUT_TOLERANCE_PX) return;
     layoutIntent.flight = { to };
-    logEl.scrollTo({ top: to, behavior: "smooth" });
+    logEl.scrollTo({ top, behavior: "smooth" });
   }
 
   // A smooth jump that stopped short of its destination was stopped by the
@@ -2445,7 +2446,7 @@
     );
     holdLayout({ kind: "timeline", key: targetKey });
     layoutReadyGeneration = scrollEffectGeneration;
-    flyTo(Math.min(top, logEl.scrollHeight - logEl.clientHeight));
+    flyTo(top);
     stickToBottom = false;
     scrollMemory.set(envelope.agent_id, {
       top, stick: false, frozenWindow,
