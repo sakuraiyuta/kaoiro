@@ -2241,7 +2241,7 @@
   }
 
   function layoutReady(): boolean {
-    return layoutIntent !== null && layoutReadyGeneration === scrollEffectGeneration;
+    return layoutReadyGeneration === scrollEffectGeneration;
   }
 
   function rowFor(key: string): HTMLElement | undefined {
@@ -2346,7 +2346,6 @@
       if (Math.abs(logEl.scrollTop - flight.to) > LAYOUT_TOLERANCE_PX) {
         leaveLayoutIntent();
         handleLogScroll();
-        return;
       }
     }
     scheduleLayoutCorrection();
