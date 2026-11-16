@@ -285,6 +285,10 @@ after the first of them; when the worker is idle they are applied at once.
 Removed or superseded owners' waiting results are dropped. One application
 parses and commits everything collected in its window without a time budget,
 so a draining backlog can keep the main thread busy once per window.
+When a cancellation or replacement terminates the active job, the next job
+starts one microtask later, so an unmount of many bodies starts at most one new
+worker per task (a per-task bound, not a rate limit); waiting results are
+applied at once meanwhile.
 
 Each successful chat body owns its diagrams and checks ownership after awaits.
 Initial navigation does not wait for formatting. Late layout preserves the

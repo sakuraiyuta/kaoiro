@@ -14,6 +14,9 @@ class Port {
   start(id = this.id) { this.send({ id, kind: "started" }); }
   succeed(id = this.id) { this.send({ id, ...lexMarkdown("**OK**") }); }
 }
+// Vitest's fake timers leave queueMicrotask real; this waits for the
+// service's deferred dispatch, which was queued first.
+const microtask = () => new Promise<void>((resolve) => queueMicrotask(resolve));
 let service: MarkdownWorker;
 let ports: Port[];
 const makePort = () => { const p = new Port(); ports.push(p); return p as LexerPort; };
@@ -67,7 +70,7 @@ it("times out at 1000 ms, ignores retired callbacks and recovers", () => {
   expect(b.mock.lastCall?.[0].kind).toBe("tokens");
 });
 
-it("retains FIFO latest owners, cancels active/pending and reuses idle worker", () => {
+it("retains FIFO latest owners, cancels active/pending and reuses idle worker", async () => {
   const a = {}, b = {}, c = {}, results: string[] = [];
   const cancelA = service.request(a, "a", () => results.push("a"));
   const cancelOldB = service.request(b, "old-b", () => results.push("old"));
@@ -76,6 +79,7 @@ it("retains FIFO latest owners, cancels active/pending and reuses idle worker", 
   cancelOldB();
   cancelA();
   expect(ports[0]!.terminate).toHaveBeenCalledOnce();
+  await microtask();
   expect(ports[1]!.postMessage.mock.lastCall?.[0].text).toBe("c");
   ports[1]!.succeed(); ports[1]!.succeed();
   expect(results).toEqual(["c", "b"]);
@@ -85,6 +89,7 @@ it("retains FIFO latest owners, cancels active/pending and reuses idle worker", 
   cancelPending();
   expect(ports[1]!.onmessage).toBeNull();
   service.request({}, "new", () => {});
+  await microtask();
   ports[2]!.succeed();
   service.request({}, "reuse", () => {});
   expect(ports).toHaveLength(3);
@@ -93,10 +98,11 @@ it("retains FIFO latest owners, cancels active/pending and reuses idle worker", 
   expect(ports[2]!.terminate).toHaveBeenCalledOnce();
 });
 
-it("replaces an active owner, ignores its old cancel and wrong result IDs", () => {
+it("replaces an active owner, ignores its old cancel and wrong result IDs", async () => {
   const owner = {}, receive = vi.fn();
   const oldCancel = service.request(owner, "old", receive);
   service.request(owner, "new", receive);
+  await microtask();
   oldCancel();
   ports[1]!.succeed(ports[0]!.id);
   expect(receive).not.toHaveBeenCalled();
@@ -193,6 +199,27 @@ it("applies nothing settled before disposal", () => {
   service.request({}, "late", receive);
   vi.advanceTimersByTime(100);
   expect(receive.mock.calls).toEqual([[{ kind: "plain", reason: "unavailable" }]]);
+});
+
+it("starts one worker per task after owners terminate the active job", async () => {
+  const applied: string[] = [];
+  const cancels = ["t0", "t1", "t2", "t3"].map((t) =>
+    service.request({}, t, () => applied.push(t)));
+  for (const cancel of cancels) cancel();
+  const late = {};
+  service.request(late, "late", () => applied.push("late"));
+  expect(ports).toHaveLength(1);
+  expect(ports[0]!.terminate).toHaveBeenCalledOnce();
+  await microtask();
+  expect(ports).toHaveLength(2);
+  expect(ports[1]!.postMessage.mock.lastCall?.[0].text).toBe("late");
+  for (const t of ["r1", "r2", "r3"]) service.request(late, t, () => applied.push(t));
+  expect(ports).toHaveLength(2);
+  await microtask();
+  expect(ports).toHaveLength(3);
+  expect(ports[2]!.postMessage.mock.lastCall?.[0].text).toBe("r3");
+  ports[2]!.succeed();
+  expect(applied).toEqual(["r3"]);
 });
 
 it("runs the actual handler and depth boundary without a DOM", () => {
