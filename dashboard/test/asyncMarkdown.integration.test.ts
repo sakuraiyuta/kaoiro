@@ -1,3 +1,4 @@
+import "./isolation.setup";
 // @vitest-environment jsdom
 import { mount, tick, unmount } from "svelte";
 import { afterEach, expect, it, vi } from "vitest";

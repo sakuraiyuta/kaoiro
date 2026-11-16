@@ -1,3 +1,4 @@
+import "./isolation.setup";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MarkdownWorker, type LexerPort } from "../src/lib/markdownWorker";
 import { handleLexRequest, lexMarkdown, type LexMessage, type LexRequest } from "../src/lib/markdownTokens";
