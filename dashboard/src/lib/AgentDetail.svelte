@@ -1118,12 +1118,11 @@
 
   // Reveal the remaining (earlier) history at once (fixed start=0, stable
   // under further appends — M1). Captures scroll height before the DOM
-  // grows, re-renders mermaid diagrams newly in view (round-1 must-fix M3 —
-  // the main $effect below only renders diagrams for the CURRENT logs.length
-  // dependency, which does not change here), then restores the visual
-  // offset against the POST-mermaid height so the prepend does not jump the
-  // viewport (#174). Kept independent of the pin/restore $effect below
-  // (different trigger, no shared state write).
+  // grows, then restores the visual offset after the update so the prepend
+  // does not jump the viewport (#174); the anchor intent keeps that row in
+  // place while the bodies format and render their own diagrams. Kept
+  // independent of the pin/restore $effect below (different trigger, no
+  // shared state write).
   //
   // ふじ round-2 must-fix M3: capture the agent this click was for and
   // re-check it after every await. AgentDetail is a single reused instance
@@ -1142,8 +1141,6 @@
     const prevScrollTop = el.scrollTop;
     frozenWindow = { start: 0, mode: "explicit-expanded", anchorLength: logs.length };
     await afterLogUpdate();
-    if (logEl !== el || envelope.agent_id !== agentId ||
-      generation !== scrollEffectGeneration) return;
     if (logEl !== el || envelope.agent_id !== agentId ||
       generation !== scrollEffectGeneration) return;
     el.scrollTop = prevScrollTop + (el.scrollHeight - prevScrollHeight);
@@ -2163,18 +2160,15 @@
   // below the top edge. This is reset for ordinary detail navigation.
   let timelineScrollTailPx = $state(0);
   let handledTimelineScrollTarget: string | null = null;
-  // ふじ review round 3 must-fix 1: the main scroll $effect's
-  // `tick().then(async () => {...})` continuation only re-checked whether
-  // `logEl` still existed after its `renderMermaidIn` await — never
-  // whether a NEWER effect run (a second rapid jump, or an agent switch)
-  // had since superseded it. renderMermaidIn's duration is content-
-  // dependent, so an OLDER continuation can resolve AFTER a newer one
-  // already landed correctly, and its own (stale) scrollTo / stick-restore
-  // call would silently overwrite the correct position. Bumped once per
-  // effect run (plain, non-reactive — like `scrollAgent` — so reading/
-  // writing it never adds a tracked dependency); each continuation
-  // captures its own value and compares against the live one before any
-  // DOM mutation, at both of its async resume points.
+  // ふじ review round 3 must-fix 1: the main scroll $effect's continuation
+  // waits (afterLogUpdate, then two animation frames), and a NEWER effect
+  // run (a second rapid jump, or an agent switch) can land first; the
+  // older continuation's stale scrollTo / stick-restore would then
+  // overwrite the correct position. Bumped once per effect run (plain,
+  // non-reactive — like `scrollAgent` — so reading/writing it never adds a
+  // tracked dependency); each continuation captures its own value and
+  // compares against the live one before any DOM mutation, at each of its
+  // async resume points.
   let scrollEffectGeneration = 0;
 
   type ReadingAnchor = { key: string; offset: number };
@@ -2445,11 +2439,12 @@
     });
   }
 
-  // Render any new mermaid diagrams (#42), then position the transcript. On a
-  // same-agent log update, keep it pinned to the latest line IF the operator
-  // was already at the bottom (stickToBottom). On an agent switch, restore that
-  // agent's remembered scroll position instead (#…), defaulting an unseen agent
-  // to the bottom. (Diagrams change the scroll height, so scroll after.)
+  // Position the transcript after the log update. On a same-agent log update,
+  // keep it pinned to the latest line IF the operator was already at the
+  // bottom (stickToBottom). On an agent switch, restore that agent's
+  // remembered scroll position instead (#…), defaulting an unseen agent to
+  // the bottom. Bodies format and render their diagrams (#42) later; the
+  // layout intent corrects the position as their heights change.
   $effect(() => {
     void logs.length;
     const agentId = envelope.agent_id;
@@ -2595,20 +2590,11 @@
     const myScrollEffectGeneration = ++scrollEffectGeneration;
     void afterLogUpdate().then(async () => {
       if (!logEl) return;
-      // クロエ review N-b: this is the FIRST of the continuation's three
-      // async resume points (after tick(), after renderMermaidIn, after the
-      // double rAF below); the other two already re-check the generation.
-      // Without this check, a run already superseded before tick() even
-      // resolves still calls renderMermaidIn for nothing — harmless (the
-      // two later guards still block any DOM mutation) but pure waste.
-      if (myScrollEffectGeneration !== scrollEffectGeneration) return;
-      // The component may have unmounted during the await; re-check logEl.
-      if (!logEl) return;
       // A newer effect run has since superseded this one — its own
       // continuation (or none, if nothing is pending) owns whatever
       // scroll/window state is now current. Touching anything here would
       // silently overwrite a possibly-already-correct, newer landing with
-      // stale data (ふじ probes 1+2).
+      // stale data (ふじ probes 1+2). The animation frames below re-check.
       if (myScrollEffectGeneration !== scrollEffectGeneration) return;
       // #118: timeline click has an explicit reading target. Do this before
       // the ordinary pin/restore path so its smooth scroll cannot be
@@ -4307,14 +4293,14 @@
               <time class="ts" datetime={env.ts}>{time}</time>
             </div>
           {:else if log?.kind === "user"}
-            <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
+            <!-- Untrusted: AsyncMarkdown sanitizes via DOMPurify (#30). -->
             <div class="msg user">
               <AsyncMarkdown text={log.text ?? ""} scope={envelope.agent_id}
                 onlayout={scheduleLayoutCorrection} />
               <time class="ts" datetime={env.ts}>{time}</time>
             </div>
           {:else if log?.kind === "assistant"}
-            <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
+            <!-- Untrusted: AsyncMarkdown sanitizes via DOMPurify (#30). -->
             <div class="msg assistant">
               <AsyncMarkdown text={log.text ?? ""} scope={envelope.agent_id}
                 onlayout={scheduleLayoutCorrection} />

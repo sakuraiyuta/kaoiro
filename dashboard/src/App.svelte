@@ -2,7 +2,6 @@
   import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { disposeMarkdownWorker } from "./lib/markdownWorker";
-  onDestroy(disposeMarkdownWorker);
   import AgentCard from "./lib/AgentCard.svelte";
   import { DeliveryPolicyStore } from "./lib/deliveryPolicyStore.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
@@ -118,6 +117,8 @@
     clientBuildIdentity,
     formatBuildIdentity,
   } from "./lib/buildIdentity";
+
+  onDestroy(disposeMarkdownWorker);
 
   // The document language follows the UI language (docs/reference/ui/i18n.md).
   $effect(() => {
