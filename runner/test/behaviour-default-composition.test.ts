@@ -2,7 +2,9 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { Duplex } from "node:stream";
@@ -12,13 +14,18 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 
-// Default-composition gate for issue #469 (design: docs/plans/
-// issue-469-runner-config-migration.md, section 3). It injects nothing: the
-// real runner entrypoint reads a config file with no KAOIRO_* variables in its
-// environment, a test-owned endpoint speaks just enough Phoenix v2 to accept
-// the runner join and push one `spawn`, and the runner launches the built
-// Claude wrapper through the real launcher. The assertion is on what the
-// wrapper's own startup line reports it will use.
+// Default-composition gates. Both inject nothing: the real runner entrypoint
+// starts in a closed environment, a test-owned endpoint speaks just enough
+// Phoenix v2 to accept the runner join and push to it, and the runner launches
+// built wrappers through the real launcher.
+//
+// - Issue #469 (design: docs/plans/issue-469-runner-config-migration.md,
+//   section 3): the runner reads a config file with no KAOIRO_* variables in
+//   its environment. The assertion is on what each wrapper's own startup line
+//   reports it will use.
+// - Issue #1169: the runner starts with its credential in the environment.
+//   The assertion is on what each child it starts records about its own
+//   environment.
 
 const runnerRoot = fileURLToPath(new URL("../", import.meta.url));
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -75,6 +82,8 @@ interface Endpoint {
   sockets: Set<Duplex>;
   /** Join params of every wrapper channel, by topic. */
   wrapperJoins: Map<string, Record<string, unknown>>;
+  /** Every upgrade on the runner's path, in order. */
+  runnerUpgrades: Array<{ url: string; socket: Duplex }>;
 }
 
 /** Serves both sockets: the runner's (`/runner`, joined on `runner:*`) and the
@@ -86,6 +95,7 @@ async function startEndpoint(
 ): Promise<Endpoint> {
   const sockets = new Set<Duplex>();
   const wrapperJoins = new Map<string, Record<string, unknown>>();
+  const runnerUpgrades: Endpoint["runnerUpgrades"] = [];
   const server = createServer();
   server.on("upgrade", (request, socket) => {
     sockets.add(socket);
@@ -98,6 +108,7 @@ async function startEndpoint(
     );
     const path = String(request.url ?? "");
     const isRunner = path.startsWith("/runner");
+    if (isRunner) runnerUpgrades.push({ url: path, socket });
     const send = (frame: unknown[]) => socket.write(encodeText(JSON.stringify(frame)));
     const state = { buffer: Buffer.alloc(0) };
     socket.on("data", (chunk: Buffer) => {
@@ -131,7 +142,7 @@ async function startEndpoint(
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("no port");
-  return { server, port: address.port, sockets, wrapperJoins };
+  return { server, port: address.port, sockets, wrapperJoins, runnerUpgrades };
 }
 
 function waitFor(
@@ -359,11 +370,11 @@ async function removeFixtureAfterGroup(
 // cleanup. A hard kill of the worker or a SIGINT that skips this hook still
 // leaves the runner, wrappers and CLI running; that is an accepted residual for
 // local aborts. The checks are outside the helper on purpose.
-let liveGroup: RunnerGroup | undefined;
+const liveGroups = new Set<RunnerGroup>();
 afterAll(async () => {
-  const group = liveGroup;
-  if (group === undefined || group.ended) return;
-  await settleRunnerGroup(group, { waitMs: 0 });
+  for (const group of liveGroups) {
+    if (!group.ended) await settleRunnerGroup(group, { waitMs: 0 });
+  }
 });
 
 describe("default composition (issue #469)", () => {
@@ -447,7 +458,10 @@ describe("default composition (issue #469)", () => {
           },
         );
         runner = started;
-        if (started.pid !== undefined) runnerGroup = liveGroup = openRunnerGroup(started.pid);
+        if (started.pid !== undefined) {
+          runnerGroup = openRunnerGroup(started.pid);
+          liveGroups.add(runnerGroup);
+        }
         closed = new Promise<void>((resolve) =>
           started.once("close", () => {
             runnerClosed = true;
@@ -558,6 +572,222 @@ describe("default composition (issue #469)", () => {
       }
       expect(failures, report).toEqual([]);
       console.info(report);
+    },
+    180_000,
+  );
+});
+
+const CREDENTIAL_NAMES = [
+  "KAOIRO_RUNNER_TOKEN",
+  "KAOIRO_RUNNER_TOKENS",
+  "KAOIRO_LAUNCHER_RUNNER_TOKENS",
+];
+const PLANTED_TOKEN = "fixture-runner-credential-not-a-secret";
+const RECORDS_ENV = "KAOIRO_TEST_CHILD_RECORDS";
+
+// Both recorders write names only, one file per process. They read the planted
+// value from a file: handed over in the environment, it would be found in
+// every recorder's own environment.
+
+// Preloaded into every Node process below the runner. tsx also runs preloads
+// in its loader threads, where an exit would stop the runner before it starts.
+const NODE_RECORDER = `const { isMainThread } = require("node:worker_threads");
+if (isMainThread) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dir = process.env.${RECORDS_ENV};
+  const planted = fs.readFileSync(path.join(dir, "planted"), "utf8");
+  const role = String(process.argv[1] ?? "");
+  const present = ${JSON.stringify(CREDENTIAL_NAMES)}.filter((name) => Object.hasOwn(process.env, name));
+  const carriers = Object.entries(process.env)
+    .filter(([, value]) => String(value).includes(planted)).map(([name]) => name);
+  const file = path.join(dir, String(process.pid));
+  fs.writeFileSync(file + ".tmp", JSON.stringify({ role, present, carriers }));
+  fs.renameSync(file + ".tmp", file + ".json");
+  // The runner keeps running; a wrapper or a probe stops before its own code.
+  if (!role.endsWith("src/cli.ts")) process.exit(0);
+}
+`;
+
+// Stands in for the engine CLIs the runner probes through PATH.
+const SHELL_RECORDER = `#!/bin/sh
+dir=$${RECORDS_ENV}
+planted=$(cat "$dir/planted")
+present=
+for name in ${CREDENTIAL_NAMES.join(" ")}; do
+  eval "[ -n \\"\\\${$name+x}\\" ]" && present="$present\\"$name\\","
+done
+carriers=$(env | grep -F -- "$planted" | sed -e 's/=.*//' -e 's/.*/"&",/' | tr -d '\\n')
+printf '{"role":"%s %s","present":[%s],"carriers":[%s]}' \\
+  "$(basename "$0")" "$1" "\${present%,}" "\${carriers%,}" > "$dir/$$.tmp"
+mv "$dir/$$.tmp" "$dir/$$.json"
+exit 0
+`;
+
+interface ChildRecord {
+  role: string;
+  present: string[];
+  carriers: string[];
+}
+
+// One child per way the runner builds a child environment.
+const RECORDED_CHILDREN: Array<{ name: string; matches: (role: string) => boolean }> = [
+  { name: "Claude wrapper", matches: (role) => role.endsWith("claude-code/dist/cli.js") },
+  { name: "Claude probe", matches: (role) => role.endsWith("claude-code/dist/probe.js") },
+  { name: "codex doctor", matches: (role) => role === "codex doctor" },
+  { name: "Grok probe", matches: (role) => role === "grok --no-auto-update" },
+];
+
+describe("runner credential (issue #1169)", () => {
+  it(
+    "starts a wrapper and the engine probes without the runner's credential, and keeps sending it to the server",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "kaoiro-1169-gate-"));
+      const records = join(root, "records");
+      const bin = join(root, "bin");
+      const scratchTmp = join(root, "tmp");
+      for (const dir of [records, bin, scratchTmp]) mkdirSync(dir);
+      writeFileSync(join(records, "planted"), PLANTED_TOKEN);
+      const preload = join(root, "recorder.cjs");
+      writeFileSync(preload, NODE_RECORDER);
+      for (const name of ["codex", "grok"]) {
+        writeFileSync(join(bin, name), SHELL_RECORDER);
+        chmodSync(join(bin, name), 0o755);
+      }
+      const configPath = join(root, "runner.config.json");
+      const readRecords = (): ChildRecord[] =>
+        readdirSync(records)
+          .filter((name) => name.endsWith(".json"))
+          .map((name) => JSON.parse(readFileSync(join(records, name), "utf8")) as ChildRecord);
+      const tokenOf = (upgrade: number): string | null => {
+        const url = endpoint.runnerUpgrades[upgrade]?.url;
+        return url === undefined ? null : new URL(url, "ws://endpoint").searchParams.get("token");
+      };
+
+      let joins = 0;
+      let output = "";
+      let runner: ChildProcess | undefined;
+      let runnerGroup: RunnerGroup | undefined;
+      let runnerClosed = false;
+      let closed: Promise<void> = Promise.resolve();
+      let primary: unknown;
+      const problems: string[] = [];
+      const endpoint = await startEndpoint((send, topic) => {
+        joins += 1;
+        // Only the first join starts children, so the run has one shape.
+        if (joins > 1) return;
+        send([null, null, topic, "spawn", {
+          version: "0",
+          agent_id: "gate.claude-code",
+          persona: { id: "p", name: "P", sprite_set: "p" },
+          cwd: root,
+          engine: "claude-code",
+        }]);
+        send([null, null, topic, "refresh_engine_catalog", {
+          engine: "claude-code",
+          request_id: "gate-1169",
+          force: true,
+        }]);
+      });
+      try {
+        // No `codex.auth_mode`: the runner asks `codex doctor`, its first child.
+        writeFileSync(
+          configPath,
+          JSON.stringify({
+            host_id: "fixture-host",
+            server_url: `ws://127.0.0.1:${endpoint.port}/runner`,
+            cwd_allowlist: [root],
+            capabilities: ["claude-code", "codex", "grok"],
+          }),
+        );
+        const started = spawn(
+          process.execPath,
+          ["--import", "tsx", "src/cli.ts", configPath],
+          {
+            cwd: runnerRoot,
+            env: {
+              PATH: `${bin}:${process.env.PATH ?? ""}`,
+              HOME: root,
+              TMPDIR: scratchTmp,
+              NODE_OPTIONS: `--require=${preload}`,
+              [RECORDS_ENV]: records,
+              KAOIRO_RUNNER_TOKEN: PLANTED_TOKEN,
+              KAOIRO_RUNNER_TOKENS: `fixture-host:${PLANTED_TOKEN}`,
+              KAOIRO_LAUNCHER_RUNNER_TOKENS: `fixture-host:${PLANTED_TOKEN}`,
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+            detached: true,
+          },
+        );
+        runner = started;
+        started.stdout?.on("data", (chunk) => (output += String(chunk)));
+        started.stderr?.on("data", (chunk) => (output += String(chunk)));
+        if (started.pid !== undefined) {
+          runnerGroup = openRunnerGroup(started.pid);
+          liveGroups.add(runnerGroup);
+        }
+        closed = new Promise<void>((resolve) =>
+          started.once("close", () => {
+            runnerClosed = true;
+            resolve();
+          }),
+        );
+
+        if (!(await waitUntil(() => joins >= 1 || runnerClosed, 60_000)) || joins < 1) {
+          throw new Error(`the runner never joined the endpoint:\n${output}`);
+        }
+        if (tokenOf(0) !== PLANTED_TOKEN) problems.push("first connection: the token is not in the connect URL");
+
+        // Positive control: the recorder sees the names and the value where they are.
+        const own = readRecords().filter((record) => record.role.endsWith("src/cli.ts"));
+        const sorted = (names: string[]) => [...names].sort().join();
+        const every = sorted(CREDENTIAL_NAMES);
+        if (own.length !== 1 || sorted(own[0]!.present) !== every || sorted(own[0]!.carriers) !== every) {
+          problems.push(`runner: expected one record with every name and value, got ${JSON.stringify(own)}`);
+        }
+
+        const recordsOf = (child: (typeof RECORDED_CHILDREN)[number]) =>
+          readRecords().filter((record) => child.matches(record.role));
+        await waitUntil(() => RECORDED_CHILDREN.every((child) => recordsOf(child).length > 0), 60_000);
+        for (const child of RECORDED_CHILDREN) {
+          const found = recordsOf(child);
+          if (found.length === 0) problems.push(`${child.name}: no record`);
+          for (const record of found) {
+            if (record.present.length > 0) problems.push(`${child.name}: holds [${record.present.join()}]`);
+            if (record.carriers.length > 0) {
+              problems.push(`${child.name}: the planted value is in [${record.carriers.join()}]`);
+            }
+          }
+        }
+
+        // A dropped socket reconnects the way a server restart does: the same
+        // client socket, with the params it was built with.
+        endpoint.runnerUpgrades[0]?.socket.destroy();
+        if (!(await waitUntil(() => joins >= 2, 30_000))) {
+          problems.push("reconnection: the runner did not join again");
+        } else if (tokenOf(endpoint.runnerUpgrades.length - 1) !== PLANTED_TOKEN) {
+          problems.push("reconnection: the token is not in the connect URL");
+        }
+      } catch (error) {
+        primary = error;
+      }
+      const failures: string[] = [];
+      if (runner !== undefined) {
+        failures.push(...(await stopRunner(runner, closed, () => runnerClosed)));
+      }
+      for (const socket of endpoint.sockets) socket.destroy();
+      await new Promise<void>((resolve) => endpoint.server.close(() => resolve()));
+      if (runnerGroup !== undefined) {
+        failures.push(...(await removeFixtureAfterGroup(root, runnerGroup)).failures);
+      } else {
+        rmSync(root, { recursive: true, force: true });
+      }
+      const report = failures.length === 0 ? "[cleanup] runner closed" : `[cleanup] ${failures.join("; ")}`;
+      if (primary !== undefined) {
+        if (primary instanceof Error) primary.message += `\n${report}`;
+        throw primary;
+      }
+      expect([...problems, ...failures]).toEqual([]);
     },
     180_000,
   );

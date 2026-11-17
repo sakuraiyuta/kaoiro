@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-11-07
+last_updated: 2026-11-18
 ---
 
 # Runner configuration
@@ -47,6 +47,27 @@ contains only `KAOIRO_RUNNER_TOKEN=<64 lowercase hex>`. `scripts/dev.sh` and
 `scripts/dogfood.sh` create it with mode 0600 when absent and append its pair
 to the server list for the configured host; a preset environment token wins
 after validation.
+
+### Runner credential and child processes
+
+The runner reads `KAOIRO_RUNNER_TOKEN` once at start and then removes it from
+its own environment. No process it starts inherits it: not a wrapper, an engine
+probe, an engine, or a tool an agent runs. Changing the token needs a runner
+restart.
+
+The runner removes two more names in the same step, `KAOIRO_RUNNER_TOKENS` and
+`KAOIRO_LAUNCHER_RUNNER_TOKENS`. It never reads them. The local launchers
+export them to hand the server its list, and that list holds this host's
+token. A launcher started from an agent's shell therefore finds no preset
+token and uses `runner/runner.env`.
+
+This stops inheritance and nothing else:
+
+- A process of the same OS user can still read `runner.env` and the runner's
+  initial environment (`/proc/<pid>/environ`, or `ps` with its environment
+  option).
+- A value that a login shell profile or an engine's own configuration exports
+  again does not come from the runner, and the runner does not remove it.
 
 `server_url` is a `runner.config.json` key and hot-reloads (the runner reconnects
 when it changes). The environment variable `KAOIRO_RUNNER_SERVER_URL`

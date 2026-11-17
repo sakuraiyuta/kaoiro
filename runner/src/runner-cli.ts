@@ -84,6 +84,22 @@ export function installRunnerUnhandledHandlers(): void {
   });
 }
 
+/** Environment names that carry this runner's server credential: its own
+ *  variable, and the two list variables the local launchers export. */
+const RUNNER_CREDENTIAL_ENV = [
+  "KAOIRO_RUNNER_TOKEN",
+  "KAOIRO_RUNNER_TOKENS",
+  "KAOIRO_LAUNCHER_RUNNER_TOKENS",
+] as const;
+
+// Every child inherits process.env, so the credential leaves it here, before
+// the first child starts. The link keeps the value it was given.
+function takeRunnerToken(env: NodeJS.ProcessEnv): string | undefined {
+  const token = env.KAOIRO_RUNNER_TOKEN;
+  for (const name of RUNNER_CREDENTIAL_ENV) delete env[name];
+  return token;
+}
+
 function isCodexEnabled(config: RunnerConfig): boolean {
   // Absent = bundled default (["claude-code", "codex"]), so codex ON.
   return config.capabilities?.includes("codex") ?? true;
@@ -182,7 +198,7 @@ export async function runRunnerCli(
   // holds across hot-reloads too.
   let fileConfig = loadConfig(configPath);
   let config = applyOverride(fileConfig);
-  const token = process.env.KAOIRO_RUNNER_TOKEN;
+  const token = takeRunnerToken(process.env);
 
   // issue #469: a deprecated behaviour variable that is invalid stops the
   // runner here instead of failing every later wrapper launch. A variable

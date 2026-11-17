@@ -1,7 +1,7 @@
 ---
 title: Authentication and authorization
 status: accepted
-last_updated: 2026-11-14
+last_updated: 2026-11-18
 ---
 
 # Authentication and authorization
@@ -37,6 +37,9 @@ In a release with the respective token registry unset, runner connections are
 rejected, while a valid server-minted signed wrapper token is still accepted
 unless its agent has been revoked. Other wrapper connections are rejected. This
 does not affect `:dev` execution through `scripts/dev.sh` (issue #133).
+
+The runner keeps its token out of the processes it starts; see
+[Runner credential and child processes](../configuration/runner.md#runner-credential-and-child-processes).
 
 ## Topic authorization (channel `join/3`)
 

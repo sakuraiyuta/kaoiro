@@ -2,7 +2,7 @@
 title: Runner install and distribution
 description: Build and distribute runner tarballs to agent hosts, install and switch releases, and run the runner as a systemd/launchd service.
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-11-18
 related: [deployment]
 ---
 
@@ -276,7 +276,10 @@ KAOIRO_NODE=/home/you/.nvm/versions/node/v22.20.0/bin/node
 To make version-managed commands available in agent tool shells, also set
 `PATH` in the same `runner.env`. The launch shim sources this file with
 `set -a` before starting Node, so the runner and newly spawned wrappers inherit
-the value. For an asdf installation, adapt this example to the host:
+the value. The runner's own credential is the exception: wrappers do not
+inherit `KAOIRO_RUNNER_TOKEN` (see
+[Runner credential and child processes](../reference/configuration/runner.md#runner-credential-and-child-processes)).
+For an asdf installation, adapt this example to the host:
 
 ```sh
 PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
