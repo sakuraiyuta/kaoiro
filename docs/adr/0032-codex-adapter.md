@@ -15,6 +15,11 @@ related_adrs: [17, 22, 23, 33, 34, 35, 37, 38, 39, 40]
 
 Accepted (implementation is the two stages of [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md) → [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)).
 
+Partially superseded (2026-11-18): how the runner launcher resolves an
+engine to its wrapper package (F1) and the MCP bridge handed to Codex as
+`<node> <@kaoiro/codex>/dist/bridge.js` (F5) are replaced by [ADR-0074](0074-runner-engine-launch-contract.md)
+(D1 and D2). The other decisions stand.
+
 ## Context
 
 The wrapper is currently a Claude-only implementation in the single

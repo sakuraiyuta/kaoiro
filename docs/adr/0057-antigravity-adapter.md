@@ -43,6 +43,11 @@ register-time `agy --version` report (F6 addendum, issue #387).
 Revised 2026-10-09 for gate-trip recovery and measured pre-execution
 validation errors.
 
+Partially superseded (2026-11-18): the runner's package table in the
+wiring of F1 and the hook and bridge commands handed to `agy` as
+`<node> <package file>` (F4 and F5) are replaced by [ADR-0074](0074-runner-engine-launch-contract.md)
+(D1 and D2). The other decisions stand.
+
 ## Context
 
 Issue #181 asks for Google Antigravity as a third kaoiro engine next to
