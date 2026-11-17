@@ -14,7 +14,7 @@ contract between the two processes as it behaves on `develop` at
 carries it: the bundled wrappers always run from the same release as the
 runner. The decisions about this contract, including the changes planned for
 [issue #140](https://github.com/sakuraiyuta/kaoiro/issues/140), are in
-[ADR-0074](../../adr/0074-runner-engine-launch-contract.md).
+[ADR-0075](../../adr/0075-runner-engine-launch-contract.md).
 
 The `runner:<host_id>` messages that trigger a launch are in
 [Runner control and launch](runner-control.md). The fields of the launch
@@ -46,7 +46,7 @@ the runner process exits, on a best-effort basis.
 
 Besides starting the process, the runner itself knows each engine. These
 responsibilities are not part of contract 1
-([ADR-0074](../../adr/0074-runner-engine-launch-contract.md) D5).
+([ADR-0075](../../adr/0075-runner-engine-launch-contract.md) D5).
 
 | Responsibility | What the runner does today |
 |---|---|
@@ -74,4 +74,4 @@ files.
 
 - [Runner control and launch](runner-control.md).
 - [Wrapper configuration](../configuration/wrapper.md).
-- [ADR-0074](../../adr/0074-runner-engine-launch-contract.md).
+- [ADR-0075](../../adr/0075-runner-engine-launch-contract.md).
