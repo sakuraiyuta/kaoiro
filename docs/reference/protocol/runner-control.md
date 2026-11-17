@@ -2,7 +2,7 @@
 title: Runner control and launch
 description: The runner:<host_id> control channel (register/spawn/stop/restart/session enumeration/session reset) and the client-facing launch-control routes that feed it.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-18
 related: [protocol, architecture]
 ---
 
@@ -276,6 +276,7 @@ See [Protocol documentation](../../README.md#protocol-documentation) for the
 full topic index.
 
 - [Envelope contract](envelope.md).
+- [Launch contract between the runner and a wrapper](launch-contract.md).
 - [Wrapper configuration](../configuration/wrapper.md).
 - [Session capabilities](capabilities.md).
 
