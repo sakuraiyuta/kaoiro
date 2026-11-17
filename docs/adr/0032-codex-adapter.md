@@ -17,7 +17,7 @@ Accepted (implementation is the two stages of [phase-13-wrapper-multipackage-res
 
 Partially superseded (2026-11-18): how the runner launcher resolves an
 engine to its wrapper package (F1) and the MCP bridge handed to Codex as
-`<node> <@kaoiro/codex>/dist/bridge.js` (F5) are replaced by [ADR-0074](0074-runner-engine-launch-contract.md)
+`<node> <@kaoiro/codex>/dist/bridge.js` (F5) are replaced by [ADR-0075](0075-runner-engine-launch-contract.md)
 (D1 and D2). The other decisions stand.
 
 ## Context

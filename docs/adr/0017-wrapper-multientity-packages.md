@@ -26,7 +26,7 @@ Note: The “new wrapper/pnpm-workspace.yaml” proposed when this ADR was draft
 
 Partially superseded (2026-11-18): the assumption that each engine
 package is started as its own `dist/cli.js` by the runner's Node binary is
-replaced by [ADR-0074](0074-runner-engine-launch-contract.md) (D1 and D2). The package structure itself stands.
+replaced by [ADR-0075](0075-runner-engine-launch-contract.md) (D1 and D2). The package structure itself stands.
 
 ## Context
 
