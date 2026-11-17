@@ -271,7 +271,12 @@ describe("resolveCodexCatalog", () => {
   });
 
   it("loads the bundled Codex CLI version through the SDK dependency", () => {
-    expect(BUNDLED_CODEX_VERSION).toBe("0.164.0");
+    const wrapperPackage = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { dependencies: Record<string, string> };
+    expect(BUNDLED_CODEX_VERSION).toBe(
+      wrapperPackage.dependencies["@openai/codex"],
+    );
   });
 
   it("matches the SDK's exact Codex CLI dependency", () => {
