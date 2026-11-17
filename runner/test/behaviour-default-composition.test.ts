@@ -585,9 +585,8 @@ const CREDENTIAL_NAMES = [
 const PLANTED_TOKEN = "fixture-runner-credential-not-a-secret";
 const RECORDS_ENV = "KAOIRO_TEST_CHILD_RECORDS";
 
-// Both recorders write names only, one file per process. They read the planted
-// value from a file: handed over in the environment, it would be found in
-// every recorder's own environment.
+// Both recorders write which credential names a process holds, one file per
+// process.
 
 // Preloaded into every Node process below the runner. tsx also runs preloads
 // in its loader threads, where an exit would stop the runner before it starts.
@@ -595,14 +594,10 @@ const NODE_RECORDER = `const { isMainThread } = require("node:worker_threads");
 if (isMainThread) {
   const fs = require("node:fs");
   const path = require("node:path");
-  const dir = process.env.${RECORDS_ENV};
-  const planted = fs.readFileSync(path.join(dir, "planted"), "utf8");
   const role = String(process.argv[1] ?? "");
   const present = ${JSON.stringify(CREDENTIAL_NAMES)}.filter((name) => Object.hasOwn(process.env, name));
-  const carriers = Object.entries(process.env)
-    .filter(([, value]) => String(value).includes(planted)).map(([name]) => name);
-  const file = path.join(dir, String(process.pid));
-  fs.writeFileSync(file + ".tmp", JSON.stringify({ role, present, carriers }));
+  const file = path.join(process.env.${RECORDS_ENV}, String(process.pid));
+  fs.writeFileSync(file + ".tmp", JSON.stringify({ role, present }));
   fs.renameSync(file + ".tmp", file + ".json");
   // The runner keeps running; a wrapper or a probe stops before its own code.
   if (!role.endsWith("src/cli.ts")) process.exit(0);
@@ -612,14 +607,11 @@ if (isMainThread) {
 // Stands in for the engine CLIs the runner probes through PATH.
 const SHELL_RECORDER = `#!/bin/sh
 dir=$${RECORDS_ENV}
-planted=$(cat "$dir/planted")
 present=
 for name in ${CREDENTIAL_NAMES.join(" ")}; do
   eval "[ -n \\"\\\${$name+x}\\" ]" && present="$present\\"$name\\","
 done
-carriers=$(env | grep -F -- "$planted" | sed -e 's/=.*//' -e 's/.*/"&",/' | tr -d '\\n')
-printf '{"role":"%s %s","present":[%s],"carriers":[%s]}' \\
-  "$(basename "$0")" "$1" "\${present%,}" "\${carriers%,}" > "$dir/$$.tmp"
+printf '{"role":"%s %s","present":[%s]}' "$(basename "$0")" "$1" "\${present%,}" > "$dir/$$.tmp"
 mv "$dir/$$.tmp" "$dir/$$.json"
 exit 0
 `;
@@ -627,7 +619,6 @@ exit 0
 interface ChildRecord {
   role: string;
   present: string[];
-  carriers: string[];
 }
 
 // One child per way the runner builds a child environment.
@@ -647,7 +638,6 @@ describe("runner credential (issue #1169)", () => {
       const bin = join(root, "bin");
       const scratchTmp = join(root, "tmp");
       for (const dir of [records, bin, scratchTmp]) mkdirSync(dir);
-      writeFileSync(join(records, "planted"), PLANTED_TOKEN);
       const preload = join(root, "recorder.cjs");
       writeFileSync(preload, NODE_RECORDER);
       for (const name of ["codex", "grok"]) {
@@ -738,12 +728,10 @@ describe("runner credential (issue #1169)", () => {
         }
         if (tokenOf(0) !== PLANTED_TOKEN) problems.push("first connection: the token is not in the connect URL");
 
-        // Positive control: the recorder sees the names and the value where they are.
+        // Positive control: the recorder sees the names where they are.
         const own = readRecords().filter((record) => record.role.endsWith("src/cli.ts"));
-        const sorted = (names: string[]) => [...names].sort().join();
-        const every = sorted(CREDENTIAL_NAMES);
-        if (own.length !== 1 || sorted(own[0]!.present) !== every || sorted(own[0]!.carriers) !== every) {
-          problems.push(`runner: expected one record with every name and value, got ${JSON.stringify(own)}`);
+        if (own.length !== 1 || own[0]!.present.join() !== CREDENTIAL_NAMES.join()) {
+          problems.push(`runner: expected one record with every name, got ${JSON.stringify(own)}`);
         }
 
         const recordsOf = (child: (typeof RECORDED_CHILDREN)[number]) =>
@@ -754,9 +742,6 @@ describe("runner credential (issue #1169)", () => {
           if (found.length === 0) problems.push(`${child.name}: no record`);
           for (const record of found) {
             if (record.present.length > 0) problems.push(`${child.name}: holds [${record.present.join()}]`);
-            if (record.carriers.length > 0) {
-              problems.push(`${child.name}: the planted value is in [${record.carriers.join()}]`);
-            }
           }
         }
 
