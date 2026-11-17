@@ -24,6 +24,10 @@ Implemented package boundaries (2026-07-10):
 
 Note: The “new wrapper/pnpm-workspace.yaml” proposed when this ADR was drafted was not adopted; the four packages were added to the existing workspace at the repository root (because pnpm workspaces cannot be nested). `wrapper/package.json` remains as a workspace-external fan-out shim.
 
+Partially superseded (2026-11-18): the assumption that each engine
+package is started as its own `dist/cli.js` by the runner's Node binary is
+replaced by [ADR-0074](0074-runner-engine-launch-contract.md) (D1 and D2). The package structure itself stands.
+
 ## Context
 
 The wrapper is currently a single package, `@kaoiro/wrapper`. In the future we want to add things besides Claude Code (Codex, and further **non-AI entities** such as DB and host-resource monitors). The ultimate goal is to “remotely manage diverse entities and visualise their state as characters.” [extensions](../architecture/extensions.md) already separates adapters (per agent) from filters (agent-independent), and an adapter abstraction also exists in code in `wrapper/src/adapter.ts`. This ADR brings that structure down into physical package structure.
