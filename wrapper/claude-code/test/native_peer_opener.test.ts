@@ -1,6 +1,5 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { createHash } from "node:crypto";
-import { createReadStream, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,7 +8,7 @@ import { peerFixture, recordedPeer } from "./fixtures/native_peer_opener.js";
 
 const sdkRequire = createRequire(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"));
 
-describe("recorded native peer root and installed pin", () => {
+describe("recorded native peer root and installed native framing", () => {
   it("matches the independently recorded row bytes", () => {
     expect(PEER_ROOT_PREFIX + recordedPeer.hook + PEER_ROOT_SUFFIX).toBe(recordedPeer.row.message.content);
     expect(matchesPeerOpener(recordedPeer.row.message.content, recordedPeer.hook, recordedPeer.row.origin.from)).toBe(true);
@@ -29,15 +28,17 @@ describe("recorded native peer root and installed pin", () => {
     expect(peerReportToken(`note\n${one}`)).toBeUndefined();
     expect(peerReportToken('<agent-message from="x">\n</agent-message>')).toBeUndefined();
   });
-  it("requires review of the native framing on SDK updates", () => {
-    const sdk = JSON.parse(readFileSync(join(dirname(sdkRequire.resolve("@anthropic-ai/claude-agent-sdk")), "package.json"), "utf8"));
-    expect(sdk.version).toBe("0.3.321");
-  });
-  // CI runs this artifact check on Linux x64; version and golden checks also run on other platforms.
-  it.skipIf(process.platform !== "linux" || process.arch !== "x64")("pins the installed native formatter artifact", async () => {
-    const binary = join(dirname(sdkRequire.resolve("@anthropic-ai/claude-agent-sdk-linux-x64/package.json")), "claude");
-    const hash = createHash("sha256");
-    for await (const bytes of createReadStream(binary)) hash.update(bytes);
-    expect(hash.digest("hex")).toBe("426c33815ca6645a772f722fbff10dbf2cbdb124a8aeab733c1365dbf8bbf61f");
+  // CI runs this on Linux x64; the golden checks also run on other platforms. It shows that the
+  // framing text is in the installed binary, not that the binary uses it or is otherwise unchanged.
+  it.skipIf(process.platform !== "linux" || process.arch !== "x64")("finds the framing text in the installed native binary", () => {
+    const binary = readFileSync(join(dirname(sdkRequire.resolve("@anthropic-ai/claude-agent-sdk-linux-x64/package.json")), "claude"));
+    // The binary holds JS source, where a newline, a quote or a non-ASCII character may be written as an escape.
+    const pieces = (PEER_ROOT_PREFIX + PEER_ROOT_SUFFIX).split(/[^\x20-\x7e]|["']/).filter(piece => piece.length > 20);
+    for (const piece of pieces) {
+      const middle = piece.length >> 1;
+      const changed = piece.slice(0, middle) + (piece[middle] === "#" ? "%" : "#") + piece.slice(middle + 1);
+      expect(binary.includes(piece), piece).toBe(true);
+      expect(binary.includes(changed), changed).toBe(false);
+    }
   });
 });

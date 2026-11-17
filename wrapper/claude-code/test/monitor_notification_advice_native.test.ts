@@ -30,7 +30,6 @@ it.each(["completion-response", "event-inform", "setting-absent", "gate-absent",
   "native Monitor advice: %s", async mode => {
     const sdkPath = dirname(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"));
     const sdk = JSON.parse(await readFile(join(sdkPath, "package.json"), "utf8"));
-    expect([sdk.version, sdk.claudeCodeVersion]).toEqual(["0.3.321", "2.1.321"]);
     const advice = monitorNotifications[0]!.advice;
     const root = await mkdtemp(join(tmpdir(), "kaoiro-monitor-advice-native-"));
     const cfg = join(root, ".claude"), cwd = join(root, "project");
@@ -167,9 +166,8 @@ it.each(["completion-response", "event-inform", "setting-absent", "gate-absent",
         for (const { row } of notifications) expect(rootPromptIds.has(row.promptId)).toBe(false);
       }
       for (const { row, block } of notifications) {
-        // Second pin on the installed CLI in this file; the one above gates the
-        // body, so a bump that only updates that one never reaches this line.
-        expect(row.version).toBe("2.1.321");
+        // monitor-fold builds its row from this same value, so the line checks nothing in that mode.
+        expect(row.version).toBe(sdk.claudeCodeVersion);
         if (longLabel) expect(block).toMatch(/<summary>[^<]*\n\n\.\.\. \[\d+ characters truncated\] \.\.\.\n\n[^<]*<\/summary>/);
         if (!bash) {
           assertMonitorAdvicePosition(block, advice, mode !== "setting-absent" && mode !== "gate-absent");

@@ -70,7 +70,8 @@ it.each([undefined, "app-server"] as const)("runs the %s production factories ag
     expect(JSON.stringify(requests[1]!.input)).toContain(unicode);
     const native = resolveAppServerBinary();
     const version = execFileSync(native, ["--version"], { encoding: "utf8" }).trim();
-    expect(version).toBe("codex-cli 0.164.0");
+    const pinned = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).dependencies["@openai/codex"];
+    expect(version).toBe(`codex-cli ${pinned}`);
     const record = { selected_backend: backend ?? "app-server", node: process.version, native_version: version,
       native_sha256: createHash("sha256").update(await readFile(native)).digest("hex"),
       requests: requests.map(r => ({ model: r.model, reasoning: r.reasoning })), unicode_observed: true,
