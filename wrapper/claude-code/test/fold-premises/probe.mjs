@@ -47,7 +47,7 @@ const poll=setInterval(()=>{if(!seenStart&&fs.existsSync(dir+'/tool-start')){see
 const timeout=setTimeout(()=>{exitCode=2;rec('limit',{limit:'five_minutes'});host?.close();},295000);
 const config={agent_id:'measurement.root',persona:{id:'kogane',name:'Kogane',sprite_set:'kogane'},display_name:'E measurement',server_url:'ws://127.0.0.1:1/wrapper',model:'claude-sonnet-4-6',permission_mode:'bypassPermissions'};
 try{
- await runClaudeCli({parseCliArgs:()=>({configPath:'scratch',prompt:'E_ROOT: local timing measurement.',resume:undefined}),loadConfig:()=>config,
+ await runClaudeCli({parseCliArgs:()=>({configPath:'scratch'}),loadConfig:()=>({...config,initial_prompt:'E_ROOT: local timing measurement.'}),
  createServerLink:(_url,_id,options)=>{queueMicrotask(()=>{options.onReplyBasisMode('v1');options.onPersonaPrompt('Local measurement. Follow the fixed tool response.');});return {
  send:e=>rec('wrapper_envelope',{e}),sendInterAgent:async()=>{throw Error('unexpected inter-agent send');},close:()=>rec('link_closed'),currentSessionId:()=>null,setSessionId:()=>{},acknowledgeInterAgentDelivery:()=>{},retireInterAgentDeliveries:()=>true,flushInterAgentRetirements:async()=>{},reportDisconnectIntent:async()=>true,deliveryModes:()=>undefined,
  };},

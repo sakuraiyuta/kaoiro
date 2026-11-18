@@ -25,12 +25,17 @@ The four files are those of the 0.3.319 and 0.3.321 records
 byte for byte. `judge.mjs`, `seam.mjs` and `checker.mjs` keep those hashes; a
 bump that needs to change one of them leaves the standing design
 ([ADR-0074](../../../../docs/adr/0074-standing-design-for-engine-pin-bumps.md)).
-The only later edit allowed within it is a no-op method added to, or aligned
-on, the server-link stub that `createServerLink` returns in `probe.mjs`, when
-the wrapper starts calling a new link method. Observation forwarding (`rec`),
-the payload and schedules, the `query` options, the scripted responses and the
-judgement stay unchanged. The same commit updates the `probe.mjs` line of
-`harness.sha256`, and the bump's implementation reviewer checks both.
+The only later edit allowed within it is one to `probe.mjs` that keeps handing
+the wrapper the same input in the form the wrapper currently takes it. Two
+examples: a no-op method added to, or aligned on, the server-link stub that
+`createServerLink` returns, when the wrapper starts calling a new link method;
+and the root prompt passed through the configuration stub, since the wrapper
+reads it from the launch file
+([ADR-0076](../../../../docs/adr/0076-single-kaoiro-entry-point.md)). The
+values handed over, observation forwarding (`rec`), the payload and schedules,
+the `query` options, the scripted responses and the judgement stay unchanged.
+The same commit updates the `probe.mjs` line of `harness.sha256`, and the
+implementation reviewer of that change checks both.
 
 The judge keeps the gaps the 0.3.321 record names: `J17`, `J20` and `J21`
 have no falsifying and no positive control.
