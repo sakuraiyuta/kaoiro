@@ -55,7 +55,7 @@ its pending codes live in the server's memory, so it is disabled when
 
 | Limit | Details | Resolving issue |
 |---|---|---|
-| **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn resolves on-disk `dist` (`resolveWrapperLaunch()` in `runner/src/spawn.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure**. By contrast, release-profile builds and extraction stay isolated under `releases/<rev>/` and never touch a running release. Codex backend selection resolves lazily until the first spawn. | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
+| **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn starts the on-disk entry and imports the wrapper's `dist` (`runner/src/spawn.ts`, `runner/src/engines.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure**. By contrast, release-profile builds and extraction stay isolated under `releases/<rev>/` and never touch a running release. Codex backend selection resolves lazily until the first spawn. | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
 
 ### Rollout ordering
 

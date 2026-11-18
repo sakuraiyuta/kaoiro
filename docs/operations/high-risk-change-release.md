@@ -2,7 +2,7 @@
 title: High-risk change release
 description: How to tell whether a change can stop the agents that would fix it, what to prepare first, the production-shape start gate for the runner, bulk restoration, and recovery when every agent has stopped.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-18
 related: [deployment]
 ---
 
@@ -62,14 +62,16 @@ git diff --name-only <base>..<head> -- \
   'runner/deploy/**' \
   scripts/build-runner-tarball.sh scripts/build-release-manifest.mjs \
   scripts/build-identity.mjs scripts/with-build-identity.mjs \
+  runner/src/kaoiro.ts runner/src/engines.ts \
   runner/src/spawn.ts runner/src/supervisor.ts runner/src/cli.ts \
   runner/src/runner-cli.ts runner/src/config.ts runner/src/config-watcher.ts \
   runner/src/transport.ts runner/src/args.ts runner/src/delivery-settings.ts \
   runner/src/permission_ceiling.ts runner/src/resume_snapshot.ts \
-  wrapper/core/src/recovery_checkpoint.ts
+  wrapper/core/src/recovery_checkpoint.ts wrapper/core/src/self_command.ts
 
 # TL: a wrapper starts and completes a turn
 git diff --name-only <base>..<head> -- \
+  runner/src/kaoiro.ts runner/src/engines.ts wrapper/core/src/self_command.ts \
   'wrapper/*/src/host.ts' 'wrapper/*/src/cli.ts' \
   'wrapper/*/src/turn_watchdog.ts' \
   'wrapper/*/src/inter_agent_turn_coordinator.ts' \
@@ -253,13 +255,12 @@ What the block fixes:
   throwaway directory), `PATH=/usr/bin:/bin` and `KAOIRO_NODE` survive, plus the
   four settings passed explicitly: `KAOIRO_RUNNER_DIR`, `KAOIRO_RUNNER_CONFIG`,
   `KAOIRO_RUNNER_ENV` and `KAOIRO_RUNNER_SERVER_URL`. Everything else is
-  dropped: inherited `KAOIRO_RUNNER_*`, `CODEX_HOME`, `XDG_*`,
-  `KAOIRO_WRAPPER_DEV`, the production token, and the `PATH` that `runner.env`
-  would add.
+  dropped: inherited `KAOIRO_RUNNER_*`, `CODEX_HOME`, `XDG_*`, the production
+  token, and the `PATH` that `runner.env` would add.
 - **Config.** The fixture is the production `runner.config.json` with only
   `host_id`, `server_url`, `cwd_allowlist` and `capabilities` replaced. Every
   other block is production's, so the candidate's loader validates production's
-  values at the real entry point (shim, verifier, `cli.js`). The host id is
+  values at the real entry point (shim, verifier, `kaoiro.js`). The host id is
   random and never collides with a real host, and the server URL points at a
   closed local port, so nothing registers with the real server.
 - **Env.** The fixture env holds a dummy token and the production env
@@ -340,11 +341,15 @@ Node. What it does not cover:
    line, confirm no old wrapper survived:
 
    ```sh
-   systemctl --user status kaoiro-runner --no-pager -l | grep -c 'node_modules/.pnpm/@kaoiro+'
+   systemctl --user status kaoiro-runner --no-pager -l |
+     grep -cE 'dist/kaoiro\.js wrapper |node_modules/\.pnpm/@kaoiro\+'
    ```
 
-   The count must be 0. This matches wrappers launched from a release, not the
-   `KAOIRO_WRAPPER_DEV` path. Run it again just before restoration. Confirm all
+   The count must be 0. The first pattern matches a wrapper started through
+   the kaoiro entry
+   ([ADR-0076](../adr/0076-single-kaoiro-entry-point.md)), the second one
+   started by an older release from its package file. Run it again just before
+   restoration. Confirm all
    agent tiles are offline and the runner has received no `spawn` since start:
 
    ```sh

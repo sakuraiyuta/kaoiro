@@ -52,9 +52,10 @@ for one package from that package's directory.
 
 - **Typecheck and tests do not require a build**: package TypeScript paths
   and Vitest aliases point to sibling `src/` directories.
-- **Runtime uses `dist/`**: the runner selects the CLI package for the chosen
-  engine and runs its `dist/cli.js`. With `KAOIRO_WRAPPER_DEV=1`, it runs that
-  package's `src/cli.ts` through `tsx watch`.
+- **Runtime uses `dist/`**: the runner starts
+  `kaoiro wrapper <engine> run <launch file>`, and the kaoiro entry imports
+  that engine's package from its `dist/`
+  ([ADR-0076](../docs/adr/0076-single-kaoiro-entry-point.md)).
 
 GitHub Actions runs `pnpm install`, `pnpm typecheck`, `pnpm build`, and
 `pnpm test` ([workflow](../.github/workflows/ci.yml)).
@@ -112,8 +113,8 @@ env 経由で流れるのは model のみ。
 ```sh
 pnpm build                          # 各パッケージの dist/ を生成
 pnpm demo                           # カレントの agent.*.json を全て並列 spawn
-# または明示的に(単一 wrapper 起動):
-node claude-code/dist/cli.js [configPath] [prompt]
+# または明示的に(単一 wrapper 起動。runner の build も要る):
+node ../runner/dist/kaoiro.js wrapper claude-code run <configPath>
 ```
 
 wrapper は常駐モードで動作する。起動後、server の join に成功すると
