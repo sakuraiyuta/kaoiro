@@ -14,33 +14,55 @@ const run = (load: () => Promise<RunCli>): Verb =>
     await (await load())({}, ["run", ...args]);
   };
 
-export const ENGINES: Record<EngineKind, Record<string, Verb>> = {
+type ArtifactName = (platform: string, arch: string, libc: "glibc" | "musl") => string;
+type Engine = { verbs: Record<string, Verb>; artifactName?: ArtifactName };
+
+export const ENGINES: Record<EngineKind, Engine> = {
   "claude-code": {
-    run: run(async () => (await import("@kaoiro/claude-code/dist/cli.js")).runClaudeCli),
-    probe: async (args) => {
-      (await import("@kaoiro/claude-code/dist/probe.js")).runProbeProcess(args);
+    artifactName: (platform, arch, libc) =>
+      `@anthropic-ai/claude-agent-sdk-${platform}-${arch}${
+        platform === "linux" && libc === "musl" ? "-musl" : ""}`,
+    verbs: {
+      run: run(async () => (await import("@kaoiro/claude-code/dist/cli.js")).runClaudeCli),
+      probe: async (args) => {
+        (await import("@kaoiro/claude-code/dist/probe.js")).runProbeProcess(args);
+      },
     },
   },
   codex: {
-    run: run(async () => (await import("@kaoiro/codex/dist/cli.js")).runCodexCli),
-    bridge: async () => {
-      await (await import("@kaoiro/codex/dist/bridge.js")).main();
+    artifactName: (platform, arch) => `@openai/codex-${platform}-${arch}`,
+    verbs: {
+      run: run(async () => (await import("@kaoiro/codex/dist/cli.js")).runCodexCli),
+      bridge: async () => {
+        await (await import("@kaoiro/codex/dist/bridge.js")).main();
+      },
     },
   },
   antigravity: {
-    run: run(async () => (await import("@kaoiro/antigravity/dist/cli.js")).runAntigravityCli),
-    hook: async () => {
-      await (await import("@kaoiro/antigravity/dist/hook.js")).runAntigravityHook();
-    },
-    bridge: async (args) => {
-      await (await import("@kaoiro/antigravity/dist/bridge.js")).runAntigravityBridge(args);
+    verbs: {
+      run: run(async () => (await import("@kaoiro/antigravity/dist/cli.js")).runAntigravityCli),
+      hook: async () => {
+        await (await import("@kaoiro/antigravity/dist/hook.js")).runAntigravityHook();
+      },
+      bridge: async (args) => {
+        await (await import("@kaoiro/antigravity/dist/bridge.js")).runAntigravityBridge(args);
+      },
     },
   },
   grok: {
-    run: run(async () => (await import("@kaoiro/grok/dist/cli.js")).runGrokCli),
+    verbs: {
+      run: run(async () => (await import("@kaoiro/grok/dist/cli.js")).runGrokCli),
+    },
   },
 };
 
 export function isEngine(value: unknown): value is EngineKind {
   return typeof value === "string" && Object.hasOwn(ENGINES, value);
+}
+
+export function hostLibc(): "glibc" | "musl" {
+  const report = process.report.getReport() as {
+    header: { glibcVersionRuntime?: string };
+  };
+  return report.header.glibcVersionRuntime ? "glibc" : "musl";
 }
