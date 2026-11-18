@@ -31,3 +31,7 @@ export const ENGINES: Record<EngineKind, Record<string, Verb>> = {
     run: run(async () => (await import("@kaoiro/grok/dist/cli.js")).runGrokCli),
   },
 };
+
+export function isEngine(value: unknown): value is EngineKind {
+  return typeof value === "string" && Object.hasOwn(ENGINES, value);
+}
