@@ -25,6 +25,7 @@ import { forceKillIfTagged } from "./fixtures/tagged_kill.js";
 const isLinux = process.platform === "linux";
 const testDir = dirname(fileURLToPath(import.meta.url));
 const distCliPath = join(testDir, "..", "dist", "cli.js");
+const entryPath = join(testDir, "..", "..", "..", "runner", "dist", "kaoiro.js");
 
 function isAlive(pid: number): boolean {
   try {
@@ -177,29 +178,21 @@ async function waitFor(
   throw new Error(`timed out after ${timeoutMs}ms${diagnostics?.() ?? ""}`);
 }
 
-async function writeRunnerScript(root: string, wireUrl: string, backend: "exec" | "app-server"): Promise<string> {
-  const script = join(root, "runner.mjs");
-  await writeFile(
-    script,
-    `import { runCodexCli } from ${JSON.stringify(distCliPath)};
-
-await runCodexCli({
-  parseCliArgs: () => ({ configPath: "fixture" }),
-  loadConfig: () => ({ initial_prompt: "run sleep 77 via exec_command",
+async function writeLaunchFile(root: string, wireUrl: string, backend: "exec" | "app-server"): Promise<string> {
+  const path = join(root, "launch.json");
+  await writeFile(path, JSON.stringify({
+    initial_prompt: "run sleep 77 via exec_command",
     agent_id: "cli-exec-sigterm-m2",
     persona: { id: "p", name: "P", sprite_set: "p" },
     display_name: "P",
-    server_url: ${JSON.stringify(wireUrl)},
+    server_url: wireUrl,
     model: "gpt-5.6-sol",
-    codex_backend: ${JSON.stringify(backend)},
-  }),
-});
-`,
-  );
-  return script;
+    codex_backend: backend,
+  }));
+  return path;
 }
 
-it.skipIf(!isLinux || !existsSync(distCliPath)).each(["app-server"] as const)(
+it.skipIf(!isLinux || !existsSync(distCliPath) || !existsSync(entryPath)).each(["app-server"] as const)(
   "%s: the spawned wrapper process exits with code 0 and no signal after SIGTERM, and the real Codex child + grandchild both terminate (issue #391 M2, Linux-only, requires build)",
   async (backend) => {
     const home = await mkdtemp(join(tmpdir(), "ao391-m2-exec-"));
@@ -253,7 +246,7 @@ plugins=false
 enabled=false
 `);
 
-    const runnerScript = await writeRunnerScript(home, wire.url, backend);
+    const launchPath = await writeLaunchFile(home, wire.url, backend);
 
     const ownerTag = newOwnerTag();
     const env = {
@@ -264,7 +257,9 @@ enabled=false
     } as Record<string, string>;
     for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) delete env[key];
 
-    const child = spawn(process.execPath, [runnerScript], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [
+      entryPath, "wrapper", "codex", "run", launchPath,
+    ], { env, stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
 
