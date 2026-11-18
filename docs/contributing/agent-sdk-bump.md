@@ -28,7 +28,9 @@ A bump that meets an exit condition goes back to a full design.
    step 5. Then edit the range in `wrapper/claude-code/package.json` and run
    `pnpm install`. Compare the dependency shape of the old and new
    package: `peerDependencies`, `exports`, `engines.node` and the set of
-   platform packages. Commit the pin and the lockfile.
+   platform packages. After changing the lockfile, run
+   `node wrapper/agent-common/scripts/generate-engine-artifacts.mjs` and commit
+   `wrapper/agent-common/src/engine-artifacts.ts` with the pin and lockfile.
 3. **Read the changelogs in full.** The SDK changelog between the old and the
    new version, and the bundled CLI changelog
    ([anthropics/claude-code `CHANGELOG.md`](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md))
