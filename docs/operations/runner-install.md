@@ -90,7 +90,7 @@ Run all of the following commands **at the repository root** (because paths are 
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm -C wrapper build && pnpm -C runner build   # build dist/cli.js
+pnpm -C wrapper build && pnpm -C runner build   # build dist/kaoiro.js
 
 # Generating config with the setup wizard in runner/README.md is fastest:
 ./runner/deploy/kaoiro-runner-setup.sh

@@ -1,8 +1,8 @@
 ---
 title: Runner development
-description: Building, testing, and running the runner package locally, including the wrapper hot-reload dev stack.
+description: Building, testing, and running the runner package locally, including the dev stack and how the runner starts its own children.
 status: accepted
-last_updated: 2026-10-23
+last_updated: 2026-11-18
 related: [deployment]
 ---
 
@@ -18,10 +18,38 @@ Every test process runs under the shared isolation guard; see
 [Test isolation](test-isolation.md).
 
 For the local stack, [`scripts/dev.sh`](../../scripts/dev.sh) launches the
-server / dashboard / runner together. The runner runs under `tsx watch`, and
-when the environment variable `KAOIRO_WRAPPER_DEV=1` is set, **spawned wrappers
-also launch with `tsx watch`**, so edits to wrapper source are hot-reloaded into
-running agents (production launches dist directly, ADR-0018).
+server / dashboard / runner together. The runner runs under `tsx watch`. A
+wrapper is not hot-reloaded: it runs the built wrapper packages, so rebuild
+them and restart the agent to pick up a wrapper change.
+
+## One entry and the self-start command
+
+Everything starts through `runner/src/kaoiro.ts`
+([ADR-0076](../adr/0076-single-kaoiro-entry-point.md)):
+
+```sh
+node runner/dist/kaoiro.js runner [config]
+node runner/dist/kaoiro.js --version [--json]
+node runner/dist/kaoiro.js setup
+node runner/dist/kaoiro.js wrapper <engine> run <launch file>
+```
+
+The runner starts a wrapper, and the Claude catalog probe, as
+`[process.execPath, ...process.execArgv, <entry>]` followed by a subcommand.
+`<entry>` is the real path of the entry the runner itself started from.
+
+- **Every node option is passed on as written.** This is what lets a runner
+  under `tsx` start its children. It also means that a debugging option such
+  as `--inspect-brk` given to the runner reaches every wrapper, where the
+  second process fails to bind the same port. Attach a debugger to a wrapper
+  by starting that wrapper by hand instead.
+- **A child runs in the agent's directory.** An option that names a module by
+  a bare or relative specifier, such as `--import tsx`, does not resolve
+  there. The `tsx` command passes absolute paths, so `tsx src/kaoiro.ts` and
+  `tsx watch src/kaoiro.ts` work; with plain `node`, give `--import` an
+  absolute `file:` URL.
+- **Do not delete the release directory of a running runner.** The runner
+  keeps starting wrappers from its own release after `current` moves.
 
 ## Test tiers
 

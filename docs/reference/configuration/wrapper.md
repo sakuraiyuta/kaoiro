@@ -2,7 +2,7 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-18
 related: [protocol]
 ---
 
@@ -64,6 +64,14 @@ Candidate kind is selected anew per launch, never inherited through reset or
 explicit rollback. Standalone wrappers without the path retain their existing
 behavior. See [wrapper-exit recovery](../protocol/runner-control.md#wrapper-exit-session-recovery)
 for states, fatal code 79 and native attach limits.
+
+`initial_prompt?: string` and `resume_session_id?: string` are private launcher
+fields as well. The launcher sets them per launch and overwrites any inbound
+value: `initial_prompt` is the wrapper's first turn and is written only for the
+launch that a `spawn` starts, and `resume_session_id` names the engine session
+the launch continues. They travel in the launch file, not in the wrapper's
+arguments ([ADR-0076](../../adr/0076-single-kaoiro-entry-point.md)). A wrapper
+started by hand reads them from the file it is given.
 
 `codex_tool_home?: string` is a local runner-to-Codex-wrapper field. The runner
 creates a private empty directory for each Codex wrapper and overwrites any

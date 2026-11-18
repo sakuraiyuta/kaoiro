@@ -120,7 +120,7 @@ restarted there (the warning in section 2 “Run as a service” applies).
 ```sh
 # 1. Record current operating state as a baseline for post-migration comparison
 systemctl --user show -p ExecStart --value kaoiro-runner
-<repo-path>/runner/dist/cli.js --version
+<repo-path>/runner/deploy/kaoiro-runner-launch.sh --version
 
 # 2. Build tarball from repo while runner remains active
 cd <repo-path>

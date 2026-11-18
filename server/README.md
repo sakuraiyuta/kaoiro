@@ -201,8 +201,7 @@ IPv6 リテラル、例 `0.0.0.0` / `::` / `192.168.1.10`)で上書きできる
 
 > 一括起動なら repo ルートの `./scripts/dev.sh`(サーバ + Vite ダッシュボード +
 > runner をホットリロード/watch 付きで起動し、Ctrl-C で一括停止)。`.env` の
-> source と runner の `tsx watch` 起動(`KAOIRO_WRAPPER_DEV=1` で wrapper も
-> hot-reload spawn)をまとめて行い、エージェントはダッシュボードの「+ 起動」
+> source と runner の `tsx watch` 起動をまとめて行い、エージェントはダッシュボードの「+ 起動」
 > から runner 経由で spawn する(ADR-0023)。以下はその手動の内訳。
 
 開発時は docker を使わず、サーバとクライアントをホストで直接起動する。
@@ -236,7 +235,7 @@ cd ../dashboard && pnpm dev
 # 3) runner(別ターミナル、repo ルートから。エージェントの起動・再開は
 #    ダッシュボードの「+ 起動」から行う)
 cd runner &&
-  KAOIRO_WRAPPER_DEV=1 pnpm exec tsx watch src/cli.ts runner.config.json
+  pnpm exec tsx watch src/kaoiro.ts runner runner.config.json
 ```
 
 - サーバ: `config/dev.exs` の `code_reloader: true` で `lib/` の変更を保存時に
@@ -248,8 +247,9 @@ cd runner &&
   が必要: `http://localhost:5173/?token=dev-op`。
 - runner: 設定は `runner/runner.config.json`(gitignored。初回は
   `./scripts/dev.sh` が localhost 既定で自動生成)。wrapper は runner が
-  ダッシュボードの「+ 起動」指示で spawn し、`KAOIRO_WRAPPER_DEV=1` なら
-  wrapper ソースの編集も実行中エージェントへ hot-reload される。
+  ダッシュボードの「+ 起動」指示で spawn する。wrapper は build 済みの
+  `dist/` で動くので、wrapper ソースの編集は build して agent を起動し直すと
+  反映される。
 - `.env` は単純な `KEY=VALUE` 形式にする(値にスペースやクォートを含めると
   `set -a && . ./.env` での読み込みが壊れる)。
 

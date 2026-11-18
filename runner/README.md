@@ -33,8 +33,8 @@
 ## 使い方
 
 ```sh
-node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
-node dist/cli.js --version --json
+node dist/kaoiro.js runner [configPath]   # configPath 既定 = runner.config.json
+node dist/kaoiro.js --version --json
 ```
 
 The version command reports the built artifact's full `revision` and boolean
