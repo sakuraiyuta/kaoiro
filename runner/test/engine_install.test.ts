@@ -45,6 +45,22 @@ describe("engine acquisition", () => {
     }
   });
 
+  it("rejects an enabled engine without a matching host artifact", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-engine-platform-"));
+    dirs.push(dir);
+    const config = join(dir, "runner.json");
+    writeFileSync(config, JSON.stringify({ host_id: "h", cwd_allowlist: [dir],
+      server_url: "ws://localhost/runner", capabilities: ["claude-code"] }));
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { value: "unsupported" });
+      await expect(installEngines(dir, config))
+        .rejects.toThrow("No artifact for claude-code");
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  });
+
   it("fetches once and preserves an existing package", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-engine-test-"));
     dirs.push(dir);
@@ -173,11 +189,11 @@ describe("engine acquisition", () => {
     }, 15_000,
   );
 
-  it("rejects an unsuccessful registry response", async () => {
+  it.each([404, 204])("rejects registry response %s", async (status) => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-engine-http-"));
     dirs.push(dir);
     const server = createServer((_req, res) => {
-      res.statusCode = 404;
+      res.statusCode = status;
       res.end("missing");
     });
     await new Promise<void>((resolve) => {
@@ -191,7 +207,7 @@ describe("engine acquisition", () => {
       await expect(installArtifact(dir, "claude-code", {
         name: "@test/engine", version: "1", integrity: "sha512-invalid",
       }, `http://127.0.0.1:${address.port}`))
-        .rejects.toThrow("Engine fetch failed: 404");
+        .rejects.toThrow(`Engine fetch failed: ${status}`);
       expect(readdirSync(join(dir, "engines"))).toEqual([]);
     } finally {
       await new Promise<void>((resolve, reject) => {
