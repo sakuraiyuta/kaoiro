@@ -35,7 +35,7 @@ describe("engine artifact table", () => {
 });
 
 it("rejects incomplete lockfile entries and missing aliases", () => {
-  const root = mkdtempSync(join(tmpdir(), "momo1193-artifacts-"));
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-engine-artifacts-"));
   const packageDir = join(root, "wrapper", "agent-common");
   mkdirSync(join(packageDir, "scripts"), { recursive: true });
   mkdirSync(join(packageDir, "src"));
@@ -50,10 +50,12 @@ it("rejects incomplete lockfile entries and missing aliases", () => {
       .replaceAll("@openai/codex", "@other/codex"),
   ];
   try {
-    for (const changed of changes) {
+    for (const [index, changed] of changes.entries()) {
       expect(changed).not.toBe(original);
       writeFileSync(join(root, "pnpm-lock.yaml"), changed);
-      expect(spawnSync(process.execPath, [generator]).status).not.toBe(0);
+      const result = spawnSync(process.execPath, [generator], { encoding: "utf8" });
+      expect(result.status).not.toBe(0);
+      if (index === 1) expect(result.stderr).toContain("Missing alias for");
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
