@@ -182,6 +182,12 @@ elif [ "$verify_status" -ne 0 ]; then
   die_config "release verification failed (see the line above for why — this is NOT a missing build, so building will not fix it); release: reinstall it"
 fi
 
+# The verifier accepts a release from before the entry, which has no
+# dist/kaoiro.js (it is a rollback target), so a tree that lost its entry
+# together with the manifest line passes above. Stop it here, as 78.
+[ -f "$entry" ] ||
+  die_config "incomplete install: $entry is missing (repo checkout: run 'pnpm -C runner build', release: reinstall it)"
+
 # Single-binary migration (issue #70): replace the line below with
 #   exec "$deploy_dir/../bin/kaoiro-runner" "$config"
 exec "$node_bin" "$entry" runner "$config"

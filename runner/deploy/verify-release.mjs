@@ -1093,7 +1093,16 @@ function expectedClosure(root) {
   // The entry reaches its modules through `import()`, which the static graph
   // does not show: the runner's own are declared runtime assets, and each
   // wrapper is seeded below.
-  entry(join(root, "dist", "kaoiro.js"));
+  //
+  // A RELEASE FROM BEFORE THE ENTRY HAS NO dist/kaoiro.js AND STARTS
+  // dist/cli.js. This verifier still reads such a tree when it is the
+  // rollback target, so the entry is required where the tree carries it and
+  // cli.js is the seed where it does not. A manifest line for a missing file
+  // has already failed above. THE LIMIT: a tree that lost the entry together
+  // with its manifest line reads as the older shape here; its own launch shim
+  // refuses to start it (ADR-0076).
+  const kaoiro = join(root, "dist", "kaoiro.js");
+  entry(lstatType(kaoiro) === "missing" ? join(root, "dist", "cli.js") : kaoiro);
   runtimeAssets(root);
   for (const name of ENTRY_PACKAGES) {
     entry(join(root, "node_modules", name, "dist", "cli.js"));

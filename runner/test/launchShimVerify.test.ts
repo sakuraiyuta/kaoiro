@@ -92,6 +92,22 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #219)", () => {
     expect(result.stdout).toContain("stub cli.js started");
   });
 
+  it("refuses to start a release that lost its entry together with the manifest line", () => {
+    // The verifier reads such a tree as a release from before the entry and
+    // accepts it, so the shim's own check is what turns this into 78.
+    rmSync(tree, { recursive: true, force: true });
+    writeReleaseTree(tree, REVISION, {
+      omit: ["dist/kaoiro.js"],
+      dropManifestEntries: ["dist/kaoiro.js"],
+    });
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("dist/kaoiro.js is missing");
+    expect(result.stdout).not.toContain("stub cli.js started");
+  });
+
   it.each(REQUIRED_ARTIFACTS)(
     "%s が欠けていれば exit 78 で起動しない",
     (artifact) => {

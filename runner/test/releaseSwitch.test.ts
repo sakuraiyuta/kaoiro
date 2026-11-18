@@ -212,6 +212,24 @@ describe("kaoiro-runner-switch.sh (issue #219)", () => {
     expect(readlinkSync(join(root, "previous"))).toBe(`releases/${B}`);
   });
 
+  it("rolls back to a release from before the kaoiro entry", () => {
+    // The tools of the release that introduced dist/kaoiro.js verify the
+    // previous release when it is the rollback target, and that tree has no
+    // such file.
+    writeReleaseTree(join(root, "releases", A), A, {
+      omit: ["dist/kaoiro.js"],
+      dropManifestEntries: ["dist/kaoiro.js"],
+    });
+    seed(B);
+    symlinkSync(`releases/${B}`, join(root, "current"));
+    symlinkSync(`releases/${A}`, join(root, "previous"));
+
+    const result = run("--rollback");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+  });
+
   it("previous が無ければ rollback は失敗し、current を変えない", () => {
     seed(A);
     symlinkSync(`releases/${A}`, join(root, "current"));
