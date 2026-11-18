@@ -37,16 +37,34 @@ have no falsifying and no positive control.
 
 ## Running it
 
-The driver expects this layout, as provided by a container or a `bwrap`
-root:
+The driver expects this layout:
 
 - `/w/repo`: the checkout at the commit under test, with dependencies
   installed and the wrapper built (`pnpm install --frozen-lockfile`, then
   `pnpm build` in `wrapper/`); the probe imports `wrapper/claude-code/dist/`.
+  In a git worktree, its common git directory must also be visible at its own
+  path.
 - `/w/e`: a writable copy of this directory.
 - `/w/out` and `/w/scratch`: empty and writable.
 
-Run `sh /w/e/run-all.sh`. Exit 0 with the last lines `ALL NEGATIVE CONTROLS
+A container provides it with read-only mounts of the checkout at `/w/repo`
+(and the common git directory), writable mounts for the other three, Node 22,
+git and coreutils, and no network. With `bwrap` and Node under `/usr`, from the
+checkout's root:
+
+```sh
+w=$(mktemp -d); mkdir -p "$w/e" "$w/out" "$w/scratch"
+cp wrapper/claude-code/test/fold-premises/* "$w/e/"
+g=$(git rev-parse --path-format=absolute --git-common-dir)
+bwrap --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+  --symlink usr/bin /bin --ro-bind /etc /etc --proc /proc --dev /dev \
+  --tmpfs /tmp --ro-bind "$PWD" /w/repo --ro-bind "$g" "$g" \
+  --bind "$w/e" /w/e --bind "$w/out" /w/out --bind "$w/scratch" /w/scratch \
+  --setenv HOME /w --unshare-net --unshare-pid --die-with-parent \
+  sh /w/e/run-all.sh
+```
+
+The driver's output is the record. Exit 0 with the last lines `ALL NEGATIVE CONTROLS
 BIT` and `J0 and J1..J27 all PASS on the unmutated expectation` means 55
 judgements passed and every control bit. Any other end is a failure: a `FAIL`
 line refutes a premise, while a `J0` failure followed by `SKIP` means that run

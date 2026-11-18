@@ -23,8 +23,10 @@ A bump that meets an exit condition goes back to a full design.
    version, its publication time, the `dist-tags.latest` value at the time you
    chose, and every skipped version with its reason (for example, never
    published).
-2. **Change the pin.** Edit the range in `wrapper/claude-code/package.json`
-   and run `pnpm install`. Compare the dependency shape of the old and new
+2. **Change the pin.** First, on the base commit, build the wrapper and save
+   the catalog probe's output (`node wrapper/claude-code/dist/probe.js`) for
+   step 5. Then edit the range in `wrapper/claude-code/package.json` and run
+   `pnpm install`. Compare the dependency shape of the old and new
    package: `peerDependencies`, `exports`, `engines.node` and the set of
    platform packages. Commit the pin and the lockfile.
 3. **Read the changelogs in full.** The SDK changelog between the old and the
@@ -32,19 +34,24 @@ A bump that meets an exit condition goes back to a full design.
    ([anthropics/claude-code `CHANGELOG.md`](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md))
    for every CLI version in between. Record the ranges read. Quote verbatim,
    with its version, every entry about folding and queued input, permissions,
-   hooks or model switching, and every change the operator can see, and name
-   the kaoiro code path it reaches. A version without a published section is
+   hooks or model switching, and every change the operator can see through a
+   kaoiro peer, and name the kaoiro code path it reaches. A version without a published section is
    recorded as unread.
 4. **Re-measure E1 to E4** on the pin commit with the
    [fold premise harness](../../wrapper/claude-code/test/fold-premises/README.md).
    Do not carry a verdict forward. If the run fails, run it once on the
    previous pin to tell a harness problem from a premise change.
-5. **Run the checks.** Pre-landing CI on the candidate
-   ([CI before landing](ci-before-landing.md)); in `wrapper/claude-code`,
+5. **Run the checks** after building the wrapper and the runner on the
+   candidate. Pre-landing CI ([CI before landing](ci-before-landing.md)); in
+   `wrapper/claude-code`,
    `KAOIRO_LIVE_CLAUDE=1 pnpm exec vitest run test/haiku55_native.test.ts`;
-   and the catalog probe `node wrapper/claude-code/dist/probe.js` on the base
-   commit and on the candidate. Record the catalog rows that differ.
-6. **Judge the exit conditions** of ADR-0074 one by one.
+   and the catalog probe, whose rows that differ from the base output of
+   step 2 you record.
+6. **Judge the exit conditions** of ADR-0074 one by one. X4 is about
+   kaoiro's own behaviour: a vendor change that kaoiro only relays to the
+   operator, such as most permission changes, is a release-note candidate.
+   When an entry reaches kaoiro only under a condition you did not measure,
+   name that condition under Limits for the reviewer.
 7. **Write the evidence file** in the form below.
 
 ## Evidence form
@@ -58,7 +65,7 @@ linking the harness README and this page, not in prose.
 | Versions | SDK and CLI before and after, the chosen time and `dist-tags.latest`, skipped versions |
 | Dependency shape | the four fields of step 2, old and new |
 | Changelogs | ranges read, unread versions, the quoted entries with the path each reaches |
-| E1 to E4 | the run's identity, the four harness hashes (and, if `probe.mjs` changed, the commit), the summary lines |
+| E1 to E4 | the run's identity (its ID, or for a local run its composition: isolation, Node version, uid), the four harness hashes (and, if `probe.mjs` changed, the commit), the summary lines |
 | Checks | the CI run URL, the `haiku55_native` result, the catalog rows that differ |
 | Exit conditions | each condition of ADR-0074: met or not, in one line |
 | Release-note candidates | new, removed or moved catalog rows and other changes the operator can see |
@@ -66,19 +73,12 @@ linking the harness README and this page, not in prose.
 
 ## Version strings that stay
 
-After a bump, the old SDK or CLI version may still appear outside `docs/` and
-the lockfile only in these places. Anything else is a pin that was missed.
-
-- `wrapper/claude-code/package.json` and `wrapper/codex/package.json`: the
-  dependency lines that pnpm reads.
-- `wrapper/codex/README.md`: the description of the current Codex pin.
-- Captures recorded on a named version and their loaders, which do not assert
-  the installed version, such as
-  `wrapper/claude-code/test/fixtures/claude-cli-2.1.321-completion-summaries.json`
-  and `completion_summaries.ts`.
-- `runner/deploy/codex-snapshot.mjs`: the Codex source versions its
-  classification was read against.
-- The Codex approval capture `app_server_approval_decline_<version>.*`, the
-  file names that read it in `app_server_rpc_server_request.test.ts`, and that
-  test's stale-version negative control (the `/<version>` user-agent string
-  it replaces). It is recaptured on each Codex pin.
+`package.json` and the lockfile are the pin. Outside `docs/` and the lockfile,
+an old version string may stay only where it names the version something was
+recorded or read on (a capture and its loader, a record, a source
+reference) and nothing compares it with the installed version. A string that
+a test or guard compares with the installed version, or prose that describes
+the current pin, moves with the pin; a search for the outgoing version that
+finds one has found a missed pin. A capture whose test requires it to match
+the pin, such as the Codex approval capture with its stale-version negative
+control, is recaptured with the pin.
