@@ -6,7 +6,7 @@ opened: 2026-11-17
 supersedes: []
 superseded_by: null
 related_specs: [protocol]
-related_adrs: [17, 18, 23, 32, 57, 75]
+related_adrs: [17, 18, 23, 32, 57, 74, 75]
 ---
 
 # ADR-0076 — One kaoiro entry point and the run verb
@@ -132,6 +132,10 @@ shim start the entry, and the verifier requires it.
   now sees the same entry for every role; the subcommand tells them apart.
 - `node dist/cli.js` no longer starts a runner. A service definition that
   starts the launch shim is unaffected.
+- The fold premise harness of
+  [ADR-0074](0074-standing-design-for-engine-pin-bumps.md) hands its root
+  prompt to the wrapper through the configuration stub instead of the argument
+  stub. The prompt, the schedules and the judgement are unchanged.
 
 ## Related
 
