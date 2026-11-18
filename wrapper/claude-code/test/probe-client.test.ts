@@ -58,6 +58,18 @@ it("the default probe child does not inherit the Codex state home", async () => 
   }
 });
 
+it("passes the engine executable to the probe process", async () => {
+  const child = fakeChild();
+  const spawn = vi.fn((_command: string, _args: string[]) => {
+    queueMicrotask(() => child.emit("close", 1));
+    return child;
+  });
+  await runClaudeProbe({ spawn, probeCommand: ["probe"],
+    engineExecutable: "/engine/claude" });
+  expect(spawn.mock.calls[0]![1]).toContain("--engine-executable");
+  expect(spawn.mock.calls[0]![1]).toContain("/engine/claude");
+});
+
 describe("parseProbeStdout", () => {
   it("成功 JSON をそのまま返す", () => {
     const out = parseProbeStdout(

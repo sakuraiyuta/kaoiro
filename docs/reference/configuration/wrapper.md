@@ -8,6 +8,10 @@ related: [protocol]
 
 # Wrapper configuration
 
+The optional launch file field `engine_executable` supplies the executable
+path for Claude or Codex. When omitted, the wrapper uses the engine in the
+release tree.
+
 ## Managed engine environment
 
 The wrapper exports the following non-secret output to each managed engine

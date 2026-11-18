@@ -41,7 +41,7 @@ if (command === "runner" || command === "--version") {
   await (await import("./setup-cli.js")).runSetupWizard();
 } else {
   const [engine, verb, ...args] = rest;
-  const verbs = command === "wrapper" && isEngine(engine) ? ENGINES[engine] : undefined;
+  const verbs = command === "wrapper" && isEngine(engine) ? ENGINES[engine].verbs : undefined;
   const run = verbs !== undefined && verb !== undefined && Object.hasOwn(verbs, verb)
     ? verbs[verb]
     : undefined;

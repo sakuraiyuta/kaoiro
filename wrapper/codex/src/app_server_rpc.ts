@@ -36,7 +36,8 @@ export function rpcObject(value: unknown): value is RpcObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function resolveAppServerBinary(): string {
+export function resolveAppServerBinary(explicitPath?: string): string {
+  if (explicitPath !== undefined) return explicitPath;
   const packagePath = realpathSync(fileURLToPath(import.meta.resolve("@openai/codex/package.json")));
   const targetPlatform = platform() === "android" ? "linux" : platform();
   const targetArch = arch();
@@ -81,6 +82,7 @@ export function serverRequestKey(id: string | number): string {
 }
 
 export interface AppServerRpcOptions {
+  engineExecutable?: string;
   spawnChild?: () => ChildProcessWithoutNullStreams;
   requestTimeoutMs?: number;
   shutdownTimeoutMs?: number;
@@ -114,7 +116,7 @@ export class AppServerRpc {
 
   constructor(options: AppServerRpcOptions = {}) {
     this.#options = options;
-    this.#child = options.spawnChild?.() ?? spawn(resolveAppServerBinary(), [
+    this.#child = options.spawnChild?.() ?? spawn(resolveAppServerBinary(options.engineExecutable), [
       "--config", 'approvals_reviewer="user"', "--config", 'approval_policy="never"',
       "--config", "analytics.enabled=false", "app-server", "--listen", "stdio://",
     ], { stdio: ["pipe", "pipe", "pipe"], env: withAgentMarker(process.env) });

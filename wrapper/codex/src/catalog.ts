@@ -1,6 +1,4 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { mergeExtraModels, writeRedactedStderr } from "@kaoiro/agent-common";
+import { ENGINE_ARTIFACTS, mergeExtraModels, writeRedactedStderr } from "@kaoiro/agent-common";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 
 export type CodexAuthMode = "chatgpt" | "apikey" | "unknown";
@@ -160,28 +158,9 @@ function isAtLeast(version: string, minimum: string): boolean {
   return true;
 }
 
-function bundledCodexVersion(): string {
-  const resolver = (import.meta as ImportMeta & {
-    resolve?: (specifier: string) => string;
-  }).resolve;
-  const packageUrl = resolver?.("@openai/codex/package.json");
-  if (packageUrl === undefined) {
-    throw new Error("import.meta.resolve is required to locate bundled @openai/codex");
-  }
-  const codexPackage = JSON.parse(
-    readFileSync(
-      fileURLToPath(packageUrl),
-      "utf8",
-    ),
-  ) as { version?: unknown };
-  if (typeof codexPackage.version !== "string") {
-    throw new Error("bundled @openai/codex package.json has no version");
-  }
-  parseCoreVersion(codexPackage.version, "bundled Codex version");
-  return codexPackage.version;
-}
-
-export const BUNDLED_CODEX_VERSION = bundledCodexVersion();
+export const BUNDLED_CODEX_VERSION: string = ENGINE_ARTIFACTS.find(
+  (artifact) => artifact.name.startsWith("@openai/codex-"),
+)!.version;
 
 export class CodexClientVersionTooOldError extends Error {}
 

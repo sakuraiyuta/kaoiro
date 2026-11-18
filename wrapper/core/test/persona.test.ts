@@ -28,6 +28,7 @@ type WrapperConfigOptionalKey = OptionalKey<WrapperConfig>;
 const ROUND_TRIP_CASES: {
   [K in WrapperConfigOptionalKey]: { value: NonNullable<WrapperConfig[K]> };
 } = {
+  engine_executable: { value: "/opt/engines/engine" },
   initial_prompt: { value: "first instruction" },
   resume_session_id: { value: "session-1" },
   recovery_checkpoint_path: { value: "/tmp/checkpoint" },

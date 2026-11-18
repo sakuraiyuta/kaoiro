@@ -195,6 +195,8 @@ export type Persona = WirePersona;
  *  fail-closed). Shared with the runner, which resolves it to spawn a
  *  wrapper (ADR-0023). */
 export interface WrapperConfig {
+  /** Optional executable used by the Claude or Codex engine. */
+  engine_executable?: string;
   /** The wrapper's first turn. The runner writes it only into the launch file
    *  of the launch a `spawn` starts, never on a relaunch (ADR-0076). */
   initial_prompt?: string;

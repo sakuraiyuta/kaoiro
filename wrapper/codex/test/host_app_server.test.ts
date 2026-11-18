@@ -651,3 +651,13 @@ it.each(["failed", "interrupted"])("keeps a fresh Codex candidate unbound after 
   expect(readRecoveryCheckpoint(path)).toEqual(candidate);
   expect(recovery.failure).toBeUndefined();
 });
+
+it("passes the configured engine path into the app-server transport", async () => {
+  const f = fixture({}, { ...config, engine_executable: "/engine/codex" });
+  await f.host.send("start");
+  await f.until(1);
+  expect(f.createSession.mock.calls[0]![0].transport).toMatchObject({
+    engineExecutable: "/engine/codex",
+  });
+  f.terminal();
+});

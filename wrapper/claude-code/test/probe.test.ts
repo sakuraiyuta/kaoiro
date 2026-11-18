@@ -104,6 +104,17 @@ describe("projectCommand", () => {
 });
 
 describe("optional usage probe", () => {
+  it("passes an explicit engine path to the SDK", async () => {
+    const queryFn = vi.fn((_input: unknown) => ({
+      initializationResult: async () => ({ models: [{ value: "sonnet" }] }),
+      close: () => {},
+    }));
+    await runProbe(["--engine-executable", "/engine/claude"], queryFn as never, () => {});
+    expect(queryFn.mock.calls[0]![0]).toMatchObject({
+      options: { pathToClaudeCodeExecutable: "/engine/claude" },
+    });
+  });
+
   it("uses an isolated cwd and minimal SDK options", async () => {
     let options: Record<string, unknown> | undefined;
     const fakeQuery = ((input: { options: Record<string, unknown> }) => {

@@ -261,6 +261,12 @@ export function parseConfig(raw: unknown): WrapperConfig {
 
   const config: WrapperConfig = { agent_id, persona, display_name, server_url };
 
+  if (raw.engine_executable !== undefined) {
+    config.engine_executable = nonEmptyString(
+      raw.engine_executable, "engine_executable",
+    );
+  }
+
   if (raw.server_token !== undefined) {
     config.server_token = nonEmptyString(raw.server_token, "server_token");
   }
