@@ -40,7 +40,8 @@ Acquisition has no timeout: if the registry stalls, update waits before
 stopping the runner; interrupt the update to stop waiting.
 
 Once a host acquires a pin, spawned engines can differ from the binary in the
-release tree. The change starts on each host at its first successful bootstrap
+release tree, while the switch guard continues to hash the tree's binary.
+The change starts on each host at its first successful bootstrap
 or update acquisition; see the
 [design decision](../adr/0076-single-kaoiro-entry-point.md).
 
