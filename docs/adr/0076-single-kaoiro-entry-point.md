@@ -116,18 +116,14 @@ with the tools it is run from, and the release before this unit has no
 tools was refused with exit 70 until the rule below was added. The verifier
 seeds its closure from `dist/kaoiro.js` when that file is in the tree (a
 manifest line for a missing file already fails), and from `dist/cli.js` when
-it is not. This is the rule the later layout change uses to tell its two
-layouts apart, applied one release earlier. Declaring the entry in
+it is not. Declaring the entry in
 `package.json` was rejected: it buys one more refusal for a new field and its
 reader.
 
 The accepted loss: a tree of this unit that lost `dist/kaoiro.js` together
 with its manifest line is not refused at install or switch, because it reads
 as the older shape. Its launch shim checks for the entry before `exec` and
-stops with exit 78. The general form of the rule, for the following units: a
-file a release starts requiring is required only where the tree carries it,
-and each production release is checked by updating and rolling back with the
-tools of both releases.
+stops with exit 78.
 
 ## Not in this unit
 
