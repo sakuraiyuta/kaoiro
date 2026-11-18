@@ -146,12 +146,11 @@ describe("kaoiro-runner-install.sh (issue #219)", () => {
     expect(existsSync(join(root, "releases", revision))).toBe(false);
   });
 
-  it("rejects a release whose entry was removed together with its manifest line", () => {
+  it("rejects a release whose manifest does not list the entry it carries", () => {
     // The entry reaches its modules through import(), so nothing else in the
     // tree names it: only seeding the closure from it makes this visible.
-    const revision = revisionOf("entry-removed");
+    const revision = revisionOf("entry-unlisted");
     const archive = makeReleaseTarball(work, revision, {
-      omit: ["dist/kaoiro.js"],
       dropManifestEntries: ["dist/kaoiro.js"],
     });
 
