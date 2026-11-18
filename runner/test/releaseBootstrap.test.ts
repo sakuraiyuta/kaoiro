@@ -16,7 +16,8 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 // writes a systemd unit / launchd plist under `$HOME`; without an override
 // that would land in the CI/dev user's real `~/.config` or
 // `~/Library/LaunchAgents`.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -31,9 +32,10 @@ import {
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveConfigDir } from "../src/setup.js";
+import { engineArtifact } from "../src/engines.js";
 import { makeReleaseTarball, revisionOf, runScript } from "./releaseFixture.js";
 
 const bootstrapScript = fileURLToPath(
@@ -113,11 +115,12 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       ].join("\n"),
     );
 
-  const writeConfig = (): void => {
+  const writeConfig = (capabilities?: string[]): void => {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(
       join(configDir, "runner.config.json"),
-      JSON.stringify({ host_id: "h1", server_url: "wss://example.invalid/runner" }),
+      JSON.stringify({ host_id: "h1", server_url: "wss://example.invalid/runner",
+        cwd_allowlist: [dir], ...(capabilities === undefined ? {} : { capabilities }) }),
     );
     writeFileSync(join(configDir, "runner.env"), `KAOIRO_RUNNER_TOKEN=${TOKEN}\n`);
     chmodSync(join(configDir, "runner.env"), 0o600);
@@ -167,6 +170,71 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
   });
 
   describe("順序と正常系(config 既存 = wizard スキップ)", () => {
+    it.each([true, false])("acquires before switch (valid=%s)", async (valid) => {
+      writeConfig(["claude-code"]);
+      const packageRoot = join(dir, "package-source");
+      mkdirSync(join(packageRoot, "package"), { recursive: true });
+      writeFileSync(join(packageRoot, "package", "claude"), "engine");
+      const tgz = join(dir, "engine.tgz");
+      expect(spawnSync("tar", ["-czf", tgz, "-C", packageRoot, "package"]).status).toBe(0);
+      const integrity = `sha512-${createHash("sha512").update(readFileSync(tgz)).digest("base64")}`;
+      const artifact = engineArtifact("claude-code")!;
+      const portFile = join(dir, "port");
+      const server = spawn(process.execPath, ["-e", `
+        const http = require('node:http'), fs = require('node:fs');
+        const server = http.createServer((req, res) => res.end(fs.readFileSync(process.argv[1])));
+        server.listen(0, '127.0.0.1', () => fs.writeFileSync(process.argv[2], String(server.address().port)));
+      `, tgz, portFile], { stdio: "ignore" });
+      try {
+        for (let i = 0; i < 100 && !existsSync(portFile); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(existsSync(portFile)).toBe(true);
+        const registry = `http://127.0.0.1:${readFileSync(portFile, "utf8")}`;
+        const entry = `
+if (process.argv[2] === "engines") {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  if (fs.existsSync(path.join(process.argv[5], "current"))) throw new Error("switched before acquisition");
+  const table = await import(process.env.KAOIRO_TEST_TABLE);
+  const row = table.ENGINE_ARTIFACTS.find(x => x.name === process.env.KAOIRO_TEST_ARTIFACT);
+  row.integrity = process.env.KAOIRO_TEST_INTEGRITY;
+  const module = await import(process.env.KAOIRO_TEST_INSTALL);
+  await module.installEngines(process.argv[5], process.env.KAOIRO_RUNNER_CONFIG, process.env.KAOIRO_TEST_REGISTRY);
+  process.exit(0);
+}
+globalThis.__kaoiroStubEntry = true;
+await import("./cli.js");
+`;
+        const revision = revisionOf(`bootstrap-acquire-${valid}`);
+        const archive = makeReleaseTarball(work, revision, { extraFiles: { "dist/kaoiro.js": entry } });
+        const result = bootstrap([archive], {
+          KAOIRO_TEST_TABLE: pathToFileURL(fileURLToPath(new URL("../../wrapper/agent-common/dist/index.js", import.meta.url))).href,
+          KAOIRO_TEST_INSTALL: pathToFileURL(fileURLToPath(new URL("../dist/engine_install.js", import.meta.url))).href,
+          KAOIRO_TEST_ARTIFACT: artifact.name,
+          KAOIRO_TEST_INTEGRITY: valid ? integrity : "sha512-invalid",
+          KAOIRO_TEST_REGISTRY: registry,
+        });
+        if (valid) {
+          expect(result.status, result.stderr).toBe(0);
+          expect(readlinkSync(join(root, "current"))).toBe(`releases/${revision}`);
+          const stored = `${artifact.name.split("/")[1]}@${artifact.version}`;
+          expect(readFileSync(join(root, "engines", stored, "claude"), "utf8")).toBe("engine");
+        } else {
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain("Engine integrity mismatch");
+          expect(existsSync(join(root, "current"))).toBe(false);
+        }
+      } finally {
+        if (server.exitCode === null && server.signalCode === null) {
+          await new Promise<void>((resolve) => {
+            server.once("exit", () => resolve());
+            if (!server.kill("SIGTERM")) resolve();
+          });
+        }
+      }
+    });
+
     it("install → switch → unit 配置 → enable --now まで一気通貫で完了する", () => {
       writeConfig();
       const revision = revisionOf("bootstrap-happy");
