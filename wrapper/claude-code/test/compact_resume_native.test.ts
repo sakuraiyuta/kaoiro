@@ -167,7 +167,7 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
         return host;
       }});
     `);
-    const child = spawn(process.execPath, [cli, file], { cwd, stdio: ["ignore", "pipe", "pipe"], env: {
+    const child = spawn(process.execPath, [cli, "run", file], { cwd, stdio: ["ignore", "pipe", "pipe"], env: {
       PROBE_SCENARIO:scenario, KAOIRO_CLAUDE_NATIVE_CONTINUATIONS:ownership==="native"?"1":"0", PATH: process.env.PATH ?? "", HOME: root, TMPDIR: root, CLAUDE_CONFIG_DIR: cfg, LANG: "C.UTF-8",
       ANTHROPIC_API_KEY: "placeholder", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
       // Remote feature payloads override the seeded gates; disable fetching while retaining disk reads.

@@ -42,19 +42,18 @@ it.each([undefined, "app-server"] as const)("runs the %s production factories ag
   });
   await new Promise<void>(resolve => provider.listen(0, "127.0.0.1", resolve));
   const address = provider.address(); if (!address || typeof address === "string") throw new Error("No provider port");
-  const argv = process.argv, signals = process.listeners("SIGINT");
+  const signals = process.listeners("SIGINT");
   let running: Promise<void> | undefined;
   try {
     await writeFile(join(home, "config.toml"), `model = "gpt-6-luna"\nmodel_provider = "local"\n[model_providers.local]\nname = "Native SDK test"\nbase_url = "http://127.0.0.1:${address.port}/v1"\nwire_api = "responses"\n[features]\nshell_snapshot = false\nplugins = false\n[analytics]\nenabled = false\n`);
     const configPath = join(home, "kaoiro.json");
     await writeFile(configPath, JSON.stringify({ agent_id: "native-fixture", persona: { id: "native-fixture", name: "Native", sprite_set: "native-fixture" },
       display_name: "Native", server_url: wire.url, model: "gpt-6-luna", sandbox: "read-only", network_access: false,
-      ...(backend === undefined ? {} : { codex_backend: backend }) }));
+      initial_prompt: "Exercise actual command output", ...(backend === undefined ? {} : { codex_backend: backend }) }));
     vi.stubEnv("HOME", home); vi.stubEnv("CODEX_HOME", home);
     for (const name of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "CODEX_MODEL_DEFAULT",
       "KAOIRO_CODEX_APPROVAL_AXIS", "KAOIRO_CODEX_OPERATOR_STEER"]) vi.stubEnv(name, undefined);
-    process.argv = [process.execPath, "cli.js", configPath, "Exercise actual command output"];
-    running = runCodexCli();
+    running = runCodexCli({}, ["run", configPath]);
     await vi.waitFor(() => expect(wire.joins).toBe(1));
     wire.push("permission_sync", { version: "0", control: null, next: null });
     wire.push("persona_prompt", { prompt: "Local acceptance fixture" });
@@ -82,7 +81,7 @@ it.each([undefined, "app-server"] as const)("runs the %s production factories ag
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) listener("SIGINT");
     await running;
     hosts.mockRestore();
-    process.argv = argv; vi.unstubAllEnvs();
+    vi.unstubAllEnvs();
     await wire.close(); provider.closeAllConnections();
     await new Promise<void>(resolve => provider.close(() => resolve()));
     await rm(home, { recursive: true, force: true });

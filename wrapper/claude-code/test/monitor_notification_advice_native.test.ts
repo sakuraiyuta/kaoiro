@@ -110,8 +110,8 @@ it.each(["completion-response", "event-inform", "setting-absent", "gate-absent",
     await writeFile(file, JSON.stringify({ agent_id: "fixture.697", persona: { id: "fixture", name: "Fixture", sprite_set: "fixture" },
       display_name: "Fixture", server_url: wire.url, model: "claude-haiku-4-5-20251001", permission_mode: "default",
       allowed_tools: ["Monitor", "Bash", "mcp__kaoiro__send_to_agent"] }));
-    const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
-    const child = spawn(process.execPath, [cli, file], { cwd, stdio: ["ignore", "pipe", "pipe"], env: {
+    const cli = fileURLToPath(new URL("../../../runner/dist/kaoiro.js", import.meta.url));
+    const child = spawn(process.execPath, [cli, "wrapper", "claude-code", "run", file], { cwd, stdio: ["ignore", "pipe", "pipe"], env: {
       PATH: process.env.PATH ?? "", HOME: root, TMPDIR: root, CLAUDE_CONFIG_DIR: cfg, LANG: "C.UTF-8",
       ANTHROPIC_API_KEY: "placeholder", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
       // Remote feature payloads override the seeded gates; disable fetching while retaining disk reads.

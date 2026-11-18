@@ -79,7 +79,7 @@ describe.skipIf(!live)("native cold resume", () => {
           await host.send("Reply with the single word OK.");
           expect(host.state).toBe("waiting_input");
           stored = ext(host).effective;
-        }, undefined, undefined, undefined, { argv: ["--resume", sessionId!], onSessionId: (id) => { resumedId = id; } });
+        }, undefined, undefined, undefined, { resume: sessionId!, onSessionId: (id) => { resumedId = id; } });
         expect(resumedId).toBe(sessionId);
       }
 
@@ -89,11 +89,11 @@ describe.skipIf(!live)("native cold resume", () => {
       await nativeRun(config("workspace-write", { model: pick, model_source: "launch" }), cwd, async (host) => {
         await ready(host);
         expect(ext(host)).toMatchObject({ model: pick, model_source: "launch" });
-      }, undefined, undefined, undefined, { argv: ["--resume", sessionId!] });
+      }, undefined, undefined, undefined, { resume: sessionId! });
 
       // Negative control: the same id from another cwd fails the start.
       await expect(nativeRun(config("workspace-write"), other, (host) => host.closed, undefined, undefined, undefined,
-        { argv: ["--resume", sessionId!] })).rejects.toThrow("grok could not resume the session");
+        { resume: sessionId! })).rejects.toThrow("grok could not resume the session");
     } finally {
       removeGrokState(cwd);
       removeGrokState(other);
@@ -126,7 +126,7 @@ print(json.dumps({'inside': ok}))
         await host.send(`Use run_terminal_command exactly once to run python3 ${JSON.stringify(script)}. ` +
           "Report JSON verbatim; no other tools, retries or commentary.");
       }, undefined, (payload) => JSON.stringify(payload).includes(script), undefined,
-      { argv: ["--resume", sessionId!] });
+      { resume: sessionId! });
       expect(existsSync(report)).toBe(true);
       expect(JSON.parse(readFileSync(report, "utf8"))).toEqual({ inside: false });
       expect(existsSync(inside)).toBe(false);

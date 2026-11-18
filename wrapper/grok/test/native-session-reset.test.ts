@@ -74,7 +74,7 @@ async function run(
   const file = join(folder, "agent.json");
   writeFileSync(file, JSON.stringify(cfg));
   const previous = process.argv;
-  process.argv = [previous[0]!, previous[1]!, file];
+  process.argv = [previous[0]!, previous[1]!, "run", file];
   const record: Run = { envelopes: [], resets: [], replay: [] };
   const replies = [...(setup.replies ?? [{ requestId: "native-reset" }])];
   let linkOptions!: ServerLinkOptions;

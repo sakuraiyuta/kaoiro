@@ -46,7 +46,7 @@ describe.skipIf(!live)("native history replay", () => {
         await vi.waitFor(() => expect(host.state).toBe("waiting_input"), { timeout: 60_000 });
         await vi.waitFor(() => expect(marks.map((m) => m.kind)).toEqual(["reset", "complete"]), { timeout: 30_000 });
         replayed = envelopes.slice(marks[0]!.at, marks[1]!.at).filter((e) => e.type === "log");
-      }, undefined, undefined, undefined, { argv: ["--resume", sessionId!], replay: { marks } });
+      }, undefined, undefined, undefined, { resume: sessionId!, replay: { marks } });
 
       const payloads = replayed.map((e) => e.payload as Record<string, any>);
       const kinds = payloads.map((p) => p.kind);

@@ -45,7 +45,6 @@ it.each([undefined, "app-server"] as const)("marks native %s shells with inherit
   await new Promise<void>(resolve => provider.listen(0, "127.0.0.1", resolve));
   const address = provider.address();
   if (!address || typeof address === "string") throw new Error("No provider port");
-  const argv = process.argv;
   const originalSignals = process.listeners("SIGINT");
   const hosts = vi.spyOn(CodexHost.prototype, "run");
   let childOutput = "";
@@ -158,7 +157,6 @@ enabled = false
     }
     await running;
     hosts.mockRestore();
-    process.argv = argv;
     vi.unstubAllEnvs();
     await wire.close(); provider.closeAllConnections();
     await new Promise<void>(resolve => provider.close(() => resolve()));

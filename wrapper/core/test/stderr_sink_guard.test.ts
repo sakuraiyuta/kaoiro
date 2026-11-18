@@ -54,6 +54,7 @@ const ALLOWED_PROCESS_MEMBERS = new Set([
   "argv",
   "cwd",
   "env",
+  "execArgv",
   "execPath",
   "exit",
   "exitCode",
