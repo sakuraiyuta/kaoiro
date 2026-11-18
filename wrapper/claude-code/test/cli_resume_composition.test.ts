@@ -166,8 +166,6 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
     await runClaudeCli({
       parseCliArgs: () => ({
         configPath: "test",
-        prompt: undefined,
-        resume: undefined,
       }),
       loadConfig: () => ({ ...config, turn_watchdog_inactivity_ms: 120_000 }),
       createServerLink: (_url, _agentId, options) => {

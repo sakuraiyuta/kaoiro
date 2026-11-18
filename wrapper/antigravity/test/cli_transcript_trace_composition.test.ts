@@ -28,7 +28,7 @@ describe("Antigravity CLI transcript-trace composition (issue #352)", () => {
       let hostOptions!: Record<string, any>;
 
       await runAntigravityCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => (options as any).onPersonaPrompt?.("system prompt"));

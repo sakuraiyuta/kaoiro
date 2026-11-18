@@ -4,10 +4,10 @@ import { createDeliverySnapshot, deliveryBehaviourRelay } from "./delivery-setti
 // Runner CLI runtime — loads the runner config, connects to the kaoiro server
 // on `runner:<host_id>`, registers the host, heartbeats, and supervises the
 // host's wrapper processes on operator spawn/stop/restart (ADR-0023, phases
-// 4-4a/4-4b), plus session enumeration / resume (4-5). The thin cli.ts
-// entry invokes this unconditionally so the runtime remains import-safe.
+// 4-4a/4-4b), plus session enumeration / resume (4-5). cli.ts calls this
+// for the kaoiro entry, so the runtime remains import-safe.
 //
-// Usage: node dist/cli.js [configPath] [--version]
+// Usage: kaoiro runner [configPath] [--version]
 //   configPath defaults to runner.config.json. --version prints the canonical
 //   build identity (issues #218/#288) and exits without touching config or
 //   network.

@@ -4,10 +4,9 @@
 #
 #   server    (Elixir) : code_reloader recompiles lib/ on save        :4000
 #   dashboard (Vite)   : HMR; proxies /client,/api,/personas to :4000  :5173
-#   runner    (tsx)    : tsx watch on src/cli.ts (runner hot-reload);
-#                        spawns each wrapper via `tsx watch` too
-#                        (KAOIRO_WRAPPER_DEV=1) so wrapper source edits
-#                        hot-reload the running agent
+#   runner    (tsx)    : tsx watch on src/kaoiro.ts (runner hot-reload);
+#                        wrappers start from the same entry and run the
+#                        built wrapper packages (no wrapper hot reload)
 #
 # Agents are launched from the dashboard (operator「+ 起動」), NOT from
 # agent.*.json — the runner supervises them (ADR-0023/0024, issue #22).
@@ -168,43 +167,34 @@ pids+=("$!")
 # setModel from the dashboard still overrides at runtime. Codex has no
 # pin (account default). See wrapper/claude-code/src/cli.ts.
 
-# runner via tsx watch (hot-reloads the runner itself). Wrapper hot reload
-# (tsx watch on wrapper src) is OFF by default. During phase-15 implementation
-# an in-place edit to wrapper/claude-code/src/cli.ts under KAOIRO_WRAPPER_DEV=1
-# tsx watch caused the running Claude wrapper — which was the AI assistant
-# editing that very file — to self-restart on every save and take down the
-# whole stack. Under this default the runner spawns each wrapper as a dist
-# binary, so wrapper src edits do NOT affect a running agent. To apply new
-# wrapper code, run
+# runner via tsx watch (hot-reloads the runner itself). There is no wrapper
+# hot reload (ADR-0076): the runner starts each wrapper through the same
+# entry, which runs the built wrapper packages, so wrapper src edits do NOT
+# affect a running agent. To apply new wrapper code, run
 #   pnpm -r --filter '@kaoiro/wrapper-core' \
 #     --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
 #     --filter '@kaoiro/codex' --filter '@kaoiro/antigravity' \
 #     --filter '@kaoiro/grok' run build
-# and restart the target agent from the dashboard (「復元」). To opt back
-# into wrapper hot reload (only when you know no running agent is the
-# editing Claude wrapper), export KAOIRO_WRAPPER_DEV=1 before invoking
-# scripts/dev.sh.
+# and restart the target agent from the dashboard (「復元」).
 #
 # Prebuild the 6 wrapper packages before tsx starts: their package.json all
 # point `main` at `./dist/index.js` (phase-13 "typecheck/test は src、runtime
-# は dist" 分離; ADR-0017/0032 F1/0057 F1). Under the default (dist) launch
-# the runner needs those dist files to exist; under KAOIRO_WRAPPER_DEV=1 the
-# tsx entry still resolves `@kaoiro/codex` etc. at top-level
-# (runner/src/config.ts) so a missing dist ENOENTs before the watch loop
-# even starts. `wrapper/` itself is a non-member meta shim, so build the six
-# packages from the root with `-r --filter` in topological order. grok is
-# required because the runner imports `@kaoiro/grok`.
+# は dist" 分離; ADR-0017/0032 F1/0057 F1), and both the runner and the
+# wrappers it starts load those dist files. `wrapper/` itself is a non-member
+# meta shim, so build the six packages from the root with `-r --filter` in
+# topological order. grok is required because the runner imports
+# `@kaoiro/grok`.
 ( cd "$root/runner" && pnpm install </dev/null &&
   cd "$root" && pnpm -r --filter '@kaoiro/wrapper-core' \
     --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
     --filter '@kaoiro/codex' --filter '@kaoiro/antigravity' \
     --filter '@kaoiro/grok' run build &&
   cd "$root/runner" &&
-  exec pnpm exec tsx watch src/cli.ts runner.config.json
+  exec pnpm exec tsx watch src/kaoiro.ts runner runner.config.json
 ) </dev/null 2>&1 | tee -a "$logdir/runner.log" &
 pids+=("$!")
 
-echo "dev: server :4000  |  dashboard :5173 (Vite HMR)  |  runner watching (spawns hot-reloaded wrappers)"
+echo "dev: server :4000  |  dashboard :5173 (Vite HMR)  |  runner watching (wrappers run from dist)"
 echo "dev: open http://localhost:5173/?token=<KAOIRO_CLIENT_TOKENS token> and launch agents via「+ 起動」"
 echo "dev: set KAOIRO_WRAPPER_TOKENS in server/.env to exercise the signed-token auth path"
 echo "dev: logs -> $logdir/{server,dashboard,runner}.log (prev run kept as *.log.prev)"

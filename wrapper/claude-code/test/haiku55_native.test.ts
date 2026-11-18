@@ -91,8 +91,8 @@ describe.skipIf(process.env.KAOIRO_LIVE_CLAUDE !== "1")("Haiku via the installed
     let host: AgentHost | undefined;
     let startupError: unknown;
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "Reply ok.", resume: undefined }),
-      loadConfig: () => config,
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "Reply ok.", ...config }),
       createServerLink: (_url, _id, options) => {
         queueMicrotask(() => {
           options.onPersonaPrompt?.("Native model regression test");

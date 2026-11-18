@@ -468,6 +468,12 @@ export function parseConfig(raw: unknown): WrapperConfig {
   if (raw.codex_tool_home !== undefined) {
     config.codex_tool_home = nonEmptyString(raw.codex_tool_home, "codex_tool_home");
   }
+  for (const field of ["initial_prompt", "resume_session_id"] as const) {
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string") throw new ConfigError(`${field} must be a string`);
+    config[field] = value;
+  }
   if (raw.codex_internal_subagents !== undefined) {
     if (typeof raw.codex_internal_subagents !== "boolean") {
       throw new ConfigError("codex_internal_subagents must be a boolean");

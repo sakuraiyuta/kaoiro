@@ -50,7 +50,7 @@ function launchCodex(onInput: (turn: { text: string; cids: readonly string[]; to
     finish: () => finished.resolve(),
   };
   const running = runCodexCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       linkOptions = options as unknown as Record<string, any>;

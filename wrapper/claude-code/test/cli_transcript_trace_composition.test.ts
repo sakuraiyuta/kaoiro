@@ -37,8 +37,6 @@ describe("Claude CLI transcript-trace composition (issue #352)", () => {
       await runClaudeCli({
         parseCliArgs: () => ({
           configPath: "test",
-          prompt: undefined,
-          resume: undefined,
         }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {

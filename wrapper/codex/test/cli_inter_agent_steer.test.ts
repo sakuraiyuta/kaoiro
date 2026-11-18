@@ -123,7 +123,7 @@ async function compose(backend: "app-server", echo: boolean, grant: "early" | "n
     } };
   const signals = process.listeners("SIGINT");
   try { await runCodexCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;

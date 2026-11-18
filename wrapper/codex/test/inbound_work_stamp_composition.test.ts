@@ -26,7 +26,7 @@ it("injects the work stamp of an assignment pushed over the wire into the Codex 
   const finished = new Promise<void>(resolve => { finishHost = resolve; });
   const started = new Promise<void>(resolve => { startHost = resolve; });
   const running = runCodexCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config, server_url: wire.url }),
     createHost: () => ({
       state: "idle", statusExtSnapshot: () => ({}),

@@ -3,36 +3,54 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeLauncher, resolveWrapperLaunch, toManagedChild } from "../src/spawn.js";
+import { fileURLToPath } from "node:url";
+import { makeLauncher, toManagedChild } from "../src/spawn.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
-describe("resolveWrapperLaunch", () => {
-  afterEach(() => {
-    delete process.env.KAOIRO_WRAPPER_DEV;
-  });
+// The built entry, started by this test's own node: the command a runner
+// started through `kaoiro runner` hands to its launcher.
+const ENTRY = [process.execPath, fileURLToPath(new URL("../dist/kaoiro.js", import.meta.url))];
 
-  it("prod は dist の cli を 1 つ返す", () => {
-    delete process.env.KAOIRO_WRAPPER_DEV;
-    const prefix = resolveWrapperLaunch();
-    expect(prefix).toHaveLength(1);
-    expect(prefix[0]).toMatch(/claude-code\/dist\/cli\.js$/);
-  });
-
-  it("engine=codex は @kaoiro/codex の dist を返す", () => {
-    delete process.env.KAOIRO_WRAPPER_DEV;
-    const prefix = resolveWrapperLaunch("codex");
-    expect(prefix).toHaveLength(1);
-    expect(prefix[0]).toMatch(/codex\/dist\/cli\.js$/);
-  });
-
-  it("KAOIRO_WRAPPER_DEV で tsx watch + src を返す(ホットリロード)", () => {
-    process.env.KAOIRO_WRAPPER_DEV = "1";
-    const prefix = resolveWrapperLaunch();
-    expect(prefix).toHaveLength(3);
-    expect(prefix[0]).toMatch(/tsx/);
-    expect(prefix[1]).toBe("watch");
-    expect(prefix[2]).toMatch(/claude-code\/src\/cli\.ts$/);
-  });
+it("the launcher starts `wrapper <engine> run <launch file>` and keeps the prompt and the resume target in the file", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "kaoiro-launch-argv-"));
+  const previous = { NODE_OPTIONS: process.env.NODE_OPTIONS, KAOIRO_LAUNCH_CAPTURE: process.env.KAOIRO_LAUNCH_CAPTURE };
+  const capture = join(scratch, "capture.cjs");
+  writeFileSync(capture, `const fs = require('node:fs');
+const path = require('node:path');
+const file = process.argv.at(-1);
+fs.writeFileSync(path.join(process.env.KAOIRO_LAUNCH_CAPTURE, path.basename(file) + '.result'),
+  JSON.stringify({ argv: process.argv.slice(2), mode: fs.statSync(file).mode & 0o777, config: JSON.parse(fs.readFileSync(file, 'utf8')) }));
+process.exit(0);`);
+  try {
+    process.env.NODE_OPTIONS = `--require=${capture}`;
+    process.env.KAOIRO_LAUNCH_CAPTURE = scratch;
+    const launch = makeLauncher(ENTRY);
+    const config = { agent_id: "argv", initial_prompt: "stale prompt", resume_session_id: "stale-session" } as never;
+    const started = async (resume?: string, prompt?: string): Promise<void> => {
+      await new Promise<void>((resolve, reject) => {
+        launch("argv", config, scratch, resume, prompt, "grok").on("exit", resolve);
+        setTimeout(() => reject(new Error("the wrapper did not exit")), 10_000).unref();
+      });
+    };
+    await started("session-1", "first instruction");
+    await started();
+    const read = (n: number) => JSON.parse(readFileSync(join(scratch, `argv-${n}.json.result`), "utf8")) as {
+      argv: string[]; mode: number; config: { initial_prompt?: string; resume_session_id?: string };
+    };
+    const first = read(0), relaunch = read(1);
+    expect(first.argv).toEqual(["wrapper", "grok", "run", expect.stringMatching(/argv-0\.json$/)]);
+    expect(first.mode).toBe(0o600);
+    expect(first.config).toMatchObject({ initial_prompt: "first instruction", resume_session_id: "session-1" });
+    expect(relaunch.argv).toEqual(["wrapper", "grok", "run", expect.stringMatching(/argv-1\.json$/)]);
+    expect(relaunch.config).not.toHaveProperty("initial_prompt");
+    expect(relaunch.config).not.toHaveProperty("resume_session_id");
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 /** A child stub that can emit `exit` and `error` separately. */
@@ -95,7 +113,7 @@ it("the default launcher isolates every built wrapper before its first action", 
   const capture = join(scratch, "capture.cjs");
   writeFileSync(capture, `const fs = require('node:fs');
 const path = require('node:path');
-const configPath = process.argv[2];
+const configPath = process.argv.at(-1);
 fs.writeFileSync(path.join(process.env.FUJI464_CAPTURE, path.basename(configPath) + '.result'),
   JSON.stringify({ home: process.env.CODEX_HOME ?? null, config: JSON.parse(fs.readFileSync(configPath, 'utf8')) }));
 process.exit(0);`);
@@ -103,7 +121,7 @@ process.exit(0);`);
     process.env.CODEX_HOME = join(scratch, "state");
     process.env.NODE_OPTIONS = `--require=${capture}`;
     process.env.FUJI464_CAPTURE = scratch;
-    const launch = makeLauncher();
+    const launch = makeLauncher(ENTRY);
     for (const engine of ["codex", "claude-code", "antigravity", "grok"] as const) {
       const id = `fuji464-${engine}`;
       await new Promise<void>((resolve, reject) => {
@@ -145,13 +163,13 @@ it("the default launcher inherits inert old variables and preserves approval inp
 const path = require('node:path');
 const seen = {};
 for (const [key, value] of Object.entries(process.env)) if (key.startsWith('KAOIRO_')) seen[key] = value;
-fs.writeFileSync(path.join(process.env.AO563_CAPTURE, path.basename(process.argv[2]) + '.env'), JSON.stringify(seen));
+fs.writeFileSync(path.join(process.env.AO563_CAPTURE, path.basename(process.argv.at(-1)) + '.env'), JSON.stringify(seen));
 process.exit(0);`);
   try {
     for (const name of names) process.env[name] = name.endsWith("PERSONAS") ? "P" : "1";
     process.env.NODE_OPTIONS = `--require=${capture}`;
     process.env.AO563_CAPTURE = scratch;
-    const launch = makeLauncher();
+    const launch = makeLauncher(ENTRY);
     for (const engine of ["codex", "claude-code"] as const) {
       const id = `ao563-${engine}`;
       await new Promise<void>((resolve, reject) => {
@@ -197,7 +215,7 @@ ${stalled ? 'setInterval(() => {}, 1000);' : ''}`);
   try {
     process.env.NODE_OPTIONS = `${previous ?? ""} --require=${preload}`;
     const started = performance.now();
-    child = makeLauncher()("recovery-launch", {
+    child = makeLauncher(ENTRY)("recovery-launch", {
       agent_id: "recovery-launch", persona: { id: "p", name: "P", sprite_set: "p" },
       display_name: "P", server_url: "ws://127.0.0.1:1/wrapper",
     }, root, undefined, undefined, engine);
@@ -239,7 +257,7 @@ require('node:module').syncBuiltinESMExports();`);
   let exited = false;
   try {
     process.env.NODE_OPTIONS = `${previous ?? ""} --require=${preload}`;
-    child = makeLauncher()("native-exit-control", {
+    child = makeLauncher(ENTRY)("native-exit-control", {
       agent_id: "native-exit-control", persona: { id: "p", name: "P", sprite_set: "p" },
       display_name: "P", server_url: wire.url, sandbox: "workspace-write", network_access: false,
     }, root, undefined, "owned process control", "codex");

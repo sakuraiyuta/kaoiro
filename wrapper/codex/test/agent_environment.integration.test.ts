@@ -103,19 +103,19 @@ enabled = false
       .map(line => JSON.parse(line) as { marker: string; source?: string });
     expect((await hooks()).every(entry => entry.marker === "unset")).toBe(true);
     const configPath = join(root, "agent.json");
-    await writeFile(configPath, JSON.stringify({ agent_id: "native-marker", persona: { id: "marker", name: "Marker", sprite_set: "marker" },
+    const launchConfig = { agent_id: "native-marker", persona: { id: "marker", name: "Marker", sprite_set: "marker" },
       display_name: "Marker", server_url: wire.url, model: "gpt-6-luna", sandbox: "read-only", network_access: false,
-      codex_backend: backend }));
+      codex_backend: backend, initial_prompt: "Read the marker" };
     let managedSession: string | undefined;
     for (const stage of ["fresh", "cold-resume-unmarked", "cold-resume-managed"] as const) {
       const before = wire.received.length;
       const hooksBefore = (await hooks()).length;
       const joins = wire.joins;
       const resumed = stage === "fresh" ? undefined : stage === "cold-resume-unmarked" ? seed as string : managedSession;
-      process.argv = [process.execPath, "cli.js", configPath, "Read the marker", ...(resumed ? ["--resume", resumed] : [])];
+      await writeFile(configPath, JSON.stringify({ ...launchConfig, ...(resumed ? { resume_session_id: resumed } : {}) }));
       if (stage === "cold-resume-managed") {
-        nativeChild = spawn(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)),
-          configPath, "Read the marker", "--resume", resumed!], { stdio: ["ignore", "pipe", "pipe"] });
+        nativeChild = spawn(process.execPath, [fileURLToPath(new URL("../../../runner/dist/kaoiro.js", import.meta.url)),
+          "wrapper", "codex", "run", configPath], { stdio: ["ignore", "pipe", "pipe"] });
         childOutput = "";
         nativeChild.stdout!.on("data", chunk => { childOutput += chunk; });
         nativeChild.stderr!.on("data", chunk => { childOutput += chunk; });
@@ -123,7 +123,7 @@ enabled = false
           nativeChild!.once("error", reject);
           nativeChild!.once("close", code => code === 0 ? resolve() : reject(new Error(`Wrapper child exited ${code}: ${childOutput}`)));
         });
-      } else running = runCodexCli();
+      } else running = runCodexCli({}, ["run", configPath]);
       void running.catch(() => {});
       await vi.waitFor(() => expect(wire.joins).toBe(joins + 1), { timeout: 10_000 });
       wire.push("permission_sync", { version: "0", control: null, next: null });

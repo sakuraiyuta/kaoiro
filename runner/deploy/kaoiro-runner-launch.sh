@@ -91,7 +91,7 @@ if [ "${1:-}" = "--version" ]; then
   node_bin="${KAOIRO_NODE:-node}"
   command -v "$node_bin" >/dev/null 2>&1 ||
     die_config "node not found: $node_bin (set KAOIRO_NODE in $env_file)"
-  entry="$deploy_dir/../dist/cli.js"
+  entry="$deploy_dir/../dist/kaoiro.js"
   [ -f "$entry" ] ||
     die_config "runner not built: $entry (run 'pnpm -C runner build')"
   exec "$node_bin" "$entry" "$@"
@@ -137,8 +137,8 @@ command -v "$node_bin" >/dev/null 2>&1 ||
 # scripts/build-runner-tarball.sh writes one. `dist/build-info.json` — which
 # IS checked — is the identity both profiles carry (ADR-0053).
 #
-# <install>/runner/deploy/<this script> -> <install>/runner/dist/cli.js
-entry="$deploy_dir/../dist/cli.js"
+# <install>/runner/deploy/<this script> -> <install>/runner/dist/kaoiro.js
+entry="$deploy_dir/../dist/kaoiro.js"
 
 # EVERY verification failure becomes exit 78, and that mapping is the point.
 # A tree that passes a hand-written sentinel list but is missing one module
@@ -184,4 +184,4 @@ fi
 
 # Single-binary migration (issue #70): replace the line below with
 #   exec "$deploy_dir/../bin/kaoiro-runner" "$config"
-exec "$node_bin" "$entry" "$config"
+exec "$node_bin" "$entry" runner "$config"

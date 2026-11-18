@@ -115,7 +115,7 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     if (interrupt) vi.stubEnv("KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS", "60000");
     for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(key, undefined);
     running = runCodexCli({ ...(interrupt ? { watchdogClock: clock } : {}),
-      parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "fixture" }),
       loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", recovery_checkpoint_path: join(home, "recovery-checkpoint"), server_url: wire.url, model: "gpt-5.6-sol", codex_backend: "app-server" }),
     });
     await vi.waitFor(() => expect(wire.joins).toBe(1));wire.push("persona_prompt", { prompt: "Lifecycle test" });

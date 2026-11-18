@@ -63,7 +63,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const started = new Promise<void>(resolve => { startHost = resolve; });
     const running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config, server_url: wire.url }),
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
@@ -129,7 +129,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const started = new Promise<void>(resolve => { startHost = resolve; });
     const running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -248,7 +248,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
 
     try {
       running = runCodexCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
@@ -406,7 +406,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
 
     try {
       running = runCodexCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
@@ -452,7 +452,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     let hostOptions!: Record<string, any>;
     const closing: string[] = [];
     const running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       prepareStartup: async () => {},
       createServerLink: (_url, _id, callbacks) => {
@@ -558,7 +558,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
       };
 
       await runCodexCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => {
@@ -628,7 +628,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         };
 
         await runCodexCli({
-          parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+          parseCliArgs: () => ({ configPath: "test" }),
           loadConfig: () => ({ ...config }),
           createServerLink: (_url, _agentId, options) => {
             queueMicrotask(() => {
@@ -686,7 +686,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
 
     try {
       await runCodexCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => {
@@ -741,7 +741,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
 
     try {
       const running = runCodexCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
@@ -836,7 +836,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     };
 
     await runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => {
@@ -874,7 +874,7 @@ describe("permission gate cancellation notice composition", () => {
     let host: InstanceType<typeof CodexHost> | undefined;
     let sdkCalls = 0;
     const running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config, sandbox: "read-only", network_access: false }),
       createServerLink: (_url, _id, options) => {
         onMessage = options.onInterAgentMessage!;

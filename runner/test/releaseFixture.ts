@@ -3,7 +3,7 @@
 //
 // Every fixture ships the REAL deploy/*.sh bytes, copied verbatim rather
 // than reimplemented, so the tests exercise the scripts an operator runs.
-// Only `dist/cli.js` and the two wrapper entry points are stubs: building
+// Only `dist/kaoiro.js`, `dist/cli.js` and the wrapper modules are stubs: building
 // the real ones needs a full `pnpm -C wrapper build && pnpm -C runner
 // build`, which this suite does not depend on.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -194,6 +194,9 @@ export function writeReleaseTree(
         .replace("@@MACHINE_OVERRIDE@@", JSON.stringify(options.cliBuildInfoOverride ?? {}))
         .replace("@@LEGACY_CLI@@", String(options.legacyCli ?? false)),
   );
+  // The real entry reaches cli.js through `import()`; a static import keeps
+  // the stub one line and lets every test go on staging its cases in cli.js.
+  put("dist/kaoiro.js", 'import "./cli.js";\n');
   put("dist/stub_dep.js", STUB_DEP);
   put(
     "dist/build-info.json",

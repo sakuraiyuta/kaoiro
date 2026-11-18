@@ -44,7 +44,7 @@ async function compose() {
   let descriptors!: ToolDescriptor[];
 
   await runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));

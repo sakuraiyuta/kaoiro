@@ -48,7 +48,7 @@ describe("Antigravity CLI", () => {
     };
 
     await runAntigravityCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => config(),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
@@ -151,8 +151,6 @@ describe("Antigravity CLI", () => {
     await runAntigravityCli({
       parseCliArgs: () => ({
         configPath: "test",
-        prompt: undefined,
-        resume: undefined,
       }),
       loadConfig: () => ({ ...defaultConfig }),
       createServerLink: (_url, _agentId, options) => {
@@ -191,7 +189,7 @@ describe("Antigravity CLI", () => {
     };
 
     await runAntigravityCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => config(),
       createServerLink: (_url, _agentId, options) => {
         capturedServerOptions = options as unknown as Record<string, unknown>;
@@ -236,8 +234,6 @@ describe("Antigravity CLI", () => {
       await runAntigravityCli({
         parseCliArgs: () => ({
           configPath: "test",
-          prompt: undefined,
-          resume: undefined,
         }),
         loadConfig: () => config(),
         createServerLink: (_url, _agentId, options) => {
@@ -283,7 +279,7 @@ describe("Antigravity CLI", () => {
 
     try {
       await runAntigravityCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => config(),
         createServerLink: (_url, _agentId, options) => {
           onSetPermission = options.onSetPermission as typeof onSetPermission;
@@ -334,7 +330,7 @@ if (args[0] === "models") {
     const result = new Promise<void>((resolve) => { resultSeen = resolve; });
     try {
       const run = runAntigravityCli({
-        parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath }),
         onHostCreated: (host) => { liveHost = host; },
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => {
@@ -380,7 +376,7 @@ if (args[0] === "models") {
         return true;
       }) as never);
       await runAntigravityCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => config(),
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
@@ -455,7 +451,7 @@ it("writes a blocked checkpoint through the real Antigravity watchdog callback",
   const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-watchdog-recovery-")); const checkpoint = join(root, "checkpoint");
   let host: AntigravityHost | undefined;
   const running = runAntigravityCli({
-    parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "fixture" }),
     loadConfig: () => ({ ...config(), recovery_checkpoint_path: checkpoint }),
     createServerLink: (_url, _id, options) => {
       queueMicrotask(() => options.onPersonaPrompt?.("fixture"));

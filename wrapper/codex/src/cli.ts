@@ -12,7 +12,7 @@ import { resolveDelivery } from "@kaoiro/agent-common";
 // app-server's approval requests, ADR-0064), no image-only upload rendering,
 // rollout history replay.
 //
-// Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
+// Usage: kaoiro wrapper codex run <launch file>
 
 import { CodexHistoryReplay } from "./app_server_replay.js";
 import { randomUUID } from "node:crypto";
@@ -170,7 +170,10 @@ function abandonmentCause(abandoned: TurnAbandonment): string {
   }
 }
 
-export async function runCodexCli(dependencies: CodexCliDependencies = {}): Promise<void> {
+export async function runCodexCli(
+  dependencies: CodexCliDependencies = {},
+  argv: string[] = process.argv.slice(2),
+): Promise<void> {
   const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
   const readConfig = dependencies.loadConfig ?? loadConfig;
   const createServerLink =
@@ -181,10 +184,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const readBuildInfo = dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo;
   let link: ServerLink | null = null;
   const deliveryPolicy = new DeliveryPolicyController();
-  const { configPath, prompt, resume: resumeSessionId } = parseArgs(
-    process.argv.slice(2),
-  );
+  const { configPath } = parseArgs(argv);
   const config = readConfig(configPath);
+  const prompt = config.initial_prompt;
+  const resumeSessionId = config.resume_session_id;
   const backend = DEFAULT_CODEX_BACKEND;
   writeRedactedStderr(`codex: backend=${backend}\n`);
   writeRedactedStderr(`codex: home=${codexHome()}\n`);

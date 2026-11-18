@@ -26,7 +26,7 @@ async function compose(backend: "app-server", env: Record<string, string>, extra
   const link = { close: () => {}, currentSessionId: () => null, send: (e: Envelope) => { sent.push(e); } };
   const host = { state: "idle", statusExtSnapshot: () => ({}), send: vi.fn(async () => {}), run: async () => {}, setPendingPermission: vi.fn() };
   await runCodexCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config, ...extra }),
     createServerLink: (_url, _agentId, options) => {
       queueMicrotask(() => { (options.onPersonaPrompt as (prompt: string) => void)("system prompt"); });

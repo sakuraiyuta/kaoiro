@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const runnerRoot = fileURLToPath(new URL("../", import.meta.url));
-const cli = join(runnerRoot, "dist", "cli.js");
+const cli = join(runnerRoot, "dist", "kaoiro.js");
 const buildInfo = join(runnerRoot, "dist", "build-info.json");
 
 interface CliPath {
@@ -40,7 +40,7 @@ describe("runner CLI built entry point", () => {
     symlinkSync(cli, entryLink, "file");
     entries = [
       { name: "direct", path: cli },
-      { name: "parent-directory symlink", path: join(parentLink, "dist", "cli.js") },
+      { name: "parent-directory symlink", path: join(parentLink, "dist", "kaoiro.js") },
       { name: "entry-file symlink", path: entryLink },
     ];
   });
@@ -79,7 +79,7 @@ describe("runner CLI built entry point", () => {
   it("fails loudly for a missing config through every built entry", () => {
     const missingConfig = join(root, "missing-runner.config.json");
     for (const { name, path } of entries) {
-      const result = run(path, [missingConfig], root);
+      const result = run(path, ["runner", missingConfig], root);
       expect(result.error, name).toBeUndefined();
       expect(result.status, name).not.toBe(0);
       expect(result.stdout, name).toBe("");

@@ -20,7 +20,7 @@ import { resolveDelivery } from "@kaoiro/agent-common";
 // itself (allowedTools) cannot be widened from the server side
 // (docs/reference/security/enforcement-boundaries.md).
 //
-// Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
+// Usage: kaoiro wrapper claude-code run <launch file>
 
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
@@ -166,7 +166,10 @@ function printLog(envelope: Envelope): void {
   }
 }
 
-export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Promise<void> {
+export async function runClaudeCli(
+  dependencies: ClaudeCliDependencies = {},
+  argv: string[] = process.argv.slice(2),
+): Promise<void> {
   const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
   const readConfig = dependencies.loadConfig ?? loadConfig;
   const createServerLink =
@@ -177,9 +180,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   let link: ServerLink | null = null;
   const deliveryPolicy = new DeliveryPolicyController();
   const buildMcpServer = dependencies.buildMcpServer ?? buildKaoiroMcpServer;
-  const { configPath, prompt: promptArg, resume: resumeSessionId } =
-    parseArgs(process.argv.slice(2));
+  const { configPath } = parseArgs(argv);
   const config = readConfig(configPath);
+  const promptArg = config.initial_prompt;
+  const resumeSessionId = config.resume_session_id;
   // Read once here for the claim path below. The consumer line prints
   // yieldClaimTimeoutMs from this constant (cli.ts is its only consumer) and
   // the pending-receipt value from the host that receives it.

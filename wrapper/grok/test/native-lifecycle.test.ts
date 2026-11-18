@@ -189,7 +189,7 @@ it.skipIf(!live)(
       driver,
       `import { runGrokCli } from ${JSON.stringify(cli)};
 import { writeFileSync } from 'node:fs';
-process.argv = [process.argv[0], process.argv[1], ${JSON.stringify(file)}];
+process.argv = [process.argv[0], process.argv[1], 'run', ${JSON.stringify(file)}];
 await runGrokCli({
  createServerLink: (_url, _id, options) => {
   queueMicrotask(() => options.onPersonaPrompt('Be concise.'));

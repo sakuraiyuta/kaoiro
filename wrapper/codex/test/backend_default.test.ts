@@ -23,7 +23,7 @@ it("uses the app-server replay fallback when a CLI Host seam omits historyBacken
   const scheduled = vi.fn(), listeners = process.listeners("SIGINT");
   try {
     await runCodexCli({
-      parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }), loadConfig: () => config,
+      parseCliArgs: () => ({ configPath: "fixture" }), loadConfig: () => config,
       prepareStartup: async () => {},
       createServerLink: (_url, _id, callbacks) => {
         queueMicrotask(() => {

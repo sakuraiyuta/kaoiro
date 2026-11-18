@@ -455,8 +455,8 @@ enabled=false
 
       const agentId = "cli-exec-sigterm";
       running = runCodexCli({
-        parseCliArgs: () => ({ configPath: "fixture", prompt: "run sleep 77 via exec_command", resume: undefined }),
-        loadConfig: () => ({
+        parseCliArgs: () => ({ configPath: "fixture" }),
+        loadConfig: () => ({ initial_prompt: "run sleep 77 via exec_command",
           agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P",
           server_url: wire.url, model: "gpt-5.6-sol", codex_backend: backend,
         }),

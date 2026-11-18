@@ -31,6 +31,12 @@
   "engines": {
     "node": ">=22"
   },
+  "kaoiro": {
+    "runtimeAssets": [
+      "dist/cli.js",
+      "dist/setup-cli.js"
+    ]
+  },
   "dependencies": {
     "@kaoiro/claude-code": "workspace:*",
     "phoenix": "^1.8.7",

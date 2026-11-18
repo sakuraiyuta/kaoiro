@@ -54,7 +54,7 @@ it("injects the work stamp of a delivered assignment into the Antigravity turn (
   };
   const signals = process.listeners("SIGINT");
   const running = runAntigravityCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }), loadConfig: () => ({ ...config }),
+    parseCliArgs: () => ({ configPath: "test" }), loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;
       queueMicrotask(() => options.onPersonaPrompt?.("PERSONA")); return link as never;

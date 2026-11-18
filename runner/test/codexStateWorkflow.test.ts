@@ -550,7 +550,7 @@ describe.skipIf(process.platform !== "linux")("managed child environments", { ti
     expect(tx().phase).toBe("completed");
     const parents=lines("marker.jsonl");
     expect(parents.some(m=>m.argv[0]?.endsWith("/kaoiro-runner-codex-state.mjs") && m.argv[1]==="run" && m.secrets)).toBe(true);
-    expect(parents.filter(m=>["guard","promote"].includes(m.argv[1]) || m.argv[0]?.endsWith("/dist/cli.js"))).toEqual([]);
+    expect(parents.filter(m=>["guard","promote"].includes(m.argv[1]) || m.argv[0]?.endsWith("/dist/kaoiro.js"))).toEqual([]);
     const closed=(child: any) => {
       for (const value of Object.values(inert)) expect(JSON.stringify(child.env)).not.toContain(value);
       expect(child.env.NODE_OPTIONS ?? "").not.toContain(marker);
@@ -578,7 +578,7 @@ describe.skipIf(process.platform !== "linux")("managed child environments", { ti
     env[selector]=selector==="KAOIRO_RUNNER_ENV"?file:alt;
     mkdirSync(dirname(file),{recursive:true}); writeFileSync(file,`KAOIRO_NODE='${recorder}'\n`,{mode:0o600});
     ok(runScript(h.updater, forwardArgs(), env));
-    expect(readFileSync(join(h.dir,"selector.log"),"utf8")).toMatch(/\/dist\/cli\.js --version --json$/m);
+    expect(readFileSync(join(h.dir,"selector.log"),"utf8")).toMatch(/\/dist\/kaoiro\.js --version --json$/m);
   });
 });
 

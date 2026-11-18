@@ -211,7 +211,7 @@ it.each([undefined, "app-server"] as const)("selects only the published config b
   vi.stubEnv("KAOIRO_CODEX_BACKEND", "app-server");
   try {
     await runCodexCli({
-      parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "fixture" }),
       loadConfig: () => ({ agent_id: "ordinary", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://fixture", ...(backend === undefined ? {} : { codex_backend: backend }) }),
       createServerLink: (_url, _id, callbacks) => {
         queueMicrotask(() => callbacks.onPersonaPrompt?.("Fixture"));
@@ -241,8 +241,8 @@ it("reports public app-server startup failure without exec fallback or another S
   const session = vi.fn(async () => { throw new Error("Required bridge startup failed"); });
   let host: InstanceType<typeof CodexHost> | undefined;
   const running = runCodexCli({
-    parseCliArgs: () => ({ configPath: "fixture", prompt: "FIRST", resume: undefined }),
-    loadConfig: () => ({ agent_id: "startup-failure", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, codex_backend: "app-server" }),
+    parseCliArgs: () => ({ configPath: "fixture" }),
+    loadConfig: () => ({ initial_prompt: "FIRST", agent_id: "startup-failure", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, codex_backend: "app-server" }),
     createHost: (config, options) => (host = new CodexHost(config, { ...options, appServerSessionFactory: session })),
   });
   try {

@@ -40,7 +40,7 @@ async function runOnceAndSigterm(): Promise<{ closed: boolean }> {
     },
   };
   const running = runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       queueMicrotask(() => {

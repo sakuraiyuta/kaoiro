@@ -81,8 +81,7 @@ it.each(modes)("retains native root MCP outcomes: %s", async mode => {
   });
   const marker = join(root, "stdio.jsonl");
   const running = runClaudeCli({
-    parseCliArgs: () => ({ configPath: "native", prompt: undefined,
-      resume: undefined }),
+    parseCliArgs: () => ({ configPath: "native" }),
     loadConfig: () => ({ agent_id: "sender", display_name: "Sender",
       persona: { id: "p", name: "P", sprite_set: "p" },
       server_url: wire.url, cwd: root,

@@ -110,8 +110,6 @@ describe("Claude CLI error surfacing — production sink negative control (issue
       await runClaudeCli({
         parseCliArgs: () => ({
           configPath: "test",
-          prompt: undefined,
-          resume: undefined,
         }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
@@ -182,7 +180,7 @@ it.each([
   }) as QueryFn;
   let host!: AgentHost;
   const running = runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       linkOptions = options as unknown as Record<string, any>;

@@ -19,11 +19,11 @@ node_bin="${KAOIRO_NODE:-node}"
 command -v "$node_bin" >/dev/null 2>&1 ||
   die_config "node not found: $node_bin (set KAOIRO_NODE)"
 
-# <install>/runner/deploy/<this script> -> <install>/runner/dist/setup-cli.js
+# <install>/runner/deploy/<this script> -> <install>/runner/dist/kaoiro.js
 unset CDPATH
 deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
-entry="$deploy_dir/../dist/setup-cli.js"
+entry="$deploy_dir/../dist/kaoiro.js"
 [ -f "$entry" ] ||
   die_config "wizard not built: $entry (run 'pnpm -C runner build')"
 
-exec "$node_bin" "$entry" "$@"
+exec "$node_bin" "$entry" setup "$@"

@@ -184,8 +184,8 @@ async function writeRunnerScript(root: string, wireUrl: string, backend: "exec" 
     `import { runCodexCli } from ${JSON.stringify(distCliPath)};
 
 await runCodexCli({
-  parseCliArgs: () => ({ configPath: "fixture", prompt: "run sleep 77 via exec_command", resume: undefined }),
-  loadConfig: () => ({
+  parseCliArgs: () => ({ configPath: "fixture" }),
+  loadConfig: () => ({ initial_prompt: "run sleep 77 via exec_command",
     agent_id: "cli-exec-sigterm-m2",
     persona: { id: "p", name: "P", sprite_set: "p" },
     display_name: "P",

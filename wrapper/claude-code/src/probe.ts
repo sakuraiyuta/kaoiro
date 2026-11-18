@@ -343,11 +343,10 @@ function classifyError(message: string): ProbeFailReason {
 // imports it. Without this guard, `probe-client.ts`'s `require.resolve()`
 // of this file would trigger the SDK query on every import.
 import { fileURLToPath } from "node:url";
-if (
-  process.argv[1] !== undefined &&
-  fileURLToPath(import.meta.url) === process.argv[1]
-) {
-  runProbe(process.argv.slice(2)).then(
+
+/** Runs the probe as the whole process: `kaoiro wrapper claude-code probe`. */
+export function runProbeProcess(argv: string[]): void {
+  runProbe(argv).then(
     (code) => process.exit(code),
     (err) => {
       // Unreachable if main() catches everything, but keep a hard backstop
@@ -364,4 +363,11 @@ if (
       process.exit(2);
     },
   );
+}
+
+if (
+  process.argv[1] !== undefined &&
+  fileURLToPath(import.meta.url) === process.argv[1]
+) {
+  runProbeProcess(process.argv.slice(2));
 }

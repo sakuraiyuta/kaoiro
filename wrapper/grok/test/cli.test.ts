@@ -98,8 +98,8 @@ describe("runGrokCli composition", () => {
     const snapshot = { model: "grok-4.6", model_source: "launch" as const };
     let probe!: Promise<void>;
     await runGrokCli({
-      parseCliArgs: () => ({ configPath: "fixture", resume: "fixture-session" }),
-      loadConfig: () => ({ ...config, resume_snapshot: snapshot }),
+      parseCliArgs: () => ({ configPath: "fixture" }),
+      loadConfig: () => ({ resume_session_id: "fixture-session", ...config, resume_snapshot: snapshot }),
       loadWrapperBuildInfo: () => buildInfo,
       createHost: (options) => {
         seen = options;

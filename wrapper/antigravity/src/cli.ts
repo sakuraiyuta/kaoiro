@@ -99,6 +99,7 @@ export function relayAntigravityInstruction(
 
 export async function runAntigravityCli(
   dependencies: AntigravityCliDependencies = {},
+  argv: string[] = process.argv.slice(2),
 ): Promise<void> {
   const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
   const loadCliConfig = dependencies.loadConfig ?? loadConfig;
@@ -107,8 +108,10 @@ export async function runAntigravityCli(
     dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
   const createHost =
     dependencies.createHost ?? ((...args) => new AntigravityHost(...args));
-  const { configPath, prompt, resume: resumeSessionId } = parseArgs(process.argv.slice(2));
+  const { configPath } = parseArgs(argv);
   const config = loadCliConfig(configPath);
+  const prompt = config.initial_prompt;
+  const resumeSessionId = config.resume_session_id;
   const resolvedWatchdog = resolveTurnWatchdogSettings(
     process.env,
     (message) => writeRedactedStderr(message),

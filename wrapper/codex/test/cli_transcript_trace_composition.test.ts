@@ -41,7 +41,7 @@ async function runWithFakeHost(
     };
     let hostOptions!: Record<string, any>;
     await runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => (options as any).onPersonaPrompt?.("system prompt"));

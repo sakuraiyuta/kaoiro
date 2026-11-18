@@ -77,7 +77,7 @@ async function runIdleCli(
   });
   let host!: AgentHost;
   const running = runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
@@ -192,8 +192,8 @@ it("production spawn owns a resistant probe tree through host close",
   };
   try {
     cli = await runIdleCli("", {
-      probePath: fileURLToPath(new URL("./fixtures/probe-tree.cjs",
-        import.meta.url)), killEscalateMs: 750,
+      probeCommand: [process.execPath, fileURLToPath(new URL("./fixtures/probe-tree.cjs",
+        import.meta.url))], killEscalateMs: 750,
     });
     await vi.waitFor(() => expect(existsSync(marker)).toBe(true));
     tree = JSON.parse(readFileSync(marker, "utf8"));
@@ -230,8 +230,7 @@ it("CLI waits for probe teardown before disconnect intent and link close",
   let runSpy: MockInstance<AgentHost["run"]> | undefined;
   let done = false;
   const running = runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined,
-      resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));

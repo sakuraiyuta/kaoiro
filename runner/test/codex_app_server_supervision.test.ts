@@ -56,8 +56,9 @@ await runCodexCli({
     launch: (_id, config, cwd, resume, prompt, engine) => {
       expect(engine).toBe("codex");expect(resume).toBeUndefined();
       const index = children.length, configPath = join(home, `config-${index}.json`);
-      writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });prompts.push(prompt);messages.push([]);stderr.push("");
-      const child = spawn(process.execPath, [entry, configPath, ...(prompt === undefined ? [] : [prompt])], {
+      writeFileSync(configPath, JSON.stringify({ ...config, ...(prompt === undefined ? {} : { initial_prompt: prompt }) }), { mode: 0o600 });
+      prompts.push(prompt);messages.push([]);stderr.push("");
+      const child = spawn(process.execPath, [entry, "run", configPath], {
         cwd, env: { ...process.env, HOME: home, CODEX_HOME: home }, stdio: ["ignore", "ignore", "pipe", "ipc"],
       });
       children.push(child);exits.push(new Promise(resolve => child.once("close", () => resolve())));

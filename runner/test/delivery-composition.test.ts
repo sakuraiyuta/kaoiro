@@ -37,14 +37,18 @@ async function start(extra: Record<string, unknown>, environment: Record<string,
   const config = { host_id: "composition", server_url: server.url, cwd_allowlist: [dir], capabilities: ["claude-code", "codex"],
     codex: { backend: "app-server", auth_mode: "chatgpt", chatgpt_plan: "plus" }, ...extra };
   writeFileSync(file, JSON.stringify(config));
-  let entry = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+  const kaoiro = new URL("../dist/kaoiro.js", import.meta.url);
+  let command = [fileURLToPath(kaoiro), "runner", file];
   if (changeEnvironment) {
-    entry = join(dir, "change-env.mjs");
+    const entry = join(dir, "change-env.mjs");
     const cli = new URL("../dist/runner-cli.js", import.meta.url).href;
-    writeFileSync(entry, `import { runRunnerCli } from ${JSON.stringify(cli)};\nawait runRunnerCli();\n` +
+    const core = new URL("../node_modules/@kaoiro/wrapper-core/dist/index.js", import.meta.url).href;
+    writeFileSync(entry, `import { registerSelfEntry } from ${JSON.stringify(core)};\nimport { runRunnerCli } from ${JSON.stringify(cli)};\n` +
+      `registerSelfEntry(${JSON.stringify(kaoiro.href)});\nawait runRunnerCli();\n` +
       'process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY="0";\nprocess.env.KAOIRO_CODEX_OPERATOR_STEER="1";\nconsole.log("DELIVERY_ENV_CHANGED");\n');
+    command = [entry, file];
   }
-  const child = spawn(process.execPath, [entry, file], { detached: true, stdio: ["ignore", "pipe", "pipe"],
+  const child = spawn(process.execPath, command, { detached: true, stdio: ["ignore", "pipe", "pipe"],
     env: { HOME: dir, PATH: "/usr/bin:/bin", CODEX_HOME: join(dir, "codex-home"), ...environment } });
   let output = ""; child.stdout!.on("data", data => { output += data; }); child.stderr!.on("data", data => { output += data; });
   const stop = async () => {
@@ -80,7 +84,7 @@ describe("built runner and wrapper delivery composition", () => {
       for (const block of [null, [], false, { claude_code: {} }, { codex: null }, { codex: [] }, { codex: { enabeld: true } }, { codex: { default: "false" } }]) {
         const path = join(dir, "config.json");
         writeFileSync(path, JSON.stringify({ host_id: "invalid", server_url: "ws://127.0.0.1:59999/runner", cwd_allowlist: [dir], in_flight_delivery: block }));
-        const result = spawnSync(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)), path],
+        const result = spawnSync(process.execPath, [fileURLToPath(new URL("../dist/kaoiro.js", import.meta.url)), "runner", path],
           { env: { HOME: dir, PATH: "/usr/bin:/bin" }, encoding: "utf8", timeout: 5000 });
         expect(result.status, result.stderr).toBe(1);
         expect(result.stderr).toContain("in_flight_delivery");
@@ -149,8 +153,8 @@ it("R1-era relay inputs cannot gate a built W2 declaration even when launch meta
   const root=mkdtempSync(join(tmpdir(),"fuji565-r1-w2-")), wire=await endpoint();
   const path=join(root,"wrapper.json");
   writeFileSync(path,JSON.stringify({agent_id:"mixed.direct",persona:{id:"P",name:"P",sprite_set:"P"},display_name:"P",server_url:wire.url,phase2_delivery:false,in_flight_delivery_enabled:true}));
-  const cli=fileURLToPath(new URL("../../wrapper/claude-code/dist/cli.js",import.meta.url));
-  const child=spawn(process.execPath,[cli,path],{env:{HOME:root,PATH:"/usr/bin:/bin",KAOIRO_CLAUDE_PHASE2_DELIVERY:"0",KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS:"private-excluded-persona"},stdio:["ignore","pipe","pipe"]});
+  const cli=fileURLToPath(new URL("../dist/kaoiro.js",import.meta.url));
+  const child=spawn(process.execPath,[cli,"wrapper","claude-code","run",path],{env:{HOME:root,PATH:"/usr/bin:/bin",KAOIRO_CLAUDE_PHASE2_DELIVERY:"0",KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS:"private-excluded-persona"},stdio:["ignore","pipe","pipe"]});
   let output="";child.stdout.on("data",x=>output+=x);child.stderr.on("data",x=>output+=x);
   try{
     await vi.waitFor(()=>expect(wire.joins.has("mixed.direct")).toBe(true),{timeout:10000});

@@ -35,7 +35,7 @@ it.each(["already off", "claim in flight"] as const)("keeps one ordinary yield r
   });
   const signals = process.listeners("SIGINT");
   const running = runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config, server_url: wire.url }),
     createHost: (cfg, options) => {
       host = new AgentHost(cfg, { ...options,
@@ -109,7 +109,7 @@ it.each(["ceiling false", "absent", "legacy false", "excluding list", "stored of
   const wire=await phoenixLoopback(()=>({delivery_policy:"v1",inter_agent_delivery_modes:"v1",inter_agent_reply_basis:"v1"}));
   const signals=process.listeners("SIGINT");
   const running=runClaudeCli({
-    parseCliArgs:()=>({configPath:"test",prompt:undefined,resume:undefined}),
+    parseCliArgs:()=>({configPath:"test"}),
     loadConfig:()=>({agent_id:"ordering",persona:{id:"P",name:"P",sprite_set:"P"},display_name:"P",server_url:wire.url,in_flight_delivery_enabled:mode!=="ceiling false",...(mode==="legacy false"?{phase2_delivery:false}:{})}),
     createHost:(config,options)=>{
       const host=new AgentHost(config,{...options,queryFn:((args:{prompt:AsyncIterable<SDKUserMessage>;options:any})=>Object.assign((async function*(){

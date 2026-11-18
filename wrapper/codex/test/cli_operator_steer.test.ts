@@ -42,7 +42,7 @@ async function compose(backend: "app-server", legacy: Legacy = {}, echoed: unkno
     during(linkOptions);
   } };
   await runCodexCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config,
       ...(legacy.ceiling === undefined ? {} : { in_flight_delivery_enabled: legacy.ceiling }),
       ...(legacy.fileKey === undefined ? {} : { operator_steer: legacy.fileKey }) }),

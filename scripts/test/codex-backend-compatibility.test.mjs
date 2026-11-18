@@ -77,8 +77,8 @@ test("the built runner emits its checkout revision on the real startup path", as
     })}\n`, { mode: 0o600 });
     mkdirSync(join(directory, "codex-home"), { mode: 0o700 });
 
-    const runnerCli = fileURLToPath(new URL("../../runner/dist/cli.js", import.meta.url));
-    child = spawn(process.execPath, [runnerCli, configPath], {
+    const runnerCli = fileURLToPath(new URL("../../runner/dist/kaoiro.js", import.meta.url));
+    child = spawn(process.execPath, [runnerCli, "runner", configPath], {
       cwd: directory,
       env: {
         PATH: process.env.PATH,
@@ -145,7 +145,7 @@ test("the built launcher reports checkout artifact identity", async (t) => {
 
   const directory = mkdtempSync(join(tmpdir(), "codex-backend-runner-version."));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const runnerCli = fileURLToPath(new URL("../../runner/dist/cli.js", import.meta.url));
+  const runnerCli = fileURLToPath(new URL("../../runner/dist/kaoiro.js", import.meta.url));
   const output = execFileSync(process.execPath, [runnerCli, "--version", "--json"], {
     cwd: repositoryRoot,
     encoding: "utf8",

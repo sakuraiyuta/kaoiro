@@ -8,14 +8,12 @@
 #   server+dashboard : docker compose (server/docker-compose.yaml, :4000)
 #                      Phoenix serves the bundled dashboard from
 #                      priv/static; no Vite HMR.
-#   runner           : host, `node dist/cli.js` (no tsx watch).
+#   runner           : host, `node dist/kaoiro.js runner` (no tsx watch).
 #                      ADR-0023 keeps runner as a host-resident
 #                      supervisor — it stays out of docker because it
 #                      spawns wrappers with host paths / tokens / cwd
 #                      allowlist.
-#   wrapper          : spawned by runner from dist (same as dev.sh
-#                      default — KAOIRO_WRAPPER_DEV is NEVER honoured
-#                      here).
+#   wrapper          : spawned by runner from dist (same as dev.sh).
 #
 # Agents are launched from the dashboard (「+ 起動」), NOT from
 # agent.*.json — the runner supervises them (ADR-0023/0024, issue #22).
@@ -59,15 +57,6 @@ if [[ ! -f "$root/server/.env" ]]; then
     "(mix phx.gen.secret) and KAOIRO_CLIENT_TOKENS" >&2
   exit 1
 fi
-
-# Header invariant: KAOIRO_WRAPPER_DEV is NEVER honoured here. dev.sh
-# instructs operators to `export KAOIRO_WRAPPER_DEV=1` in their shell to
-# opt into wrapper hot reload — that export persists after dev.sh exits,
-# so a same-terminal switch to dogfood.sh would otherwise inherit it and
-# the runner would spawn wrappers via `tsx watch` instead of dist,
-# reintroducing the exact self-restart disruption this script exists to
-# prevent. Strip it before anything downstream can read it.
-unset KAOIRO_WRAPPER_DEV
 
 logdir="$root/tmp/dogfood-logs"
 mkdir -p "$logdir"
@@ -240,7 +229,7 @@ pids+=("$!")
 # node never received the signal, hanging Ctrl-C forever. Backgrounding
 # the subshell directly makes `$!` == node's pid == the pgid.
 ( cd "$root/runner" &&
-  exec node --enable-source-maps dist/cli.js runner.config.json
+  exec node --enable-source-maps dist/kaoiro.js runner runner.config.json
 ) </dev/null > >(tee -a "$logdir/runner.log") 2>&1 &
 runner_pid=$!
 pids+=("$runner_pid")

@@ -5,22 +5,27 @@ import { parseArgs } from "node:util";
 
 export interface CliArgs {
   configPath: string;
-  prompt?: string | undefined;
-  resume?: string | undefined;
 }
 
-// Positional [configPath] [prompt] plus the optional --resume <session_id>
-// flag (ADR-0014 phase-1: start a wrapper continuing an existing SDK session;
-// the id flows to the SDK query's `resume` option).
+/** A command line that is not `run <launch file>`. The kaoiro entry exits 64
+ *  on it. */
+export class CliUsageError extends Error {
+  override name = "CliUsageError";
+}
+
+// `run <launch file>` is the only form a wrapper starts with (ADR-0076). The
+// initial prompt and the resume target are fields of the launch file, so they
+// never reach the process list.
 export function parseCliArgs(argv: string[]): CliArgs {
-  const { values, positionals } = parseArgs({
-    args: argv,
-    options: { resume: { type: "string" } },
-    allowPositionals: true,
-  });
-  return {
-    configPath: positionals[0] ?? "kaoiro.config.json",
-    prompt: positionals[1],
-    resume: values.resume,
-  };
+  let positionals: string[];
+  try {
+    ({ positionals } = parseArgs({ args: argv, allowPositionals: true }));
+  } catch (error) {
+    throw new CliUsageError(error instanceof Error ? error.message : String(error));
+  }
+  const [verb, configPath, ...rest] = positionals;
+  if (verb !== "run" || configPath === undefined || rest.length > 0) {
+    throw new CliUsageError("usage: kaoiro wrapper <engine> run <launch file>");
+  }
+  return { configPath };
 }

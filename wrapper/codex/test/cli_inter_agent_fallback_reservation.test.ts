@@ -109,7 +109,7 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
     reportDisconnectIntent: async () => {},
   };
   const signals = process.listeners("SIGINT");
-  const cli = runCodexCli({     parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+  const cli = runCodexCli({     parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;
