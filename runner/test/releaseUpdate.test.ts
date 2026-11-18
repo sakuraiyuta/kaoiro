@@ -54,7 +54,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -171,24 +171,33 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     writeFileSync(preload, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x')`);
     writeFileSync(envFile, `KAOIRO_RUNNER_TOKEN=from_fixture\n: > '${sourced}'\n`);
     const entry = `import {writeFileSync} from 'node:fs';
+const allowed = new Set(['PATH', 'KAOIRO_RUNNER_CONFIG',
+  'KAOIRO_CODEX_NATIVE_IDENTITY']);
+const env = Object.fromEntries(Object.entries(process.env).map(([key, value]) =>
+  [key, allowed.has(key) ? value : '<redacted>']));
 writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
-  inherited: 'EXTRA_SECRET' in process.env,
-  token: 'KAOIRO_RUNNER_TOKEN' in process.env,
-  loader: 'NODE_OPTIONS' in process.env
+  env, argv: process.argv.slice(2)
 }));`;
     writeReleaseTree(tree, B, { extraFiles: { "dist/kaoiro.js": entry } });
     const result = runScript(join(tree, "deploy/kaoiro-runner-engines.sh"),
       ["install", "--install-dir", root], {
         KAOIRO_RUNNER_DIR: dir, KAOIRO_RUNNER_ENV: envFile,
+        KAOIRO_RUNNER_CONFIG: join(dir, "runner.config.json"),
         KAOIRO_NODE: process.execPath, EXTRA_SECRET: "inert",
         NODE_OPTIONS: `--require=${preload}`,
       });
     expect(result.status, result.stderr).toBe(0);
     expect(existsSync(sourced)).toBe(true);
     expect(existsSync(marker)).toBe(false);
-    expect(JSON.parse(readFileSync(resultFile, "utf8"))).toEqual({
-      inherited: false, token: false, loader: false,
-    });
+    const child = JSON.parse(readFileSync(resultFile, "utf8"));
+    expect(Object.keys(child.env).sort()).toEqual([
+      "KAOIRO_CODEX_NATIVE_IDENTITY", "KAOIRO_RUNNER_CONFIG", "PATH",
+    ]);
+    expect(child.env.PATH).toBe(process.env.PATH);
+    expect(child.env.KAOIRO_RUNNER_CONFIG).toBe(join(dir, "runner.config.json"));
+    expect(resolve(child.env.KAOIRO_CODEX_NATIVE_IDENTITY))
+      .toBe(join(tree, "dist/codex-native.json"));
+    expect(child.argv).toEqual(["engines", "install", "--install-dir", root]);
   });
 
   it("stops before the service when acquisition fails", () => {
