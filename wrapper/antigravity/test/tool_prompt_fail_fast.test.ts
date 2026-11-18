@@ -1,4 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +8,7 @@ import { join } from "node:path";
 import { PermissionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost } from "../src/host.js";
 
-const HOOK = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+const HOOK = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
 
 // Stands in for `git fetch` over ssh: it blocks like a passphrase prompt
 // unless every prompt-disabling variable reached it, and only then reports

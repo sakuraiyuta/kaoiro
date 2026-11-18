@@ -30,4 +30,10 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((error: unknown) => deny(`kaoiro: hook failure (${String(error)})`));
+export async function runAntigravityHook(): Promise<void> {
+  try {
+    await main();
+  } catch (error: unknown) {
+    deny(`kaoiro: hook failure (${String(error)})`);
+  }
+}

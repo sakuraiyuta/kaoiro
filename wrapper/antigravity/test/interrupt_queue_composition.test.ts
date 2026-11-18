@@ -1,4 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,7 +55,7 @@ async function waitFor(predicate: () => boolean, diagnostic: () => unknown, time
 function writeFixture(root: string): { executable: string; configPath: string } {
   const executable = join(root, "agy-fixture.mjs");
   const configPath = join(root, "wrapper.config.json");
-  const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+  const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
   writeFileSync(executable, `#!${process.execPath}
 const args = process.argv.slice(2);
 const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");

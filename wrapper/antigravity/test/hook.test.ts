@@ -8,8 +8,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { askGate } from "../src/hook_client.js";
+import { runAntigravityHook } from "../src/hook.js";
 
-const hookPath = fileURLToPath(new URL("../dist/hook.js", import.meta.url));
+const kaoiroPath = fileURLToPath(new URL("../../../runner/dist/kaoiro.js", import.meta.url));
 
 async function withServer(
   serve: (socket: Socket) => void,
@@ -29,9 +30,13 @@ async function withServer(
 }
 
 describe("hook gate client", () => {
-  it("malformed responseはdist/hook.jsのproduction pathでもdenyしてexitする", async () => {
+  it("exports runAntigravityHook without running on import", () => {
+    expect(typeof runAntigravityHook).toBe("function");
+  });
+
+  it("malformed responseはkaoiro wrapper antigravity hook経路でもdenyしてexitする", async () => {
     await withServer((socket) => socket.end("not-json\n"), async (path) => {
-      const child = spawn(process.execPath, [hookPath], {
+      const child = spawn(process.execPath, [kaoiroPath, "wrapper", "antigravity", "hook"], {
         env: { ...process.env, CODEX_HOME: undefined, KAOIRO_GATE_SOCKET: path, KAOIRO_GATE_NONCE: "nonce", KAOIRO_GATE_DEADLINE_MS: "500" },
         stdio: ["pipe", "pipe", "pipe"],
       });

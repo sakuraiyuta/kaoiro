@@ -86,21 +86,21 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-async function main(): Promise<void> {
-  const [command, toolName, encoded] = process.argv.slice(2);
+async function main(args: readonly string[]): Promise<void> {
+  const [command, toolName, encoded] = args;
   const socketPath = process.env.KAOIRO_BRIDGE_SOCKET;
   const nonce = process.env.KAOIRO_BRIDGE_NONCE;
   if (socketPath === undefined || nonce === undefined) fail("KAOIRO bridge environment is not set");
   const client = new ToolHostClient(socketPath, nonce);
   try {
-    if (command === "list" && toolName === undefined) {
+    if (command === "list" && args.length === 1) {
       const reply = await client.call("list_tools");
       if (reply.error !== undefined) fail(reply.error);
       process.stdout.write(`${JSON.stringify(reply.tools)}\n`);
       return;
     }
-    if (command !== "call" || toolName === undefined || encoded === undefined || process.argv.length !== 5 || !/^[a-z_]{1,64}$/.test(toolName) || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
-      fail("usage: bridge.js list | bridge.js call <tool> <base64url-json>");
+    if (command !== "call" || toolName === undefined || encoded === undefined || args.length !== 3 || !/^[a-z_]{1,64}$/.test(toolName) || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+      fail("usage: kaoiro wrapper antigravity bridge list | kaoiro wrapper antigravity bridge call <tool> <base64url-json>");
     }
     let input: unknown;
     try {
@@ -119,7 +119,11 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((error: unknown) => {
-  writeRedactedStderr(`${String(error)}\n`);
-  process.exitCode = 1;
-});
+export async function runAntigravityBridge(args: readonly string[]): Promise<void> {
+  try {
+    await main(args);
+  } catch (error: unknown) {
+    writeRedactedStderr(`${String(error)}\n`);
+    process.exitCode = 1;
+  }
+}

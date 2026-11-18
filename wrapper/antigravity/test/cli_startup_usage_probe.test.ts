@@ -61,7 +61,6 @@ async function runCli(args: { prompt?: string; resume?: string }): Promise<{
       host = createHarnessHost(cfg, {
         ...options,
         verifyGate: async () => true,
-        runtimeAssetsAvailable: () => true,
         agyPath: "/test/agy",
         spawn: () => {
           const child = new FakeAgy();

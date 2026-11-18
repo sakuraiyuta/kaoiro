@@ -26,6 +26,12 @@ export const ENGINES: Record<EngineKind, Record<string, Verb>> = {
   },
   antigravity: {
     run: run(async () => (await import("@kaoiro/antigravity/dist/cli.js")).runAntigravityCli),
+    hook: async () => {
+      await (await import("@kaoiro/antigravity/dist/hook.js")).runAntigravityHook();
+    },
+    bridge: async (args) => {
+      await (await import("@kaoiro/antigravity/dist/bridge.js")).runAntigravityBridge(args);
+    },
   },
   grok: {
     run: run(async () => (await import("@kaoiro/grok/dist/cli.js")).runGrokCli),

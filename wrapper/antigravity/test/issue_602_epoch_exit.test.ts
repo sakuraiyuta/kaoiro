@@ -1,4 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import {
   chmodSync,
   mkdtempSync,
@@ -186,8 +188,7 @@ describe("issue 602 exit before close", () => {
     const finishFlag = join(root, "finish");
     const strayFlag = join(root, "stray");
     const straySent = join(root, "stray-sent");
-    const hookPath = new URL("../dist/hook.js", import.meta.url).pathname;
-    const hook = `${process.execPath} ${hookPath}`;
+    const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
     writeFileSync(holdFlag, "1");
     writeFileSync(holder, holderSource(strayFlag, straySent));
     writeFileSync(executable, fixtureSource({

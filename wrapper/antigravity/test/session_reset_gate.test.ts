@@ -104,7 +104,6 @@ async function makeRig(
       hostOptions = options as unknown as Record<string, any>;
       host = createHarnessHost(cfg, {
         ...options,
-        runtimeAssetsAvailable: () => true,
         verifyGate,
         agyPath: "/test/agy",
         ...(prepareInput === undefined ? {} : { prepareInput }),
