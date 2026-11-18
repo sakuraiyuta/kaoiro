@@ -23,6 +23,9 @@ export const ENGINES: Record<EngineKind, Record<string, Verb>> = {
   },
   codex: {
     run: run(async () => (await import("@kaoiro/codex/dist/cli.js")).runCodexCli),
+    bridge: async () => {
+      await (await import("@kaoiro/codex/dist/bridge.js")).main();
+    },
   },
   antigravity: {
     run: run(async () => (await import("@kaoiro/antigravity/dist/cli.js")).runAntigravityCli),

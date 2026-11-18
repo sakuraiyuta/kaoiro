@@ -242,7 +242,6 @@ describe("kaoiro.runtimeAssets (issue #219)", () => {
   });
 
   it.each([
-    ["wrapper/codex", "../dist/bridge.js", "dist/bridge.js"],
     ["runner", "./cli.js", "dist/cli.js"],
   ])("%s: 走査が %s を実際に見つける (回帰)", (pkg, specifier, target) => {
     // PINS THE DETECTION PATH, NOT THE DECLARATION. Deleting a declaration
@@ -261,12 +260,12 @@ describe("kaoiro.runtimeAssets (issue #219)", () => {
     ["wrapper/claude-code", "dist/probe.js"],
   ])("%s は %s を宣言している (回帰)", (pkg, asset) => {
     // The real instances, named explicitly so deleting a declaration fails
-    // here and not only inside a release. codex reaches bridge.js through
-    // `new URL("../dist/bridge.js", import.meta.url)`; the kaoiro entry
-    // imports claude-code's probe.js by package name, which no scan here
-    // sees. An earlier form of that reference was MISSED by the first
-    // version of this test, and the release verifier accepted its deletion
-    // at exit 0 as a result.
+    // here and not only inside a release. The kaoiro entry imports both
+    // by package name (`@kaoiro/codex/dist/bridge.js`,
+    // `@kaoiro/claude-code/dist/probe.js`), which no scan here sees. An
+    // earlier form of the probe reference was MISSED by the first version
+    // of this test, and the release verifier accepted its deletion at
+    // exit 0 as a result.
     expect(declarationsOf(join(repoRoot, pkg))).toContain(asset);
   });
 });

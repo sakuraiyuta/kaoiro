@@ -1,8 +1,8 @@
 import { rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ToolDescriptor, WrapperConfig, ReplyOrigin } from "@kaoiro/agent-common";
 import { AGENT_MARKER_ENV } from "@kaoiro/agent-common";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import { BRIDGE_MCP_POLICY, BRIDGE_THREAD_OPEN_TIMEOUT_MS } from "./bridge_policy.js";
 import { ToolHost } from "./toolhost.js";
 import {
@@ -81,6 +81,12 @@ export class AppServerSession {
   private constructor(options: AppServerSessionOptions, host: ToolHost | null) {
     this.#toolHost = host;
     this.#turnSignal = options.turnSignal;
+    const [command, ...args] = host === null ? [] : [
+      ...selfCommand(),
+      "wrapper",
+      "codex",
+      "bridge",
+    ];
     this.#threadOptions = {
       ...options.thread,
       config: {
@@ -89,11 +95,11 @@ export class AppServerSession {
           ...AGENT_MARKER_ENV,
           ...(options.toolHome === undefined ? {} : { CODEX_HOME: options.toolHome }),
         } },
-        ...(host === null ? {} : {
+        ...(host === null || command === undefined ? {} : {
           mcp_servers: {
             kaoiro: {
-              command: process.execPath,
-              args: [fileURLToPath(new URL("../dist/bridge.js", import.meta.url))],
+              command,
+              args,
               env: {
                 KAOIRO_BRIDGE_SOCKET: host.socketPath,
                 ...(options.bridgeStderrPath === undefined ? {} : {
