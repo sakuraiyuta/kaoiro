@@ -1,4 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { createHash } from "node:crypto";
@@ -117,7 +119,6 @@ function hostHarness(options: {
     },
     onLog: (envelope) => logs.push(envelope),
     onPermissionLifecycle: (event) => permissionLifecycle.push(event),
-    runtimeAssetsAvailable: () => true,
     verifyGate: async () => typeof options.verifyGate === "function" ? options.verifyGate() : options.verifyGate ?? true,
     ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
     ...(options.dangerouslySkipPermissions === undefined ? {} : { dangerouslySkipPermissions: options.dangerouslySkipPermissions }),
@@ -297,7 +298,6 @@ describe("AntigravityHost", () => {
           void hostRef!.send("second input accepted during recovery delivery", undefined, ["cid-queued-good"], "queued-good");
         }
       },
-      runtimeAssetsAvailable: () => true,
       verifyGate: async () => true,
       agyPath: "/test/agy",
       closeGraceMs: 5,
@@ -376,7 +376,6 @@ describe("AntigravityHost", () => {
       onTurnEnd: () => {},
       onSendRejected: (event) => rejected.push(event),
       onGateRecoveryLifecycle: (event) => recoveryEvents.push(event),
-      runtimeAssetsAvailable: () => true,
       verifyGate: async () => true,
       agyPath: "/test/agy",
       spawn: () => {
@@ -479,7 +478,6 @@ describe("AntigravityHost", () => {
       onTurnEnd: ({ turnToken }) => ends.push(turnToken),
       onSendRejected: (event) => rejected.push(event),
       onGateRecoveryLifecycle: (event) => recoveryEvents.push(event),
-      runtimeAssetsAvailable: () => true,
       verifyGate: async () => true,
       agyPath: "/test/agy",
       spawn: () => {
@@ -1066,7 +1064,6 @@ describe("AntigravityHost", () => {
       appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {},
-      runtimeAssetsAvailable: () => true,
       verifyGate: async () => true,
       agyPath: "/test/agy",
       spawn: () => {
@@ -1451,7 +1448,7 @@ describe("AntigravityHost", () => {
     const broker = new PermissionBroker({ config: cfg, send: () => {} });
     expect(() => createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: broker,
-      onState: () => {}, runtimeAssetsAvailable: () => true,
+      onState: () => {},
     })).toThrow("antigravity approval=on-failure is unsupported");
   });
 
@@ -1531,7 +1528,7 @@ describe("AntigravityHost", () => {
 
   it("F4b smoke probeは実機形hooks.json内の期待action一件だけを受け入れる", () => {
     const source = "/tmp/kaoiro-agy-x/.agents/hooks.json";
-    const command = "/usr/bin/node /pkg/dist/hook.js";
+    const command = antigravitySubcommandPrefix({ nodePath: "/usr/bin/node", entryPath: "/pkg/dist/kaoiro.js", subcommand: "hook" });
     const fixture = JSON.parse(readFileSync(new URL("./fixtures/hooks.json", import.meta.url), "utf8")
       .replace("__HOOKS_JSON__", source).replace("__HOOK_COMMAND__", command)) as unknown;
     const expected = { source, command, timeoutSeconds: 3600 };
@@ -1545,11 +1542,11 @@ describe("AntigravityHost", () => {
     const cfg = config();
     const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, runtimeAssetsAvailable: () => true,
+      onState: () => {},
       probeSpawn: (_command, args) => {
         const child = new FakeAgy();
         const source = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
-        const command = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+        const command = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
         queueMicrotask(() => {
           child.stdout.end(JSON.stringify({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
           child.emit("exit", 0, null);
@@ -1574,7 +1571,7 @@ describe("AntigravityHost", () => {
     const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, runtimeAssetsAvailable: () => true, agyPath: "/test/agy",
+      onState: () => {}, agyPath: "/test/agy",
       probeModels: async () => null,
       probeSpawn: (_command, args) => {
         hookSource = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
@@ -1591,7 +1588,7 @@ describe("AntigravityHost", () => {
     probe.emit("exit", 0, null);
     await new Promise((resolve) => setTimeout(resolve, 1));
     expect(calls).toHaveLength(0);
-    const command = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    const command = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
     probe.stdout.end(JSON.stringify({ hooks: [{ source: hookSource, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
     await new Promise((resolve) => setTimeout(resolve, 1));
     expect(calls).toHaveLength(0);
@@ -1612,7 +1609,7 @@ describe("AntigravityHost", () => {
       const host = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {}, runtimeAssetsAvailable: () => true,
+        onState: () => {},
         modelsProbeSpawn: (command) => {
           commands.push(command);
           const child = new FakeAgy();
@@ -1626,7 +1623,7 @@ describe("AntigravityHost", () => {
           commands.push(command);
           const child = new FakeAgy();
           const source = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
-          const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+          const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
           queueMicrotask(() => {
             child.stdout.end(JSON.stringify({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command: hook, timeout_seconds: 3600 }] }] }));
             child.emit("close", 0, null);
@@ -1654,7 +1651,7 @@ describe("AntigravityHost", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-default-host-"));
     const executable = join(root, "agy fixture with spaces.mjs");
     const capture = join(root, "child-env.jsonl");
-    const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
     writeFileSync(executable, `#!${process.execPath}
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
@@ -1724,7 +1721,7 @@ if (args[0] === "models") {
     const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
+      onState: () => {}, onLog: (envelope) => logs.push(envelope),
       spawn: () => {
         turnSpawns += 1;
         return new FakeAgy() as unknown as SpawnedAgy;
@@ -1743,7 +1740,7 @@ if (args[0] === "models") {
     const onSessionHost = createHarnessHost(config(), {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: config(), send: () => {} }),
       onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope), onSessionId: (id) => sessionIds.push(id),
-      verifyGate: async () => true, runtimeAssetsAvailable: () => true,
+      verifyGate: async () => true,
       agyPath: "/test/agy",
       spawn: (command, args, spawnOptions) => { const child = new FakeAgy(); calls.push({ command, args, env: spawnOptions.env, child }); return child as unknown as SpawnedAgy; },
     });
@@ -1923,7 +1920,6 @@ if (args[0] === "models") {
       onLog: () => {},
       resumeSessionId: "resumed-session-123",
       verifyGate: async () => true,
-      runtimeAssetsAvailable: () => true,
     });
     expect(resumedHost.statusSnapshot()).toMatchObject({
       session_id: "resumed-session-123",
@@ -2350,7 +2346,7 @@ if (args[0] === "models") {
     const calls: string[][] = [];
     const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
+      onState: (envelope) => states.push(envelope),
       agyPath: "/test/agy",
       modelsProbeSpawn: (_command, args) => {
         calls.push(args);
@@ -2380,7 +2376,7 @@ if (args[0] === "models") {
     };
     const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
+      onState: (envelope) => states.push(envelope),
       agyPath: "/test/agy",
       modelsProbeSpawn: () => {
         const child = new FakeAgy();
@@ -2405,7 +2401,7 @@ if (args[0] === "models") {
     const questionBroker = new QuestionBroker({ config: cfg, send: () => {}, onPendingChange: (pending) => host?.setPendingQuestion(pending) });
     host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }), questionBroker,
-      onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
+      onState: (envelope) => states.push(envelope),
     });
     const answer = questionBroker.decide([{ question: "continue?", header: "continue", multiSelect: false, options: [{ label: "yes", description: "yes" }, { label: "no", description: "no" }] }]);
     expect(states.at(-1)?.state).toBe("waiting_question");
@@ -2433,7 +2429,7 @@ if (args[0] === "models") {
     const cfg = config();
     const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
+      onState: () => {}, onLog: (envelope) => logs.push(envelope),
       agyPath: "/test/agy", verifyGate: async () => new Promise<boolean>(() => {}), gateProbeTimeoutMs: 5,
       spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
     });
@@ -2466,7 +2462,7 @@ if (args[0] === "models") {
     const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
+      onState: () => {}, onLog: (envelope) => logs.push(envelope),
       agyPath: "/test/agy", probeModels: async () => null,
       probeSpawn: () => {
         const child = new FakeAgy();
@@ -2493,7 +2489,7 @@ if (args[0] === "models") {
     const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
+      onState: () => {}, onLog: (envelope) => logs.push(envelope),
       agyPath: "/test/agy", probeModels: async () => null, gateProbeTimeoutMs: 5,
       probeSpawn: () => probe as unknown as GateProbe,
       spawn: () => {
@@ -2664,7 +2660,7 @@ if (args[0] === "models") {
         cwd: process.cwd(),
         customizationDir: process.cwd(),
         nodePath: process.execPath,
-        bridgePath: "/test/bridge.js",
+        entryPath: "/test/kaoiro.js",
         toolNames: () => new Set(),
         broker: new PermissionBroker({ config: config(), send: () => {} }),
       }) });
@@ -3303,7 +3299,7 @@ if (args[0] === "models") {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope),
-        runtimeAssetsAvailable: () => true, verifyGate: async () => true, agyPath: "/test/agy",
+        verifyGate: async () => true, agyPath: "/test/agy",
         onTurnEnd: (info) => ends.push(info),
         spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
       });
@@ -3368,7 +3364,7 @@ if (args[0] === "models") {
       host = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {}, runtimeAssetsAvailable: () => true, verifyGate: async () => true, agyPath: "/test/agy",
+        onState: () => {}, verifyGate: async () => true, agyPath: "/test/agy",
         onTurnStart: (info) => {
           starts.push(info);
           expect(host.activeInterAgentTurnToken()).toBe(info.turnToken);
@@ -3469,7 +3465,7 @@ if (args[0] === "models") {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: (envelope) => logs.push(envelope),
-        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        verifyGate: async () => true,
         agyPath: "/test/agy",
         onTurnStart: ({ turnToken }) => starts.push(turnToken),
         onTurnEnd: (info) => turnEnds.push(info),
@@ -3507,7 +3503,7 @@ if (args[0] === "models") {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: () => {},
-        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        verifyGate: async () => true,
         agyPath: "/test/agy",
         onTurnStart: ({ turnToken }) => starts.push(turnToken),
         onTurnEnd: (info) => turnEnds.push(info),
@@ -3554,7 +3550,7 @@ if (args[0] === "models") {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: () => {},
-        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        verifyGate: async () => true,
         agyPath: "/test/agy",
         onTurnEnd: (info) => turnEnds.push(info),
         onInterruptSettled: (info) => interruptSettlements.push(info),
@@ -3600,7 +3596,7 @@ if (args[0] === "models") {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: () => {},
-        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        verifyGate: async () => true,
         agyPath: "/test/agy",
         onTurnEnd: (info) => turnEnds.push(info),
         spawn: () => {
@@ -3647,7 +3643,7 @@ if (args[0] === "models") {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: () => {},
-        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        verifyGate: async () => true,
         agyPath: "/test/agy",
         onTurnEnd: (info) => turnEnds.push(info),
         onToolStart: (info) => toolStarts.push(info.turnToken),
@@ -3697,7 +3693,7 @@ if (args[0] === "models") {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: (envelope) => states.push(envelope.state), onLog: () => {},
-        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        verifyGate: async () => true,
         agyPath: "/test/agy",
         onTurnEnd: (info) => turnEnds.push(info),
         onToolStart: (info) => toolStarts.push(info.turnToken),
@@ -3747,7 +3743,6 @@ if (args[0] === "models") {
         }),
         onState: () => {},
         onLog: () => {},
-        runtimeAssetsAvailable: () => true,
         verifyGate: async () => true,
         agyPath: "/test/agy",
         closeGraceMs,
@@ -4138,7 +4133,7 @@ if (args[0] === "models") {
           cwd: process.cwd(), appendSystemPrompt: "persona",
           permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
           onState: () => {}, onLog: () => {},
-          runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+          verifyGate: async () => true,
           agyPath: "/test/agy",
           epochIdleMs: 1_000,
           epochIdleSetTimer: timers.set,
@@ -4173,7 +4168,7 @@ if (args[0] === "models") {
           cwd: process.cwd(), appendSystemPrompt: "persona",
           permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
           onState: () => {}, onLog: () => {},
-          runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+          verifyGate: async () => true,
           agyPath: "/test/agy",
           epochIdleMs: 1_000,
           epochIdleSetTimer: timers.set,

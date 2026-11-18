@@ -7,6 +7,7 @@ import { createConnection } from "node:net";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker } from "@kaoiro/agent-common";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "../src/gate.js";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
 
 function config(overrides: Partial<AntigravityLaunchConfig> = {}): AntigravityLaunchConfig {
   return {
@@ -24,14 +25,15 @@ function config(overrides: Partial<AntigravityLaunchConfig> = {}): AntigravityLa
 function makeGate(
   overrides: Partial<AntigravityLaunchConfig> = {},
   omitApproval = false,
+  entryOptions: { entryPath?: string; nodeArgs?: readonly string[] } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "agy-gate-test-"));
   const cwd = join(root, "workspace");
   const customizationDir = join(root, "custom");
   mkdirSync(cwd);
   mkdirSync(customizationDir);
-  const bridgePath = join(root, "bridge.js");
-  writeFileSync(bridgePath, "");
+  const entryPath = entryOptions.entryPath ?? join(root, "kaoiro.js");
+  if (entryOptions.entryPath === undefined) writeFileSync(entryPath, "");
   const warnings: string[] = [];
   const configured = config(overrides);
   const { approval: _approval, ...withoutApproval } = configured;
@@ -41,12 +43,13 @@ function makeGate(
     cwd,
     customizationDir,
     nodePath: process.execPath,
-    bridgePath,
+    ...(entryOptions.nodeArgs === undefined ? {} : { nodeArgs: entryOptions.nodeArgs }),
+    entryPath,
     toolNames: () => new Set(["whoami"]),
     broker: new PermissionBroker({ config: launchConfig, send: () => {} }),
     warn: (message) => warnings.push(message),
   });
-  return { gate, root, cwd, customizationDir, bridgePath, warnings };
+  return { gate, root, cwd, customizationDir, entryPath, warnings };
 }
 
 describe("AntigravityGate", () => {
@@ -472,25 +475,86 @@ describe("AntigravityGate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("F5 bridge auto-allow は字句どおりの正規形だけに限る", () => {
-    const { gate, root, cwd, bridgePath } = makeGate();
+  it("F5 bridge auto-allow は字句どおりの subcommand 正規形だけに限る (V10a)", () => {
+    const { gate, root, cwd, entryPath } = makeGate();
     try {
       const payload = Buffer.from(JSON.stringify({}), "utf8").toString("base64url");
-      const command = `${process.execPath} ${bridgePath} call whoami ${payload}`;
+      const prefix = antigravitySubcommandPrefix({ nodePath: process.execPath, entryPath, subcommand: "bridge" });
+      const command = `${prefix} call whoami ${payload}`;
       const args = { CommandLine: command, Cwd: cwd, WaitMsBeforeAsync: 5000 };
       expect(gate.evaluate({ name: "run_command", args })).toEqual({ decision: "allow" });
-      expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${process.execPath} ${bridgePath} list`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
+      expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${prefix} list`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
+      // Negative control: old bridge.js form and unquoted entryPath are never auto-allowed.
+      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${join(root, "bridge.js")} call whoami ${payload}` } })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${entryPath} wrapper antigravity call whoami ${payload}` } })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${entryPath} wrapper antigravity bridge list` } })).toEqual({ decision: "ask" });
       for (const injection of ["; id", " && id", " | id", " $(id)", "\necho injected", " extra", ` ${Buffer.from("not-json").toString("base64url")}`]) {
         expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: command + injection } })).toEqual({ decision: "ask" });
       }
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${bridgePath} call whoami !!!` } })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${prefix} call whoami !!!` } })).toEqual({ decision: "ask" });
       expect(gate.evaluate({ name: "run_command", args: { ...args, Extra: true } })).toEqual({ decision: "ask" });
       expect(gate.evaluate({ name: "run_command", args: { ...args, WaitMsBeforeAsync: 4999 } })).toEqual({ decision: "ask" });
       expect(gate.evaluate({ name: "run_command", args: { CommandLine: command, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${bridgePath} call unknown_tool ${payload}` } })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${prefix} call unknown_tool ${payload}` } })).toEqual({ decision: "ask" });
       const nonJson = Buffer.from("not-json", "utf8").toString("base64url");
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${bridgePath} call whoami ${nonJson}` } })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${prefix} call whoami ${nonJson}` } })).toEqual({ decision: "ask" });
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("V10a: allows single-quoted spaces, single quotes, regex metacharacters, symlink canonicalisation, and execArgv", () => {
+    const payload = Buffer.from(JSON.stringify({}), "utf8").toString("base64url");
+    const outer = mkdtempSync(join(tmpdir(), "agy-gate-v10a-"));
+    try {
+      for (const segment of ["dir with space", "it's a dir", "meta.+(1)[x]"]) {
+        const sub = join(outer, segment);
+        mkdirSync(sub, { recursive: true });
+        const entryPath = join(sub, "kaoiro.js");
+        writeFileSync(entryPath, "");
+        const { gate, root, cwd } = makeGate({}, false, { entryPath });
+        try {
+          const prefix = antigravitySubcommandPrefix({ nodePath: process.execPath, entryPath, subcommand: "bridge" });
+          expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${prefix} call whoami ${payload}`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
+          expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${prefix} list`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
+          // Old form and unquoted path fail closed even with Cwd present.
+          expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${process.execPath} ${entryPath} call whoami ${payload}`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
+          if (segment.includes(".")) {
+            // Regex metacharacters in entryPath must be escaped, not wildcards.
+            const mutated = prefix.replace("meta.+", "metax+");
+            expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${mutated} list`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
+          }
+        } finally { rmSync(root, { recursive: true, force: true }); }
+      }
+
+      // Symlinked entryPath: gate canonicalises only entryPath, adding quotes/subcommand words afterward.
+      const realDir = join(outer, "real target");
+      mkdirSync(realDir);
+      const realEntry = join(realDir, "kaoiro.js");
+      writeFileSync(realEntry, "");
+      const linkEntry = join(outer, "current-kaoiro.js");
+      symlinkSync(realEntry, linkEntry);
+      const symlinkGate = makeGate({}, false, { entryPath: linkEntry });
+      try {
+        const realPrefix = antigravitySubcommandPrefix({ nodePath: process.execPath, entryPath: realEntry, subcommand: "bridge" });
+        const linkPrefix = antigravitySubcommandPrefix({ nodePath: process.execPath, entryPath: linkEntry, subcommand: "bridge" });
+        expect(symlinkGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${realPrefix} list`, Cwd: symlinkGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
+        expect(symlinkGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${linkPrefix} list`, Cwd: symlinkGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
+      } finally { rmSync(symlinkGate.root, { recursive: true, force: true }); }
+
+      // Non-empty execArgv (Q1): nodeArgs with a space-containing element and regex metacharacters.
+      const nodeArgs = ["--import", "/tmp/tsx loader/entry.(1).mjs"];
+      const argsGate = makeGate({}, false, { nodeArgs });
+      try {
+        const prefix = antigravitySubcommandPrefix({ nodePath: process.execPath, nodeArgs, entryPath: argsGate.entryPath, subcommand: "bridge" });
+        expect(prefix).toContain("'/tmp/tsx loader/entry.(1).mjs'");
+        expect(argsGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${prefix} call whoami ${payload}`, Cwd: argsGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
+        const wrongArg = antigravitySubcommandPrefix({ nodePath: process.execPath, nodeArgs: ["--import", "/tmp/tsx loader/entryX(1).mjs"], entryPath: argsGate.entryPath, subcommand: "bridge" });
+        const extraArg = antigravitySubcommandPrefix({ nodePath: process.execPath, nodeArgs: [...nodeArgs, "--no-warnings"], entryPath: argsGate.entryPath, subcommand: "bridge" });
+        const missingArg = antigravitySubcommandPrefix({ nodePath: process.execPath, nodeArgs: ["--import"], entryPath: argsGate.entryPath, subcommand: "bridge" });
+        expect(argsGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${wrongArg} list`, Cwd: argsGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
+        expect(argsGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${extraArg} list`, Cwd: argsGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
+        expect(argsGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${missingArg} list`, Cwd: argsGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
+      } finally { rmSync(argsGate.root, { recursive: true, force: true }); }
+    } finally { rmSync(outer, { recursive: true, force: true }); }
   });
 
   it("writeはtarget schema、全path、symlink祖先をfail-closedにする", () => {
@@ -545,7 +609,7 @@ describe("AntigravityGate", () => {
       cwd: join(root, "workspace"),
       customizationDir: join(root, "custom"),
       nodePath: process.execPath,
-      bridgePath: join(root, "bridge.js"),
+      entryPath: join(root, "kaoiro.js"),
       toolNames: () => new Set(["whoami"]),
       broker: new PermissionBroker({ config: config(), send: () => {} }),
       warn: (message) => secondWarnings.push(message),
@@ -575,7 +639,7 @@ describe("AntigravityGate", () => {
     let pending = false;
     const broker = new PermissionBroker({ config: config(), send: () => {}, onPendingChange: (value) => { pending = value !== null; } });
     const gate = new AntigravityGate({
-      config: config(), cwd, customizationDir, nodePath: process.execPath, bridgePath: join(root, "bridge.js"), toolNames: () => new Set(), broker,
+      config: config(), cwd, customizationDir, nodePath: process.execPath, entryPath: join(root, "kaoiro.js"), toolNames: () => new Set(), broker,
     });
     const server = await GateServer.listen({ gate, nonce: "nonce", onSocketClose: () => broker.close() });
     try {
@@ -602,3 +666,4 @@ describe("AntigravityGate", () => {
     }
   });
 });
+

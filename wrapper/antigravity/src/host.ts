@@ -1,7 +1,6 @@
-import type { RecoveryReporter } from "@kaoiro/wrapper-core";
+import { selfCommand, type RecoveryReporter } from "@kaoiro/wrapper-core";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   clipText,
@@ -58,6 +57,7 @@ import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCus
 import { DEFAULT_EPOCH_IDLE_MS, epochSpecsEqual, type EpochEndReason, type EpochSpec } from "./epoch.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig, type GateServerOptions } from "./gate.js";
 import { effectiveNetworkAccess } from "./network_access.js";
+import { antigravitySubcommandPrefix } from "./subcommand.js";
 import { ceilingExceeded, type SwitchCeiling } from "./permission_switch.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { ToolHost } from "./toolhost.js";
@@ -80,12 +80,10 @@ import {
   type UsageProbeClosedResult,
 } from "./usage_probe.js";
 
-const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const STALE_TERMINAL_429_DETAIL =
   "antigravity_terminal_429_unconfirmed: terminal result contained RESOURCE_EXHAUSTED, but /usage showed quota remaining; the conversation may be repeating an old error. Consider resetting the session.";
 const STALE_TERMINAL_429_THRESHOLD_DETAIL =
   "antigravity_terminal_429_unconfirmed: the last two same-family confirmations showed quota remaining; the conversation may be repeating an old error. Consider resetting the session.";
-const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
 // issue #379 M2: must stay below the tightest outer bound that can SIGKILL
 // this wrapper PROCESS itself while `close()`'s own escalation is pending --
 // currently the runner's reset-relaunch grace (`RESET_TERMINATION_GRACE_MS`
@@ -360,6 +358,8 @@ export interface AntigravityHostOptions {
   waitForPermissionSync?: () => Promise<void>;
   dangerouslySkipPermissions?: boolean;
   nodePath?: string;
+  nodeArgs?: readonly string[] | undefined;
+  entryPath?: string;
   agyPath?: string;
   spawn?: (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => SpawnedAgy;
   /** Test-only seam. Production uses the checked PID/process-group signal gate. */
@@ -399,7 +399,6 @@ export interface AntigravityHostOptions {
   epochIdleSetTimer?: (callback: () => void, delayMs: number) => unknown;
   epochIdleClearTimer?: (timer: unknown) => void;
   probeModels?: () => Promise<EngineModelInfo[] | null>;
-  runtimeAssetsAvailable?: () => boolean;
   warn?: (message: string) => void;
   now?: () => string;
   usageProbeSpawn?: AgyUsageProbeSpawn;
@@ -1660,17 +1659,13 @@ export class AntigravityHost implements EngineAdapter {
       throw new Error(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
     }
     const executable = this.#agyExecutable.path;
+    const entryCommand = this.#entryCommand();
     this.#customization ??= CustomizationDir.create({
       cwd: this.#options.cwd,
       personaPrompt: this.#options.appendSystemPrompt,
-      nodePath: this.#options.nodePath ?? process.execPath,
-      hookPath: HOOK_SCRIPT,
-      bridgePath: BRIDGE_SCRIPT,
+      ...entryCommand,
     });
     const customization = this.#customization;
-    if (!(this.#options.runtimeAssetsAvailable?.() ?? (existsSync(HOOK_SCRIPT) && existsSync(BRIDGE_SCRIPT)))) {
-      throw new Error("antigravity runtime assets are not built");
-    }
     try {
       // issue #359 M1: block this turn's gate until the server's permission_sync
       // for the current connection has been applied, so a durable control/next
@@ -1760,8 +1755,7 @@ export class AntigravityHost implements EngineAdapter {
         config: this.#config,
         cwd: this.#options.cwd,
         customizationDir: customization.path,
-        nodePath: this.#options.nodePath ?? process.execPath,
-        bridgePath: BRIDGE_SCRIPT,
+        ...entryCommand,
         toolNames: () => epoch.toolHost.toolNames(),
         broker: this.#options.permissionBroker,
         onPermissionRequest: () => {
@@ -2239,8 +2233,7 @@ export class AntigravityHost implements EngineAdapter {
         config: this.#config,
         cwd: this.#options.cwd,
         customizationDir: customization.path,
-        nodePath: this.#options.nodePath ?? process.execPath,
-        bridgePath: BRIDGE_SCRIPT,
+        ...this.#entryCommand(),
         toolNames: () => toolHost!.toolNames(),
         broker: this.#options.permissionBroker,
         onPermissionRequest: () => {},
@@ -2535,7 +2528,7 @@ export class AntigravityHost implements EngineAdapter {
         try {
           const registered = isGateRegistered(JSON.parse(output) as unknown, {
             source: join(this.#customization!.path, ".agents", "hooks.json"),
-            command: `${this.#options.nodePath ?? process.execPath} ${HOOK_SCRIPT}`,
+            command: antigravitySubcommandPrefix({ ...this.#entryCommand(), subcommand: "hook" }),
             timeoutSeconds: HOOK_TIMEOUT_SECONDS,
           });
           settle(registered && this.#isCurrent(generation)
@@ -3142,6 +3135,26 @@ export class AntigravityHost implements EngineAdapter {
     if (code === "ENOENT" || code === "ENOTDIR") return "executable_missing";
     if (code === "EACCES" || code === "EPERM") return "permission_denied";
     return "spawn_failure";
+  }
+
+  #entryCommand(): { nodePath: string; nodeArgs: readonly string[]; entryPath: string } {
+    if (
+      this.#options.nodePath !== undefined &&
+      this.#options.nodeArgs !== undefined &&
+      this.#options.entryPath !== undefined
+    ) {
+      return {
+        nodePath: this.#options.nodePath,
+        nodeArgs: this.#options.nodeArgs,
+        entryPath: this.#options.entryPath,
+      };
+    }
+    const self = selfCommand();
+    return {
+      nodePath: this.#options.nodePath ?? self[0]!,
+      nodeArgs: this.#options.nodeArgs ?? self.slice(1, -1),
+      entryPath: this.#options.entryPath ?? self.at(-1)!,
+    };
   }
 
   #safeChildEnv(): NodeJS.ProcessEnv {

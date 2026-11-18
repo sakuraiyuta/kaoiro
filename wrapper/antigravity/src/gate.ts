@@ -11,6 +11,7 @@ import {
   type WrapperConfig,
 } from "@kaoiro/agent-common";
 import { effectiveNetworkAccess } from "./network_access.js";
+import { antigravitySubcommandPrefix } from "./subcommand.js";
 
 export type AntigravityLaunchConfig = WrapperConfig & {
   approval?: "untrusted" | "on-request" | "local" | "on-failure" | "never";
@@ -393,7 +394,8 @@ export interface GatePolicyOptions {
   cwd: string;
   customizationDir: string;
   nodePath: string;
-  bridgePath: string;
+  nodeArgs?: readonly string[] | undefined;
+  entryPath: string;
   toolNames: () => ReadonlySet<string>;
   broker: PermissionBroker;
   waitMsBeforeAsyncFloor?: number;
@@ -406,7 +408,8 @@ export class AntigravityGate {
   readonly #cwd: string;
   readonly #customizationDir: string;
   readonly #nodePath: string;
-  readonly #bridgePath: string;
+  readonly #nodeArgs: readonly string[];
+  readonly #entryPath: string;
   readonly #toolNames: () => ReadonlySet<string>;
   readonly #broker: PermissionBroker;
   readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
@@ -421,7 +424,8 @@ export class AntigravityGate {
     this.#cwd = canonical(options.cwd) ?? resolve(options.cwd);
     this.#customizationDir = canonical(options.customizationDir) ?? resolve(options.customizationDir);
     this.#nodePath = canonical(options.nodePath) ?? resolve(options.nodePath);
-    this.#bridgePath = canonical(options.bridgePath) ?? resolve(options.bridgePath);
+    this.#nodeArgs = [...(options.nodeArgs ?? [])];
+    this.#entryPath = canonical(options.entryPath) ?? resolve(options.entryPath);
     this.#toolNames = options.toolNames;
     this.#broker = options.broker;
     this.#sandbox = options.config.sandbox ?? "workspace-write";
@@ -547,9 +551,14 @@ export class AntigravityGate {
     if (typeof args.Cwd !== "string" || canonical(args.Cwd) !== this.#cwd) return false;
     if (typeof args.WaitMsBeforeAsync !== "number" || args.WaitMsBeforeAsync < this.#waitMsBeforeAsyncFloor) return false;
     if (typeof args.CommandLine !== "string") return false;
-    const escapedNode = this.#nodePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const escapedBridge = this.#bridgePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = new RegExp(`^${escapedNode} ${escapedBridge} (?:list|call ([a-z_]{1,64}) ([A-Za-z0-9_-]{1,${MAX_BRIDGE_PAYLOAD_BYTES}}))$`).exec(args.CommandLine);
+    const bridgePrefix = antigravitySubcommandPrefix({
+      nodePath: this.#nodePath,
+      nodeArgs: this.#nodeArgs,
+      entryPath: this.#entryPath,
+      subcommand: "bridge",
+    });
+    const escapedPrefix = bridgePrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(`^${escapedPrefix} (?:list|call ([a-z_]{1,64}) ([A-Za-z0-9_-]{1,${MAX_BRIDGE_PAYLOAD_BYTES}}))$`).exec(args.CommandLine);
     if (match === null) return false;
     if (match[1] === undefined) return true;
     return this.#toolNames().has(match[1]) && knownBridgePayload(match[2]!);

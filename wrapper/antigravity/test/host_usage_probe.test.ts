@@ -1,4 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -138,7 +140,6 @@ function makeHarness(options: {
       turnEnds.push(turnToken);
       turnEndErrors.push(error);
     },
-    runtimeAssetsAvailable: () => true,
     verifyGate: async () => true,
     agyPath: "/test/agy",
     signalTarget,
@@ -393,7 +394,7 @@ describe("AntigravityHost usage probe state transitions", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-issue393-fixture-"));
     const executable = join(root, "agy issue393 fixture.mjs");
     const callsFile = join(root, "calls.jsonl");
-    const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
     writeFileSync(executable, `#!${process.execPath}
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
@@ -433,7 +434,6 @@ if (args[0] === "models") {
       onLog: (envelope) => logs.push(envelope),
       onTurnEnd: ({ error }) => turnErrors.push(error),
       now: () => now,
-      runtimeAssetsAvailable: () => true,
     });
     try {
       await host.send("run one captured 429 fixture turn");
@@ -536,7 +536,7 @@ if (args[0] === "models") {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-default-usage-"));
     const executable = join(root, "agy fixture.mjs");
     const callsFile = join(root, "calls.jsonl");
-    const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
     writeFileSync(executable, `#!${process.execPath}
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
@@ -577,7 +577,6 @@ if (args[0] === "models") {
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: (envelope) => states.push(envelope),
       onLog: (envelope) => logs.push(envelope),
-      runtimeAssetsAvailable: () => true,
     });
     try {
       await host.send("run one fixture-backed turn");
@@ -1435,7 +1434,6 @@ describe("AntigravityHost startup usage probe (issue #660)", () => {
       appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {},
-      runtimeAssetsAvailable: () => true,
       verifyGate: async () => true,
       agyPath: "/test/agy",
       usageProbeSpawn: () => {

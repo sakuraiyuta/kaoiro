@@ -1,4 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,8 +65,8 @@ describe("Antigravity CLI", () => {
     const toolHost = await ToolHost.listen(hostOptions.toolDescriptors as ToolDescriptor[]);
     try {
       const child = spawn(process.execPath, [
-        fileURLToPath(new URL("../dist/bridge.js", import.meta.url)),
-        "call", "whoami", Buffer.from("{}").toString("base64url"),
+        fileURLToPath(new URL("../../../runner/dist/kaoiro.js", import.meta.url)),
+        "wrapper", "antigravity", "bridge", "call", "whoami", Buffer.from("{}").toString("base64url"),
       ], {
         env: { ...process.env, CODEX_HOME: undefined, KAOIRO_BRIDGE_SOCKET: toolHost.socketPath, KAOIRO_BRIDGE_NONCE: toolHost.nonce },
         stdio: ["ignore", "pipe", "pipe"],
@@ -301,7 +303,7 @@ describe("Antigravity CLI", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-cli-default-"));
     const executable = join(root, "fixture agy with spaces.mjs");
     const record = join(root, "commands.jsonl");
-    const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
     const configPath = join(root, "wrapper.config.json");
     writeFileSync(executable, `#!${process.execPath}
 import { appendFileSync } from "node:fs";

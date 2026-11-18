@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { antigravitySubcommandPrefix } from "./subcommand.js";
 
 export const GATE_DEADLINE_MS = 55 * 60 * 1000;
 export const HOOK_TIMEOUT_SECONDS = 60 * 60;
@@ -11,8 +12,8 @@ export interface CustomizationOptions {
   cwd: string;
   personaPrompt: string;
   nodePath: string;
-  hookPath: string;
-  bridgePath: string;
+  nodeArgs?: readonly string[] | undefined;
+  entryPath: string;
 }
 
 function digest(content: string): string {
@@ -26,15 +27,15 @@ function writeVerified(path: string, content: string): string {
   return actual;
 }
 
-function rulesText(cwd: string, personaPrompt: string, nodePath: string, bridgePath: string): string {
+function rulesText(cwd: string, personaPrompt: string, bridgeCommand: string): string {
   return [
     "You are operating through kaoiro.",
     `Your working directory is ${cwd}. Work only there unless the operator approves another location.`,
     "Never read, modify, or delete the kaoiro customization directory that supplied this instruction.",
     "kaoiro tools are available only through the bridge. List them with:",
-    `  ${nodePath} ${bridgePath} list`,
+    `  ${bridgeCommand} list`,
     "Call one with:",
-    `  ${nodePath} ${bridgePath} call <tool_name> <base64url-json-object>`,
+    `  ${bridgeCommand} call <tool_name> <base64url-json-object>`,
     "The bridge command must be run exactly as shown, with Cwd set to the working directory and WaitMsBeforeAsync at least 5000.",
     "Do not use Antigravity's ask_question, send_message, or MCP tools; use the kaoiro bridge instead.",
     "",
@@ -43,7 +44,7 @@ function rulesText(cwd: string, personaPrompt: string, nodePath: string, bridgeP
   ].join("\n");
 }
 
-function skillText(nodePath: string, bridgePath: string): string {
+function skillText(bridgeCommand: string): string {
   return [
     "---",
     "name: kaoiro",
@@ -51,8 +52,8 @@ function skillText(nodePath: string, bridgePath: string): string {
     "---",
     "",
     "Use the bridge only in these forms:",
-    `- ${nodePath} ${bridgePath} list`,
-    `- ${nodePath} ${bridgePath} call <tool_name> <base64url JSON object>`,
+    `- ${bridgeCommand} list`,
+    `- ${bridgeCommand} call <tool_name> <base64url JSON object>`,
     "",
     "Encode the JSON input as UTF-8 base64url without padding. The command is auto-approved only when it has no additional arguments or shell syntax.",
     "",
@@ -88,14 +89,26 @@ export class CustomizationDir {
     const skill = join(root, "skills", "kaoiro");
     mkdirSync(rules, { recursive: true, mode: 0o700 });
     mkdirSync(skill, { recursive: true, mode: 0o700 });
+    const bridgeCommand = antigravitySubcommandPrefix({
+      nodePath: this.#options.nodePath,
+      ...(this.#options.nodeArgs === undefined ? {} : { nodeArgs: this.#options.nodeArgs }),
+      entryPath: this.#options.entryPath,
+      subcommand: "bridge",
+    });
+    const hookCommand = antigravitySubcommandPrefix({
+      nodePath: this.#options.nodePath,
+      ...(this.#options.nodeArgs === undefined ? {} : { nodeArgs: this.#options.nodeArgs }),
+      entryPath: this.#options.entryPath,
+      subcommand: "hook",
+    });
     const files = new Map<string, string>([
-      [join(rules, "AGENTS.md"), rulesText(this.#options.cwd, this.#options.personaPrompt, this.#options.nodePath, this.#options.bridgePath)],
+      [join(rules, "AGENTS.md"), rulesText(this.#options.cwd, this.#options.personaPrompt, bridgeCommand)],
       [join(root, "hooks.json"), `${JSON.stringify({
       hooks: {
-        PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `${this.#options.nodePath} ${this.#options.hookPath}`, timeout: HOOK_TIMEOUT_SECONDS }] }],
+        PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: hookCommand, timeout: HOOK_TIMEOUT_SECONDS }] }],
       },
       }, null, 2)}\n`],
-      [join(skill, "SKILL.md"), skillText(this.#options.nodePath, this.#options.bridgePath)],
+      [join(skill, "SKILL.md"), skillText(bridgeCommand)],
     ]);
     this.#hashes.clear();
     for (const [path, content] of files) this.#hashes.set(path, writeVerified(path, content));

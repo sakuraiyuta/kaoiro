@@ -100,7 +100,6 @@ describe("Antigravity CLI whoami composition (issue #418)", () => {
         actualHost = createHarnessHost(cfg, {
           ...options,
           verifyGate: async () => true,
-          runtimeAssetsAvailable: () => true,
           agyPath: "/test/agy",
           spawn: () => {
             const child = new FakeAgy();

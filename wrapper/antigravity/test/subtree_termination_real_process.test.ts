@@ -149,7 +149,6 @@ function hostHarness(
     appendSystemPrompt: "persona",
     permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
     onState: () => {},
-    runtimeAssetsAvailable: () => true,
     verifyGate: async () => true, // gate self-verification (F4b) is out of scope here
     agyPath,
     ...(options.abortGraceMs === undefined ? {} : { abortGraceMs: options.abortGraceMs }),

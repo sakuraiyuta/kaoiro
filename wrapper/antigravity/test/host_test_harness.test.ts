@@ -45,7 +45,6 @@ describe("shared Antigravity host-test harness", () => {
       permissionBroker: new PermissionBroker({ config, send: () => {} }),
       onState: () => {},
       onLog: (envelope) => logs.push(envelope),
-      runtimeAssetsAvailable: () => true,
       agyPath: executable,
     }, {
       onGateProbeSpawn: () => { gateProbeSpawns += 1; },
@@ -87,7 +86,6 @@ process.exit(0);
       appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config, send: () => {} }),
       onState: () => {},
-      runtimeAssetsAvailable: () => true,
       verifyGate: async () => true,
       agyPath: executable,
     }, {
@@ -133,7 +131,6 @@ process.exit(0);
       permissionBroker: new PermissionBroker({ config, send: () => {} }),
       onState: () => {},
       onTurnEnd: ({ terminal }) => { terminalTurnEnded ||= terminal; },
-      runtimeAssetsAvailable: () => true,
       verifyGate: async () => true,
       agyPath: executable,
       warn: () => {},

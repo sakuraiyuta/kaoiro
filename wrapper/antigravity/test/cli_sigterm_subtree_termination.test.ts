@@ -1,4 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { selfCommand } from "@kaoiro/wrapper-core";
 // issue #379 M1: without a handler, Node's default SIGTERM behavior kills
 // this process immediately (no close(), no group signal, no escalation).
 // This test proves the registered handler's FULL effect end to end: SIGTERM
@@ -94,7 +96,7 @@ writeFileSync(${JSON.stringify(grandchildReadyFile)}, "");
 setInterval(() => {}, 1_000);
 `);
   chmodSync(grandchildScript, 0o755);
-  const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+  const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
   writeFileSync(executable, `#!${process.execPath}
 import { spawn } from "node:child_process";
 import { renameSync, writeFileSync } from "node:fs";

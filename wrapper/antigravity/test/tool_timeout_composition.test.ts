@@ -1,4 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +54,7 @@ function writeFixture(root: string, mode: "blocked" | "released"): { executable:
   const executable = join(root, "agy-fixture.mjs");
   const configPath = join(root, "wrapper.config.json");
   const sigtermMarker = join(root, "sigterm.marker");
-  const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+  const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
   // call_mcp_tool is agent-internal, so its DONE needs no hook observation.
   const toolName = mode === "blocked" ? "run_command" : "call_mcp_tool";
   writeFileSync(executable, `#!${process.execPath}
