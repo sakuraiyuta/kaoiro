@@ -1,16 +1,22 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { installArtifact, installEngines } from "../src/engine_install.js";
+import {
+  installArtifact, installEngines, runEngines,
+} from "../src/engine_install.js";
 
 describe("engine acquisition", () => {
   const dirs: string[] = [];
   afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("skips a missing config and rejects invalid configuration", async () => {
@@ -24,23 +30,42 @@ describe("engine acquisition", () => {
     expect(readdirSync(dir)).toEqual(["runner.json"]);
   });
 
-  it("fetches once, publishes a complete package and preserves an existing one", async () => {
+  it("requires install arguments and a config location", async () => {
+    await expect(runEngines([])).rejects
+      .toThrow("usage: kaoiro engines install");
+    const previous = process.env.KAOIRO_RUNNER_CONFIG;
+    try {
+      delete process.env.KAOIRO_RUNNER_CONFIG;
+      await expect(runEngines(["install", "--install-dir", "/unused"]))
+        .rejects.toThrow("KAOIRO_RUNNER_CONFIG is required");
+    } finally {
+      if (previous === undefined) delete process.env.KAOIRO_RUNNER_CONFIG;
+      else process.env.KAOIRO_RUNNER_CONFIG = previous;
+    }
+  });
+
+  it("fetches once and preserves an existing package", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-engine-test-"));
     dirs.push(dir);
     const source = join(dir, "source");
     mkdirSync(join(source, "package"), { recursive: true });
     writeFileSync(join(source, "package", "claude"), "engine");
     const archive = join(dir, "engine.tgz");
-    expect(spawnSync("tar", ["-czf", archive, "-C", source, "package"]).status).toBe(0);
+    expect(spawnSync("tar", ["-czf", archive, "-C", source, "package"]).status)
+      .toBe(0);
     const bytes = readFileSync(archive);
     const artifact = { name: "@test/engine", version: "1", integrity:
       `sha512-${createHash("sha512").update(bytes).digest("base64")}` };
     let requests = 0;
     const server = createServer((_req, res) => { requests++; res.end(bytes); });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
-      if (!address || typeof address === "string") throw new Error("no address");
+      if (!address || typeof address === "string") {
+        throw new Error("no address");
+      }
       const registry = `http://127.0.0.1:${address.port}`;
       const root = join(dir, "root");
       await installArtifact(root, "claude-code", artifact, registry);
@@ -56,19 +81,25 @@ describe("engine acquisition", () => {
       }, registry)).rejects.toThrow("integrity mismatch");
       expect(readdirSync(join(dir, "bad", "engines"))).toEqual([]);
     } finally {
-      await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => err ? reject(err) : resolve());
+      });
     }
   });
 
   it.each(["missing", "empty", "populated"])(
-    "publishes against a %s destination created during fetch", async (condition) => {
+    "publishes against a %s destination created during fetch",
+    async (condition) => {
       const dir = mkdtempSync(join(tmpdir(), "kaoiro-engine-race-"));
       dirs.push(dir);
       const source = join(dir, "source");
       mkdirSync(join(source, "package"), { recursive: true });
       writeFileSync(join(source, "package", "claude"), "new");
       const archive = join(dir, "engine.tgz");
-      expect(spawnSync("tar", ["-czf", archive, "-C", source, "package"]).status).toBe(0);
+      const result = spawnSync("tar", [
+        "-czf", archive, "-C", source, "package",
+      ]);
+      expect(result.status).toBe(0);
       const bytes = readFileSync(archive);
       const artifact = { name: "@test/engine", version: "1", integrity:
         `sha512-${createHash("sha512").update(bytes).digest("base64")}` };
@@ -76,14 +107,21 @@ describe("engine acquisition", () => {
       const dest = join(root, "engines", "engine@1");
       const server = createServer((_req, res) => {
         if (condition !== "missing") mkdirSync(dest);
-        if (condition === "populated") writeFileSync(join(dest, "marker"), "old");
+        if (condition === "populated") {
+          writeFileSync(join(dest, "marker"), "old");
+        }
         res.end(bytes);
       });
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       try {
         const address = server.address();
-        if (!address || typeof address === "string") throw new Error("no address");
-        await installArtifact(root, "claude-code", artifact, `http://127.0.0.1:${address.port}`);
+        if (!address || typeof address === "string") {
+          throw new Error("no address");
+        }
+        await installArtifact(root, "claude-code", artifact,
+          `http://127.0.0.1:${address.port}`);
         expect(readdirSync(join(root, "engines"))).toEqual(["engine@1"]);
         if (condition === "populated") {
           expect(readFileSync(join(dest, "marker"), "utf8")).toBe("old");
@@ -91,7 +129,9 @@ describe("engine acquisition", () => {
           expect(readFileSync(join(dest, "claude"), "utf8")).toBe("new");
         }
       } finally {
-        await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => err ? reject(err) : resolve());
+        });
       }
     },
   );
@@ -104,47 +144,94 @@ describe("engine acquisition", () => {
       const artifact = { name: "@test/engine", version: "1", integrity:
         `sha512-${createHash("sha512").update(bytes).digest("base64")}` };
       const server = createServer((_req, res) => {
-        if (failure === "truncated") res.setHeader("Content-Length", bytes.length + 10);
+        if (failure === "truncated") {
+          res.setHeader("Content-Length", bytes.length + 10);
+        }
         res.end(bytes);
       });
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       try {
         const address = server.address();
-        if (!address || typeof address === "string") throw new Error("no address");
+        if (!address || typeof address === "string") {
+          throw new Error("no address");
+        }
         const root = join(dir, "root");
-        await expect(installArtifact(root, "claude-code", artifact,
-          `http://127.0.0.1:${address.port}`)).rejects.toThrow();
+        const outcome = expect(installArtifact(root, "claude-code", artifact,
+          `http://127.0.0.1:${address.port}`)).rejects;
+        if (failure === "unpack") await outcome.toThrow("Engine unpack failed");
+        else await outcome.toThrow();
         expect(readdirSync(join(root, "engines"))).toEqual([]);
       } finally {
         server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => err ? reject(err) : resolve());
+        });
       }
     }, 15_000,
   );
 
-  it("refuses a Codex acquisition when the release identity is absent", async () => {
+  it("rejects an unsuccessful registry response", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-engine-http-"));
+    dirs.push(dir);
+    const server = createServer((_req, res) => {
+      res.statusCode = 404;
+      res.end("missing");
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("no address");
+      }
+      await expect(installArtifact(dir, "claude-code", {
+        name: "@test/engine", version: "1", integrity: "sha512-invalid",
+      }, `http://127.0.0.1:${address.port}`))
+        .rejects.toThrow("Engine fetch failed: 404");
+      expect(readdirSync(join(dir, "engines"))).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => err ? reject(err) : resolve());
+      });
+    }
+  });
+
+  it("refuses a Codex acquisition without release identity", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-codex-identity-"));
     dirs.push(dir);
     const source = join(dir, "source");
     mkdirSync(join(source, "package"), { recursive: true });
     writeFileSync(join(source, "package", "marker"), "payload");
     const archive = join(dir, "engine.tgz");
-    expect(spawnSync("tar", ["-czf", archive, "-C", source, "package"]).status).toBe(0);
+    expect(spawnSync("tar", ["-czf", archive, "-C", source, "package"]).status)
+      .toBe(0);
     const bytes = readFileSync(archive);
     const artifact = { name: "@openai/codex-linux-x64", version: "1", integrity:
       `sha512-${createHash("sha512").update(bytes).digest("base64")}` };
     const requests: string[] = [];
-    const server = createServer((req, res) => { requests.push(req.url!); res.end(bytes); });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const server = createServer((req, res) => {
+      requests.push(req.url!);
+      res.end(bytes);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
-      if (!address || typeof address === "string") throw new Error("no address");
+      if (!address || typeof address === "string") {
+        throw new Error("no address");
+      }
       await expect(installArtifact(dir, "codex", artifact,
         `http://127.0.0.1:${address.port}`)).rejects.toThrow();
       expect(requests).toEqual(["/@openai/codex/-/codex-1-linux-x64.tgz"]);
       expect(readdirSync(join(dir, "engines"))).toEqual([]);
     } finally {
-      await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => err ? reject(err) : resolve());
+      });
     }
   });
 });

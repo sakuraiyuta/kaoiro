@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync,
+  statSync,
+} from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +35,8 @@ export async function installEngines(
 
 export async function installArtifact(
   root: string, engine: EngineKind,
-  artifact: { name: string; version: string; integrity: string }, registry: string,
+  artifact: { name: string; version: string; integrity: string },
+  registry: string,
 ): Promise<void> {
   const store = join(root, "engines");
   const basename = artifact.name.split("/")[1]!;
@@ -41,11 +45,15 @@ export async function installArtifact(
   mkdirSync(store, { recursive: true });
   const stage = mkdtempSync(join(store, ".staging-"));
   try {
+    const suffix = basename.slice("codex-".length);
+    const codexVersion = `${artifact.version}-${suffix}`;
     const url = engine === "codex"
-      ? `${registry}/@openai/codex/-/codex-${artifact.version}-${basename.slice("codex-".length)}.tgz`
+      ? `${registry}/@openai/codex/-/codex-${codexVersion}.tgz`
       : `${registry}/${artifact.name}/-/${basename}-${artifact.version}.tgz`;
     const response = await fetch(url);
-    if (!response.ok || !response.body) throw new Error(`Engine fetch failed: ${response.status}`);
+    if (!response.ok || !response.body) {
+      throw new Error(`Engine fetch failed: ${response.status}`);
+    }
     const archive = join(stage, "package.tgz");
     const file = await open(archive, "w");
     const hash = createHash("sha512");
@@ -60,14 +68,23 @@ export async function installArtifact(
     if (`sha512-${hash.digest("base64")}` !== artifact.integrity) {
       throw new Error(`Engine integrity mismatch: ${artifact.name}`);
     }
-    const unpack = spawnSync("tar", ["-xzf", archive, "-C", stage], { stdio: "inherit" });
-    if (unpack.status !== 0) throw new Error(`Engine unpack failed: ${artifact.name}`);
+    const unpack = spawnSync("tar", ["-xzf", archive, "-C", stage], {
+      stdio: "inherit",
+    });
+    if (unpack.status !== 0) {
+      throw new Error(`Engine unpack failed: ${artifact.name}`);
+    }
     const pkg = join(stage, "package");
     if (engine === "codex") {
-      const identityFile = fileURLToPath(new URL("./codex-native.json", import.meta.url));
-      const identity = JSON.parse(readFileSync(identityFile, "utf8")) as { version: string; sha256: string };
+      const identityFile = fileURLToPath(
+        new URL("./codex-native.json", import.meta.url),
+      );
+      const identity = JSON.parse(readFileSync(identityFile, "utf8")) as {
+        version: string; sha256: string;
+      };
       const binary = engineBinaryPath(engine, pkg);
-      const digest = createHash("sha256").update(readFileSync(binary)).digest("hex");
+      const digest = createHash("sha256")
+        .update(readFileSync(binary)).digest("hex");
       if (identity.version !== artifact.version || identity.sha256 !== digest) {
         throw new Error("Codex native identity mismatch");
       }
@@ -84,7 +101,8 @@ export async function installArtifact(
 }
 
 export async function runEngines(args: string[]): Promise<void> {
-  if (args.length !== 3 || args[0] !== "install" || args[1] !== "--install-dir") {
+  if (args.length !== 3 || args[0] !== "install" ||
+      args[1] !== "--install-dir") {
     throw new Error("usage: kaoiro engines install --install-dir <dir>");
   }
   const config = process.env.KAOIRO_RUNNER_CONFIG;
