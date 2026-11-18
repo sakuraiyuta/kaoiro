@@ -170,6 +170,19 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
   });
 
   describe("順序と正常系(config 既存 = wizard スキップ)", () => {
+    it("refuses a candidate without an engines script before switching", () => {
+      writeConfig();
+      const revision = revisionOf("bootstrap-no-engines");
+      const missing = "deploy/kaoiro-runner-engines.sh";
+      const archive = makeReleaseTarball(work, revision, {
+        omit: [missing], dropManifestEntries: [missing],
+      });
+      const result = bootstrap([archive]);
+      expect(result.status).toBe(78);
+      expect(result.stderr).toContain("candidate engines script missing");
+      expect(existsSync(join(root, "current"))).toBe(false);
+    });
+
     it.each([true, false])("acquires before switch (valid=%s)", async (valid) => {
       writeConfig(["claude-code"]);
       const packageRoot = join(dir, "package-source");
