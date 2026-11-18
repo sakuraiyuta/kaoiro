@@ -131,6 +131,7 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
     const merged: Record<string, string | undefined> = {
       HOME: home,
       KAOIRO_RUNNER_DIR: configDir,
+      KAOIRO_RUNNER_ENV: join(configDir, "runner.env"),
       KAOIRO_UNAME: "Linux",
       ...env,
     };

@@ -4,6 +4,9 @@
 // imports its module when it runs, so one engine never loads another.
 
 import type { EngineKind } from "@kaoiro/protocol";
+import { ENGINE_ARTIFACTS } from "@kaoiro/agent-common";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 /** Receives the arguments that follow the verb. */
 type Verb = (args: string[]) => void | Promise<void>;
@@ -58,4 +61,36 @@ export const ENGINES: Record<EngineKind, Engine> = {
 
 export function isEngine(value: unknown): value is EngineKind {
   return typeof value === "string" && Object.hasOwn(ENGINES, value);
+}
+
+export function hostLibc(): "glibc" | "musl" {
+  const report = process.report.getReport() as { header: { glibcVersionRuntime?: string } };
+  return report.header.glibcVersionRuntime ? "glibc" : "musl";
+}
+
+export function engineArtifact(engine: EngineKind) {
+  const name = ENGINES[engine].artifactName?.(process.platform, process.arch, hostLibc());
+  return ENGINE_ARTIFACTS.find((item) => item.name === name);
+}
+
+export function engineBinaryPath(engine: EngineKind, packageDir: string): string {
+  if (engine === "claude-code") return join(packageDir, "claude");
+  const triples: Record<string, string> = {
+    "linux:x64": "x86_64-unknown-linux-musl",
+    "linux:arm64": "aarch64-unknown-linux-musl",
+    "darwin:x64": "x86_64-apple-darwin",
+    "darwin:arm64": "aarch64-apple-darwin",
+  };
+  const triple = triples[`${process.platform}:${process.arch}`];
+  if (!triple) throw new Error("Unsupported Codex platform");
+  return join(packageDir, "vendor", triple, "bin", "codex");
+}
+
+export function storedEngineExecutable(engine: EngineKind): string | undefined {
+  const store = process.env.KAOIRO_ENGINE_STORE_DIR;
+  const artifact = engineArtifact(engine);
+  if (!store || !artifact) return undefined;
+  const dir = join(store, `${artifact.name.split("/")[1]}@${artifact.version}`);
+  if (!existsSync(dir)) return undefined;
+  return engineBinaryPath(engine, dir);
 }

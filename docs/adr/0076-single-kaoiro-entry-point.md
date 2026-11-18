@@ -140,6 +140,14 @@ stops with exit 78.
 - Engine executable locations, `kaoiro engines install` and the bundled
   release layout are later units of issue #140.
 
+## Engine store addendum (2026-11-18)
+
+The operator accepted that, after a host first acquires its Codex pin, the
+runner executes the stored binary while the switch guard hashes the separate
+binary in the release tree. Acquisition verifies the stored binary against the
+release identity once; subsequent changes to the stored binary are not detected
+by that guard. See [issue #1205](https://github.com/sakuraiyuta/kaoiro/issues/1205).
+
 ## Consequences
 
 - A wrapper started by hand goes through the entry:

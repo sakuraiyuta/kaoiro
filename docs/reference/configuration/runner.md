@@ -83,6 +83,14 @@ destination. Move the value into `server_url` and remove the variable from
 [Runner install](../../operations/runner-install.md)). The variable is not
 relayed to wrappers; they get their URL from the runner's own `server_url`.
 
+## Engine store
+
+Release installations share `<install-root>/engines/<name>@<version>/` across
+releases. At each wrapper spawn and Claude catalog probe, the runner uses the
+stored executable when the running release's pin is present; otherwise it uses
+the engine in its release tree. The launch shim supplies the store location.
+Acquiring a different pin does not change the engine used by a running runner.
+
 ## Other `runner.config.json` and env fields
 
 `context_work_budget_percent` is the soft working budget percentage relative to

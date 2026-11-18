@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-18
 related: [deployment]
 ---
 
@@ -27,6 +27,26 @@ completing (the runner's start path, the wrapper's turn lifecycle) follows
 [High-risk change release](high-risk-change-release.md) first: it adds a
 production-shape start check and fleet restoration procedure, and it links back
 here for the update and rollback commands.
+
+## Engine acquisition
+
+Bootstrap and update install the candidate release, then acquire the enabled
+Claude and Codex pins before switching. Update does this before stopping the
+runner. When the configuration file is absent acquisition is skipped; an
+unreadable or invalid file fails the operation. An acquisition failure leaves
+the current release running, and a later update can retry. An already acquired
+pin needs no network request; a missing pin requires access to the npm registry.
+
+These tools require the candidate's `deploy/kaoiro-runner-engines.sh` and
+therefore cannot install older tarballs without it. Use `switch` or `--rollback`
+for an already retained release. To reinstall an older tarball, use its own
+tools or `kaoiro-runner-install.sh` followed by `kaoiro-runner-switch.sh`.
+
+The store is not cleaned automatically. An operator may manually remove an
+unused version or an abandoned `.staging-*` directory after confirming no
+operation is using it. Do not remove the release directory of a running runner:
+it starts wrappers from that release. See the
+[engine store contract](../reference/configuration/runner.md#engine-store).
 
 ## Build identity preconditions
 
@@ -169,7 +189,7 @@ git -C <repo-path> status --porcelain   # Must be empty
   --from-repo <repo-path> --detach
 ```
 
-It performs build → install → stop → switch → start → identity check → prune in
+It performs build → install → acquire → stop → switch → start → identity check → prune in
 order. **Stopping happens only immediately before switching**; build and expansion
 never touch the active release. If build or expansion fails, it **never reaches
 stop** and the old runner keeps running.

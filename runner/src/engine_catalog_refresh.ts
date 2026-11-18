@@ -21,6 +21,7 @@ import type { BuildInfo } from "./build_info.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { runClaudeProbe } from "@kaoiro/claude-code/probe-client";
 import type { ProbeOutcome } from "@kaoiro/claude-code/probe-client";
+import { storedEngineExecutable } from "./engines.js";
 
 /** Engines whose launch catalog can be freshened via a live probe. Codex
  *  is static-catalog by ADR-0035 F1, so refresh requests targeting it are
@@ -114,7 +115,9 @@ async function handle(
   deps: RefreshEngineCatalogDeps,
   req: ParsedRefreshRequest,
 ): Promise<void> {
-  const probeFn = deps.probe ?? runClaudeProbe;
+  const probeFn = deps.probe ?? (() => runClaudeProbe({
+    engineExecutable: storedEngineExecutable("claude-code"),
+  }));
   const outcome = await deps.cache.refresh(probeFn, req.force);
 
   if (outcome.ok && outcome.models !== undefined) {

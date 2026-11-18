@@ -323,6 +323,11 @@ its `PATH=` line with
 
 ## Creating distribution tarballs
 
+Engine acquisition and its failure handling are described in
+[Runner update and rollback](runner-update-and-rollback.md#engine-acquisition).
+The acquisition path is verified on Linux x64 with glibc. Artifacts for macOS
+arm64 and musl are produced but have not been verified.
+
 Create a self-contained archive requiring only the Node runtime (issue #70,
 revised 2026-07-25 in [ADR-0018](../adr/0018-runner-distribution.md)).
 Because wrappers, engine CLIs (Claude Code / codex are bundled as actual

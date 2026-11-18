@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineKind, WrapperConfig } from "@kaoiro/protocol";
+import { storedEngineExecutable } from "./engines.js";
 import type { LaunchFn, ManagedChild } from "./supervisor.js";
 
 /** The child-process surface toManagedChild needs; ChildProcess satisfies it. */
@@ -98,6 +99,9 @@ export function makeLauncher(command: string[] = selfCommand()): LaunchFn {
     const toolHome = engine === "codex"
       ? mkdtempSync(join(dir, "codex-tool-")) : undefined;
     const childConfig = { ...config, recovery_checkpoint_path: checkpointPath };
+    const executable = storedEngineExecutable(engine);
+    if (executable === undefined) delete childConfig.engine_executable;
+    else childConfig.engine_executable = executable;
     if (toolHome === undefined) delete childConfig.codex_tool_home;
     else childConfig.codex_tool_home = toolHome;
     // Both travel in the 0600 launch file, never in the arguments, which any

@@ -200,6 +200,7 @@ pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/$name" --legacy >/dev/nul
   exit 70
 }
 printf '%s\n' "$version_string" >"$stage/$name/VERSION"
+node "$root/scripts/write-codex-native.mjs" "$stage/$name" "$target"
 
 # MANIFEST.json — the runtime module closure, so a release with ONE missing
 # module is rejected before it starts (issue #219 round 2, ふじ 差し戻し

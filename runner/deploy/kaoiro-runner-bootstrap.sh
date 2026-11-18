@@ -432,6 +432,10 @@ printf '%s: installing %s\n' "$prog" "$tarball" >&2
 id=$("$deploy_dir/kaoiro-runner-install.sh" "$tarball" --install-dir "$root")
 printf '%s: installed release %s\n' "$prog" "$id" >&2
 
+engines_script="$root/releases/$id/deploy/kaoiro-runner-engines.sh"
+[ -x "$engines_script" ] || kaoiro_die "candidate engines script missing" 78
+"$engines_script" install --install-dir "$root"
+
 printf '%s: switching current to %s\n' "$prog" "$id" >&2
 "$deploy_dir/kaoiro-runner-switch.sh" "$id" --install-dir "$root" >/dev/null
 
