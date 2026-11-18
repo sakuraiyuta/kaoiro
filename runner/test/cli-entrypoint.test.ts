@@ -92,6 +92,22 @@ describe("runner CLI built entry point", () => {
     expect(result.stderr).toContain("usage: kaoiro ");
   });
 
+  it("prints only the fixed grok line when run fails on another error", () => {
+    const canary = "grok-stderr-canary";
+    const missing = join(root, `${canary}.json`);
+    const env = { ...process.env };
+    delete env.NO_COLOR;
+    delete env.FORCE_COLOR;
+    const result = spawnSync(process.execPath, [
+      cli, "wrapper", "grok", "run", missing,
+    ], { cwd: root, encoding: "utf8", env });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("[kaoiro] grok wrapper failed\n");
+    expect(result.stderr).not.toContain(canary);
+  });
+
   it("fails loudly for a missing config through every built entry", () => {
     const missingConfig = join(root, "missing-runner.config.json");
     for (const { name, path } of entries) {

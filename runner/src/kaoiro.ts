@@ -18,6 +18,20 @@ import { ENGINES, isEngine } from "./engines.js";
 
 registerSelfEntry(import.meta.url);
 
+async function entryStderrLine(
+  engine: string | undefined,
+  error: unknown,
+): Promise<string> {
+  if (engine !== "grok" || error instanceof CliUsageError) {
+    return `${String(error)}\n`;
+  }
+  const { GrokLaunchError } = await import("@kaoiro/grok/dist/grok/errors.js");
+  const detail = error instanceof GrokLaunchError
+    ? error.message
+    : "grok wrapper failed";
+  return `[kaoiro] ${detail}\n`;
+}
+
 const argv = process.argv.slice(2);
 const [command, ...rest] = argv;
 
@@ -40,7 +54,7 @@ if (command === "runner" || command === "--version") {
     try {
       await run(args);
     } catch (error) {
-      writeRedactedStderr(`${String(error)}\n`);
+      writeRedactedStderr(await entryStderrLine(engine, error));
       process.exitCode = error instanceof CliUsageError ? 64 : recoveryExitCode(error);
     }
   }
