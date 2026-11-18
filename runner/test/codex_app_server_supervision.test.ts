@@ -26,6 +26,7 @@ createInterface({input:process.stdin}).on('line', line => {
  if(r.method==='turn/start'){reply({turn:{id:'turn'}});send({method:'turn/started',params:{threadId:'thread',turn:{id:'turn'}}});}
 }).on('close',()=>process.exit(0));`);
   writeFileSync(entry, `import {spawn} from 'node:child_process';
+import {registerSelfEntry} from ${JSON.stringify(pathToFileURL(require.resolve("@kaoiro/wrapper-core")).href)};
 import {runCodexCli} from ${JSON.stringify(moduleUrl("cli"))};
 import {CodexHost} from ${JSON.stringify(moduleUrl("host"))};
 import {AppServerSession} from ${JSON.stringify(moduleUrl("app_server_session"))};
@@ -34,6 +35,7 @@ process.on('message', command=>{
  if(command==='break')child?.kill('SIGKILL');
  if(command==='next')callbacks.onInstruction('EXPLICIT_NEXT');
 });
+registerSelfEntry(${JSON.stringify(new URL("../dist/kaoiro.js", import.meta.url).href)});
 await runCodexCli({
  createServerLink:(_url,_id,options)=>{callbacks=options;queueMicrotask(()=>options.onPersonaPrompt('Fixture'));return {
   send:e=>process.send?.({kind:'envelope',envelope:e}),close(){},currentSessionId:()=>null,setSessionId(){},
