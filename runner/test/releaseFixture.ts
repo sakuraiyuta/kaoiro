@@ -50,6 +50,11 @@ import { join } from "node:path";
 // sibling makes the negative control possible: delete dist/stub_dep.js and
 // this exits non-zero on its own.
 import dep from "./stub_dep.js";
+// The real cli.js starts nothing by itself; only the entry calls it.
+if (globalThis.__kaoiroStubEntry !== true) {
+  process.stderr.write("stub cli.js: started without the kaoiro entry\\n");
+  process.exit(64);
+}
 if (process.argv.includes("--version")) {
   // VERSION_OVERRIDE lets a test make the RUNNING artifact disagree with the
   // tree it sits in. Overriding VERSION or build-info.json cannot do that any
@@ -79,6 +84,18 @@ process.exit(0);
 `;
 
 const STUB_DEP = 'export default { marker: "dep-loaded" };\n';
+
+/** Stands in for the real entry: it accepts the commands the shims start and
+ *  reaches cli.js through `import()`, which is why the fixture's package.json
+ *  declares that module as a runtime asset, as the real one does. */
+const STUB_ENTRY = `
+if (!["runner", "--version"].includes(process.argv[2])) {
+  process.stderr.write("stub kaoiro.js: unexpected command\\n");
+  process.exit(64);
+}
+globalThis.__kaoiroStubEntry = true;
+await import("./cli.js");
+`;
 
 export interface RunResult {
   status: number | null;
@@ -185,7 +202,12 @@ export function writeReleaseTree(
   // parse alike. The real tarball ships exactly this (measured 2026-08-16).
   put(
     "package.json",
-    JSON.stringify({ name: "@kaoiro/runner", version: "0.0.0", type: "module" }),
+    JSON.stringify({
+      name: "@kaoiro/runner",
+      version: "0.0.0",
+      type: "module",
+      kaoiro: { runtimeAssets: ["dist/cli.js"] },
+    }),
   );
   put(
     "dist/cli.js",
@@ -194,9 +216,7 @@ export function writeReleaseTree(
         .replace("@@MACHINE_OVERRIDE@@", JSON.stringify(options.cliBuildInfoOverride ?? {}))
         .replace("@@LEGACY_CLI@@", String(options.legacyCli ?? false)),
   );
-  // The real entry reaches cli.js through `import()`; a static import keeps
-  // the stub one line and lets every test go on staging its cases in cli.js.
-  put("dist/kaoiro.js", 'import "./cli.js";\n');
+  put("dist/kaoiro.js", STUB_ENTRY);
   put("dist/stub_dep.js", STUB_DEP);
   put(
     "dist/build-info.json",
