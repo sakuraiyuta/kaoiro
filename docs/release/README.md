@@ -66,7 +66,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
-| [v2026.11.17.1](v2026.11.17.1.md) | 2026-11-18 | v2026.11.16.1 | The runner removes its own server credential from its environment right after reading it, so no wrapper, engine probe, engine or agent tool inherits it. |
+| [v2026.11.18.1](v2026.11.18.1.md) | 2026-11-18 | v2026.11.16.1 | The runner removes its own server credential from its environment right after reading it, so no wrapper, engine probe, engine or agent tool inherits it. |
 | [v2026.11.16.1](v2026.11.16.1.md) | 2026-11-17 | v2026.11.15.1 | The dashboard formats Markdown bodies in a Web Worker and judges tail follow by scroll position, Grok peers accept attachments, a Claude Code resume note after compaction gets a 30-second idle floor, a director's yield waits for a running MCP call, and the runner reconnects after a channel error followed by close 1000. |
 | [v2026.11.15.1](v2026.11.15.1.md) | 2026-11-15 | v2026.11.14.2 | Grok peers gain work tools, session reset, ownership of the turns Grok starts on its own and background-task kill on interrupt; a stopping wrapper releases pending reply waits on every engine. |
 | [v2026.11.14.2](v2026.11.14.2.md) | 2026-11-14 | v2026.11.14.1 | Browser caching, composer send feedback, supervised Claude probes, Codex reply guidance, and pinned rollback archives. |
