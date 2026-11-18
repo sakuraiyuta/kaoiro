@@ -164,6 +164,32 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
 
   const goodExecStart = () => `${root}/current/deploy/kaoiro-runner-launch.sh`;
 
+  it("runs the candidate acquisition before stopping the service", () => {
+    const marker = join(dir, "acquired");
+    const entry = `
+if (process.argv[2] === "engines") {
+  const fs = await import("node:fs");
+  fs.writeFileSync(process.env.KAOIRO_TEST_MARKER, "acquired");
+  process.exit(0);
+}
+globalThis.__kaoiroStubEntry = true;
+await import("./cli.js");
+`;
+    const archive = makeReleaseTarball(work, B, {
+      extraFiles: { "dist/kaoiro.js": entry },
+    });
+    const result = runUpdate(["--tarball", archive], {
+      KAOIRO_TEST_MARKER: marker,
+      KAOIRO_SYSTEMCTL: systemctlStub({
+        execStart: goodExecStart(),
+        onStop: `[ -f ${JSON.stringify(marker)} ] || exit 66`,
+      }),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("acquired");
+    expect(readCalls().some((line) => line.includes(" stop "))).toBe(true);
+  });
+
   it("keeps the engine script away from the inherited home configuration", () => {
     const home = join(dir, "home");
     const config = join(home, ".config", "kaoiro");
