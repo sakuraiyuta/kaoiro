@@ -85,6 +85,22 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #219)", () => {
   const launch = (env: Record<string, string | undefined> = {}) =>
     runScript(shim, [], { KAOIRO_RUNNER_DIR: confDir, ...env });
 
+  it("derives the store from a physical release and clears it elsewhere", () => {
+    const install = join(dir, "custom-install");
+    const release = join(install, "releases", REVISION);
+    const entry = 'process.stdout.write(`store=${process.env.KAOIRO_ENGINE_STORE_DIR ?? "unset"}\\n`);\n';
+    writeReleaseTree(release, REVISION, { extraFiles: { "dist/cli.js": entry } });
+    symlinkSync(`releases/${REVISION}`, join(install, "current"));
+    const env = { KAOIRO_RUNNER_DIR: confDir, KAOIRO_ENGINE_STORE_DIR: "/inherited" };
+    const installed = runScript(join(install, "current/deploy/kaoiro-runner-launch.sh"), [], env);
+    expect(installed.status, installed.stderr).toBe(0);
+    expect(installed.stdout).toContain(`store=${install}/engines`);
+    writeReleaseTree(join(dir, "checkout"), REVISION, { extraFiles: { "dist/cli.js": entry } });
+    const checkout = runScript(join(dir, "checkout/deploy/kaoiro-runner-launch.sh"), [], env);
+    expect(checkout.status, checkout.stderr).toBe(0);
+    expect(checkout.stdout).toContain("store=unset");
+  });
+
   it("artifact が揃っていれば entry point を exec する", () => {
     const result = launch();
 
