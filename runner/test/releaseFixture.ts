@@ -11,6 +11,7 @@ import {
   chmodSync,
   copyFileSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -24,8 +25,12 @@ import {
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { afterAll } from "vitest";
 
 const deploySrc = fileURLToPath(new URL("../deploy", import.meta.url));
+const isolatedConfig = mkdtempSync(join(tmpdir(), "kaoiro-release-config-"));
+afterAll(() => rmSync(isolatedConfig, { recursive: true, force: true }));
 
 const DEPLOY_SCRIPTS = readdirSync(deploySrc).filter((name) => statSync(join(deploySrc, name)).isFile());
 
@@ -89,6 +94,7 @@ const STUB_DEP = 'export default { marker: "dep-loaded" };\n';
  *  reaches cli.js through `import()`, which is why the fixture's package.json
  *  declares that module as a runtime asset, as the real one does. */
 const STUB_ENTRY = `
+if (process.argv[2] === "engines") process.exit(0);
 if (!["runner", "--version"].includes(process.argv[2])) {
   process.stderr.write("stub kaoiro.js: unexpected command\\n");
   process.exit(64);
@@ -113,7 +119,9 @@ export function runScript(
   env: Record<string, string | undefined> = {},
 ): RunResult {
   const merged: Record<string, string> = {};
-  for (const [key, value] of Object.entries({ ...process.env, ...env })) {
+  for (const [key, value] of Object.entries({
+    ...process.env, KAOIRO_RUNNER_ENV: join(isolatedConfig, "runner.env"), ...env,
+  })) {
     if (value !== undefined) merged[key] = value;
   }
   if (env.CODEX_HOME === undefined) delete merged.CODEX_HOME;

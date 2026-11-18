@@ -39,6 +39,8 @@ if (command === "runner" || command === "--version") {
   (await import("./cli.js")).runRunner(command === "runner" ? rest : argv);
 } else if (command === "setup") {
   await (await import("./setup-cli.js")).runSetupWizard();
+} else if (command === "engines") {
+  await (await import("./engine_install.js")).runEngines(rest);
 } else {
   const [engine, verb, ...args] = rest;
   const verbs = command === "wrapper" && isEngine(engine) ? ENGINES[engine].verbs : undefined;

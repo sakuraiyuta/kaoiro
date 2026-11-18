@@ -78,6 +78,16 @@ if [ -f "$env_file" ]; then
   set +a
 fi
 
+unset KAOIRO_ENGINE_STORE_DIR
+release_parent=${deploy_dir%/deploy}
+release_parent=${release_parent%/*}
+case "$release_parent" in
+  */releases)
+    KAOIRO_ENGINE_STORE_DIR=${release_parent%/releases}/engines
+    export KAOIRO_ENGINE_STORE_DIR
+    ;;
+esac
+
 # --version (issue #218 round 2 MF-5, ふじ 差し戻し): forwarded to the
 # entry point BEFORE the config-existence check below. A first-run host
 # with no config yet (setup wizard not run) must still be able to answer

@@ -373,6 +373,10 @@ if [ "$allow_dirty" = no ] && ! kaoiro_clean_release_id "$id"; then
   kaoiro_die "refusing to activate $id: only a clean 40-hex revision may become current — build from a clean tree, or pass --allow-dirty for a development host" 78
 fi
 
+engines_script="$root/releases/$id/deploy/kaoiro-runner-engines.sh"
+[ -x "$engines_script" ] || kaoiro_die "candidate engines script missing" 78
+"$engines_script" install --install-dir "$root"
+
 fi
 
 

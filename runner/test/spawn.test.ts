@@ -1,15 +1,56 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 import { makeLauncher, toManagedChild } from "../src/spawn.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { engineArtifact } from "../src/engines.js";
 
 // The built entry, started by this test's own node: the command a runner
 // started through `kaoiro runner` hands to its launcher.
 const ENTRY = [process.execPath, fileURLToPath(new URL("../dist/kaoiro.js", import.meta.url))];
+
+it("uses a newly acquired matching engine on the next spawn", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "kaoiro-store-spawn-"));
+  const saved = { NODE_OPTIONS: process.env.NODE_OPTIONS,
+    KAOIRO_ENGINE_STORE_DIR: process.env.KAOIRO_ENGINE_STORE_DIR,
+    KAOIRO_LAUNCH_CAPTURE: process.env.KAOIRO_LAUNCH_CAPTURE };
+  const capture = join(scratch, "capture.cjs");
+  writeFileSync(capture, `const fs = require('node:fs');
+const path = require('node:path');
+const file = process.argv.at(-1);
+fs.writeFileSync(path.join(process.env.KAOIRO_LAUNCH_CAPTURE, path.basename(file) + '.result'),
+  fs.readFileSync(file));
+process.exit(0);`);
+  try {
+    process.env.NODE_OPTIONS = `--require=${capture}`;
+    process.env.KAOIRO_LAUNCH_CAPTURE = scratch;
+    process.env.KAOIRO_ENGINE_STORE_DIR = join(scratch, "engines");
+    const artifact = engineArtifact("claude-code")!;
+    const store = join(scratch, "engines", `${artifact.name.split("/")[1]}@${artifact.version}`);
+    const launch = makeLauncher(ENTRY);
+    const run = async () => new Promise<void>((resolve, reject) => {
+      launch("agent", { agent_id: "agent" } as never, scratch).on("exit", resolve);
+      setTimeout(() => reject(new Error("wrapper did not exit")), 10_000).unref();
+    });
+    await run();
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "claude"), "engine");
+    await run();
+    const first = JSON.parse(readFileSync(join(scratch, "agent-0.json.result"), "utf8"));
+    const second = JSON.parse(readFileSync(join(scratch, "agent-1.json.result"), "utf8"));
+    expect(first.engine_executable).toBeUndefined();
+    expect(second.engine_executable).toBe(join(store, "claude"));
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
 
 it("the launcher starts `wrapper <engine> run <launch file>` and keeps the prompt and the resume target in the file", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "kaoiro-launch-argv-"));

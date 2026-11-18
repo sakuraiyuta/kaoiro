@@ -164,6 +164,42 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
 
   const goodExecStart = () => `${root}/current/deploy/kaoiro-runner-launch.sh`;
 
+  it("keeps the engine script away from the inherited home configuration", () => {
+    const home = join(dir, "home");
+    const config = join(home, ".config", "kaoiro");
+    const marker = join(dir, "sourced");
+    mkdirSync(config, { recursive: true });
+    writeFileSync(join(config, "runner.env"), `: > '${marker}'\n`);
+    const old = process.env.KAOIRO_RUNNER_ENV;
+    delete process.env.KAOIRO_RUNNER_ENV;
+    try {
+      const script = fileURLToPath(new URL("../deploy/kaoiro-runner-engines.sh", import.meta.url));
+      const result = runScript(script, ["install", "--install-dir", root], {
+        HOME: home, XDG_CONFIG_HOME: join(home, ".config"),
+        KAOIRO_RUNNER_DIR: undefined, KAOIRO_RUNNER_CONFIG: join(dir, "missing.json"),
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (old === undefined) delete process.env.KAOIRO_RUNNER_ENV;
+      else process.env.KAOIRO_RUNNER_ENV = old;
+    }
+  });
+
+  it("refuses a candidate without the engines script before stopping", () => {
+    const missing = "deploy/kaoiro-runner-engines.sh";
+    const archive = makeReleaseTarball(work, B, {
+      omit: [missing], dropManifestEntries: [missing],
+    });
+    const result = runUpdate(["--tarball", archive], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("candidate engines script missing");
+    expect(readCalls().some((line) => line.includes(" stop "))).toBe(false);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+  });
+
   it.each([true, false])("checks the live server format before stop (supported=%s)", async (supported) => {
     const server = createServer((_request, response) => {
       response.setHeader("Content-Type", "application/json");
@@ -411,6 +447,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
       env: {
         ...process.env,
         CODEX_HOME: undefined,
+        KAOIRO_RUNNER_ENV: join(dir, "absent.env"),
         KAOIRO_SYSTEMCTL: systemctl,
         KAOIRO_SYSTEMD_RUN: detachingSystemdRun,
       },
