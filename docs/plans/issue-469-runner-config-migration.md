@@ -1,7 +1,7 @@
 ---
 title: Move runner/wrapper behaviour settings from KAOIRO_* variables into runner.config.json
 status: in_progress
-last_updated: 2026-10-02
+last_updated: 2026-11-18
 related: [issue-469, issue-438, issue-463, issue-470]
 ---
 
@@ -492,7 +492,7 @@ exported constant.
 | New top-level keys cannot miss the reload diff | compile-time `Record<keyof RunnerConfig, true>` iterated by `changedFields`, plus a test that mutates each key and expects it in the result | add a key to `RunnerConfig` without the entry: typecheck fails |
 | Docs table matches the registry | test parses the table in `runner.md` and compares rows | add a registry row without a doc row: the test fails |
 | Live heartbeat toggle | transport test flipping the getter mid-connection | none |
-| Config-only setup works with the default composition (gate) | one test that injects nothing, below | below |
+| Config-only setup works with the default composition (gate) | one test with real factories, launcher and consumers, below | below |
 
 Default-composition gate. It is a bounded integration smoke test of the
 assembly, not a second copy of the input matrix: one non-default setting per
@@ -501,7 +501,11 @@ It starts the real runner entrypoint (`runner-cli`, no substituted
 constructors, launcher or consumer) as a child process with a config file that
 sets every relay key of every engine to a non-default value (a cut on a key left
 at its default would be invisible) and `KAOIRO_*` scrubbed from its
-environment. `server_url` points at a test-owned local endpoint that speaks
+environment. The fixture limits Git transports to `file` with
+`GIT_ALLOW_PROTOCOL` so CLI plugin discovery cannot hold the process group
+open on external network traffic. Git network transport is outside this
+gate; factories, launcher and consumers are not replaced.
+`server_url` points at a test-owned local endpoint that speaks
 just enough of the Phoenix v2 frame protocol to accept the runner join and push
 a `spawn`, and to accept each wrapper's join and answer it with the
 `persona_prompt` push, so the wrapper completes its handshake and constructs

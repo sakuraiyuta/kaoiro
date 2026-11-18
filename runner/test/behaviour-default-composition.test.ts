@@ -15,8 +15,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 
-// Default-composition gates. Both inject nothing: the real runner entrypoint
-// starts in a closed environment, a test-owned endpoint speaks just enough
+// Default-composition gates keep the real factories, launcher and consumers.
+// The runner starts in a closed environment; a test-owned endpoint speaks enough
 // Phoenix v2 to accept the runner join and push to it, and the runner launches
 // built wrappers through the real launcher.
 //
@@ -450,13 +450,19 @@ describe("default composition (issue #469)", () => {
             },
           }),
         );
-        // Nothing but PATH and a private HOME: no KAOIRO_* variable at all.
+        // No KAOIRO_* overrides; settings come from the config file.
+        // Limit Git transports so CLI plugin discovery cannot outlive shutdown
+        // while waiting on external network traffic.
         const started = spawn(
           process.execPath,
           ["--import", tsxLoader, "src/kaoiro.ts", "runner", configPath],
           {
             cwd: runnerRoot,
-            env: { PATH: process.env.PATH ?? "", HOME: root },
+            env: {
+              PATH: process.env.PATH ?? "",
+              HOME: root,
+              GIT_ALLOW_PROTOCOL: "file",
+            },
             stdio: ["ignore", "pipe", "pipe"],
             detached: true,
           },
