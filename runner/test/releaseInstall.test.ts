@@ -146,6 +146,22 @@ describe("kaoiro-runner-install.sh (issue #219)", () => {
     expect(existsSync(join(root, "releases", revision))).toBe(false);
   });
 
+  it("rejects a release whose entry was removed together with its manifest line", () => {
+    // The entry reaches its modules through import(), so nothing else in the
+    // tree names it: only seeding the closure from it makes this visible.
+    const revision = revisionOf("entry-removed");
+    const archive = makeReleaseTarball(work, revision, {
+      omit: ["dist/kaoiro.js"],
+      dropManifestEntries: ["dist/kaoiro.js"],
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("dist/kaoiro.js");
+    expect(existsSync(join(root, "releases", revision))).toBe(false);
+  });
+
   it("回帰: コメント内の specifier を依存と誤認して健全な release を拒否しない", () => {
     // The closure walk follows the specifiers written inside each module, and
     // tsc preserves comments into dist/. A doc comment naming a since-renamed
