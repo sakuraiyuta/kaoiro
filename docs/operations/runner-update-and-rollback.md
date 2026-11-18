@@ -36,6 +36,13 @@ runner. When the configuration file is absent acquisition is skipped; an
 unreadable or invalid file fails the operation. An acquisition failure leaves
 the current release running, and a later update can retry. An already acquired
 pin needs no network request; a missing pin requires access to the npm registry.
+Acquisition has no timeout: if the registry stalls, update waits before
+stopping the runner; interrupt the update to stop waiting.
+
+Once a host acquires a pin, spawned engines can differ from the binary in the
+release tree. The change starts on each host at its first successful bootstrap
+or update acquisition; see the
+[design decision](../adr/0076-single-kaoiro-entry-point.md).
 
 These tools require the candidate's `deploy/kaoiro-runner-engines.sh` and
 therefore cannot install older tarballs without it. Use `switch` or `--rollback`
@@ -44,8 +51,11 @@ tools or `kaoiro-runner-install.sh` followed by `kaoiro-runner-switch.sh`.
 
 The store is not cleaned automatically. An operator may manually remove an
 unused version or an abandoned `.staging-*` directory after confirming no
-operation is using it. Do not remove the release directory of a running runner:
-it starts wrappers from that release. See the
+operation is using it. If a store directory is damaged, remove that version
+after confirming it is not in use; the next update or bootstrap can acquire it
+again. Until then, a missing executable falls back to the release tree. Do not
+remove the release directory of a running runner: it starts wrappers from that
+release. See the
 [engine store contract](../reference/configuration/runner.md#engine-store).
 
 ## Build identity preconditions

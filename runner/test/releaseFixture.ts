@@ -6,6 +6,7 @@
 // Only `dist/kaoiro.js`, `dist/cli.js` and the wrapper modules are stubs: building
 // the real ones needs a full `pnpm -C wrapper build && pnpm -C runner
 // build`, which this suite does not depend on.
+import "../../scripts/test/fixtures/test-isolation.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,

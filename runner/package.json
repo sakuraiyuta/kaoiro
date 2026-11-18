@@ -34,6 +34,7 @@
   "kaoiro": {
     "runtimeAssets": [
       "dist/cli.js",
+      "dist/engine_install.js",
       "dist/setup-cli.js"
     ]
   },

@@ -18,4 +18,6 @@ fi
 KAOIRO_RUNNER_CONFIG=${KAOIRO_RUNNER_CONFIG:-$conf_dir/runner.config.json}
 export KAOIRO_RUNNER_CONFIG
 node_bin=$(kaoiro_node)
-exec "$node_bin" "$deploy_dir/../dist/kaoiro.js" engines "$@"
+exec env -i PATH="$PATH" KAOIRO_RUNNER_CONFIG="$KAOIRO_RUNNER_CONFIG" \
+  KAOIRO_CODEX_NATIVE_IDENTITY="$deploy_dir/../dist/codex-native.json" \
+  "$node_bin" "$deploy_dir/../dist/kaoiro.js" engines "$@"

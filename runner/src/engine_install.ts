@@ -6,7 +6,6 @@ import {
 } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { EngineKind } from "@kaoiro/protocol";
 import { effectiveCapabilities, loadRunnerConfig } from "./config.js";
 import { engineArtifact, engineBinaryPath, isEngine } from "./engines.js";
@@ -37,7 +36,8 @@ export async function installArtifact(
   root: string, engine: EngineKind,
   artifact: { name: string; version: string; integrity: string },
   registry: string,
-  identityPath = fileURLToPath(new URL("./codex-native.json", import.meta.url)),
+  // The verifier does not require this file; Codex acquisition checks it.
+  identityPath = process.env.KAOIRO_CODEX_NATIVE_IDENTITY,
 ): Promise<void> {
   const store = join(root, "engines");
   const basename = artifact.name.split("/")[1]!;
@@ -77,6 +77,7 @@ export async function installArtifact(
     }
     const pkg = join(stage, "package");
     if (engine === "codex") {
+      if (!identityPath) throw new Error("Codex native identity path missing");
       const identity = JSON.parse(readFileSync(identityPath, "utf8")) as {
         version: string; sha256: string;
       };

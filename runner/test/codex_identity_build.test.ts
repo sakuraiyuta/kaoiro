@@ -1,3 +1,4 @@
+import "../../scripts/test/fixtures/test-isolation.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -42,6 +43,11 @@ it("builds the target identity from the pinned native package", () => {
       createHash("sha256").update("native fixture").digest("hex"),
     );
     expect(join(root, identity.path)).toBe(binary);
+    mkdirSync(join(root, "node_modules/.pnpm", `@openai+codex@${pin.version}-linux-x64-extra`));
+    const ambiguous = run();
+    expect(ambiguous.status).not.toBe(0);
+    expect(ambiguous.stderr).toContain("missing or ambiguous");
+    rmSync(join(root, "node_modules/.pnpm", `@openai+codex@${pin.version}-linux-x64-extra`), { recursive: true });
     writeFileSync(manifest, JSON.stringify({ version: "wrong" }));
     const bad = run();
     expect(bad.status).not.toBe(0);

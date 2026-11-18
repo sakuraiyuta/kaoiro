@@ -164,12 +164,56 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
 
   const goodExecStart = () => `${root}/current/deploy/kaoiro-runner-launch.sh`;
 
+  it("closes the engine process environment after sourcing runner.env", () => {
+    const envFile = join(dir, "runner.env"), sourced = join(dir, "sourced");
+    const resultFile = join(dir, "child.json"), preload = join(dir, "preload.cjs");
+    const marker = join(dir, "preloaded"), tree = join(root, "releases", B);
+    writeFileSync(preload, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x')`);
+    writeFileSync(envFile, `KAOIRO_RUNNER_TOKEN=from_fixture\n: > '${sourced}'\n`);
+    const entry = `import {writeFileSync} from 'node:fs';
+writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({
+  inherited: 'EXTRA_SECRET' in process.env,
+  token: 'KAOIRO_RUNNER_TOKEN' in process.env,
+  loader: 'NODE_OPTIONS' in process.env
+}));`;
+    writeReleaseTree(tree, B, { extraFiles: { "dist/kaoiro.js": entry } });
+    const result = runScript(join(tree, "deploy/kaoiro-runner-engines.sh"),
+      ["install", "--install-dir", root], {
+        KAOIRO_RUNNER_DIR: dir, KAOIRO_RUNNER_ENV: envFile,
+        KAOIRO_NODE: process.execPath, EXTRA_SECRET: "inert",
+        NODE_OPTIONS: `--require=${preload}`,
+      });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(sourced)).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+    expect(JSON.parse(readFileSync(resultFile, "utf8"))).toEqual({
+      inherited: false, token: false, loader: false,
+    });
+  });
+
+  it("stops before the service when acquisition fails", () => {
+    const entry = `
+if (process.argv[2] === "engines") { process.exit(1); }
+globalThis.__kaoiroStubEntry = true;
+await import("./cli.js");
+`;
+    const archive = makeReleaseTarball(work, B, {
+      extraFiles: { "dist/kaoiro.js": entry },
+    });
+    const result = runUpdate(["--tarball", archive], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+    expect(result.status).not.toBe(0);
+    expect(readCalls().some((line) => line.includes(" stop "))).toBe(false);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+  });
+
   it("runs the candidate acquisition before stopping the service", () => {
     const marker = join(dir, "acquired");
     const entry = `
 if (process.argv[2] === "engines") {
   const fs = await import("node:fs");
-  fs.writeFileSync(process.env.KAOIRO_TEST_MARKER, "acquired");
+  fs.writeFileSync(${JSON.stringify(marker)}, "acquired");
   process.exit(0);
 }
 globalThis.__kaoiroStubEntry = true;
@@ -179,7 +223,6 @@ await import("./cli.js");
       extraFiles: { "dist/kaoiro.js": entry },
     });
     const result = runUpdate(["--tarball", archive], {
-      KAOIRO_TEST_MARKER: marker,
       KAOIRO_SYSTEMCTL: systemctlStub({
         execStart: goodExecStart(),
         onStop: `[ -f ${JSON.stringify(marker)} ] || exit 66`,

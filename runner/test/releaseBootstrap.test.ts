@@ -209,11 +209,11 @@ if (process.argv[2] === "engines") {
   const fs = await import("node:fs");
   const path = await import("node:path");
   if (fs.existsSync(path.join(process.argv[5], "current"))) throw new Error("switched before acquisition");
-  const table = await import(process.env.KAOIRO_TEST_TABLE);
-  const row = table.ENGINE_ARTIFACTS.find(x => x.name === process.env.KAOIRO_TEST_ARTIFACT);
-  row.integrity = process.env.KAOIRO_TEST_INTEGRITY;
-  const module = await import(process.env.KAOIRO_TEST_INSTALL);
-  await module.installEngines(process.argv[5], process.env.KAOIRO_RUNNER_CONFIG, process.env.KAOIRO_TEST_REGISTRY);
+  const table = await import(${JSON.stringify(pathToFileURL(fileURLToPath(new URL("../../wrapper/agent-common/dist/index.js", import.meta.url))).href)});
+  const row = table.ENGINE_ARTIFACTS.find(x => x.name === ${JSON.stringify(artifact.name)});
+  row.integrity = ${JSON.stringify(valid ? integrity : "sha512-invalid")};
+  const module = await import(${JSON.stringify(pathToFileURL(fileURLToPath(new URL("../dist/engine_install.js", import.meta.url))).href)});
+  await module.installEngines(process.argv[5], process.env.KAOIRO_RUNNER_CONFIG, ${JSON.stringify(registry)});
   process.exit(0);
 }
 globalThis.__kaoiroStubEntry = true;
@@ -221,13 +221,7 @@ await import("./cli.js");
 `;
         const revision = revisionOf(`bootstrap-acquire-${valid}`);
         const archive = makeReleaseTarball(work, revision, { extraFiles: { "dist/kaoiro.js": entry } });
-        const result = bootstrap([archive], {
-          KAOIRO_TEST_TABLE: pathToFileURL(fileURLToPath(new URL("../../wrapper/agent-common/dist/index.js", import.meta.url))).href,
-          KAOIRO_TEST_INSTALL: pathToFileURL(fileURLToPath(new URL("../dist/engine_install.js", import.meta.url))).href,
-          KAOIRO_TEST_ARTIFACT: artifact.name,
-          KAOIRO_TEST_INTEGRITY: valid ? integrity : "sha512-invalid",
-          KAOIRO_TEST_REGISTRY: registry,
-        });
+        const result = bootstrap([archive]);
         if (valid) {
           expect(result.status, result.stderr).toBe(0);
           expect(readlinkSync(join(root, "current"))).toBe(`releases/${revision}`);

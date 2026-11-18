@@ -1,14 +1,13 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { engineBinaryPath } from "../runner/dist/engines.js";
 
 const [root, target] = process.argv.slice(2);
-const triples = {
-  "linux-x64": "x86_64-unknown-linux-musl",
-  "darwin-arm64": "aarch64-apple-darwin",
-};
-const triple = triples[target];
-if (!root || !triple) throw new Error("unsupported Codex target");
+const [platform, arch] = (target ?? "").split("-");
+if (!root || !["linux-x64", "darwin-arm64"].includes(target)) {
+  throw new Error("unsupported Codex target");
+}
 const artifacts = await import(
   "../wrapper/agent-common/dist/engine-artifacts.js"
 );
@@ -27,7 +26,7 @@ const pkg = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 if (pkg.version !== `${expected.version}-${target}`) {
   throw new Error("Codex version mismatch");
 }
-const binary = join(packageRoot, "vendor", triple, "bin", "codex");
+const binary = engineBinaryPath("codex", packageRoot, platform, arch);
 const sha256 = createHash("sha256").update(readFileSync(binary)).digest("hex");
 writeFileSync(join(root, "dist/codex-native.json"), `${JSON.stringify({
   path: relative(root, binary), version: expected.version, sha256,
