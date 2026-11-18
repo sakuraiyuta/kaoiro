@@ -62,12 +62,13 @@ responsibilities are not part of contract 1
 ## Paths a wrapper hands to its engine
 
 Some wrappers give their engine a command that starts code from the wrapper
-package. These commands are built from the location of the wrapper's own
-files.
+package. These commands are built from `selfCommand()`: the Node binary, its
+options and the kaoiro entry that the wrapper process was started from,
+followed by `wrapper <engine> <verb>`.
 
 | Engine | Path handed over |
 |---|---|
-| Codex | The MCP server `kaoiro`: `command` is `process.execPath`, `args` is `[<@kaoiro/codex>/dist/bridge.js]`, and the socket is passed in `KAOIRO_BRIDGE_SOCKET`. |
+| Codex | The MCP server `kaoiro`: `command` and `args` are `selfCommand()` (`[process.execPath, ...process.execArgv, entryPath]`) followed by `wrapper`, `codex`, `bridge`; `command` is the first item and `args` the rest. The socket is passed in `KAOIRO_BRIDGE_SOCKET`. |
 | Antigravity | The PreToolUse hook command `<node> ['<execArg>' ...] '<entry>' wrapper antigravity hook`, and instructions to run `<node> ['<execArg>' ...] '<entry>' wrapper antigravity bridge list` or `call <tool> <payload>`, built by one helper (`antigravitySubcommandPrefix`) from `selfCommand()` (`[process.execPath, ...process.execArgv, entryPath]`). Each `execArgv` item (if any) and `<entry>` are unconditionally shell single-quoted (`'` escaped as `'\''`). The wrapper checks hook registration by matching that exact hook command string. The gate builds its bridge regex from the same helper, canonicalising only `<node>` and `<entry>` as paths while preserving and regex-escaping `execArgv`. The runner dispatches `antigravity hook` / `bridge` to exported functions, where `bridge` validates its argument count after the entry and subcommand dispatch (`list`: 1 trailing arg; `call <tool> <payload>`: 3 trailing args); no standalone script existence check is performed. |
 | Claude Code | None to the engine. The runner and the Claude wrapper, through the probe client, start `<entry> wrapper claude-code probe` with the command of contract 1. |
 | Grok | None. The wrapper serves an HTTP MCP endpoint on loopback and hands its URL to Grok. |

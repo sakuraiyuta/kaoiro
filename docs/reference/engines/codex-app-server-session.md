@@ -18,7 +18,9 @@ Start and resume therefore supply `KAOIRO_AGENT=1` to tool shells even with
 `toolHome` is supplied; `CODEX_HOME` is added only when a tool home exists.
 
 `AppServerSession` composes the transport with the existing `ToolHost` and
-`dist/bridge.js`. It binds one thread per lifetime, using either start or
+the MCP bridge, which Codex starts as `kaoiro wrapper codex bridge` (the
+command is in the [launch contract](../protocol/launch-contract.md#paths-a-wrapper-hands-to-its-engine)).
+It binds one thread per lifetime, using either start or
 resume, and supplies the same thread configuration in both cases. Developer
 instructions are a thread field; user text and local images use an ordered,
 closed input converter. Other input kinds, including external messages, are
