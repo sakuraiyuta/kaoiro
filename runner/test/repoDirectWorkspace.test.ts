@@ -461,6 +461,16 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.stderr).not.toContain("pnpm install");
   });
 
+  it("a checkout without the built entry is a build shortage, not a failed exec", () => {
+    unlinkSync(join(runner, "dist", "kaoiro.js"));
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("dist/kaoiro.js");
+    expect(result.stderr).toContain("a build artifact is missing");
+  });
+
   it("intact topology + leaf 欠落のみ (真の build shortage) は、build 完了後に verifier を通す (positive control)", () => {
     // ふじ round3: 「exit 71 の positive case は、案内した build を実行
     // した後に verifier が通ることまで負の control としてください」。
