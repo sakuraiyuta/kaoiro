@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ChildProcess } from "node:child_process";
 import {
   parseProbeStdout,
@@ -42,7 +43,8 @@ it("the default probe child does not inherit the Codex state home", async () => 
     process.env.CODEX_HOME = join(root, "hostile-state");
     process.env.NODE_OPTIONS = `--require=${preload}`;
     process.env.FUJI464_PROBE_MARKER = marker;
-    await runClaudeProbe({ hardTimeoutMs: 5_000 });
+    await runClaudeProbe({ hardTimeoutMs: 5_000, probeCommand: [process.execPath,
+      fileURLToPath(new URL("../../../runner/dist/kaoiro.js", import.meta.url)), "wrapper", "claude-code", "probe"] });
     expect(existsSync(marker)).toBe(true);
     expect(readFileSync(marker, "utf8")).toBe("<unset>");
   } finally {

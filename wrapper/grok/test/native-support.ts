@@ -136,7 +136,8 @@ export async function nativeRun(
   permissions?: LivePermissions | ((payload: Record<string, unknown>) => boolean),
   hostOptions?: Pick<GrokHostOptions, "onLaneStep">,
   extras: {
-    argv?: string[];
+    /** The session this launch continues, as the launch file names it. */
+    resume?: string;
     onSessionId?: (id: string) => void;
     /** Asks for a history replay on join and records where in the envelope
      *  stream its reset and completion fell. */
@@ -145,9 +146,10 @@ export async function nativeRun(
 ) {
   const folder = mkdtempSync(join(tmpdir(), "kaoiro-grok-native-config-"));
   const file = join(folder, "agent.json");
-  writeFileSync(file, JSON.stringify(config));
+  writeFileSync(file, JSON.stringify({ ...config,
+    ...(extras.resume === undefined ? {} : { resume_session_id: extras.resume }) }));
   const previous = process.argv;
-  process.argv = [previous[0]!, previous[1]!, file, ...(extras.argv ?? [])];
+  process.argv = [previous[0]!, previous[1]!, "run", file];
   const envelopes: Envelope[] = [];
   const metadata: WireMetadata[] = [];
   let callbacks!: ServerLinkOptions;

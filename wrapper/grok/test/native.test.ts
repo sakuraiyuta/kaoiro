@@ -45,7 +45,7 @@ it.skipIf(!live)(
     const file = join(dir, "agent.json");
     writeFileSync(file, JSON.stringify(config));
     const argv = process.argv;
-    process.argv = [argv[0]!, argv[1]!, file];
+    process.argv = [argv[0]!, argv[1]!, "run", file];
     const envelopes: Envelope[] = [];
     const metadata: WireMetadata[] = [];
     const outbound: Envelope[] = [];

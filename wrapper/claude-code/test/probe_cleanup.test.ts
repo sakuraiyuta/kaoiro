@@ -31,7 +31,7 @@ function fake(pid: number | undefined = 9123) {
   });
   const diagnostic = vi.fn();
   const deps: ProbeSpawnDeps = { superviseProcessTree: true,
-    spawn: launch, groupSignal: signal,
+    probeCommand: ["node", "probe"], spawn: launch, groupSignal: signal,
     diagnostic, killEscalateMs: 50 };
   const close = (code = 0) => {
     Object.assign(child, { exitCode: code });
