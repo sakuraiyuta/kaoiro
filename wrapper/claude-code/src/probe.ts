@@ -83,12 +83,14 @@ interface CliArgs {
   timeoutMs: number;
   usage: boolean;
   cwd?: string;
+  engineExecutable?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
   let timeoutMs = 30_000;
   let usage = false;
   let cwd: string | undefined;
+  let engineExecutable: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--timeout-ms" && i + 1 < argv.length) {
@@ -108,6 +110,8 @@ function parseArgs(argv: string[]): CliArgs {
     } else if (arg === "--probe-cwd") {
       // Internal launcher argument: the parent owns and removes this cwd.
       cwd = argv[++i];
+    } else if (arg === "--engine-executable") {
+      engineExecutable = argv[++i];
     } else if (arg === "--usage") {
       usage = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -118,7 +122,8 @@ function parseArgs(argv: string[]): CliArgs {
       process.exit(0);
     }
   }
-  return { timeoutMs, usage, ...(cwd === undefined ? {} : { cwd }) };
+  return { timeoutMs, usage, ...(cwd === undefined ? {} : { cwd }),
+    ...(engineExecutable === undefined ? {} : { engineExecutable }) };
 }
 
 /** Map an SDK ModelInfo (structural — the SDK type may have extra optional
@@ -235,6 +240,9 @@ export async function runProbe(
       prompt: neverYields(),
       options: {
         cwd,
+        ...(args.engineExecutable === undefined ? {} : {
+          pathToClaudeCodeExecutable: args.engineExecutable,
+        }),
         // Minimize side effects: no MCP, no built-in tools, no hooks,
         // no agents, no additional directories. OAuth/keychain are
         // preserved by inheriting the parent env (default). See file header.

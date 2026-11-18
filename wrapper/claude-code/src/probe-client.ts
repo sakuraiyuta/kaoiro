@@ -70,6 +70,7 @@ export interface ProbeSpawnDeps {
   /** Grace period between SIGTERM and SIGKILL. */
   killEscalateMs?: number;
   includeUsage?: boolean;
+  engineExecutable?: string | undefined;
   signal?: AbortSignal;
 }
 
@@ -100,7 +101,9 @@ export async function runClaudeProbe(
         command!,
         [...prefix, "--timeout-ms", String(PROBE_INTERNAL_TIMEOUT_MS),
           ...(cwd ? ["--probe-cwd", cwd] : []),
-          ...(deps.includeUsage ? ["--usage"] : [])],
+          ...(deps.includeUsage ? ["--usage"] : []),
+          ...(deps.engineExecutable === undefined ? [] :
+            ["--engine-executable", deps.engineExecutable])],
         {
           // Preserve the SDK's auth sources without exporting Codex state.
           stdio: ["ignore", "pipe", "pipe"],

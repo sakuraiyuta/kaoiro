@@ -1317,7 +1317,10 @@ export class CodexHost implements EngineAdapter {
         onForeignTurn: turn => this.#onForeignTurn(turn),
         enforceForeignTurn: this.#options.operatorSteer !== undefined || this.#options.interAgentSteer !== undefined,
         ...(this.#options.appServerApprovals === undefined ? {} : { approvals: this.#options.appServerApprovals }),
-        transport: { shutdownTimeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS },
+        transport: { shutdownTimeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
+          ...(this.#config.engine_executable === undefined ? {} : {
+            engineExecutable: this.#config.engine_executable,
+          }) },
       },
       approvalAxis: this.#approvalAxis,
       effortIntent: this.#effort !== null && this.#effortSource !== "default" ? "explicit" : "default",

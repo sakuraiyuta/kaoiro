@@ -103,6 +103,33 @@ describe("initialStatusExt", () => {
   });
 });
 
+describe("explicit engine executable", () => {
+  it("passes the launch path to the probe launcher", async () => {
+    const probeFn = vi.fn(async () => ({ ok: false, elapsed_ms: 0 }));
+    const host = new AgentHost({ ...config, engine_executable: "/engine/claude" }, {
+      onState: () => {}, probeFn,
+    });
+    await host.probeRateLimits();
+    expect(probeFn).toHaveBeenCalledWith(expect.objectContaining({
+      engineExecutable: "/engine/claude",
+    }));
+    await host.close();
+  });
+  it("passes the launch path to the SDK query", async () => {
+    let seen: string | undefined;
+    const host = new AgentHost({ ...config, engine_executable: "/engine/claude" }, {
+      onState: () => {},
+      queryFn: makeQueryFn(({ options }) => {
+        seen = options.pathToClaudeCodeExecutable;
+        return asQuery((async function* () { yield result("success", { result: "ok" }); })());
+      }),
+    });
+    await host.run("hello");
+    expect(seen).toBe("/engine/claude");
+    await host.close();
+  });
+});
+
 describe("AgentHost whoami effective projection (#113)", () => {
   it.each([undefined, "", "1", "legacy"])("marks SDK child env and filters CODEX_HOME with inherited marker %s", async marker => {
     let seen: NodeJS.ProcessEnv | undefined;

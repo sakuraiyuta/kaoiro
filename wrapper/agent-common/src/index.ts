@@ -3,6 +3,7 @@
 // envelope builders, the EngineAdapter interface, the permission / question
 // brokers, and the common tool description layer.
 
+export { ENGINE_ARTIFACTS } from "./engine-artifacts.js";
 export { askUserQuestionDescriptor } from "./ask_user_question.js";
 export { AGENT_MARKER_ENV, withAgentMarker } from "./agent_environment.js";
 export { mergeExtraModels } from "./catalog.js";

@@ -3191,6 +3191,9 @@ export class AgentHost implements EngineAdapter {
           : {}),
       },
       ...this.#options.queryOptions,
+      ...(this.#config.engine_executable === undefined ? {} : {
+        pathToClaudeCodeExecutable: this.#config.engine_executable,
+      }),
       env: childEnv,
       // PRE-run model / effort switches override the constructor snapshot;
       // queryOptions alone would retain the spawn-time values and silently
@@ -4274,6 +4277,7 @@ export class AgentHost implements EngineAdapter {
     this.#probeTasks.add(pending);
     try {
       void this.#probeFn({ includeUsage, superviseProcessTree: true,
+        engineExecutable: this.#config.engine_executable,
         signal: this.#startupProbeAbort.signal }).then(resolve, reject);
     } catch (error) { reject(error); }
     void pending.finally(() => this.#probeTasks.delete(pending))
