@@ -62,10 +62,10 @@ plugins = false
 enabled = false
 `);
     const launcher = join(home, "delayed-bridge.mjs");
-    await writeFile(launcher, `import { pathToFileURL } from "node:url";
+    await writeFile(launcher, `import { spawn } from "node:child_process";
 await new Promise(resolve => setTimeout(resolve, 2500));
-process.argv.splice(1, 1);
-await import(pathToFileURL(process.argv[1]).href);
+const child = spawn(process.execPath, process.argv.slice(2), { stdio: "inherit" });
+child.on("exit", (code) => { process.exit(code ?? 1); });
 `);
     vi.stubEnv("HOME", home); vi.stubEnv("CODEX_HOME", home);
     for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(key, undefined);

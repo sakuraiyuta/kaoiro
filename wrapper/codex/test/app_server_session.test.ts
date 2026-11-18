@@ -6,6 +6,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { access, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { selfCommand } from "@kaoiro/wrapper-core";
 import { AppServerSession } from "../src/app_server_session.js";
 import { ToolHost } from "../src/toolhost.js";
 import { BRIDGE_TOOL_TIMEOUT_SEC } from "../src/host.js";
@@ -102,8 +103,11 @@ it.each([undefined, false, true])("uses exec-equivalent bridge settings and expl
   const config = params.config as { features: unknown; mcp_servers: { kaoiro: { command: string; args: string[]; env: Record<string, string>; tool_timeout_sec: number; default_tools_approval_mode: string } } };
   expect(config.features).toEqual({ multi_agent: internalSubagents ?? true });
   const bridge = config.mcp_servers.kaoiro;
-  expect(bridge.command).toBe(process.execPath);
-  expect(bridge.args[0]).toMatch(/\/dist\/bridge\.js$/);
+  const [command, ...args] = [
+    ...selfCommand(), "wrapper", "codex", "bridge",
+  ];
+  expect(bridge.command).toBe(command);
+  expect(bridge.args).toEqual(args);
   expect(bridge.tool_timeout_sec).toBe(BRIDGE_TOOL_TIMEOUT_SEC);
   expect(bridge.default_tools_approval_mode).toBe("approve");
   expect(bridge).toMatchObject({ required: true, startup_timeout_sec: 30 });

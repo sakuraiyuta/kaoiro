@@ -8,8 +8,6 @@
 
 import { appendFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
@@ -110,43 +108,38 @@ class ToolHostClient {
   }
 }
 
-async function main(): Promise<void> {
-  const socketPath = process.env.KAOIRO_BRIDGE_SOCKET;
-  if (!socketPath) {
-    reportStderr("KAOIRO_BRIDGE_SOCKET is not set\n");
-    process.exitCode = 1;
-    return;
-  }
-  const client = new ToolHostClient(socketPath);
-  const server = new Server(
-    { name: "kaoiro", version: "0.0.0" },
-    { capabilities: { tools: {} } },
-  );
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const response = await client.request({ method: "list_tools" });
-    return { tools: (response.tools ?? []) as never };
-  });
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const response = await client.request({
-      method: "call_tool",
-      name: request.params.name,
-      input: request.params.arguments ?? {},
-      metadata: request.params._meta,
+export async function main(): Promise<void> {
+  try {
+    const socketPath = process.env.KAOIRO_BRIDGE_SOCKET;
+    if (!socketPath) {
+      reportStderr("KAOIRO_BRIDGE_SOCKET is not set\n");
+      process.exitCode = 1;
+      return;
+    }
+    const client = new ToolHostClient(socketPath);
+    const server = new Server(
+      { name: "kaoiro", version: "0.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
+      const response = await client.request({ method: "list_tools" });
+      return { tools: (response.tools ?? []) as never };
     });
-    return (response.result ?? {
-      content: [{ type: "text", text: "tool host returned no result" }],
-      isError: true,
-    }) as never;
-  });
-  await server.connect(new StdioServerTransport());
-}
-
-if (
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  main().catch((error: unknown) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const response = await client.request({
+        method: "call_tool",
+        name: request.params.name,
+        input: request.params.arguments ?? {},
+        metadata: request.params._meta,
+      });
+      return (response.result ?? {
+        content: [{ type: "text", text: "tool host returned no result" }],
+        isError: true,
+      }) as never;
+    });
+    await server.connect(new StdioServerTransport());
+  } catch (error: unknown) {
     reportStderr(`${String(error)}\n`);
     process.exitCode = 1;
-  });
+  }
 }
