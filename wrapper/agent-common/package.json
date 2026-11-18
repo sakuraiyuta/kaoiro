@@ -9,7 +9,8 @@
   "scripts": {
     "build": "node scripts/generate-engine-artifacts.mjs && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "node scripts/generate-engine-artifacts.mjs"
   },
   "dependencies": {
     "@kaoiro/wrapper-core": "workspace:*",
