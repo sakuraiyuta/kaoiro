@@ -27,9 +27,6 @@
     "./dist/probe.js": "./dist/probe.js",
     "./package.json": "./package.json"
   },
-  "bin": {
-    "kaoiro-claude-probe": "./dist/probe.js"
-  },
   "kaoiro": {
     "runtimeAssets": [
       "dist/probe.js",
