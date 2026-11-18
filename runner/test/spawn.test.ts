@@ -37,12 +37,15 @@ process.exit(0);`);
     });
     await run();
     mkdirSync(store, { recursive: true });
+    await run();
     writeFileSync(join(store, "claude"), "engine");
     await run();
     const first = JSON.parse(readFileSync(join(scratch, "agent-0.json.result"), "utf8"));
     const second = JSON.parse(readFileSync(join(scratch, "agent-1.json.result"), "utf8"));
+    const third = JSON.parse(readFileSync(join(scratch, "agent-2.json.result"), "utf8"));
     expect(first.engine_executable).toBeUndefined();
-    expect(second.engine_executable).toBe(join(store, "claude"));
+    expect(second.engine_executable).toBeUndefined();
+    expect(third.engine_executable).toBe(join(store, "claude"));
   } finally {
     for (const [name, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[name];

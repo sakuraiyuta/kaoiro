@@ -1,3 +1,4 @@
+import "../../scripts/test/fixtures/test-isolation.mjs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -242,7 +243,8 @@ describe("engine acquisition", () => {
         throw new Error("no address");
       }
       await expect(installArtifact(dir, "codex", artifact,
-        `http://127.0.0.1:${address.port}`)).rejects.toThrow();
+        `http://127.0.0.1:${address.port}`,
+        join(dir, "missing-identity.json"))).rejects.toThrow(/missing-identity\.json/);
       expect(requests).toEqual(["/@openai/codex/-/codex-1-linux-x64.tgz"]);
       expect(readdirSync(join(dir, "engines"))).toEqual([]);
     } finally {

@@ -73,7 +73,10 @@ export function engineArtifact(engine: EngineKind) {
   return ENGINE_ARTIFACTS.find((item) => item.name === name);
 }
 
-export function engineBinaryPath(engine: EngineKind, packageDir: string): string {
+export function engineBinaryPath(
+  engine: EngineKind, packageDir: string,
+  platform = process.platform, arch = process.arch,
+): string {
   if (engine === "claude-code") return join(packageDir, "claude");
   const triples: Record<string, string> = {
     "linux:x64": "x86_64-unknown-linux-musl",
@@ -81,7 +84,7 @@ export function engineBinaryPath(engine: EngineKind, packageDir: string): string
     "darwin:x64": "x86_64-apple-darwin",
     "darwin:arm64": "aarch64-apple-darwin",
   };
-  const triple = triples[`${process.platform}:${process.arch}`];
+  const triple = triples[`${platform}:${arch}`];
   if (!triple) throw new Error("Unsupported Codex platform");
   return join(packageDir, "vendor", triple, "bin", "codex");
 }
@@ -91,6 +94,6 @@ export function storedEngineExecutable(engine: EngineKind): string | undefined {
   const artifact = engineArtifact(engine);
   if (!store || !artifact) return undefined;
   const dir = join(store, `${artifact.name.split("/")[1]}@${artifact.version}`);
-  if (!existsSync(dir)) return undefined;
-  return engineBinaryPath(engine, dir);
+  const binary = engineBinaryPath(engine, dir);
+  return existsSync(binary) ? binary : undefined;
 }

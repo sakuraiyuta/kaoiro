@@ -573,7 +573,7 @@ describe.skipIf(process.platform !== "linux")("managed child environments", { ti
     const alt=join(h.dir,"alt-config"),recorder=join(h.dir,"selector-node.sh");
     writeFileSync(recorder,`#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(h.dir,"selector.log")}'\nexec '${process.execPath}' "$@"\n`,{mode:0o755});
     const env: Record<string, string | undefined>={ ...h.env() };
-    delete env.KAOIRO_RUNNER_DIR; delete env.KAOIRO_RUNNER_ENV; delete env.XDG_CONFIG_HOME;
+    env.KAOIRO_RUNNER_DIR = undefined; env.KAOIRO_RUNNER_ENV = undefined; env.XDG_CONFIG_HOME = undefined;
     const file=selector==="KAOIRO_RUNNER_DIR"?join(alt,"runner.env"):selector==="KAOIRO_RUNNER_ENV"?join(alt,"selected.env"):join(alt,"kaoiro/runner.env");
     env[selector]=selector==="KAOIRO_RUNNER_ENV"?file:alt;
     mkdirSync(dirname(file),{recursive:true}); writeFileSync(file,`KAOIRO_NODE='${recorder}'\n`,{mode:0o600});
