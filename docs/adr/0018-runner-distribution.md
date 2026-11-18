@@ -187,6 +187,18 @@ Omissions are caught in CI by `runner/test/runtimeAssetDeclarations.test.ts`. Th
 
 The trust boundary is the same as the `dependencies` map and no more. Anyone who can rewrite MANIFEST.json can also rewrite this field. It closes builder bugs and partial damage, not tampering.
 
+### Revision (2026-11-18)—The runner starts its own entry
+
+[ADR-0076](0076-single-kaoiro-entry-point.md) replaces the per-spawn
+resolution described in the 2026-08-16 revision. The runner no longer resolves
+a wrapper package from disk: it starts the kaoiro entry it was itself started
+from, by the real path of that entry, with a subcommand. The immutable release
+and the atomic switch stand, and so does the reason for them, since the entry
+still imports the wrapper modules from the release it belongs to. The Claude
+probe is now a subcommand that the entry imports by package name; its
+declaration stays, and the runner declares the two modules of its own that the
+entry imports.
+
 ## Consequences
 
 ### Positive

@@ -23,8 +23,13 @@ and hand issue #140 three constraints" on 2026-11-18.
 Implementation state: D3 records the behaviour that exists, stated in
 [Launch contract](../reference/protocol/launch-contract.md). D4 is
 implemented by [issue #1169](https://github.com/sakuraiyuta/kaoiro/issues/1169)
-(`develop` at `fda95f95`). D1, D2 and D6 are implemented in issue #140
-stage 1; until then the reference page describes the old form.
+(`develop` at `fda95f95`). D1 and D2 are implemented for the start of a
+wrapper and of the Claude probe by
+[ADR-0076](0076-single-kaoiro-entry-point.md)
+([issue #1177](https://github.com/sakuraiyuta/kaoiro/issues/1177)). The
+bridge and hook commands handed to an engine, and D6, follow in later units of
+issue #140 stage 1; until then the reference page describes them in the old
+form.
 
 Partially supersedes the launch parts of
 [ADR-0017](0017-wrapper-multientity-packages.md),
