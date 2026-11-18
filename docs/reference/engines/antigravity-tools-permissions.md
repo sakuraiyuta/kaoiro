@@ -290,27 +290,35 @@ production CLI close path with a real fixture subtree; and
 ### Tool definition (CLI bridge over the wrapper tool host)
 
 The Antigravity wrapper starts its own `ToolHost` (NDJSON over a socket in a
-private temporary directory: `list_tools` / `call_tool`) and ships
-`dist/bridge.js` as a **CLI** bridge. `ToolHost.listen()` and
+private temporary directory: `list_tools` / `call_tool`) and exposes a
+**CLI** bridge via the `kaoiro wrapper antigravity bridge` subcommand
+(`runAntigravityBridge` in `dist/bridge.js`). `ToolHost.listen()` and
 `GateServer.listen()` both complete before the `agy` child starts. The
 measured absence of MCP in headless mode is recorded in
 [Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#mcp-is-not-available-in-headless-mode).
-The bridge accepts these invocations:
+The bridge accepts these invocations (built by `antigravitySubcommandPrefix`,
+unconditionally shell single-quoting each `execArgv` item, when present, and the
+`kaoiro` entry path with `'` escaped as `'\''`):
 
 ```text
-<node absolute path> <bridge absolute path> call <tool_name> <base64url-json>
-<node absolute path> <bridge absolute path> list
+<node absolute path> ['<execArg>' ...] '<kaoiro entry absolute path>' wrapper antigravity bridge call <tool_name> <base64url-json>
+<node absolute path> ['<execArg>' ...] '<kaoiro entry absolute path>' wrapper antigravity bridge list
 ```
 
 - The model learns the bridge from the always-on rules file (tool names,
   one-line contracts, the exact invocation form) and a skill with fuller
   examples. The socket path and per-spawn nonce travel in the environment
   of the `agy` child, which `run_command` inherits *(measured)*.
-- The gate auto-allows a `run_command` only when its `CommandLine`
-  full-matches the bridge grammar of ADR-0057 F5 (absolute paths, tool
-  name, base64url payload; no shell metacharacters possible). `run_command`
-  runs through `bash` *(measured: `$0` = bash, `/proc/$$/exe` = bash)*, so
-  `;`, `&&`, `$(…)` in a command line are interpreted *(measured)*.
+- The gate auto-allows a `run_command` only when `Cwd` resolves to the
+  agent's canonical cwd, `WaitMsBeforeAsync` meets the floor, and
+  `CommandLine` full-matches the bridge grammar of ADR-0057 F5 (escaped
+  `antigravitySubcommandPrefix` with canonical node path, exact quoted
+  `execArgv` if any, canonical quoted entry path, and
+  `wrapper antigravity bridge`; plus `list` or `call <tool_name> <base64url-json>`
+  for a registered tool with parseable JSON object input and no trailing
+  arguments or shell syntax). `run_command` runs through `bash` *(measured:
+  `$0` = bash, `/proc/$$/exe` = bash)*, so `;`, `&&`, `$(…)` in a command line
+  are interpreted *(measured)*.
 - `ask_user_question` goes through the same bridge; the bridge blocks until
   the operator answers, which holds the `run_command` step and therefore the
   turn *(a 70 s tool call held the turn, measured)* — the same mechanism
