@@ -50,10 +50,3 @@ export const ENGINES: Record<EngineKind, Engine> = {
 export function isEngine(value: unknown): value is EngineKind {
   return typeof value === "string" && Object.hasOwn(ENGINES, value);
 }
-
-export function hostLibc(): "glibc" | "musl" {
-  const report = process.report.getReport() as {
-    header: { glibcVersionRuntime?: string };
-  };
-  return report.header.glibcVersionRuntime ? "glibc" : "musl";
-}

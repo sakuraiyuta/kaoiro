@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import { AppServerRpc } from "../src/app_server_rpc.js";
 
 it("starts the app-server from the explicit executable", async () => {
-  const root = mkdtempSync(join(tmpdir(), "momo1193-codex-"));
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-engine-codex-"));
   const executable = join(root, "codex");
   const marker = join(root, "started");
   writeFileSync(executable, `#!/bin/sh\nprintf started > '${marker}'\n`, { mode: 0o755 });
