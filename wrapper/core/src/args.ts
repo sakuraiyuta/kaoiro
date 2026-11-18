@@ -17,15 +17,15 @@ export class CliUsageError extends Error {
 // initial prompt and the resume target are fields of the launch file, so they
 // never reach the process list.
 export function parseCliArgs(argv: string[]): CliArgs {
+  const usage = new CliUsageError("usage: kaoiro wrapper <engine> run <launch file>");
   let positionals: string[];
   try {
+    // No option is defined, so parseArgs rejects every `--flag`.
     ({ positionals } = parseArgs({ args: argv, allowPositionals: true }));
-  } catch (error) {
-    throw new CliUsageError(error instanceof Error ? error.message : String(error));
+  } catch {
+    throw usage;
   }
   const [verb, configPath, ...rest] = positionals;
-  if (verb !== "run" || configPath === undefined || rest.length > 0) {
-    throw new CliUsageError("usage: kaoiro wrapper <engine> run <launch file>");
-  }
+  if (verb !== "run" || configPath === undefined || rest.length > 0) throw usage;
   return { configPath };
 }
