@@ -40,10 +40,9 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 // The runner is started by plain node with tsx's ESM loader, not the tsx CLI.
 // The CLI relays SIGTERM to its child on a 30 ms reply window and exits 143
 // when the child answers late (see the first test). Production starts node on
-// the built dist/cli.js directly (runner/src/spawn.ts:79), so the loader is
-// the only tsx code in this test's launch path, and the signal goes straight
-// to the process that owns the handler. The tsx CLI's dev path (KAOIRO_WRAPPER_DEV,
-// `tsx watch`, runner/src/spawn.ts:65-77) has the same relay; it is not used here.
+// the built entry directly (runner/src/spawn.ts), so the loader is the only
+// tsx code in this test's launch path, and the signal goes straight to the
+// process that owns the handler.
 const tsxEsmUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 const cliSrcPath = join(testDir, "..", "src", "cli.ts");
 const hostSrcPath = join(testDir, "..", "src", "host.ts");
@@ -168,8 +167,8 @@ const config = {
 };
 
 await runClaudeCli({
-  parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
-  loadConfig: () => config,
+  parseCliArgs: () => ({ configPath: "test" }),
+  loadConfig: () => ({ initial_prompt: "first instruction", ...config }),
   createHost: (cfg, options) =>
     new AgentHost(cfg, {
       ...options,

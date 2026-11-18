@@ -2,13 +2,12 @@
 // real wrapper child process. Factored out from the supervisor so the
 // supervision logic can be tested without spawning processes.
 
-import { readRecoveryCheckpoint, writeRecoveryCheckpoint } from "@kaoiro/wrapper-core";
+import { readRecoveryCheckpoint, selfCommand, writeRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import type { RecoverySnapshot } from "@kaoiro/wrapper-core";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { EngineKind, WrapperConfig } from "@kaoiro/protocol";
 import type { LaunchFn, ManagedChild } from "./supervisor.js";
 
@@ -60,61 +59,16 @@ export function toManagedChild(child: ExitErrorChild, readRecovery?: () => Recov
   return managed;
 }
 
-/** Engine kind -> wrapper package (ADR-0032 F4a, ADR-0057 F1). */
-const ENGINE_PACKAGES: Record<EngineKind, string> = {
-  "claude-code": "@kaoiro/claude-code",
-  codex: "@kaoiro/codex",
-  antigravity: "@kaoiro/antigravity",
-  grok: "@kaoiro/grok",
-};
-
-// Leading argv for `process.execPath` (node) that runs the wrapper of the
-// requested engine. Default (prod) runs the built dist directly; the wrapper
-// packages declare no exports field so the subpath resolves, and the
-// single-binary build bundles them alongside (ADR-0018). When
-// KAOIRO_WRAPPER_DEV is set, run the wrapper from TS source under `tsx watch`
-// so source edits hot-reload the running agent: tsx restarts the inner script
-// on change while the supervised process (tsx) stays up. This is a dev-only
-// path (scripts/dev.sh); prod is unaffected.
-export function resolveWrapperLaunch(
-  engine: EngineKind = "claude-code",
-): string[] {
-  const require = createRequire(import.meta.url);
-  const pkg = ENGINE_PACKAGES[engine];
-  if (process.env.KAOIRO_WRAPPER_DEV) {
-    const tsxPkgPath = require.resolve("tsx/package.json");
-    const tsxPkg = JSON.parse(readFileSync(tsxPkgPath, "utf8")) as {
-      bin: string | Record<string, string>;
-    };
-    const tsxRel = typeof tsxPkg.bin === "string" ? tsxPkg.bin : tsxPkg.bin.tsx;
-    if (tsxRel === undefined) {
-      throw new Error("KAOIRO_WRAPPER_DEV: tsx package has no bin entry");
-    }
-    const tsxBin = join(dirname(tsxPkgPath), tsxRel);
-    const wrapperPkgPath = require.resolve(`${pkg}/package.json`);
-    const wrapperSrc = join(dirname(wrapperPkgPath), "src", "cli.ts");
-    return [tsxBin, "watch", wrapperSrc];
-  }
-  return [require.resolve(`${pkg}/dist/cli.js`)];
-}
-
 /**
  * Builds the default launcher. It owns a private temp dir (0700 via mkdtemp)
  * holding the per-agent wrapper config files; those carry the server_token, so
- * each is written 0600 and removed when its child exits.
+ * each is written 0600 and removed when its child exits. `command` starts the
+ * kaoiro entry; a wrapper is `<command...> wrapper <engine> run <launch file>`
+ * (ADR-0076).
  */
-export function makeLauncher(): LaunchFn {
-  // Per-engine launch prefixes, resolved lazily: a host that never spawns
-  // codex never require.resolves that package.
-  const prefixes = new Map<EngineKind, string[]>();
-  const launchPrefixFor = (engine: EngineKind): string[] => {
-    let prefix = prefixes.get(engine);
-    if (prefix === undefined) {
-      prefix = resolveWrapperLaunch(engine);
-      prefixes.set(engine, prefix);
-    }
-    return prefix;
-  };
+export function makeLauncher(command: string[] = selfCommand()): LaunchFn {
+  const [node, ...entry] = command;
+  if (node === undefined) throw new Error("makeLauncher: empty command");
   const dir = mkdtempSync(join(tmpdir(), "kaoiro-runner-"));
   let counter = 0;
 
@@ -141,12 +95,18 @@ export function makeLauncher(): LaunchFn {
     const configPath = join(dir, `${agentId}-${counter}.json`);
     const checkpointPath = `${configPath}.recovery`;
     counter += 1;
-    const prefix = launchPrefixFor(engine);
     const toolHome = engine === "codex"
       ? mkdtempSync(join(dir, "codex-tool-")) : undefined;
     const childConfig = { ...config, recovery_checkpoint_path: checkpointPath };
     if (toolHome === undefined) delete childConfig.codex_tool_home;
     else childConfig.codex_tool_home = toolHome;
+    // Both travel in the 0600 launch file, never in the arguments, which any
+    // local user can read from the process list. They are per launch, so a
+    // value on `config` is not carried over: a relaunch gets no prompt.
+    if (initialPrompt === undefined) delete childConfig.initial_prompt;
+    else childConfig.initial_prompt = initialPrompt;
+    if (resumeSessionId === undefined) delete childConfig.resume_session_id;
+    else childConfig.resume_session_id = resumeSessionId;
     const childEnv = { ...process.env };
     if (engine !== "codex") delete childEnv.CODEX_HOME;
     let cleaned = false;
@@ -163,18 +123,12 @@ export function makeLauncher(): LaunchFn {
       }
     };
 
-    // wrapper CLI: [configPath] [prompt] [--resume <id>]. The prompt is the
-    // positional after configPath, so it must precede the --resume flag.
-    // The prefix is the engine's dist entry (prod) or `tsx watch src/cli.ts`
-    // (dev).
-    const args = [...prefix, configPath];
-    if (initialPrompt !== undefined) args.push(initialPrompt);
-    if (resumeSessionId !== undefined) args.push("--resume", resumeSessionId);
+    const args = [...entry, "wrapper", engine, "run", configPath];
     let child: ReturnType<typeof spawn>;
     try {
       writeRecoveryCheckpoint(checkpointPath, { version: 1, state: "initial" });
       writeFileSync(configPath, JSON.stringify(childConfig), { mode: 0o600 });
-      child = spawn(process.execPath, args, { cwd, stdio: "inherit", env: childEnv });
+      child = spawn(node, args, { cwd, stdio: "inherit", env: childEnv });
     } catch (error) {
       cleanup();
       throw error;

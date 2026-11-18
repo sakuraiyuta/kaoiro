@@ -5,7 +5,7 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 // still answer it. This exercises the REAL, unmodified shim script bytes
 // (copied verbatim, not reimplemented) against a fixture "deploy/ + dist/"
 // layout that mirrors what scripts/build-runner-tarball.sh actually ships
-// — only the entry point (dist/cli.js) is a stub, since building the real
+// — only the entry point (dist/kaoiro.js) is a stub, since building the real
 // one here would require a full `pnpm -C runner build` this test suite
 // does not depend on.
 import { execFileSync } from "node:child_process";
@@ -53,7 +53,7 @@ const path = require("node:path");
   process.stdout.write(\`\${label} / \${info.branch ?? "unknown"} / \${shortHash}\\n\`);
   process.exit(0);
 }
-process.stdout.write("stub cli.js: no --version given\\n");
+process.stdout.write("stub kaoiro.js: no --version given\\n");
 process.exit(1);
 `;
 
@@ -66,7 +66,7 @@ function buildFixture(dir: string, buildInfo: BuildInfo): void {
   writeFileSync(shimPath, shimSource);
   chmodSync(shimPath, 0o755);
   writeFileSync(join(deployDir, "kaoiro-runner-common.sh"), commonSource);
-  writeFileSync(join(distDir, "cli.js"), STUB_CLI);
+  writeFileSync(join(distDir, "kaoiro.js"), STUB_CLI);
   writeFileSync(join(distDir, "build-info.json"), JSON.stringify(buildInfo));
 }
 

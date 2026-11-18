@@ -60,8 +60,7 @@ const wire = await phoenixLoopback(() => ({ permission_sync: false }));
 const config = { agent_id: `fuji485-gate-${randomUUID()}`, persona: { id: "fuji", name: "Fuji", sprite_set: "fuji" }, display_name: "Fuji context gate",
   server_url: wire.url, codex_backend: "app-server", cwd: output, model: "gpt-6.1-sol", effort: "low", sandbox: "read-only", network_access: false, codex_internal_subagents: false, codex_auth_mode: "chatgpt" };
 const file = join(output, "config.json");writeFileSync(file, JSON.stringify(config), { mode: 0o600 });
-process.argv = [process.execPath, join(root, "wrapper/codex/dist/cli.js"), file];
-const running = runCodexCli();let failure: unknown;void running.catch(error => { failure = error; });
+const running = runCodexCli({}, ["run", file]);let failure: unknown;void running.catch(error => { failure = error; });
 const states = () => wire.received.filter(e => e.event === "envelope" && e.payload.type === "state_change").map(e => e.payload as any);
 async function until(predicate: () => boolean, label: string, ms = 180000) {
   const deadline = Date.now() + ms;

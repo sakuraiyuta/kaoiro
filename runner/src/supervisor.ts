@@ -86,9 +86,8 @@ export interface ManagedChild {
 }
 
 /** Launches one wrapper child. resumeSessionId, when set, continues an existing
- *  SDK session (the launcher passes it to the wrapper as `--resume`).
- *  initialPrompt, when set, is the wrapper's first turn (passed as the positional
- *  prompt arg). */
+ *  SDK session. initialPrompt, when set, is the wrapper's first turn. The
+ *  launcher passes both to the wrapper in the launch file. */
 export type LaunchFn = (
   agentId: string,
   config: WrapperConfig,

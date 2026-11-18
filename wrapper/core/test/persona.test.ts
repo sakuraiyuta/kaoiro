@@ -28,6 +28,8 @@ type WrapperConfigOptionalKey = OptionalKey<WrapperConfig>;
 const ROUND_TRIP_CASES: {
   [K in WrapperConfigOptionalKey]: { value: NonNullable<WrapperConfig[K]> };
 } = {
+  initial_prompt: { value: "first instruction" },
+  resume_session_id: { value: "session-1" },
   recovery_checkpoint_path: { value: "/tmp/checkpoint" },
   recovery_resume_kind: { value: "candidate" },
   in_flight_delivery_enabled: { value: false },

@@ -64,17 +64,19 @@ export interface GrokCliDependencies {
   platform?: NodeJS.Platform;
 }
 
-export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
-  const args = (dependencies.parseCliArgs ?? parseCliArgs)(
-    process.argv.slice(2),
-  );
-  const config = (dependencies.loadConfig ?? loadConfig)(args.configPath);
+export async function runGrokCli(
+  dependencies: GrokCliDependencies = {},
+  argv: string[] = process.argv.slice(2),
+) {
+  const { configPath } = (dependencies.parseCliArgs ?? parseCliArgs)(argv);
+  const config = (dependencies.loadConfig ?? loadConfig)(configPath);
+  const resumeSessionId = config.resume_session_id;
   const buildInfo = (dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo)(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
   let host: GrokHost | undefined;
   let link: ServerLink | undefined;
-  const recovery = new RecoveryReporter(config, args.resume, failure => {
+  const recovery = new RecoveryReporter(config, resumeSessionId, failure => {
     void shutdownForRecovery(failure, () => host?.close(),
       () => link?.reportDisconnectIntent?.("crash"), () => { link?.close(); }).catch(() => {});
   });
@@ -112,7 +114,7 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     sendEnvelope: (envelope) => link?.send(envelope),
     sendReplayIa: (replayId, items) => link?.sendReplayIa(replayId, items),
     sendHistoryReplayComplete: (replayId) => link?.sendHistoryReplayComplete(replayId),
-    ...(args.resume ? { legacyResumeSessionId: args.resume } : {}),
+    ...(resumeSessionId ? { legacyResumeSessionId: resumeSessionId } : {}),
   });
   const permission = new PermissionBroker({
     config,
@@ -401,7 +403,7 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
         cwd,
         intake,
         personaPrompt: rules,
-        ...(args.resume ? { resumeSessionId: args.resume } : {}),
+        ...(resumeSessionId ? { resumeSessionId } : {}),
         ...(config.resume_snapshot ? { resumeSnapshot: config.resume_snapshot } : {}),
         send,
         toolDescriptors: [
@@ -489,7 +491,7 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
     dependencies.onHostCreated?.(host);
     process.on("SIGTERM", stop);
     process.on("SIGINT", stop);
-    await host.run(args.prompt);
+    await host.run(config.initial_prompt);
   } catch (error) {
     disconnectReason = "crash";
     throw error;

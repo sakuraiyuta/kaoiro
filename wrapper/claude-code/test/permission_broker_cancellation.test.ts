@@ -466,8 +466,6 @@ describe("issue #285 M3 — question twin and stream EOF", () => {
     await runClaudeCli({
       parseCliArgs: () => ({
         configPath: "test",
-        prompt: undefined,
-        resume: undefined,
       }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {

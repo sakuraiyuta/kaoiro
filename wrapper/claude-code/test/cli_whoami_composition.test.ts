@@ -36,7 +36,7 @@ describe("Claude CLI whoami composition (issue #254)", () => {
       run: async () => {},
     };
     await runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
@@ -56,8 +56,8 @@ describe("Claude CLI whoami composition (issue #254)", () => {
       run: async () => {},
     };
     await runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: "resume-session" }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ resume_session_id: "resume-session", ...config }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
         return { deliveryModes: () => undefined, close: () => {}, currentSessionId: () => null,
@@ -95,7 +95,7 @@ describe("Claude CLI whoami composition (issue #254)", () => {
     };
 
     await runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
@@ -148,7 +148,7 @@ describe("Claude CLI whoami composition (issue #254)", () => {
     };
 
     await runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       loadWrapperBuildInfo: () => buildInfo,
       createServerLink: (_url, _agentId, options) => {
@@ -168,7 +168,7 @@ it("actual Claude CLI forwards the live join generation to the acceptance sink",
   let generation = 7;
   const seen: Array<number | undefined> = [];
   await runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       queueMicrotask(() => { options.onReplyBasisMode?.("v1"); options.onPersonaPrompt?.("system prompt"); });

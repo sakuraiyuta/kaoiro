@@ -88,7 +88,7 @@ describe("Antigravity CLI whoami composition (issue #418)", () => {
     };
 
     const cliPromise = runAntigravityCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => config,
       createServerLink: (_url, _agentId, options) => {
         expect(options.buildInfo).toEqual(baked);

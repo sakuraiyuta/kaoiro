@@ -195,6 +195,11 @@ export type Persona = WirePersona;
  *  fail-closed). Shared with the runner, which resolves it to spawn a
  *  wrapper (ADR-0023). */
 export interface WrapperConfig {
+  /** The wrapper's first turn. The runner writes it only into the launch file
+   *  of the launch a `spawn` starts, never on a relaunch (ADR-0076). */
+  initial_prompt?: string;
+  /** The engine session this launch continues (ADR-0076). */
+  resume_session_id?: string;
   recovery_checkpoint_path?: string;
   recovery_resume_kind?: "candidate";
   in_flight_delivery_enabled?: boolean;

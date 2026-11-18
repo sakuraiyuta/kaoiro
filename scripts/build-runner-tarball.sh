@@ -189,10 +189,10 @@ fi
 echo "build-runner-tarball: pnpm deploy"
 pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/$name" --legacy >/dev/null
 
-# The launch shim resolves ../dist/cli.js from its own directory, so the deploy
-# tree needs no rearranging: deploy/ and dist/ are already siblings.
-[[ -f "$stage/$name/dist/cli.js" ]] || {
-  echo "build-runner-tarball: dist/cli.js missing from the deploy tree" >&2
+# The launch shim resolves ../dist/kaoiro.js from its own directory, so the
+# deploy tree needs no rearranging: deploy/ and dist/ are already siblings.
+[[ -f "$stage/$name/dist/kaoiro.js" ]] || {
+  echo "build-runner-tarball: dist/kaoiro.js missing from the deploy tree" >&2
   exit 70 # EX_SOFTWARE
 }
 [[ -x "$stage/$name/deploy/kaoiro-runner-launch.sh" ]] || {

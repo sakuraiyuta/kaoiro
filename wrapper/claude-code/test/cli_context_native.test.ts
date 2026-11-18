@@ -43,8 +43,8 @@ describe("native Claude context error", () => {
     let host: AgentHost | undefined;
     let startupError: unknown;
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "Reply ok.", resume: undefined }),
-      loadConfig: () => config,
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "Reply ok.", ...config }),
       createServerLink: (_url, _id, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("Native regression test"));
         return { deliveryModes: () => undefined, send: (e: Envelope) => sent.push(e), close: () => {},

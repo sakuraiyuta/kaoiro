@@ -46,7 +46,7 @@ async function compose() {
   };
 
   await runAntigravityCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));

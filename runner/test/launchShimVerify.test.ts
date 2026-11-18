@@ -46,6 +46,7 @@ const REVISION = revisionOf("shim-verify");
  *  the manifest missing it is not a smaller failure than missing cli.js —
  *  the runner starts, and the first agent spawn dies at import instead. */
 const REQUIRED_ARTIFACTS = [
+  "dist/kaoiro.js",
   "dist/cli.js",
   "dist/build-info.json",
   "node_modules/@kaoiro/claude-code/dist/cli.js",

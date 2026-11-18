@@ -32,8 +32,7 @@ it.each(["result", "terminal"])(
           authority_epoch: 1 } : {}) } },
   });
   const running = runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined,
-      resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ agent_id: "self", display_name: "Self",
       persona: { id: "p", name: "P", sprite_set: "p" },
       server_url: wire.url, in_flight_delivery_enabled: true }),

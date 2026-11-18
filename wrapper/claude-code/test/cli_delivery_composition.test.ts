@@ -61,7 +61,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const ready = new Promise<void>(resolve => { start = resolve; });
     const finished = new Promise<void>(resolve => { finish = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config, ...(scenario === "ceiling off" ? { in_flight_delivery_enabled: false } : {}) }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -111,7 +111,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     let ready!: () => void;
     const rootReady = new Promise<void>(resolve => { ready = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -215,7 +215,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const rootTexts: string[] = [];
     const stages: Array<Record<string, unknown>> = [];
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -293,7 +293,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const rootTexts: string[] = [];
     const foldTexts: string[] = [];
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -419,7 +419,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const cutStarted = new Promise<void>(resolve => { cutReady = resolve; });
     const cutFinished = new Promise<void>(resolve => { finishCut = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -543,7 +543,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const ready = new Promise<void>(resolve => { started = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config,
         yield_claim_timeout_ms: scenario.claim === "timeout" ? 5 : 2_000,
         pending_receipt_root_timeout_ms: scenario.claim === "chain expires" ? 50 : 2_000,
@@ -679,7 +679,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const ready = new Promise<void>(resolve => { started = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -761,7 +761,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const ready = new Promise<void>(resolve => { started = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -807,7 +807,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const ready = new Promise<void>(resolve => { started = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -848,7 +848,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     let host!: AgentHost;
     let linkOptions!: Record<string, any>;
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config, recovery_checkpoint_path: checkpoint }),
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
@@ -901,7 +901,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const ready = new Promise<void>(resolve => { started = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
@@ -962,7 +962,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const ready = new Promise<void>(resolve => { started = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
@@ -1009,7 +1009,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const ready = new Promise<void>(resolve => { started = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
@@ -1070,7 +1070,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
     };
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       buildMcpServer: (interAgent) => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
@@ -1152,8 +1152,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         return Object.assign(frames(), { interrupt: async () => {} }) as unknown as Query;
       };
       const running = runClaudeCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
-        loadConfig: () => ({ ...config }),
+        parseCliArgs: () => ({ configPath: "test" }),
+        loadConfig: () => ({ initial_prompt: "first instruction", ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
         options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
@@ -1224,7 +1224,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     let startHost!: () => void;
     const ready = new Promise<void>(resolve => { startHost = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -1287,7 +1287,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const ready = new Promise<void>(resolve => { startHost = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config, server_url: wire.url }),
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
@@ -1343,7 +1343,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const started = new Promise<void>(resolve => { startHost = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config, server_url: wire.url }),
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createHost: (_config, options) => {
@@ -1407,7 +1407,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finishHost = resolve; });
     const started = new Promise<void>(resolve => { startHost = resolve; });
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
@@ -1508,7 +1508,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
 
     try {
     running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;

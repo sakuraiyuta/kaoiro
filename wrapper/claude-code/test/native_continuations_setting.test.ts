@@ -58,7 +58,7 @@ describe("native continuation startup selection (issue #426)", () => {
     let hostOptions: AgentHostOptions | undefined;
     try {
       await runClaudeCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));

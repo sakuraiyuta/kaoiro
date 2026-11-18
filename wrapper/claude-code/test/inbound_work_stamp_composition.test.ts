@@ -48,7 +48,7 @@ it("injects the work stamp of a delivered assignment into the Claude turn (issue
   const ready = new Promise<void>(resolve => { start = resolve; });
   const finished = new Promise<void>(resolve => { finish = resolve; });
   const running = runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;

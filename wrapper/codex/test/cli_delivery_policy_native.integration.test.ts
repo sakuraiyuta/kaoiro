@@ -50,11 +50,11 @@ it.each(["operator", "peer"] as const)("enforces policy for %s at native CLI com
   await writeFile(configPath, JSON.stringify({ agent_id: "fuji560.native.codex", persona: { id: "p", name: "P", sprite_set: "p" },
     display_name: "P", server_url: wire.url, model: "gpt-6-luna", codex_backend: "app-server",
     sandbox: "danger-full-access", network_access: true, approval: "never" }));
-  const cli = join(dirname(fileURLToPath(import.meta.url)), "../dist/cli.js");
+  const cli = join(dirname(fileURLToPath(import.meta.url)), "../../../runner/dist/kaoiro.js");
   const rpcModule = join(dirname(fileURLToPath(import.meta.url)), "../dist/app_server_rpc.js");
   const observer = join(root, "observer.mjs");
   await writeFile(observer, `import {AppServerRpc} from ${JSON.stringify(rpcModule)};\nconst original=AppServerRpc.prototype.request;\nAppServerRpc.prototype.request=function(method,params,timeout){if(method==="turn/start"||method==="turn/steer")process.stderr.write("NATIVE_RPC "+JSON.stringify({method,params})+"\\n");return original.call(this,method,params,timeout);};\n`);
-  const child = spawn(process.execPath, ["--import", observer, cli, configPath], {
+  const child = spawn(process.execPath, ["--import", observer, cli, "wrapper", "codex", "run", configPath], {
     cwd: root, env: { PATH: process.env.PATH ?? "", HOME: root, CODEX_HOME: root, TMPDIR: root, LANG: "C.UTF-8" },
     stdio: ["ignore", "pipe", "pipe"],
   });

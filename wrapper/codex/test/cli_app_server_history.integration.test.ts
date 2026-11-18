@@ -82,7 +82,7 @@ enabled = false
     session = undefined;
     const config = { agent_id: "history-cli", persona: { id: "fuji", name: "Fuji", sprite_set: "fuji" }, display_name: "Fuji", server_url: wire.url, model: "gpt-5.6-sol" };
     running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: threadId }), loadConfig: () => config,
+      parseCliArgs: () => ({ configPath: "fixture" }), loadConfig: () => ({ ...(threadId === undefined ? {} : { resume_session_id: threadId }), ...config }),
       createHost: (value, options) => {
         host = new CodexHost(value, { ...options,           onTurnStart: info => { starts.push(info.turnToken);options.onTurnStart?.(info); },
           onTurnFinalized: info => { finals.push(info.turnToken);options.onTurnFinalized?.(info); },

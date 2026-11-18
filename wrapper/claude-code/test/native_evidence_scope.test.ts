@@ -299,7 +299,7 @@ describe("peer input through the CLI after native closes (issue #426)", () => {
           kind: "request", body: `peer message ${seq}`, meta: { done: false, propose_next: "" } } });
       try {
         const running = runClaudeCli({
-          parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+          parseCliArgs: () => ({ configPath: "test" }),
           loadConfig: () => ({ ...config }),
           createServerLink: (_url, _id, options) => {
             linkOptions = options as unknown as Record<string, any>;
@@ -341,7 +341,7 @@ describe("native unavailability in the operator log (issue #426)", () => {
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
       await runClaudeCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...cliConfig }),
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));

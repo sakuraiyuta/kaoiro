@@ -137,17 +137,7 @@ function referencesIn(pkgDir: string): Reference[] {
  *  unresolvable call in an exempted file breaks this test instead of
  *  inheriting the exemption. An entry here is an assertion a reader can
  *  check, not a mute button. */
-const UNRESOLVABLE_EXCEPTIONS: Record<string, { count: number; why: string }> = {
-  "runner/src/spawn.ts": {
-    count: 2,
-    why:
-      "resolveWrapperLaunch resolves `${pkg}/dist/cli.js`, and on the " +
-      "KAOIRO_WRAPPER_DEV path `${pkg}/package.json`. Both are already " +
-      "enforced without a declaration: ENTRY_PACKAGES in verify-release.mjs " +
-      "seeds each wrapper's dist/cli.js as a closure ENTRY POINT, and a " +
-      "package.json that cannot be read fails the release outright.",
-  },
-};
+const UNRESOLVABLE_EXCEPTIONS: Record<string, { count: number; why: string }> = {};
 
 /** RAW detector output: call sites whose argument is a substituted template
  *  literal, per file, with no exemption applied.
@@ -253,7 +243,7 @@ describe("kaoiro.runtimeAssets (issue #219)", () => {
 
   it.each([
     ["wrapper/codex", "../dist/bridge.js", "dist/bridge.js"],
-    ["wrapper/claude-code", "./probe.js", "dist/probe.js"],
+    ["runner", "./cli.js", "dist/cli.js"],
   ])("%s: 走査が %s を実際に見つける (回帰)", (pkg, specifier, target) => {
     // PINS THE DETECTION PATH, NOT THE DECLARATION. Deleting a declaration
     // turns the tests around this one red, so it is easy to believe the alarm
@@ -272,10 +262,11 @@ describe("kaoiro.runtimeAssets (issue #219)", () => {
   ])("%s は %s を宣言している (回帰)", (pkg, asset) => {
     // The real instances, named explicitly so deleting a declaration fails
     // here and not only inside a release. codex reaches bridge.js through
-    // `new URL("../dist/bridge.js", import.meta.url)`; claude-code reaches
-    // probe.js through `createRequire(import.meta.url).resolve("./probe.js")`
-    // — the second one was MISSED by the first version of this test, and the
-    // release verifier accepted its deletion at exit 0 as a result.
+    // `new URL("../dist/bridge.js", import.meta.url)`; the kaoiro entry
+    // imports claude-code's probe.js by package name, which no scan here
+    // sees. An earlier form of that reference was MISSED by the first
+    // version of this test, and the release verifier accepted its deletion
+    // at exit 0 as a result.
     expect(declarationsOf(join(repoRoot, pkg))).toContain(asset);
   });
 });

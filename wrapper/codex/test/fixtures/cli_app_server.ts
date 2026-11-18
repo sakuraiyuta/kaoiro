@@ -108,8 +108,8 @@ export async function cliAppFixture(permissionSync = false, backend: "app-server
   const received: number[] = [], finalized: string[] = [], queued: string[] = [];
   let callbacks!: CodexHostOptions;
   const running = runCodexCli({ watchdogClock: clock,
-    parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: fixtureOptions.resume }),
-    loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, ...(fixtureOptions.recoveryCheckpoint ? { recovery_checkpoint_path: join(home, "recovery") } : {}), model: "gpt-5.6-sol", approval_axis: fixtureOptions.approvalAxis ?? false, ...(fixtureOptions.permissionTimeoutMs === undefined ? {} : { permission_timeout_ms: fixtureOptions.permissionTimeoutMs }) }),
+    parseCliArgs: () => ({ configPath: "fixture" }),
+    loadConfig: () => ({ ...(fixtureOptions.resume === undefined ? {} : { resume_session_id: fixtureOptions.resume }), agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, ...(fixtureOptions.recoveryCheckpoint ? { recovery_checkpoint_path: join(home, "recovery") } : {}), model: "gpt-5.6-sol", approval_axis: fixtureOptions.approvalAxis ?? false, ...(fixtureOptions.permissionTimeoutMs === undefined ? {} : { permission_timeout_ms: fixtureOptions.permissionTimeoutMs }) }),
     createServerLink: (url, id, options) => {
       permissionDecision = options.onPermissionDecision;
       return (link = new ServerLink(url, id, { ...options,

@@ -225,7 +225,7 @@ describe.skipIf(!LIVE)("Antigravity 1.3.1 native production entrypoint acceptanc
 
     try {
       void runAntigravityCli({
-        parseCliArgs: () => ({ configPath: "dummy.json", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "dummy.json" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, callbacks) => {
           linkCallbacks = callbacks;

@@ -118,7 +118,7 @@ describe("Antigravity tool deadline through the production default CLI (issue #3
     let options!: Record<string, any>;
     let host: { close(): void } | undefined;
     const run = runAntigravityCli({
-        parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath }),
         probeSshAgentIdentities: async () => "unknown",
         onHostCreated: (created) => {
           host = created;

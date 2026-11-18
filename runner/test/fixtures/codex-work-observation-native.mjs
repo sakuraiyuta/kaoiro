@@ -63,7 +63,7 @@ async function stopOwned(child) {
 try {
   await writeFile(join(root, 'observer.mjs'), `import fs from 'node:fs';import cp from 'node:child_process';import {syncBuiltinESMExports} from 'node:module';import {createHash} from 'node:crypto';
 const log=x=>fs.appendFileSync(process.env.KOGANE_OBSERVATION_LOG,JSON.stringify(x)+'\\n');
-log({kind:'node',pid:process.pid,ppid:process.ppid,entry:process.argv[1]});
+log({kind:'node',pid:process.pid,ppid:process.ppid,entry:process.argv.slice(1,4).join(' ')});
 const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(this,arguments);if(ex.endsWith('/codex'))log({kind:'native',pid:p.pid,exec_turn:args.includes('exec'),sha:createHash('sha256').update(fs.readFileSync(ex)).digest('hex')});p.once('exit',(code,signal)=>log({kind:'exit',pid:p.pid,code,signal}));return p;};syncBuiltinESMExports();\n`);
   provider = createServer(async (req, res) => {
     let raw = ''; for await (const part of req) raw += part;
@@ -114,7 +114,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
       approval: 'never', initial_prompt: 'Perform the local tool turn.' });
     await waitFor(() => toolResults > initialTools, 'native tool result');
     const pointer = await waitFor(() => rpc(`case KaoiroServer.SessionPointers.get(${JSON.stringify(agent)}) do nil -> nil; p -> p.session_id end`), 'session pointer');
-    const processes = await records(), wrapper = processes.find(x => x.kind === 'node' && x.ppid === runner.pid && x.entry.endsWith('/wrapper/codex/dist/cli.js'));
+    const processes = await records(), wrapper = processes.find(x => x.kind === 'node' && x.ppid === runner.pid && x.entry.endsWith('/dist/kaoiro.js wrapper codex'));
     assert.ok(wrapper?.pid > 0);
     const connected = await rpc(`MapSet.member?(KaoiroServer.AgentStates.connected_ids(), ${JSON.stringify(agent)})`);
     assert.equal(connected, true);
@@ -241,7 +241,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
       assert.deepEqual((await observe(host)).children, []);
       await delay(10_050);
       const after = await observe(host); assert.deepEqual(after.children, []);
-      assert.equal((await records()).filter(x => x.kind === 'node' && x.ppid === runner.pid && x.entry.endsWith('/wrapper/codex/dist/cli.js')).length, 1);
+      assert.equal((await records()).filter(x => x.kind === 'node' && x.ppid === runner.pid && x.entry.endsWith('/dist/kaoiro.js wrapper codex')).length, 1);
       report.observations.push({ label, stage: 'after-exit-and-timer-boundary', value: after });
     }
     report.controls.push({ label, stop: true, wrapper_exited: true, server_disconnected: true });
@@ -261,7 +261,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
     for (const { host, agent } of launched) {
       await broadcast('runner:' + host, 'stop', { version: '0', agent_id: agent });
     }
-    return (await records()).filter(x => x.kind === 'node' && x.entry.endsWith('/wrapper/codex/dist/cli.js')).every(x => !existsSync('/proc/' + x.pid));
+    return (await records()).filter(x => x.kind === 'node' && x.entry.endsWith('/dist/kaoiro.js wrapper codex')).every(x => !existsSync('/proc/' + x.pid));
   }, 'owned wrappers stopped', 15_000); }
   catch (error) { report.cleanup_error = error.message; }
   for (const child of [...children].reverse()) await stopOwned(child);

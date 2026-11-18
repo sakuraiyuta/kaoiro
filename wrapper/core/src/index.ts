@@ -2,7 +2,8 @@
 // wrapper family (ADR-0017 / ADR-0032 F1): server transport, config
 // loading/validation, and CLI argument parsing. No AI-engine concepts here.
 
-export { parseCliArgs } from "./args.js";
+export { CliUsageError, parseCliArgs } from "./args.js";
+export { registerSelfEntry, selfCommand } from "./self_command.js";
 export { ConfigError, PERMISSION_MODES, loadConfig, parseConfig } from "./persona.js";
 export {
   CLAUDE_SCHEDULER_SETTINGS,

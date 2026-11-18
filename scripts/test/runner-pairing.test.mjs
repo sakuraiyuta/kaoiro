@@ -128,7 +128,7 @@ function launcherFixture(scriptName, runnerList, options = {}) {
   }
   writeFileSync(join(runner, "runner.config.json"), '{"host_id":"dev-host"}\n');
   writeRunnerEnv(join(runner, "runner.env"), `KAOIRO_RUNNER_TOKEN=${managedToken}\n`);
-  writeFileSync(join(runner, "dist/cli.js"), 'require("fs").appendFileSync(process.env.MOCK_LOG, `runner|${process.env.KAOIRO_RUNNER_TOKEN}\\n`);\n');
+  writeFileSync(join(runner, "dist/kaoiro.js"), 'require("fs").appendFileSync(process.env.MOCK_LOG, `runner|${process.env.KAOIRO_RUNNER_TOKEN}\\n`);\n');
   writeStub(join(stubBin, "mix"), 'printf "mix|%s|%s\\n" "${KAOIRO_RUNNER_TOKENS:-}" "${KAOIRO_RUNNER_TOKEN:-}" >> "$MOCK_LOG"');
   writeStub(join(stubBin, "pnpm"), 'printf "pnpm|%s|%s\\n" "${KAOIRO_RUNNER_TOKENS:-}" "${KAOIRO_RUNNER_TOKEN:-}" >> "$MOCK_LOG"');
   writeStub(join(stubBin, "docker"), `

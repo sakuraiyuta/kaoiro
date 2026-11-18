@@ -110,7 +110,7 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
     let options!: Record<string, any>;
     let host: { close(): void } | undefined;
     const run = runAntigravityCli({
-      parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath }),
       probeSshAgentIdentities: async () => "unknown",
       onHostCreated: (created) => { host = created; },
       createServerLink: (_url, _agentId, createdOptions) => {
@@ -174,7 +174,7 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
     let options!: Record<string, any>;
     let host: { close(): void } | undefined;
     const run = runAntigravityCli({
-      parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath }),
       probeSshAgentIdentities: async () => "unknown",
       onHostCreated: (created) => { host = created; },
       createServerLink: (_url, _agentId, createdOptions) => {

@@ -117,8 +117,8 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     let fixturePid: number | undefined;
     let linkOptions!: Record<string, any>;
     const run = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "first instruction", ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
         queueMicrotask(() => {
@@ -174,8 +174,8 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     const { executable, pidFile } = writeFixture(root);
     let fixturePid: number | undefined;
     const run = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "first instruction", ...config }),
       createServerLink: (_url, _agentId, options) => {
         const linkOptions = options as unknown as Record<string, any>;
         queueMicrotask(() => {
@@ -220,8 +220,8 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     let fixturePid: number | undefined;
     let host!: AgentHost;
     const run = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "first instruction", ...config }),
       createServerLink: (_url, _agentId, options) => {
         const linkOptions = options as unknown as Record<string, any>;
         queueMicrotask(() => {
@@ -280,8 +280,8 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     let sdkChild: ChildProcessWithoutNullStreams | undefined;
     let forwardedSignal: AbortSignal | undefined;
     const run = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "first instruction", ...config }),
       createServerLink: (_url, _agentId, options) => {
         const linkOptions = options as unknown as Record<string, any>;
         queueMicrotask(() => {

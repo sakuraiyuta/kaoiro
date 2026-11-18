@@ -83,8 +83,8 @@ async function run(options: { resume: boolean; replay: boolean; history?: string
   let host: GrokHost | undefined;
   const work = runGrokCli({
     platform: "darwin", cwd,
-    parseCliArgs: () => ({ configPath: "fixture", ...(options.resume ? { resume: SESSION } : {}) }),
-    loadConfig: () => ({ agent_id: "composition.history", display_name: "Grok", server_url: server.url,
+    parseCliArgs: () => ({ configPath: "fixture" }),
+    loadConfig: () => ({ ...(options.resume ? { resume_session_id: SESSION } : {}), agent_id: "composition.history", display_name: "Grok", server_url: server.url,
       sandbox: "danger-full-access", network_access: true,
       persona: { id: "default", name: "Default", sprite_set: "default" } }),
     loadWrapperBuildInfo: () => ({ revision: "unknown", dirty: false, built_at: "unknown", version: "unknown", channel: "dev" }),

@@ -148,8 +148,8 @@ describe("Codex CLI permission-sync composition", () => {
     let host: CodexHost | undefined;
     let spawns = 0;
     const running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "first", ...config }),
       loadWrapperBuildInfo: () => ({
         revision: "0123456789012345678901234567890123456789",
         dirty: false,
@@ -190,8 +190,8 @@ describe("Codex CLI permission-sync composition", () => {
     let host: CodexHost | undefined;
     let spawns = 0;
     const running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "first", ...config }),
       createServerLink,
       createHost: (hostConfig, options) => {
         host = appHost(hostConfig, { ...options }, () => { spawns++; });
@@ -219,8 +219,8 @@ describe("Codex CLI permission-sync composition", () => {
     let spawns = 0;
     const contexts: string[] = [];
     const running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "first", ...config }),
       createServerLink,
       createHost: (hostConfig, options) => {
         host = appHost(hostConfig, {
@@ -264,8 +264,8 @@ describe("Codex CLI permission-sync composition", () => {
     let host: CodexHost | undefined;
     let spawns = 0;
     const running = runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ initial_prompt: "first", ...config }),
       createServerLink,
       createHost: (hostConfig, options) => {
         host = appHost(hostConfig, {

@@ -44,6 +44,7 @@ import vm from "node:vm";
 /** Artifacts a repo-direct checkout must carry even when it has no
  * MANIFEST.json. A real release's manifest covers these first-party files. */
 const SENTINELS = [
+  "dist/kaoiro.js",
   "dist/cli.js",
   "dist/build-info.json",
   "node_modules/@kaoiro/claude-code/dist/cli.js",
@@ -1089,7 +1090,10 @@ function expectedClosure(root) {
     }
   };
   const realRoot = realpathSync(root);
-  entry(join(root, "dist", "cli.js"));
+  // The entry reaches its modules through `import()`, which the static graph
+  // does not show: the runner's own are declared runtime assets, and each
+  // wrapper is seeded below.
+  entry(join(root, "dist", "kaoiro.js"));
   runtimeAssets(root);
   for (const name of ENTRY_PACKAGES) {
     entry(join(root, "node_modules", name, "dist", "cli.js"));

@@ -49,7 +49,7 @@ async function compose() {
     foldsPerTurn: 0,
   };
   await runClaudeCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       linkOptions = options as unknown as Record<string, any>;

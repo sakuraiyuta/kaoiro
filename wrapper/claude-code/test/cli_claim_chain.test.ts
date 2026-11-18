@@ -64,7 +64,7 @@ describe("Claude claimed-cut receipt chain", () => {
     let linkOptions!: Record<string, any>;
     let host!: AgentHost;
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config, folds_per_turn: 3 }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -179,7 +179,7 @@ describe("Claude claimed-cut final receipt deadline", () => {
     let linkOptions!: Record<string, any>;
     let host!: AgentHost;
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config, pending_receipt_root_timeout_ms: 100 }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -302,7 +302,7 @@ describe("pushed receipt successor after host close", () => {
       let host!: AgentHost;
       let closed = false;
       const running = runClaudeCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _id, options) => {
           linkOptions = options as unknown as Record<string, any>;

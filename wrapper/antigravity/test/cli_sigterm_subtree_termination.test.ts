@@ -168,7 +168,7 @@ describe.skipIf(!isLinux)("Antigravity CLI SIGTERM subtree termination (issue #3
     let grandchildPid: number | undefined;
     let options!: Record<string, any>;
     const run = runAntigravityCli({
-      parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath }),
       probeSshAgentIdentities: async () => "unknown",
       onHostCreated: () => {
         queueMicrotask(() => {

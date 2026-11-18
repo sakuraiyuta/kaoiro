@@ -15,9 +15,8 @@ import {
 import { mkdtempSync, rmSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { EngineCatalogFailReason, EngineModelInfo } from "@kaoiro/protocol";
-import { clipUtf16Head, writeRedactedStderr } from "@kaoiro/wrapper-core";
+import { clipUtf16Head, selfCommand, writeRedactedStderr } from "@kaoiro/wrapper-core";
 
 /** Wall-clock cap on the child process itself. Slightly above the probe's own
  *  internal --timeout-ms so a stuck child (e.g. SDK deadlock past its own
@@ -52,25 +51,15 @@ export interface ProbeOutcome {
   commands?: string[];
 }
 
-/** Resolve the probe entrypoint against this package's exports. Same
- *  package = the sibling `probe.js` inside `dist/`. */
-function resolveProbePath(): string {
-  try {
-    return fileURLToPath(new URL("./probe.js", import.meta.url));
-  } catch (err) {
-    throw new Error(
-      `cannot resolve @kaoiro/claude-code/dist/probe.js (build the wrapper first?): ${String(err)}`,
-    );
-  }
-}
-
 /** Injection seam so unit tests can drive parse/timeout/kill paths without
  *  actually spawning the probe subprocess. Production uses the real spawn. */
 export interface ProbeSpawnDeps {
   spawnProbe?: () => ChildProcess;
   spawn?: (command: string, args: string[],
     options: SpawnOptions) => ChildProcess;
-  probePath?: string;
+  /** Command and leading arguments that start the probe. Defaults to this
+   *  kaoiro's own `wrapper claude-code probe`. */
+  probeCommand?: string[];
   superviseProcessTree?: boolean;
   platform?: NodeJS.Platform;
   groupSignal?: (pid: number, signal: NodeJS.Signals | 0) => unknown;
@@ -103,12 +92,13 @@ export async function runClaudeProbe(
     if (deps.spawnProbe !== undefined) {
       child = deps.spawnProbe();
     } else {
-      const probePath = deps.probePath ?? resolveProbePath();
+      const [command, ...prefix] = deps.probeCommand ??
+        [...selfCommand(), "wrapper", "claude-code", "probe"];
       const childEnv = { ...process.env };
       delete childEnv.CODEX_HOME;
       child = (deps.spawn ?? spawn)(
-        process.execPath,
-        [probePath, "--timeout-ms", String(PROBE_INTERNAL_TIMEOUT_MS),
+        command!,
+        [...prefix, "--timeout-ms", String(PROBE_INTERNAL_TIMEOUT_MS),
           ...(cwd ? ["--probe-cwd", cwd] : []),
           ...(deps.includeUsage ? ["--usage"] : [])],
         {

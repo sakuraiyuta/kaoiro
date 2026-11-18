@@ -93,7 +93,7 @@ async function makeRig(
     requestDirectory: async () => ({ agents: directoryAgents, users: [] }),
   };
   const done = runAntigravityCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...CONFIG, ...overrides }),
     createServerLink: (_url, _agentId, options) => {
       linkOptions = options as unknown as Record<string, any>;

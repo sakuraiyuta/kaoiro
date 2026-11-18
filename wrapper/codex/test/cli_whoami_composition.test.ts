@@ -46,7 +46,7 @@ describe("Codex CLI whoami composition (issue #254)", () => {
     };
 
     await runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
@@ -119,7 +119,7 @@ describe("Codex CLI whoami composition (issue #254)", () => {
     };
 
     await runCodexCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       loadWrapperBuildInfo: () => buildInfo,
       createServerLink: (_url, _agentId, options) => {

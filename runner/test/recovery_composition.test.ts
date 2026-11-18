@@ -25,7 +25,7 @@ it.each(cases)("composes real Supervisor and launcher: $name", async scenario =>
   const previous = { options: process.env.NODE_OPTIONS, dir: process.env.KAOIRO_TEST_RECOVERY_DIR, plan: process.env.KAOIRO_TEST_RECOVERY_PLAN };
   const children: ManagedChild[] = [], exited = new Set<ManagedChild>();
   const results: SpawnResult[] = [], resets: SessionResetResult[] = [];
-  const actual = launcher ??= makeLauncher();
+  const actual = launcher ??= makeLauncher([process.execPath, fileURLToPath(new URL("../dist/kaoiro.js", import.meta.url))]);
   process.env.NODE_OPTIONS = `${previous.options ?? ""} --require=${fileURLToPath(new URL("./fixtures/recovery-wrapper.cjs", import.meta.url))}`;
   process.env.KAOIRO_TEST_RECOVERY_DIR = root;
   process.env.KAOIRO_TEST_RECOVERY_PLAN = JSON.stringify(scenario.plan);

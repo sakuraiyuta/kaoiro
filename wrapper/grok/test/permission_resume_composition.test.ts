@@ -46,8 +46,8 @@ it.each([
       const syncApplied = vi.spyOn(GrokHost.prototype, "applyPermissionSync");
       const work = runGrokCli({
         cwd,
-        parseCliArgs: () => ({ configPath: "fixture", ...(phase === "resume" ? { resume: "fixture-session" } : {}) }),
-        loadConfig: () => ({
+        parseCliArgs: () => ({ configPath: "fixture" }),
+        loadConfig: () => ({ ...(phase === "resume" ? { resume_session_id: "fixture-session" } : {}),
           agent_id: "resume.grok",
           display_name: "Grok",
           persona: { id: "default", name: "Default", sprite_set: "default" },

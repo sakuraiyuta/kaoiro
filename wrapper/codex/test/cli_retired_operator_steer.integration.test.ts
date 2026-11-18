@@ -6,9 +6,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 
-// The built CLI is launched directly, with no runner, as docs/reference/configuration/wrapper.md allows.
+// The wrapper is started through the kaoiro entry with no runner, as docs/reference/configuration/wrapper.md allows.
 // Obsolete inputs must not change the startup declaration or emit warnings.
-const cli = join(dirname(fileURLToPath(import.meta.url)), "../dist/cli.js");
+const cli = join(dirname(fileURLToPath(import.meta.url)), "../../../runner/dist/kaoiro.js");
 const secret = "secret-persona-id";
 
 async function startup(env: Record<string, string>, extra: Record<string, unknown>) {
@@ -16,7 +16,7 @@ async function startup(env: Record<string, string>, extra: Record<string, unknow
   const configPath = join(root, "kaoiro.json");
   await writeFile(configPath, JSON.stringify({ agent_id: "ao563.direct.codex", persona: { id: "p", name: "P", sprite_set: "p" },
     display_name: "P", server_url: "ws://127.0.0.1:9/wrapper", codex_backend: "app-server", ...extra }));
-  const child = spawn(process.execPath, [cli, configPath], { cwd: root, stdio: ["ignore", "pipe", "pipe"],
+  const child = spawn(process.execPath, [cli, "wrapper", "codex", "run", configPath], { cwd: root, stdio: ["ignore", "pipe", "pipe"],
     env: { PATH: process.env.PATH ?? "", HOME: root, CODEX_HOME: root, TMPDIR: root, LANG: "C.UTF-8", ...env } });
   let output = "";
   child.stdout.on("data", chunk => { output += chunk; });

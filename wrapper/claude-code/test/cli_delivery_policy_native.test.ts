@@ -71,8 +71,8 @@ it.each(cases)("fences $source delivery with $legacy through the built runner, C
   const observerPath = join(root, "observer.mjs"), observationPath = join(root, "child.json");
   await writeFile(observerPath, `import cp from 'node:child_process';import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
 const original=cp.spawn;cp.spawn=function(ex,args,options){
- if(args?.[0]?.endsWith('/wrapper/claude-code/dist/cli.js')){
-  const c=JSON.parse(fs.readFileSync(args[1],'utf8'));
+ if(args?.[1]==='wrapper'&&args[2]==='claude-code'&&args[3]==='run'){
+  const c=JSON.parse(fs.readFileSync(args[4],'utf8'));
   fs.writeFileSync(${JSON.stringify(observationPath)},JSON.stringify({ceiling:c.in_flight_delivery_enabled,legacy_key:Object.hasOwn(c,'phase2_delivery'),legacy_env:['KAOIRO_CLAUDE_PHASE2_DELIVERY','KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS'].filter(k=>Object.hasOwn(options.env,k))}));
  }
  return original.apply(this,arguments);
@@ -82,8 +82,8 @@ const original=cp.spawn;cp.spawn=function(ex,args,options){
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", LANG: "C.UTF-8", NODE_OPTIONS: `--import=${observerPath}`,
     ...(legacy === "false" ? { KAOIRO_CLAUDE_PHASE2_DELIVERY: "0" } : {}),
     ...(legacy === "persona-list" ? { KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "different-persona" } : {}) };
-  const cli = fileURLToPath(new URL("../../../runner/dist/cli.js", import.meta.url));
-  const child = spawn(process.execPath, [cli, configPath], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+  const cli = fileURLToPath(new URL("../../../runner/dist/kaoiro.js", import.meta.url));
+  const child = spawn(process.execPath, [cli, "runner", configPath], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", chunk => { output += chunk; }); child.stderr.on("data", chunk => { output += chunk; });
   // The runner exits before its wrapper; inherited stdio stays open while

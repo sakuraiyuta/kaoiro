@@ -20,9 +20,9 @@ export async function absentHomeBoot(dir: string, home: string) {
   const trace=join(dir,"boot-spawns"),preload=join(dir,"boot-observer.mjs"),config=join(dir,"boot-runner.json");
   const tmp=join(dir,"boot-tmp");mkdirSync(tmp,{recursive:true,mode:0o700});
   writeFileSync(preload,`import cp from 'node:child_process';import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
-const original=cp.spawn;cp.spawn=(file,args,...rest)=>{const kind=String(file).endsWith('/codex')?'native':args?.some(a=>String(a).includes('/codex/dist/cli.js'))?'wrapper':'other';fs.appendFileSync(${JSON.stringify(trace)},kind+'\\n');return original(file,args,...rest)};syncBuiltinESMExports();`);
+const original=cp.spawn;cp.spawn=(file,args,...rest)=>{const kind=String(file).endsWith('/codex')?'native':args?.includes('wrapper')&&args.includes('codex')?'wrapper':'other';fs.appendFileSync(${JSON.stringify(trace)},kind+'\\n');return original(file,args,...rest)};syncBuiltinESMExports();`);
   writeFileSync(config,JSON.stringify({host_id:"n2-boot",server_url:`ws://127.0.0.1:${address.port}/runner`,cwd_allowlist:[dir],capabilities:["codex"],codex:{auth_mode:"chatgpt"}}),{mode:0o600});
-  const runner=spawn(process.execPath,[fileURLToPath(new URL("../dist/cli.js",import.meta.url)),config],{env:{PATH:process.env.PATH!,HOME:dir,CODEX_HOME:home,TMPDIR:tmp,NODE_OPTIONS:(process.env.NODE_OPTIONS||"")+" --import="+preload},stdio:["ignore","ignore","pipe"]});
+  const runner=spawn(process.execPath,[fileURLToPath(new URL("../dist/kaoiro.js",import.meta.url)),"runner",config],{env:{PATH:process.env.PATH!,HOME:dir,CODEX_HOME:home,TMPDIR:tmp,NODE_OPTIONS:(process.env.NODE_OPTIONS||"")+" --import="+preload},stdio:["ignore","ignore","pipe"]});
   let stderr="";runner.stderr?.on("data",chunk=>{stderr+=chunk;});
   const closed=new Promise<void>(resolve=>runner.once("close",()=>resolve()));
   try{

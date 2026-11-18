@@ -51,8 +51,8 @@ async function runCli(args: { prompt?: string; resume?: string }): Promise<{
     reportDisconnectIntent: async () => true,
   };
   const cliPromise = runAntigravityCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: args.prompt, resume: args.resume }),
-    loadConfig: () => config,
+    parseCliArgs: () => ({ configPath: "test" }),
+    loadConfig: () => ({ ...(args.prompt === undefined ? {} : { initial_prompt: args.prompt }), ...(args.resume === undefined ? {} : { resume_session_id: args.resume }), ...config }),
     createServerLink: (_url, _agentId, options) => {
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
       return link as never;

@@ -47,7 +47,7 @@ async function compose(
   };
 
   await runAntigravityCli({
-    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    parseCliArgs: () => ({ configPath: "test" }),
     loadConfig: () => ({ ...config, ...overrides }),
     createServerLink: (_url, _agentId, options) => {
       linkOptions = options as unknown as Record<string, any>;

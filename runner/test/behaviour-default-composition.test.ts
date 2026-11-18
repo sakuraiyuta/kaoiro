@@ -7,10 +7,11 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
+import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 
@@ -28,6 +29,9 @@ import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 //   environment.
 
 const runnerRoot = fileURLToPath(new URL("../", import.meta.url));
+// The runner hands its own node options to every child it starts, and a child
+// runs in the agent's directory, where a bare `tsx` would not resolve.
+const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 function encodeText(text: string): Buffer {
@@ -449,7 +453,7 @@ describe("default composition (issue #469)", () => {
         // Nothing but PATH and a private HOME: no KAOIRO_* variable at all.
         const started = spawn(
           process.execPath,
-          ["--import", "tsx", "src/cli.ts", configPath],
+          ["--import", tsxLoader, "src/kaoiro.ts", "runner", configPath],
           {
             cwd: runnerRoot,
             env: { PATH: process.env.PATH ?? "", HOME: root },
@@ -594,13 +598,14 @@ const NODE_RECORDER = `const { isMainThread } = require("node:worker_threads");
 if (isMainThread) {
   const fs = require("node:fs");
   const path = require("node:path");
-  const role = String(process.argv[1] ?? "");
+  // Every process starts the same entry, so the subcommand is the role.
+  const role = process.argv.slice(2, 5).join(" ");
   const present = ${JSON.stringify(CREDENTIAL_NAMES)}.filter((name) => Object.hasOwn(process.env, name));
   const file = path.join(process.env.${RECORDS_ENV}, String(process.pid));
   fs.writeFileSync(file + ".tmp", JSON.stringify({ role, present }));
   fs.renameSync(file + ".tmp", file + ".json");
   // The runner keeps running; a wrapper or a probe stops before its own code.
-  if (!role.endsWith("src/cli.ts")) process.exit(0);
+  if (!role.startsWith("runner ")) process.exit(0);
 }
 `;
 
@@ -623,8 +628,8 @@ interface ChildRecord {
 
 // One child per way the runner builds a child environment.
 const RECORDED_CHILDREN: Array<{ name: string; matches: (role: string) => boolean }> = [
-  { name: "Claude wrapper", matches: (role) => role.endsWith("claude-code/dist/cli.js") },
-  { name: "Claude probe", matches: (role) => role.endsWith("claude-code/dist/probe.js") },
+  { name: "Claude wrapper", matches: (role) => role === "wrapper claude-code run" },
+  { name: "Claude probe", matches: (role) => role === "wrapper claude-code probe" },
   { name: "codex doctor", matches: (role) => role === "codex doctor" },
   { name: "Grok probe", matches: (role) => role === "grok --no-auto-update" },
 ];
@@ -692,7 +697,7 @@ describe("runner credential (issue #1169)", () => {
         );
         const started = spawn(
           process.execPath,
-          ["--import", "tsx", "src/cli.ts", configPath],
+          ["--import", tsxLoader, "src/kaoiro.ts", "runner", configPath],
           {
             cwd: runnerRoot,
             env: {
@@ -729,7 +734,7 @@ describe("runner credential (issue #1169)", () => {
         if (tokenOf(0) !== PLANTED_TOKEN) problems.push("first connection: the token is not in the connect URL");
 
         // Positive control: the recorder sees the names where they are.
-        const own = readRecords().filter((record) => record.role.endsWith("src/cli.ts"));
+        const own = readRecords().filter((record) => record.role.startsWith("runner "));
         if (own.length !== 1 || own[0]!.present.join() !== CREDENTIAL_NAMES.join()) {
           problems.push(`runner: expected one record with every name, got ${JSON.stringify(own)}`);
         }

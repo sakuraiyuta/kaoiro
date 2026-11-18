@@ -1,14 +1,14 @@
 // Entry point for the runner setup wizard (issue #139). The flow itself lives
 // in setup.ts; this only wires readline to it.
 //
-// Usage: node dist/setup.js     (or deploy/kaoiro-runner-setup.sh)
+// Usage: kaoiro setup     (or deploy/kaoiro-runner-setup.sh)
 
 import { platform } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { ConfigError } from "./config.js";
 import { type Prompt, nextSteps, runSetup } from "./setup.js";
 
-async function main(): Promise<void> {
+export async function runSetupWizard(): Promise<void> {
   // A wizard reached from a service manager (systemd / launchd) would have no
   // terminal and would loop forever on EOF, so refuse up front. 78 =
   // EX_CONFIG, matching the launch shim's configuration-error status.
@@ -84,5 +84,3 @@ async function main(): Promise<void> {
   finished = true;
   rl.close();
 }
-
-void main();

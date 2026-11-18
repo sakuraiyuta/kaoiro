@@ -32,7 +32,7 @@ it.each([
   let modes: unknown;
   try {
     await runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         modes = options.interAgentDeliveryModes;
@@ -65,7 +65,7 @@ it.each([undefined,false,true] as const)("ignores a direct wrapper obsolete file
   const writes:string[]=[];const stderr=vi.spyOn(process.stderr,"write").mockImplementation(chunk=>{writes.push(String(chunk));return true;});
   let modes:unknown;
   try{
-    await runClaudeCli({parseCliArgs:()=>({configPath:"test",prompt:undefined,resume:undefined}),
+    await runClaudeCli({parseCliArgs:()=>({configPath:"test"}),
       loadConfig:()=>({...config,...(fileKey===undefined?{}:{phase2_delivery:fileKey})}),
       createServerLink:(_url,_id,options)=>{modes=options.interAgentDeliveryModes;queueMicrotask(()=>options.onPersonaPrompt?.("system"));return{deliveryModes:()=>undefined,currentSessionId:()=>null,send(){},close(){}}as never;},
       createHost:()=>({state:"idle",statusExtSnapshot:()=>({}),run:async()=>{}})as never});

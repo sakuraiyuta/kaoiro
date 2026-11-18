@@ -61,7 +61,7 @@ describe("Antigravity CLI delivery composition", () => {
     };
     const signals = process.listeners("SIGINT");
     const running = runAntigravityCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }), loadConfig: () => ({ ...config }),
+      parseCliArgs: () => ({ configPath: "test" }), loadConfig: () => ({ ...config }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
         queueMicrotask(() => options.onPersonaPrompt?.("PERSONA")); return link as never;
@@ -111,7 +111,7 @@ describe("Antigravity CLI delivery composition", () => {
       run: async () => { started(); await finished; },
     };
     running = runAntigravityCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -180,7 +180,7 @@ describe("Antigravity CLI delivery composition", () => {
 
     try {
       running = runAntigravityCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath: "test" }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
@@ -270,7 +270,7 @@ describe("Antigravity CLI delivery composition", () => {
       },
     };
     const running = runAntigravityCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -401,7 +401,7 @@ if (args[0] === "models") {
 
     try {
       const run = runAntigravityCli({
-        parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
+        parseCliArgs: () => ({ configPath }),
         onHostCreated: (created) => {
           host = created;
           queueMicrotask(() => {
@@ -440,7 +440,7 @@ if (args[0] === "models") {
     const events: string[] = [];
 
     await expect(runAntigravityCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));

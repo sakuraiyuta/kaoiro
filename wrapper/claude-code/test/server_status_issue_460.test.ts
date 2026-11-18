@@ -45,7 +45,7 @@ describe("issue #460 Claude server status handoff", () => {
     const failTurnPromise = new Promise<void>(resolve => { failTurn = resolve; });
     let resultIndex = 0;
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
@@ -141,7 +141,7 @@ describe("issue #460 Claude server status handoff", () => {
     let recoveryResult: Record<string, any> | undefined;
     let resultIndex = 0;
     const running = runClaudeCli({
-      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      parseCliArgs: () => ({ configPath: "test" }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;

@@ -85,8 +85,8 @@ async function startup(usage: { stdout: string; code: number }, resume?: string,
   let host: AntigravityHost | undefined;
   let hostOptions: AntigravityHostOptions | undefined;
   const work = runAntigravityCli({
-    parseCliArgs: () => ({ configPath: "fixture", ...(resume === undefined ? {} : { resume }) }),
-    loadConfig: () => config,
+    parseCliArgs: () => ({ configPath: "fixture" }),
+    loadConfig: () => ({ ...(resume === undefined ? {} : { resume_session_id: resume }), ...config }),
     createHost: (cfg, options) => {
       hostOptions = options;
       return new AntigravityHost(cfg, options);
