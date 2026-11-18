@@ -1,4 +1,4 @@
-import { RecoveryReporter, recoveryExitCode, shutdownForRecovery } from "@kaoiro/wrapper-core";
+import { RecoveryReporter, shutdownForRecovery } from "@kaoiro/wrapper-core";
 import { resolveDelivery } from "@kaoiro/agent-common";
 // Minimal demo CLI — runs an agent session and prints color-coded state
 // transitions, so you can watch the kaoiro state follow real agent behavior.
@@ -23,7 +23,6 @@ import { resolveDelivery } from "@kaoiro/agent-common";
 // Usage: kaoiro wrapper claude-code run <launch file>
 
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadWrapperBuildInfo, parseCliArgs } from "@kaoiro/wrapper-core";
 import {
@@ -1809,14 +1808,4 @@ export async function runClaudeCli(
       }
     }
   }
-}
-
-if (
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  runClaudeCli().catch((error: unknown) => {
-    writeRedactedStderr(`${String(error)}\n`);
-    process.exitCode = recoveryExitCode(error);
-  });
 }

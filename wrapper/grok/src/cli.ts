@@ -1,9 +1,8 @@
-import { RecoveryReporter, recoveryExitCode, shutdownForRecovery } from "@kaoiro/wrapper-core";
+import { RecoveryReporter, shutdownForRecovery } from "@kaoiro/wrapper-core";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { retirePermissionSyncInput } from "@kaoiro/agent-common";
 import { randomUUID } from "node:crypto";
 import type { PermissionSelection, PermissionSyncMessage, WrapperPermissionLifecycleMessage } from "@kaoiro/protocol";
-import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   askUserQuestionDescriptor,
@@ -36,7 +35,6 @@ import {
 } from "@kaoiro/wrapper-core";
 import { GrokHost, type GrokHostOptions } from "./host.js";
 import type { GrokWireMetadata } from "./grok/wire.js";
-import { GrokLaunchError } from "./grok/errors.js";
 import { readGrokHistory } from "./history.js";
 import { UploadIntake, type StagedRecord } from "./upload.js";
 
@@ -513,16 +511,4 @@ export async function runGrokCli(
       if (recovery.failure) throw recovery.failure;
     }
   }
-}
-
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  void runGrokCli().catch((error: unknown) => {
-    const detail =
-      error instanceof GrokLaunchError ? error.message : "grok wrapper failed";
-    writeRedactedStderr(`[kaoiro] ${detail}\n`);
-    process.exitCode = recoveryExitCode(error);
-  });
 }

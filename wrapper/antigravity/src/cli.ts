@@ -1,6 +1,5 @@
-import { RecoveryReporter, recoveryExitCode, shutdownForRecovery } from "@kaoiro/wrapper-core";
+import { RecoveryReporter, shutdownForRecovery } from "@kaoiro/wrapper-core";
 import { retirePermissionSyncInput } from "@kaoiro/agent-common";
-import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   askUserQuestionDescriptor,
@@ -863,11 +862,4 @@ export async function runAntigravityCli(
       }
     }
   }
-}
-
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  runAntigravityCli().catch((error: unknown) => {
-    writeRedactedStderr(`${String(error)}\n`);
-    process.exitCode = recoveryExitCode(error);
-  });
 }
