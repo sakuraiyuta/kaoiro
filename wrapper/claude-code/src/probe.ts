@@ -112,7 +112,7 @@ function parseArgs(argv: string[]): CliArgs {
       usage = true;
     } else if (arg === "--help" || arg === "-h") {
       writeRedactedStderr(
-        "usage: kaoiro-claude-probe [--timeout-ms N] [--usage]\n" +
+        "usage: kaoiro wrapper claude-code probe [--timeout-ms N] [--usage]\n" +
           "emits ProbeResult JSON on stdout; exit 0 on success, 1 on failure.\n",
       );
       process.exit(0);
@@ -338,12 +338,6 @@ function classifyError(message: string): ProbeFailReason {
   return "cli_error";
 }
 
-// Import-safe entrypoint gate (ADR-0039 F9 v2 = 藤 review B): only run
-// main() when this file is invoked as a CLI, not when a library module
-// imports it. Without this guard, `probe-client.ts`'s `require.resolve()`
-// of this file would trigger the SDK query on every import.
-import { fileURLToPath } from "node:url";
-
 /** Runs the probe as the whole process: `kaoiro wrapper claude-code probe`. */
 export function runProbeProcess(argv: string[]): void {
   runProbe(argv).then(
@@ -363,11 +357,4 @@ export function runProbeProcess(argv: string[]): void {
       process.exit(2);
     },
   );
-}
-
-if (
-  process.argv[1] !== undefined &&
-  fileURLToPath(import.meta.url) === process.argv[1]
-) {
-  runProbeProcess(process.argv.slice(2));
 }

@@ -23,9 +23,10 @@ A bump that meets an exit condition goes back to a full design.
    version, its publication time, the `dist-tags.latest` value at the time you
    chose, and every skipped version with its reason (for example, never
    published).
-2. **Change the pin.** First, on the base commit, build the wrapper and save
-   the catalog probe's output (`node wrapper/claude-code/dist/probe.js`) for
-   step 5. Then edit the range in `wrapper/claude-code/package.json` and run
+2. **Change the pin.** First, on the base commit, build the wrapper and the
+   runner and save the catalog probe's output
+   (`node runner/dist/kaoiro.js wrapper claude-code probe`) for step 5. Then
+   edit the range in `wrapper/claude-code/package.json` and run
    `pnpm install`. Compare the dependency shape of the old and new
    package: `peerDependencies`, `exports`, `engines.node` and the set of
    platform packages. Commit the pin and the lockfile.
