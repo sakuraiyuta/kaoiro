@@ -37,6 +37,7 @@ export async function installArtifact(
   root: string, engine: EngineKind,
   artifact: { name: string; version: string; integrity: string },
   registry: string,
+  identityPath = fileURLToPath(new URL("./codex-native.json", import.meta.url)),
 ): Promise<void> {
   const store = join(root, "engines");
   const basename = artifact.name.split("/")[1]!;
@@ -76,10 +77,7 @@ export async function installArtifact(
     }
     const pkg = join(stage, "package");
     if (engine === "codex") {
-      const identityFile = fileURLToPath(
-        new URL("./codex-native.json", import.meta.url),
-      );
-      const identity = JSON.parse(readFileSync(identityFile, "utf8")) as {
+      const identity = JSON.parse(readFileSync(identityPath, "utf8")) as {
         version: string; sha256: string;
       };
       const binary = engineBinaryPath(engine, pkg);

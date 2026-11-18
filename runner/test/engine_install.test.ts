@@ -5,11 +5,12 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   installArtifact, installEngines, runEngines,
 } from "../src/engine_install.js";
+import { engineBinaryPath } from "../src/engines.js";
 
 describe("engine acquisition", () => {
   const dirs: string[] = [];
@@ -228,6 +229,50 @@ describe("engine acquisition", () => {
         `http://127.0.0.1:${address.port}`)).rejects.toThrow();
       expect(requests).toEqual(["/@openai/codex/-/codex-1-linux-x64.tgz"]);
       expect(readdirSync(join(dir, "engines"))).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => err ? reject(err) : resolve());
+      });
+    }
+  });
+
+  it("checks the Codex version and native hash before publication", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-codex-check-"));
+    dirs.push(dir);
+    const source = join(dir, "source");
+    const binary = engineBinaryPath("codex", join(source, "package"));
+    mkdirSync(dirname(binary), { recursive: true });
+    writeFileSync(binary, "native fixture");
+    const archive = join(dir, "engine.tgz");
+    expect(spawnSync("tar", ["-czf", archive, "-C", source, "package"]).status)
+      .toBe(0);
+    const bytes = readFileSync(archive);
+    const artifact = { name: "@openai/codex-linux-x64", version: "1", integrity:
+      `sha512-${createHash("sha512").update(bytes).digest("base64")}` };
+    const identity = join(dir, "identity.json");
+    const nativeHash = createHash("sha256").update("native fixture").digest("hex");
+    const server = createServer((_req, res) => res.end(bytes));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("no address");
+      }
+      const registry = `http://127.0.0.1:${address.port}`;
+      for (const value of [
+        { version: "2", sha256: nativeHash },
+        { version: "1", sha256: "incorrect" },
+      ]) {
+        writeFileSync(identity, JSON.stringify(value));
+        await expect(installArtifact(dir, "codex", artifact, registry, identity))
+          .rejects.toThrow("Codex native identity mismatch");
+        expect(readdirSync(join(dir, "engines"))).toEqual([]);
+      }
+      writeFileSync(identity, JSON.stringify({ version: "1", sha256: nativeHash }));
+      await installArtifact(dir, "codex", artifact, registry, identity);
+      expect(readdirSync(join(dir, "engines"))).toEqual(["codex-linux-x64@1"]);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => err ? reject(err) : resolve());
