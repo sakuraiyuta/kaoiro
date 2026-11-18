@@ -107,7 +107,27 @@ two layouts can be told apart. `dist/cli.js` of the runner and of each wrapper
 package stay in the tree as modules, and the tree keeps everything the
 verifier of the previous release requires, because during an update the tools
 of the running release verify the candidate. The launch shim and the setup
-shim start the entry, and the verifier requires it.
+shim start the entry.
+
+**D7. The verifier requires the entry where the tree carries it.** The tools
+of a release also read the release before it: a rollback verifies `previous`
+with the tools it is run from, and the release before this unit has no
+`dist/kaoiro.js`. Measured on real tarballs, a rollback run with this unit's
+tools was refused with exit 70 until the rule below was added. The verifier
+seeds its closure from `dist/kaoiro.js` when that file is in the tree (a
+manifest line for a missing file already fails), and from `dist/cli.js` when
+it is not. This is the rule the later layout change uses to tell its two
+layouts apart, applied one release earlier. Declaring the entry in
+`package.json` was rejected: it buys one more refusal for a new field and its
+reader.
+
+The accepted loss: a tree of this unit that lost `dist/kaoiro.js` together
+with its manifest line is not refused at install or switch, because it reads
+as the older shape. Its launch shim checks for the entry before `exec` and
+stops with exit 78. The general form of the rule, for the following units: a
+file a release starts requiring is required only where the tree carries it,
+and each production release is checked by updating and rolling back with the
+tools of both releases.
 
 ## Not in this unit
 
