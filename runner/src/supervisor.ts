@@ -30,6 +30,7 @@ import { codexHomeProblem as defaultCodexHomeProblem } from "@kaoiro/codex";
 import type { CodexAuthMode } from "./codex-auth.js";
 import type { BehaviourRelay } from "./behaviour-settings.js";
 import type { ChatGptPlan } from "./config.js";
+import { isEngine } from "./engines.js";
 import {
   agyFailureDetail,
   effectiveNetworkAccess,
@@ -321,14 +322,7 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   // value is a fail-loud reject, not a silent fallback to the wrong engine.
   let engine: EngineKind = "claude-code";
   if (payload.engine !== undefined) {
-    if (
-      payload.engine !== "claude-code" &&
-      payload.engine !== "codex" &&
-      payload.engine !== "antigravity" &&
-      payload.engine !== "grok"
-    ) {
-      return null;
-    }
+    if (!isEngine(payload.engine)) return null;
     engine = payload.engine;
   }
   const parsed: ParsedSpawn = {

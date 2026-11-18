@@ -14,7 +14,7 @@ import {
   registerSelfEntry,
   writeRedactedStderr,
 } from "@kaoiro/wrapper-core";
-import { ENGINES } from "./engines.js";
+import { ENGINES, isEngine } from "./engines.js";
 
 registerSelfEntry(import.meta.url);
 
@@ -27,9 +27,7 @@ if (command === "runner" || command === "--version") {
   await (await import("./setup-cli.js")).runSetupWizard();
 } else {
   const [engine, verb, ...args] = rest;
-  const verbs = command === "wrapper" && engine !== undefined && Object.hasOwn(ENGINES, engine)
-    ? ENGINES[engine as keyof typeof ENGINES]
-    : undefined;
+  const verbs = command === "wrapper" && isEngine(engine) ? ENGINES[engine] : undefined;
   const run = verbs !== undefined && verb !== undefined && Object.hasOwn(verbs, verb)
     ? verbs[verb]
     : undefined;

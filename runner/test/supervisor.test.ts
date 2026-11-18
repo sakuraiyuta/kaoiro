@@ -282,6 +282,15 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     void _omit;
     expect(parseSpawn(rest)).toBeNull();
   });
+
+  it("accepts the engines of the engine table and rejects any other name", () => {
+    for (const engine of ["claude-code", "codex", "antigravity", "grok"]) {
+      expect(parseSpawn({ ...spawnMsg, engine })?.engine).toBe(engine);
+    }
+    for (const engine of ["gemini", "", "constructor", 7]) {
+      expect(parseSpawn({ ...spawnMsg, engine })).toBeNull();
+    }
+  });
   it("wrapper config に server_token を載せ allowed_tools は載せない", () => {
     const parsed = parseSpawn(spawnMsg)!;
     const config = resolveWrapperConfig(

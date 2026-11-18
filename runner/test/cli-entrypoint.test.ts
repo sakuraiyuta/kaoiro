@@ -76,6 +76,22 @@ describe("runner CLI built entry point", () => {
     expect(typeof identity.dirty).toBe("boolean");
   });
 
+  it.each([
+    [[]],
+    [["start"]],
+    [["wrapper"]],
+    [["wrapper", "gemini", "run", "launch.json"]],
+    [["wrapper", "claude-code", "start", "launch.json"]],
+    [["wrapper", "claude-code", "run"]],
+    [["wrapper", "claude-code", "run", "launch.json", "first instruction"]],
+    [["wrapper", "claude-code", "run", "launch.json", "--resume", "session-1"]],
+  ])("exits 64 on %j without starting anything", (args) => {
+    const result = run(cli, args, root);
+    expect(result.status).toBe(64);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("usage: kaoiro ");
+  });
+
   it("fails loudly for a missing config through every built entry", () => {
     const missingConfig = join(root, "missing-runner.config.json");
     for (const { name, path } of entries) {
