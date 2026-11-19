@@ -47,6 +47,8 @@ describe("moderation diagnostics", () => {
         },
       });
       const out = await collect(project([completed(itemValue), completed(itemValue), terminal()]).events);
+      expect(stderr).toHaveBeenCalledOnce();
+      expect(stderr.mock.calls[0]![0]).toBe(2);
       const diagnostic = stderr.mock.calls.map(call => String(call[1])).join("");
       expect(diagnostic).toBe(`codex: moderation observed mode=${mode}\n`);
       for (const marker of ["BODY_MARKER", "REASON_MARKER", "ANNOTATION_MARKER", "ITEM_MARKER"]) {
