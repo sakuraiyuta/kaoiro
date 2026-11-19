@@ -789,6 +789,8 @@ describe("buildRegister", () => {
         (engine) => engine.id === "codex",
       );
       expect(codex?.models.map((model) => model.value)).toEqual([
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
         "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6.1-terra",
@@ -818,6 +820,8 @@ describe("buildRegister", () => {
       (engine) => engine.id === "codex",
     );
     expect(codex?.models.map((model) => model.value)).toEqual([
+      "gpt-6.2-sol",
+      "gpt-6.2-astra",
       "gpt-6.1-sol",
       "gpt-6-astra",
       "gpt-6.1-terra",
