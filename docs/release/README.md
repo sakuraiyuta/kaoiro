@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-11-18
+last_updated: 2026-11-19
 ---
 
 # Release notes
@@ -33,6 +33,9 @@ Whoever prepares a production release writes the note and lands it on
 develop **before** creating the release tag, and creates the tag on the commit
 that contains the note. Checking out a release tag therefore includes the
 note that describes it.
+
+The [v2026.11.19.1 record](v2026.11.19.1.md#tag-and-note-location)
+documents the operator-approved placement of that release's note.
 
 1. Plan the tag name with `scripts/release-tag.mjs plan` on the code that will
    be released, and name the note after it. The name depends on the UTC date:
@@ -66,6 +69,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.19.1](v2026.11.19.1.md) | 2026-11-19 | v2026.11.18.1 | One kaoiro entry for the runner and all wrappers; prompts and resume targets in launch files; wrapper hot reload retired. |
 | [v2026.11.18.1](v2026.11.18.1.md) | 2026-11-18 | v2026.11.16.1 | The runner removes its own server credential from its environment right after reading it, so no wrapper, engine probe, engine or agent tool inherits it. |
 | [v2026.11.16.1](v2026.11.16.1.md) | 2026-11-17 | v2026.11.15.1 | The dashboard formats Markdown bodies in a Web Worker and judges tail follow by scroll position, Grok peers accept attachments, a Claude Code resume note after compaction gets a 30-second idle floor, a director's yield waits for a running MCP call, and the runner reconnects after a channel error followed by close 1000. |
 | [v2026.11.15.1](v2026.11.15.1.md) | 2026-11-15 | v2026.11.14.2 | Grok peers gain work tools, session reset, ownership of the turns Grok starts on its own and background-task kill on interrupt; a stopping wrapper releases pending reply waits on every engine. |
