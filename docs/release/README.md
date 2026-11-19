@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-11-19
+last_updated: 2026-11-20
 ---
 
 # Release notes
@@ -69,6 +69,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.19.2](v2026.11.19.2.md) | 2026-11-19 | v2026.11.19.1 | Shared engine acquisition and executable selection; bridge and hook subcommands; Claude Agent SDK 0.3.327; Codex 0.170.0 with GPT-6.2 and state-aware update and rollback. |
 | [v2026.11.19.1](v2026.11.19.1.md) | 2026-11-19 | v2026.11.18.1 | One kaoiro entry for the runner and all wrappers; prompts and resume targets in launch files; wrapper hot reload retired. |
 | [v2026.11.18.1](v2026.11.18.1.md) | 2026-11-18 | v2026.11.16.1 | The runner removes its own server credential from its environment right after reading it, so no wrapper, engine probe, engine or agent tool inherits it. |
 | [v2026.11.16.1](v2026.11.16.1.md) | 2026-11-17 | v2026.11.15.1 | The dashboard formats Markdown bodies in a Web Worker and judges tail follow by scroll position, Grok peers accept attachments, a Claude Code resume note after compaction gets a 30-second idle floor, a director's yield waits for a running MCP call, and the runner reconnects after a channel error followed by close 1000. |
