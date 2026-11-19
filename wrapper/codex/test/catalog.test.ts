@@ -25,6 +25,11 @@ const terraRemoteSnapshot = JSON.parse(
   };
 };
 
+const models62Remote = JSON.parse(readFileSync(
+  new URL("./fixtures/models_62_remote_2026-11-19.json", import.meta.url), "utf8",
+)) as { models: { slug: string; display_name: string; description: string;
+  default_reasoning_level: string; supported_reasoning_levels: { effort: string }[] }[] };
+
 const values = (authMode: "chatgpt" | "apikey" | "unknown", plan?:
   | "free"
   | "go"
@@ -44,6 +49,8 @@ describe("resolveCodexCatalog", () => {
         description,
       })),
     ).toEqual([
+      { value: "gpt-6.2-sol", description: "Fast, go-to model for coding and everyday work." },
+      { value: "gpt-6.2-astra", description: "Our most capable model for complex coding and professional work." },
       {
         value: "gpt-6.1-sol",
         description: "Latest workhorse model for coding and everyday work.",
@@ -132,7 +139,7 @@ describe("resolveCodexCatalog", () => {
     const efforts = captured.supported_reasoning_levels.map(
       ({ effort }) => effort,
     );
-    expect(catalog[2]).toMatchObject({
+    expect(catalog[4]).toMatchObject({
       value: captured.slug,
       display_name: "GPT-6.1-Terra",
       description: captured.description,
@@ -141,6 +148,22 @@ describe("resolveCodexCatalog", () => {
       minimal_client_version: "0.161.0",
     });
     expect(effortLevelsForModel(catalog, captured.slug)).toEqual(efforts);
+  });
+
+  it.each(models62Remote.models)("matches $slug to the remote capture", (captured) => {
+    const efforts = captured.supported_reasoning_levels.map(({ effort }) => effort);
+    for (const auth of ["chatgpt", "apikey"] as const) {
+      const catalog = resolveCodexCatalog(auth, "plus");
+      expect(catalog.find(model => model.value === captured.slug)).toMatchObject({
+        value: captured.slug, display_name: captured.display_name,
+        description: captured.description, effort_levels: efforts,
+        default_effort: captured.default_reasoning_level, minimal_client_version: "0.170.0",
+      });
+      expect(resolveCodexCatalog(auth, "plus", undefined, "0.169.0")
+        .some(model => model.value === captured.slug)).toBe(false);
+      expect(resolveCodexCatalog(auth, "plus", undefined, "0.170.0")
+        .some(model => model.value === captured.slug)).toBe(true);
+    }
   });
 
   it.each([
@@ -181,6 +204,8 @@ describe("resolveCodexCatalog", () => {
     "ChatGPT %s follows remote priority for paid models",
     (plan) => {
       expect(values("chatgpt", plan)).toEqual([
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
         "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6.1-terra",
@@ -195,6 +220,8 @@ describe("resolveCodexCatalog", () => {
 
   it("API-key auth は plan と別の curated catalog を返す", () => {
     expect(values("apikey")).toEqual([
+      "gpt-6.2-sol",
+      "gpt-6.2-astra",
       "gpt-6.1-sol",
       "gpt-6-astra",
       "gpt-6.1-terra",
@@ -266,7 +293,7 @@ describe("resolveCodexCatalog", () => {
     const first = resolveCodexCatalog("chatgpt", "plus");
     first[0]!.display_name = "mutated";
     expect(resolveCodexCatalog("chatgpt", "plus")[0]?.display_name).toBe(
-      "GPT-6.1-Sol",
+      "GPT-6.2-Sol",
     );
   });
 
@@ -303,6 +330,8 @@ describe("resolveCodexCatalog", () => {
     ["gpt-6-astra", "0.153.0"],
     ["gpt-6.1-sol", "0.153.0"],
     ["gpt-6.1-terra", "0.161.0"],
+    ["gpt-6.2-sol", "0.170.0"],
+    ["gpt-6.2-astra", "0.170.0"],
     ["gpt-6-sol", "0.155.0"],
     ["gpt-6-luna", "0.155.0"],
     ["gpt-5.5", "0.124.0"],

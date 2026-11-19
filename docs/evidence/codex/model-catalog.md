@@ -386,3 +386,16 @@ was observed before, during or after the run. The isolated state was deleted
 afterward. These observations support 0.161.0 as a kaoiro-verified floor for
 both backends, independent of the separate pin update; they do not establish
 an upstream minimum or incompatibility below 0.161.0.
+
+
+## Signed-in remote catalog (2026-11-19)
+
+A signed-in ChatGPT catalog retrieved with Codex CLI 0.170.0 included
+`gpt-6.2-sol` and `gpt-6.2-astra`. The selected public fields are preserved in
+[the fixture](../../../wrapper/codex/test/fixtures/models_62_remote_2026-11-19.json).
+Both advertise low, medium, high, xhigh, max, and ultra effort with low as
+the default. The remote did not declare a minimum client version or plan
+entitlements. CLI 0.170.0 completed short turns for both; 0.164.0 rejected
+both with `model_not_found`. Versions 0.165.0 through 0.169.x were not tested.
+kaoiro keeps its existing Free/Go and API-key catalog policies; inclusion does
+not establish entitlement for other accounts.

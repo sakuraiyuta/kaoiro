@@ -1,6 +1,7 @@
 import type { ThreadItem } from "@openai/codex-sdk";
+import fs from "node:fs";
 import {
-  boundErrorDetail, clipText, logEntryToPayload, normalizeTasklist,
+  boundErrorDetail, clipText, logEntryToPayload, normalizeTasklist, writeRedactedStderr,
   type AdapterEvent, type LogEntry, type LogPayload, type ResultPayload,
   type TasklistSnapshot, type TasklistSourceItem,
 } from "@kaoiro/agent-common";
@@ -83,6 +84,40 @@ function sdkItem(item: RpcObject & { id: string }): ThreadItem | null {
           ? { error: { message: item.error.message } } : {}) };
     }
     default: return null;
+  }
+}
+
+function moderationMode(value: unknown): string | null {
+  if (value == null) return null;
+  if (!rpcObject(value)) return "unknown";
+  const display = value.display;
+  if (display == null && value.moderated === true) return "restricted_unspecified";
+  if (typeof value.moderated !== "boolean" || !rpcObject(display) || display.version !== 1) return "unknown";
+  if (display.mode === "show") {
+    const annotation = display.annotation;
+    if (display.trustedContacts !== "check" && display.trustedContacts !== "skip") return "unknown";
+    if (annotation != null && (!rpcObject(annotation) || annotation.kind !== "wellbeingHelpline" ||
+      (annotation.subject !== "answer" && annotation.subject !== "prompt"))) return "unknown";
+    return "show";
+  }
+  if (display.mode === "hide") {
+    return rpcObject(display.replacement) && display.replacement.kind === "wellbeingPromptHelpline" ? "hide" : "unknown";
+  }
+  if (display.mode === "block" && rpcObject(display.reason)) {
+    if (display.reason.kind === "protection" && typeof display.reason.protectionType === "string") return "block";
+    if (display.reason.kind === "cyber" && (display.reason.trustedAccess === undefined ||
+      typeof display.reason.trustedAccess === "boolean")) return "block";
+  }
+  return "unknown";
+}
+
+function reportModeration(value: unknown): void {
+  const mode = moderationMode(value);
+  if (mode === null) return;
+  try {
+    writeRedactedStderr(`codex: moderation observed mode=${mode}\n`, chunk => fs.writeSync(2, chunk));
+  } catch {
+    // Diagnostics must not alter the turn.
   }
 }
 
@@ -201,6 +236,7 @@ async function* project(turn: AppServerTurn, state: { usage: AppServerUsage | nu
           break;
         }
         if (isComplete && item.type === "agentMessage" && typeof item.text === "string") {
+          reportModeration(item.moderation);
           if (item.phase === "final_answer") finalText = item.text;
           else if (item.phase == null) fallbackText = item.text;
         }

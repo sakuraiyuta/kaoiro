@@ -1,8 +1,8 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import fs, { readFileSync } from "node:fs";
 import { MAX_LOG_BYTES, makeResult } from "@kaoiro/agent-common";
-import { projectAppServerTurn, type AppServerProjection } from "../src/app_server_projection.js";
+import { appServerItemLogs, projectAppServerTurn, type AppServerProjection } from "../src/app_server_projection.js";
 import { AppServerConnectionError, type AppServerNotification, type RpcObject } from "../src/app_server_rpc.js";
 
 const identity = { threadId: "thread", turnId: "turn", hostTurnToken: "host", requestId: 73, clientUserMessageId: "client" };
@@ -27,6 +27,65 @@ async function collect(events: AsyncIterable<AppServerProjection>) {
 const logs = (events: AppServerProjection[]) => events.flatMap(e => e.kind === "log" ? [e.payload] : []);
 const results = (events: AppServerProjection[]) => events.filter(e => e.kind === "result");
 const adapters = (events: AppServerProjection[]) => events.flatMap(e => e.kind === "adapter" ? [e.event] : []);
+
+describe("moderation diagnostics", () => {
+  it.each([
+    [{ moderated: true, display: { version: 1, mode: "show", trustedContacts: "skip", annotation: {
+      kind: "wellbeingHelpline", subject: "answer", extra: "ANNOTATION_MARKER" } } }, "show"],
+    [{ moderated: true, display: { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } } }, "hide"],
+    [{ moderated: true, display: { version: 1, mode: "block", reason: { kind: "protection", protectionType: "REASON_MARKER" } } }, "block"],
+    [{ moderated: true }, "restricted_unspecified"],
+    [{ moderated: true, display: { version: 1, mode: "hide" } }, "unknown"],
+    [{ moderated: true, display: { version: 2, mode: "show" } }, "unknown"],
+    [{ moderated: true, display: { version: 1, mode: "other" } }, "unknown"],
+  ])("records a fixed classification without private fields", async (moderation, mode) => {
+    const stderr = vi.spyOn(fs, "writeSync").mockImplementation(() => 1);
+    try {
+      const itemValue = item("agentMessage", "ITEM_MARKER", {
+        text: "BODY_MARKER", phase: "final_answer", moderation: {
+          ...moderation, annotation: "ANNOTATION_MARKER", reason: "REASON_MARKER",
+        },
+      });
+      const out = await collect(project([completed(itemValue), completed(itemValue), terminal()]).events);
+      const diagnostic = stderr.mock.calls.map(call => String(call[1])).join("");
+      expect(diagnostic).toBe(`codex: moderation observed mode=${mode}\n`);
+      for (const marker of ["BODY_MARKER", "REASON_MARKER", "ANNOTATION_MARKER", "ITEM_MARKER"]) {
+        expect(diagnostic).not.toContain(marker);
+      }
+      expect(logs(out)).toContainEqual({ kind: "assistant", text: "BODY_MARKER" });
+      expect(results(out)).toEqual([{ kind: "result", status: "completed", payload: {
+        text: "BODY_MARKER", is_error: false,
+      } }]);
+    } finally { stderr.mockRestore(); }
+  });
+
+  it("does not record absent, started or foreign items", async () => {
+    const stderr = vi.spyOn(fs, "writeSync").mockImplementation(() => 1);
+    try {
+      const moderated = item("agentMessage", "m", { text: "x", moderation: { moderated: true } });
+      await collect(project([started(moderated), completed(item("agentMessage", "plain", { text: "x" })),
+        completed(item("agentMessage", "null", { text: "x", moderation: null })),
+        event("item/completed", { threadId: "foreign", item: moderated }),
+        event("item/completed", { turnId: "foreign", item: moderated }), terminal()]).events);
+      appServerItemLogs({ ...moderated, id: "history" }, true);
+      expect(stderr).not.toHaveBeenCalled();
+    } finally { stderr.mockRestore(); }
+  });
+
+  it("keeps the result when diagnostic output fails", async () => {
+    const stderr = vi.spyOn(fs, "writeSync").mockImplementation(() => { throw new Error("sink failed"); });
+    try {
+      const out = await collect(project([completed(item("agentMessage", "m", {
+        text: "answer", phase: "final_answer", moderation: { moderated: true },
+      })), terminal()]).events);
+      expect(stderr).toHaveBeenCalledOnce();
+      expect(logs(out)).toContainEqual({ kind: "assistant", text: "answer" });
+      expect(results(out)).toEqual([{ kind: "result", status: "completed", payload: {
+        text: "answer", is_error: false,
+      } }]);
+    } finally { stderr.mockRestore(); }
+  });
+});
 
 describe("app-server result and progress projection", () => {
   it("projects the captured pinned-CLI compaction without requiring thread/compacted", async () => {

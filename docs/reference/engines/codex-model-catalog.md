@@ -1,7 +1,7 @@
 ---
 title: Codex model catalog reference
 status: accepted
-last_updated: 2026-10-27
+last_updated: 2026-11-19
 related: [codex-exec-events, protocol, plugin-model]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -15,7 +15,7 @@ For model-change procedures, see [Codex model settings](../../operations/codex-m
 ## Advertised catalog
 
 [The plan table](../../evidence/codex/model-catalog.md#plan--available-model-2026-07-11-astra-column-added-2026-09-05-sol6luna6-columns-added-2026-09-23) is an **upstream availability snapshot**, not kaoiro's advertised
-catalog. The current kaoiro snapshot advertises Sol6.1 / Astra / Terra6.1 / Sol6 /
+catalog. The current kaoiro snapshot advertises Sol6.2 / Astra6.2 / Sol6.1 / Astra / Terra6.1 / Sol6 /
 Luna6 / Sol5.6 / Terra5.6 / Luna5.6 for ChatGPT Plus and above, Terra5.6 for
 Free/Go, and additionally
 only `gpt-5.5` and `gpt-5.4-mini` for API-key authentication. It deliberately
@@ -47,14 +47,14 @@ existing shared paid catalog also includes it for API-key authentication;
 actual entitlement remains account-dependent. See the
 [dated Terra evidence](../../evidence/codex/model-catalog.md#signed-in-remote-catalog-2026-10-27).
 
-## Bundled 0.164.0 baseline
+## Bundled 0.170.0 baseline
 
-The bundled CLI/SDK pin is 0.164.0. Its consumed SDK declarations remain
-compatible, and native checks cover explicit model/effort settings, default-effort
-resolution, and resumed turns. The pin does not change kaoiro's curated order,
-minimum client versions, plan policy or effort policy; GPT-6.1 Terra still has
-a supported minimum of 0.161.0. Local-provider checks do not establish signed-in
-server defaults or account entitlement. See [the dated adoption evidence](../../evidence/codex-app-server/pin-0.164.0-adoption-gates-2026-10-27.md).
+The CLI and SDK are pinned together at 0.170.0. The two new GPT-6.2 entries
+come from the signed-in remote catalog and support low through ultra effort,
+with low as the default. The remote did not declare a minimum client version;
+0.170.0 is the measured floor, while 0.165.0–0.169.x were not tested. Free/Go
+retain their existing catalog. Catalog inclusion does not establish entitlement
+for every account. See the [dated adoption evidence](../../evidence/codex-app-server/pin-0.170.0-adoption-gates-2026-11-19.md).
 
 ## Implications for kaoiro
 

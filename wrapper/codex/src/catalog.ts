@@ -54,6 +54,26 @@ const ASTRA: EngineModelInfo = {
   minimal_client_version: "0.153.0",
 };
 
+// The remote rows declare no minimum. 0.170.0 is the verified baseline;
+// versions 0.165.0 through 0.169.x have not been measured.
+const SOL_62: EngineModelInfo = {
+  value: "gpt-6.2-sol",
+  display_name: "GPT-6.2-Sol",
+  description: "Fast, go-to model for coding and everyday work.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  default_effort: "low",
+  minimal_client_version: "0.170.0",
+};
+
+const ASTRA_62: EngineModelInfo = {
+  value: "gpt-6.2-astra",
+  display_name: "GPT-6.2-Astra",
+  description: "Our most capable model for complex coding and professional work.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  default_effort: "low",
+  minimal_client_version: "0.170.0",
+};
+
 const SOL_61: EngineModelInfo = {
   value: "gpt-6.1-sol",
   display_name: "GPT-6.1-Sol",
@@ -93,7 +113,7 @@ const LUNA_6: EngineModelInfo = {
 
 // Remote priority: Sol 6.1 1, Astra 2, Terra 6.1 3, Sol 6 4, Luna 6 5,
 // gpt-5.6-sol 6, gpt-5.6-terra 8, gpt-5.6-luna 9.
-const CHATGPT_PLUS_MODELS = [SOL_61, ASTRA, TERRA_61, SOL_6, LUNA_6, SOL, TERRA, LUNA];
+const CHATGPT_PLUS_MODELS = [SOL_62, ASTRA_62, SOL_61, ASTRA, TERRA_61, SOL_6, LUNA_6, SOL, TERRA, LUNA];
 // kaoiro advertises only Terra on Free/Go; paid plans share the curated
 // catalog. See docs/reference/engines/codex-model-catalog.md.
 const CHATGPT_TERRA = [TERRA];

@@ -10,7 +10,7 @@ import { spawnChildSync } from "./child-process-environment.mjs";
 export const CREDENTIALS = ["auth.json", ".credentials.json", "secrets", "mcp-oauth-locks"];
 // Prior references (rust-v0.156.1, rust-v0.159.3, rust-v0.160.0): state/src/sqlite.rs,
 // rollout/src, message-history/src/lib.rs, config/src, skills/src/lib.rs.
-// Lock/cache references (rust-v0.164.0): state/src/runtime/reclamation.rs,
+// Lock/cache references (rust-v0.170.0): state/src/runtime/reclamation.rs,
 // state/src/sqlite.rs, core/src/config/mod.rs, cloud-config/src/service.rs
 // and cloud-config/src/cache.rs (excluded). Native local-provider measurements
 // cover both the exec and app-server backends, not every runtime path.

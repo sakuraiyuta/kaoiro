@@ -21,17 +21,26 @@ admission. See [ADR-0040](../../docs/adr/0040-context-usage-capability.md#addend
 
 The credentialed default-composition gate runs after building core, agent-common
 and codex: `pnpm -C runner exec tsx ../scripts/check-codex-context-meter.mts <output-dir>`.
-It requires an authenticated `CODEX_HOME`, uses pinned Codex 0.164.0 and a local
+It requires an authenticated `CODEX_HOME`, uses pinned Codex 0.170.0 and a local
 Phoenix wire fixture, and injects no host/session/transport factory. Unit suites
 run separately with `env -u CODEX_HOME pnpm -C wrapper/codex test`.
 
 ## Pinned SDK compatibility
 
-The CLI and SDK are pinned together at 0.164.0. The SDK package supplies the
+The CLI and SDK are pinned together at 0.170.0. The SDK package supplies the
 native binary and shared event types; execution uses app-server JSON-RPC.
 Native checks use isolated homes and a loopback provider,
 including `runCodexCli` with its production app-server factories. Historical exec checks belong to pre-retirement releases.
-See [the 0.164.0 evidence](../../docs/evidence/codex-app-server/pin-0.164.0-adoption-gates-2026-10-27.md)
+See [the 0.170.0 evidence](../../docs/evidence/codex-app-server/pin-0.170.0-adoption-gates-2026-11-19.md)
 for fixture provenance, negative controls and remaining limits. The
 [U2 acceptance limits](../../docs/operations/codex-backend-switch.md#accepted-measurement-limits)
 separate controlled native checks from authenticated behavior and API-key defaults.
+
+## Moderation display instructions
+
+The app-server path currently passes answer text through to the conversation
+log, result and restored history even when the upstream item carries `hide` or
+`block` display instructions. A completed item with moderation emits a fixed
+classification to the runner journal without the text, reason or item ID.
+If that diagnostic appears even once, ask the operator to reconsider how
+moderation display instructions should be handled.
