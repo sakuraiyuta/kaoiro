@@ -38,6 +38,8 @@ describe("CodexHost statusExtSnapshot", () => {
       expect(
         (initial.models as { value: string }[]).map((m) => m.value),
       ).toEqual([
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
         "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6.1-terra",
@@ -93,6 +95,8 @@ describe("CodexHost statusExtSnapshot", () => {
       expect(
         (initial.models as { value: string }[]).map((m) => m.value),
       ).toEqual([
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
         "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6.1-terra",
