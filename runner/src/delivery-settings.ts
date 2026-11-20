@@ -45,9 +45,9 @@ export interface DeliveryOmission {
   limit: number;
 }
 
-export function preflightDeliveryRegister(register: RunnerRegister, warn: (omissions: DeliveryOmission[]) => void): RunnerRegister {
+export function preflightDeliveryRegister(register: RunnerRegister<EngineKind>, warn: (omissions: DeliveryOmission[]) => void): RunnerRegister<EngineKind> {
   const omissions: DeliveryOmission[] = [];
-  const engines: EngineCatalogEntry[] = (register.engines ?? []).map(entry => {
+  const engines: EngineCatalogEntry<EngineKind>[] = (register.engines ?? []).map(entry => {
     const metadata = entry.launch_delivery_policy;
     if (metadata === undefined) return entry;
     const count = Object.keys(metadata.persona_overrides ?? {}).length;
@@ -73,7 +73,7 @@ export function preflightDeliveryRegister(register: RunnerRegister, warn: (omiss
   return result;
 }
 
-export function projectDeliveryRegister(register: RunnerRegister, snapshot: AppliedDeliverySnapshot): RunnerRegister {
+export function projectDeliveryRegister(register: RunnerRegister<EngineKind>, snapshot: AppliedDeliverySnapshot): RunnerRegister<EngineKind> {
   const engines = (register.engines ?? []).map(entry => ({ ...entry, launch_delivery_policy: buildLaunchDeliveryMetadata(snapshot, entry.id) }));
   const in_flight_defaults = Object.fromEntries(engines.map(entry => [entry.id, snapshot.engines[entry.id].default]));
   return preflightDeliveryRegister({ ...register, engines, in_flight_defaults }, omissions => {

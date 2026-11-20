@@ -656,9 +656,9 @@ export function buildRegister(
   antigravityCatalogOverride?: EngineCatalogEntry["models"],
   deliverySnapshot: AppliedDeliverySnapshot = createDeliverySnapshot(config),
   grokCatalogOverride?: EngineCatalogEntry["models"],
-): RunnerRegister {
+): RunnerRegister<EngineKind> {
   const capabilities = effectiveCapabilities(config);
-  const engines: EngineCatalogEntry[] = [];
+  const engines: EngineCatalogEntry<EngineKind>[] = [];
   if (capabilities.includes("claude-code")) {
     // Option E, ADR-0039: when the runner has a fresh live-probe catalog in
     // its memory cache it overrides the pre-init bootstrap floor. Absent =

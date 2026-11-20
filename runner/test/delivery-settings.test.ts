@@ -69,7 +69,7 @@ describe("host delivery settings", () => {
   });
   it("omits whole metadata at either independent bound and preserves defaults with a size-only warning", () => {
     const metadata = boundedMetadata(); const warn = vi.fn();
-    const register: RunnerRegister = { version: "0", host_id: "test", cwd_allowlist: ["/tmp"],
+    const register: RunnerRegister<EngineKind> = { version: "0", host_id: "test", cwd_allowlist: ["/tmp"],
       engines: [{ id: "codex", models: [], launch_delivery_policy: metadata }], in_flight_defaults: { codex: false } };
     expect(deliveryJsonBytes(metadata)).toBe(8192);
     expect(preflightDeliveryRegister(register, warn).engines![0]!.launch_delivery_policy).toEqual(metadata);
@@ -86,14 +86,14 @@ describe("host delivery settings", () => {
     expect(warn).toHaveBeenLastCalledWith([{ engine: "codex", reason: "override_count", size: 65, limit: 64 }]);
   });
   it("omits all metadata under register pressure and warns once without model, path or persona data", () => {
-    const warn = vi.fn(); const register: RunnerRegister = { version: "0", host_id: "test", cwd_allowlist: ["/private-path"],
+    const warn = vi.fn(); const register: RunnerRegister<EngineKind> = { version: "0", host_id: "test", cwd_allowlist: ["/private-path"],
       in_flight_defaults: { codex: false }, engines: (["claude-code", "codex", "antigravity"] as EngineKind[]).map(id => ({ id, models: [], launch_delivery_policy: boundedMetadata() })) };
     expect(registerSizeEstimate(register)).toBeGreaterThan(65536);
     expect(preflightDeliveryRegister(register, warn).engines?.every(e => e.launch_delivery_policy === undefined)).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toHaveLength(3);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("private-path");
-    const unicodeRegister: RunnerRegister = { ...register, engines: register.engines!.map(entry => ({ ...entry,
+    const unicodeRegister: RunnerRegister<EngineKind> = { ...register, engines: register.engines!.map(entry => ({ ...entry,
       models: Array.from({ length: 32 }, (_, i) => ({ value: `model-${i}`, display_name: "界".repeat(80) })),
       launch_delivery_policy: { version: "v1", ceiling: true, mechanisms: none },
     })) };
