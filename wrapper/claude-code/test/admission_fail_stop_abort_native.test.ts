@@ -18,6 +18,9 @@ import { describe, expect, it } from "vitest";
 import { AgentHost } from "../src/host.js";
 
 const EXIT_CEILING_MS = 6_000;
+const CLEANUP_CEILING_MS = 130_000;
+const TEST_CEILING_MS = 240_000;
+const BACKGROUND_LIFETIME_S = 120;
 const FAIL_STOP = "notification result ownership ambiguous";
 
 /** The process's start time (field 22 of /proc/<pid>/stat), or undefined when
@@ -27,7 +30,10 @@ const procStart = (pid: number): string | undefined => {
     const stat = readFileSync(`/proc/${requirePositiveSafePid(pid)}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return fields[0] === "Z" ? undefined : fields[19];
-  } catch { return undefined; }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 };
 const readPid = (path: string): number | undefined => {
   try { return requirePositiveSafePid(Number(readFileSync(path, "utf8").trim())); } catch { return undefined; }
@@ -46,6 +52,7 @@ async function fixture(background: boolean) {
   writeFileSync(join(cfg, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
   const requests: Array<{ resumed: boolean; stopped: boolean }> = [];
   let launched = false;
+  let backgroundRequestedAt: number | undefined;
   const provider = createServer(async (request, response) => {
     let raw = ""; for await (const chunk of request) raw += chunk;
     if (!request.url?.startsWith("/v1/messages") || request.url.includes("count_tokens")) {
@@ -56,13 +63,16 @@ async function fixture(background: boolean) {
     const messages = JSON.stringify(payload.messages ?? []);
     requests.push({ resumed: messages.includes("RESUMED-1188"), stopped: messages.includes("<status>stopped</status>") });
     const bash = background && !launched && messages.includes("START-1188");
-    if (bash) launched = true;
+    if (bash) {
+      launched = true;
+      backgroundRequestedAt = Date.now();
+    }
     const block = bash
       ? { type: "tool_use", id: "fixture_bg", name: "Bash", input: {} }
       : { type: "text", text: "" };
     const delta = bash
       ? { type: "input_json_delta", partial_json: JSON.stringify({ run_in_background: true, description: "bg sleep",
-        command: `sleep 60 & echo $! > ${shellQuote(join(marks, "sleep.pid"))}; echo $$ > ${shellQuote(join(marks, "shell.pid"))}; wait` }) }
+        command: `sleep ${BACKGROUND_LIFETIME_S} & echo $! > ${shellQuote(join(marks, "sleep.pid"))}; echo $$ > ${shellQuote(join(marks, "shell.pid"))}; wait` }) }
       : { type: "text_delta", text: "TURN-DONE" };
     const emit = (event: string, data: unknown) => response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -118,8 +128,6 @@ async function fixture(background: boolean) {
     const running = host.run(prompt).then(() => { outcome = "resolved"; }, () => { outcome = "rejected"; });
     return { host, states, warnings, running, turnEnds: () => turnEnds, outcome: () => outcome };
   };
-  // The background shell and its sleep, recorded with their start times on
-  // the first read so that later checks and the cleanup never touch a reused PID.
   const recorded = new Map<string, { pid: number; start: string }>();
   const backgroundStarted = () => ["shell", "sleep"].every(name => {
     if (recorded.has(name)) return true;
@@ -131,21 +139,30 @@ async function fixture(background: boolean) {
   });
   const backgroundRunning = () => [...recorded.values()].some(({ pid, start }) => procStart(pid) === start);
   const cleanup = async () => {
+    const deadline = Date.now() + CLEANUP_CEILING_MS;
     try {
       for (const { child } of clis) {
         if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       }
-      for (const { pid, start } of recorded.values()) {
-        if (procStart(pid) !== start) continue;
-        try { process.kill(pid, "SIGKILL"); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      const exited = await until(
+        () => clis.every(({ child }) => child.exitCode !== null || child.signalCode !== null),
+        Math.max(0, deadline - Date.now()),
+      );
+      if (!exited) throw new Error("CLI cleanup timed out");
+      if (backgroundRequestedAt !== undefined) {
+        const stopped = await until(
+          () => backgroundStarted() && !backgroundRunning(),
+          Math.max(0, deadline - Date.now()),
+        );
+        if (!stopped) throw new Error("background cleanup timed out");
       }
     } finally {
       provider.closeAllConnections(); await new Promise<void>(resolve => provider.close(() => resolve()));
       rmSync(root, { recursive: true, force: true });
     }
   };
-  return { start, clis, sessions, requests, backgroundStarted, backgroundRunning, cleanup };
+  return { start, clis, sessions, requests, backgroundStarted, backgroundRunning,
+    backgroundRequestedAt: () => backgroundRequestedAt, cleanup };
 }
 
 /** Runs one turn (optionally leaving a background Bash), then fails admission
@@ -156,10 +173,16 @@ async function failStop(f: Awaited<ReturnType<typeof fixture>>, background: bool
   void run.host.send("/clear").catch(() => {});
   expect(await until(() => run.states.includes("error"), 15_000)).toBe(true);
   const failedAt = Date.now();
+  if (background) {
+    expect(f.backgroundRequestedAt()).toBeDefined();
+    expect(failedAt - f.backgroundRequestedAt()!).toBeLessThanOrEqual(45_000);
+  }
   expect(run.warnings.some(line => line.includes(FAIL_STOP))).toBe(true);
   const cli = f.clis[0]!;
   const exited = await until(() => cli.exit !== undefined && run.outcome() !== undefined
     && (!background || !f.backgroundRunning()), EXIT_CEILING_MS);
+  console.log(JSON.stringify({ decision: { exited, cliExit: cli.exit ?? null,
+    elapsedMs: Date.now() - failedAt } }));
   return { run, cli, exited, elapsedMs: Date.now() - failedAt };
 }
 
@@ -172,7 +195,7 @@ describe.skipIf(process.platform !== "linux")("admission fail-stop aborts the CL
       expect(exited).toBe(true);
       expect(run.outcome()).toBe("resolved");
     } finally { await f.cleanup(); }
-  }, 60_000);
+  }, TEST_CEILING_MS);
 
   it("ends the CLI and its background Bash, which would otherwise keep it alive", async () => {
     const f = await fixture(true);
@@ -182,7 +205,7 @@ describe.skipIf(process.platform !== "linux")("admission fail-stop aborts the CL
       expect(exited).toBe(true);
       expect(run.outcome()).toBe("resolved");
     } finally { await f.cleanup(); }
-  }, 60_000);
+  }, TEST_CEILING_MS);
 
   it("reports the stopped Bash to the model when the aborted session is resumed", async () => {
     const f = await fixture(true);
@@ -194,5 +217,5 @@ describe.skipIf(process.platform !== "linux")("admission fail-stop aborts the CL
       expect(resumed.states).not.toContain("error");
       await resumed.host.close(); await resumed.running;
     } finally { await f.cleanup(); }
-  }, 60_000);
+  }, TEST_CEILING_MS);
 });
