@@ -36,7 +36,8 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 // sufficient: it says nothing about cgroups. It is kept because it would
 // catch a worker that died of a broken pipe or an inherited signal
 // disposition, not because it establishes self-stop safety.
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import {
   chmodSync,
@@ -49,6 +50,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -56,6 +58,7 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   makeReleaseTarball,
@@ -163,6 +166,207 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
   });
 
   const goodExecStart = () => `${root}/current/deploy/kaoiro-runner-launch.sh`;
+
+describe("published runner release", () => {
+    const tag = "v2026.11.20.1";
+    const version = tag.slice(1);
+    const name = "kaoiro-runner-" + tag + "-linux-x64.tar.gz";
+    const assetUrl = "https://github.com/sakuraiyuta/kaoiro/releases/download/"
+      + tag + "/" + name;
+
+    const fileFor = (buildVersion: string, revision = B) =>
+      makeReleaseTarball(work, revision, { buildVersion, buildBranch: "develop" });
+
+    const checksumFor = (archive: string) =>
+      createHash("sha256").update(readFileSync(archive)).digest("hex")
+        + "  " + name + "\n";
+
+    const configureCurl = (
+      archive: string, checksum: string, response = "200",
+    ) => {
+      const sidecar = join(dir, "sidecar");
+      writeFileSync(sidecar, checksum);
+      writeStub("curl", [
+        "set -eu",
+        "while [ $# -gt 0 ]; do",
+        '  case "$1" in',
+        '    --output) out=$2; shift 2 ;;',
+        '    --) url=$2; break ;;',
+        '    *) shift ;;',
+        "  esac",
+        "done",
+        'case "$url" in',
+        "  '" + assetUrl + ".sha256') cp " + JSON.stringify(sidecar)
+          + ' "$out"; printf 200 ;;',
+        "  '" + assetUrl + "') cp " + JSON.stringify(archive)
+          + ' "$out"; printf ' + JSON.stringify(response) + " ;;",
+        "  *) exit 99 ;;",
+        "esac",
+      ].join("\n"));
+    };
+
+    const releaseEnv = () => ({
+      PATH: bin + ":" + process.env.PATH,
+      KAOIRO_UNAME: "Linux",
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+
+    const expectRefused = (status: number | null) => {
+      expect(status).toBe(70);
+      expect(readCalls().filter((line) => / (stop|start) /.test(line))).toEqual([]);
+      expect(readlinkSync(join(root, "current"))).toBe("releases/" + A);
+      expect(existsSync(join(root, "previous"))).toBe(false);
+      expect(readdirSync(root).filter((entry) => entry.startsWith(".staging.")))
+        .toEqual([]);
+      expect(existsSync(join(root, ".lock.update"))).toBe(false);
+    };
+
+    it.each([
+      ["missing v", ["2026.11.20.1"], "Linux", 64],
+      ["invalid day", ["v2026.02.30.1"], "Linux", 64],
+      ["multiple lines", [tag + "\nextra"], "Linux", 64],
+      ["duplicate", [tag, "--from-release", tag], "Linux", 64],
+      ["dirty", [tag, "--allow-dirty"], "Linux", 64],
+      ["archive", [tag, "--tarball", "/fixture"], "Linux", 64],
+      ["empty archive", [tag, "--tarball", ""], "Linux", 64],
+      ["checkout", [tag, "--from-repo", "/fixture"], "Linux", 64],
+      ["target", [tag, "--target", ""], "Linux", 64],
+      ["restore", [tag, "--restore-codex-backup", "/fixture"], "Linux", 64],
+      ["resume", [tag, "--resume-codex-transaction", "fixture"], "Linux", 64],
+      ["recover", [tag, "--recover-codex-transaction", "fixture"], "Linux", 64],
+      ["Darwin", [tag], "Darwin", 64],
+      ["missing Node", [tag], "Linux", 78],
+    ] as const)("refuses %s before queue", (kind, args, os, status) => {
+      const log = join(dir, "queued-argv");
+      const result = runUpdate(["--detach", "--from-release", ...args], {
+        ...releaseEnv(),
+        KAOIRO_UNAME: os,
+        KAOIRO_NODE: kind === "missing Node" ? join(bin, "missing") : undefined,
+        KAOIRO_SYSTEMD_RUN: recordingSystemdRun(log),
+      });
+      expect(result.status, result.stderr).toBe(status);
+      expect(readCalls()).toEqual([]);
+      expect(existsSync(log)).toBe(false);
+    });
+
+    it.each(["missing archive", "multiple lines", "CRLF", "basename",
+      "digest", "timeout"])("rejects %s before invoking install", (kind) => {
+      const archive = fileFor(version);
+      const correct = checksumFor(archive);
+      const checksum = kind === "multiple lines" ? correct + "\n"
+        : kind === "CRLF" ? correct.replace(/\n$/, "\r\n")
+        : kind === "basename" ? correct.replace(name, "other.tar.gz")
+        : kind === "digest" ? "0".repeat(64) + correct.slice(64) : correct;
+      configureCurl(archive, checksum, kind === "missing archive" ? "404" : "200");
+      if (kind === "timeout") {
+        writeStub("curl", "echo 'test redirect query=fixture-marker' >&2; exit 28");
+      }
+      const result = runUpdate(["--from-release", tag], releaseEnv());
+      expectRefused(result.status);
+      expect(result.stderr).not.toContain("installing");
+      expect(result.stderr).not.toContain("fixture-marker");
+      expect(readdirSync(join(root, "releases"))).toEqual([A]);
+      if (kind === "timeout") {
+        configureCurl(archive, "", "404");
+        const retry = runUpdate(["--from-release", tag], releaseEnv());
+        expectRefused(retry.status);
+        expect(retry.stderr).toContain("HTTP 404");
+      }
+    });
+
+    it.each(["other tag", "untagged", "installed version"])(
+      "rejects %s without placing a tree or refreshing its mtime", (kind) => {
+        const revision = kind === "other tag" ? revisionOf("another-tag") : B;
+        const installed = join(root, "releases", B);
+        const old = new Date("2025-01-02T00:00:00Z");
+        if (kind === "installed version") {
+          writeReleaseTree(installed, B, {
+            buildVersion: "untagged", buildBranch: "develop",
+          });
+          utimesSync(installed, old, old);
+        }
+        const other = kind === "other tag" ? "2026.11.20.2" : "untagged";
+        const archive = fileFor(kind === "installed version" ? version : other,
+          revision);
+        configureCurl(archive, checksumFor(archive));
+        const result = runUpdate(["--from-release", tag], releaseEnv());
+        expectRefused(result.status);
+        expect(result.stderr).toContain("Expected release version " + version);
+        if (kind === "installed version") {
+          expect(statSync(installed).mtimeMs).toBe(old.getTime());
+        } else {
+          expect(readdirSync(join(root, "releases"))).toEqual([A]);
+        }
+      },
+    );
+
+    it("refuses a held update lock before downloading", () => {
+      mkdirSync(join(root, ".lock.update"));
+      const result = runUpdate(["--from-release", tag], releaseEnv());
+      expect(result.status, result.stderr).toBe(75);
+      expect(readCalls()).toEqual([]);
+      expect(readdirSync(join(root, "releases"))).toEqual([A]);
+    });
+
+    it.each([false, true])(
+      "uses the tagged archive after a refusal (detach=%s)", async (detach) => {
+        const previous = fileFor("untagged");
+        configureCurl(previous, checksumFor(previous));
+        expectRefused(runUpdate(["--from-release", tag], releaseEnv()).status);
+        expect(readdirSync(join(root, "releases"))).toEqual([A]);
+
+        const archive = fileFor(version);
+        configureCurl(archive, checksumFor(archive));
+        const server = createServer((_request, response) => {
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({
+            status: "ok", build_identity_formats: ["landing-calver-v1"],
+          }));
+        });
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        try {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("missing loopback address");
+          }
+          const config = join(dir, "runner.json");
+          writeFileSync(config, JSON.stringify({
+            server_url: "ws://127.0.0.1:" + address.port + "/runner",
+          }));
+          const env = {
+            ...process.env, ...releaseEnv(), KAOIRO_RUNNER_CONFIG: config,
+            KAOIRO_RUNNER_SERVER_URL: "", CODEX_HOME: join(dir, "codex-home"),
+            KAOIRO_RUNNER_ENV: join(dir, "absent.env"),
+          };
+          const args = ["--from-release", tag, "--install-dir", root,
+            "--service", SERVICE];
+          const queued = join(dir, "queued-argv");
+          const command = detach ? runUpdate(["--detach", "--from-release", tag], {
+            ...env, KAOIRO_SYSTEMD_RUN: recordingSystemdRun(queued),
+          }) : null;
+          let worker = [updateScript, ...args];
+          if (command !== null) {
+            expect(command.status, command.stderr).toBe(0);
+            expect(readlinkSync(join(root, "current"))).toBe("releases/" + A);
+            const argv = readFileSync(queued, "utf8").trimEnd().split("\n");
+            worker = argv.slice(argv.indexOf("--") + 1);
+            expect(worker.slice(-2)).toEqual(["--from-release", tag]);
+          }
+          const result = await promisify(execFile)(worker[0], worker.slice(1),
+            { env });
+          expect(result.stdout.trim()).toBe(B);
+          expect(readlinkSync(join(root, "current"))).toBe("releases/" + B);
+          expect(readlinkSync(join(root, "previous"))).toBe("releases/" + A);
+          expect(readCalls().some((line) => line.includes(" stop "))).toBe(true);
+          expect(readdirSync(root).filter((entry) => entry.startsWith(".staging.")))
+            .toEqual([]);
+        } finally {
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+        }
+      },
+    );
+  });
+
 
   it("closes the engine process environment after sourcing runner.env", () => {
     const envFile = join(dir, "runner.env"), sourced = join(dir, "sourced");

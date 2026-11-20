@@ -289,7 +289,7 @@ kaoiro_verify_release_tree() {
     "$(kaoiro_node)" \
       --experimental-vm-modules --disable-warning=ExperimentalWarning \
       "$deploy_dir/verify-release.mjs" \
-      "$_tree" --require-manifest --hash
+      "$_tree" --require-manifest --hash ${2:+--expect-version "$2"}
   ) || kaoiro_die "release tree failed verification: $_tree" 70
   [ -x "$_tree/deploy/kaoiro-runner-launch.sh" ] ||
     kaoiro_die "release tree is incomplete: deploy/kaoiro-runner-launch.sh missing or not executable in $_tree" 70

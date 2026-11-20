@@ -3,6 +3,7 @@
 #
 #   kaoiro-runner-update.sh --tarball <path>   [options]
 #   kaoiro-runner-update.sh --from-repo <path> [options]
+#   kaoiro-runner-update.sh --from-release <tag> [options]
 #
 #   --install-dir <dir>  install root (default: per-OS data dir)
 #   --service <name>     systemd user unit of the runner (default:
@@ -79,6 +80,8 @@ UPDATE_UNIT=kaoiro-runner-update
 
 tarball=
 repo=
+release_tag=
+other_input=no
 root=
 service=kaoiro-runner
 build_target=
@@ -98,6 +101,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || kaoiro_die "$1 needs a value" 64
       kaoiro_reject_option_like "$1" "$2"
       [ -z "$codex_resume$codex_recover" ] || kaoiro_die "repeated or conflicting recovery option" 64
+      other_input=yes
       case "$1" in
         --resume-codex-transaction) codex_resume=$2 ;;
         --recover-codex-transaction) codex_recover=$2 ;;
@@ -111,7 +115,7 @@ while [ $# -gt 0 ]; do
       case "$1" in
         --codex-home) codex_home=$2 ;;
         --codex-backup-dir) codex_backup=$2 ;;
-        --restore-codex-backup) codex_restore=$2 ;;
+        --restore-codex-backup) codex_restore=$2; other_input=yes ;;
       esac
       shift 2
       ;;
@@ -119,12 +123,23 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || kaoiro_die "--tarball needs a value" 64
       kaoiro_reject_option_like --tarball "$2"
       tarball=$2
+      other_input=yes
       shift 2
       ;;
     --from-repo)
       [ $# -ge 2 ] || kaoiro_die "--from-repo needs a value" 64
       kaoiro_reject_option_like --from-repo "$2"
       repo=$2
+      other_input=yes
+      shift 2
+      ;;
+    --from-release)
+      [ $# -ge 2 ] || kaoiro_die "--from-release needs a tag" 64
+      [ -z "$release_tag" ] || kaoiro_die "repeated --from-release" 64
+      case $2 in
+        v*) release_tag=$2 ;;
+        *) kaoiro_die "--from-release requires a v-prefixed release tag" 64 ;;
+      esac
       shift 2
       ;;
     --install-dir)
@@ -143,6 +158,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || kaoiro_die "--target needs a value" 64
       kaoiro_reject_option_like --target "$2"
       build_target=$2
+      other_input=yes
       shift 2
       ;;
     --keep)
@@ -168,8 +184,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$tarball$repo$codex_restore$codex_resume$codex_recover" ] ||
-  kaoiro_die "usage: $prog --tarball <path> | --from-repo <path>" 64
+[ -n "$tarball$repo$release_tag$codex_restore$codex_resume$codex_recover" ] ||
+  kaoiro_die "give --tarball, --from-repo, --from-release or a recovery input" 64
 [ -z "$tarball" ] || [ -z "$repo" ] ||
   kaoiro_die "--tarball and --from-repo are mutually exclusive" 64
 [ -z "$build_target" ] || [ -n "$repo" ] ||
@@ -192,6 +208,31 @@ case $keep in
   '' | *[!0-9]*) kaoiro_die "--keep must be a non-negative integer: $keep" 64 ;;
 esac
 [ "$keep" -ge 1 ] || kaoiro_die "--keep must be at least 1" 64
+
+release_version=
+if [ -n "$release_tag" ]; then
+  if [ "$other_input" = yes ] ||
+      [ "$allow_dirty" = yes ]; then
+    kaoiro_die "--from-release excludes other inputs and --allow-dirty" 64
+  fi
+  if [ "${KAOIRO_UNAME:-$(uname -s)}" != Linux ] ||
+      [ "$(uname -m)" != x86_64 ]; then
+    kaoiro_die "--from-release requires Linux x64 with systemd" 64
+  fi
+  release_node=$(kaoiro_node)
+  release_version=${release_tag#v}
+  "$release_node" --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    const [version, validator] = process.argv.slice(1);
+    const { isLandingBuildVersion } = await import(pathToFileURL(validator));
+    process.exitCode = isLandingBuildVersion(version) ? 0 : 64;
+  ' "$release_version" "$deploy_dir/attest-build-info.mjs" ||
+    kaoiro_die "--from-release requires a valid release tag" 64
+  for dependency in curl sha256sum; do
+    command -v "$dependency" >/dev/null 2>&1 ||
+      kaoiro_die "--from-release requires $dependency" 78
+  done
+fi
 
 [ -n "$root" ] || root=$(kaoiro_install_root)
 
@@ -219,6 +260,7 @@ if [ "$detach" = yes ]; then
   [ -z "$codex_resume" ] || set -- "$@" --resume-codex-transaction "$codex_resume"
   [ -z "$codex_recover" ] || set -- "$@" --recover-codex-transaction "$codex_recover"
   [ -z "$tarball" ] || set -- "$@" --tarball "$tarball"
+  [ -z "$release_tag" ] || set -- "$@" --from-release "$release_tag"
   if [ -n "$repo" ]; then
     set -- "$@" --from-repo "$repo"
     [ -z "$build_target" ] || set -- "$@" --target "$build_target"
@@ -327,8 +369,38 @@ esac
 # --- prepare: nothing below the switch is touched, so a failure here is a
 # --- no-op for the running runner.
 
+fetch_release_file() {
+  release_url=https://github.com/sakuraiyuta/kaoiro/releases/download
+  curl_status=0
+  http_status=$(curl --disable --silent --location --noproxy '*' \
+    --proto '=https' --proto-redir '=https' --connect-timeout 10 \
+    --max-time 300 --max-redirs 5 --write-out '%{http_code}' \
+    --output "$build_dir/$1" -- "$release_url/$release_tag/$1" 2>/dev/null) ||
+    curl_status=$?
+  if [ "$curl_status" -ne 0 ] || [ "$http_status" != 200 ]; then
+    case $http_status in [0-9][0-9][0-9]) ;; *) http_status=unknown ;; esac
+    kaoiro_die "download failed for $1 (HTTP $http_status, curl $curl_status)" 70
+  fi
+}
+
 if [ -z "$codex_restore$codex_resume$codex_recover" ]; then
-if [ -n "$repo" ]; then
+if [ -n "$release_tag" ]; then
+  download_dir="$root/.staging.build.$$"
+  mkdir -m 700 "$download_dir" || kaoiro_die "cannot stage release download" 78
+  build_dir=$download_dir
+  archive_name="kaoiro-runner-$release_tag-linux-x64.tar.gz"
+  tarball="$build_dir/$archive_name"
+  fetch_release_file "$archive_name.sha256"
+  fetch_release_file "$archive_name"
+  release_hash=$(sha256sum < "$tarball") ||
+    kaoiro_die "cannot hash $archive_name" 70
+  "$release_node" -e '
+    const [sidecar, expected] = process.argv.slice(1);
+    const actual = require("node:fs").readFileSync(sidecar);
+    process.exitCode = actual.equals(Buffer.from(expected + "\n")) ? 0 : 1;
+  ' "$tarball.sha256" "${release_hash%% *}  $archive_name" 2>/dev/null ||
+    kaoiro_die "invalid or mismatched SHA-256 for $archive_name" 70
+elif [ -n "$repo" ]; then
   builder="$repo/scripts/build-runner-tarball.sh"
   [ -x "$builder" ] || kaoiro_die "not a kaoiro checkout: $builder is missing or not executable" 78
 
@@ -357,11 +429,10 @@ if [ -n "$repo" ]; then
 fi
 
 printf '%s: installing %s\n' "$prog" "$tarball" >&2
-install_args=""
-[ "$allow_dirty" = no ] || install_args="--allow-dirty"
-# shellcheck disable=SC2086 # install_args is either empty or one literal
-# flag this script chose; it must word-split to nothing when empty.
-id=$("$deploy_dir/kaoiro-runner-install.sh" "$tarball" --install-dir "$root" $install_args)
+set -- "$tarball" --install-dir "$root"
+[ "$allow_dirty" = no ] || set -- "$@" --allow-dirty
+[ -z "$release_version" ] || set -- "$@" --expect-version "$release_version"
+id=$("$deploy_dir/kaoiro-runner-install.sh" "$@")
 printf '%s: prepared release %s\n' "$prog" "$id" >&2
 
 # The activation gate is enforced HERE, not left to the switch below. The

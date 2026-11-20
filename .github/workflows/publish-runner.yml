@@ -1,0 +1,164 @@
+name: Publish runner release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag (vYYYY.MM.DD.N)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ github.repository_id == '1343265983' && github.ref == 'refs/heads/develop' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.build.outputs.tag }}
+      tag_object: ${{ steps.build.outputs.tag_object }}
+      revision: ${{ steps.build.outputs.revision }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - name: Build the annotated tag
+        id: build
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          node --input-type=module -e '
+            import { parseLandingVersion } from "./scripts/build-identity.mjs";
+            const tag = process.argv[1];
+            if (!tag.startsWith("v") || !parseLandingVersion(tag.slice(1))) {
+              throw new Error("Expected a release tag in vYYYY.MM.DD.N form");
+            }
+          ' -- "$TAG"
+          ref="refs/tags/$TAG"
+          object=$(git rev-parse --verify "$ref^{tag}")
+          revision=$(git rev-parse --verify "$ref^{commit}")
+          git merge-base --is-ancestor "$revision" "$GITHUB_SHA"
+          git checkout --detach "$revision"
+          note="docs/release/$TAG.md"
+          test -f "$note" && test ! -L "$note" ||
+            { echo 'Release note missing or not a regular file' >&2; exit 1; }
+          pnpm install --frozen-lockfile
+          out="$RUNNER_TEMP/runner-release"
+          mkdir -p "$out/assets"
+          cp -- "$note" "$out/notes.md"
+          for target in linux-x64 darwin-arm64; do
+            scripts/build-runner-tarball.sh --require-tagged \
+              --target "$target" --out "$RUNNER_TEMP"
+            stem="kaoiro-runner-$revision-$target"
+            archive="$RUNNER_TEMP/$stem.tar.gz"
+            tar -xOzf "$archive" "$stem/dist/build-info.json" |
+              jq -e --arg rev "$revision" --arg version "${TAG#v}" \
+                '.revision == $rev and .version == $version and .dirty == false'
+            name="kaoiro-runner-$TAG-$target.tar.gz"
+            mv -- "$archive" "$out/assets/$name"
+            (cd "$out/assets" && sha256sum "$name" > "$name.sha256")
+          done
+          (cd "$out/assets" && sha256sum *.tar.gz > ../archives.sha256)
+          printf 'tag=%s\ntag_object=%s\nrevision=%s\n' \
+            "$TAG" "$object" "$revision" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: runner-release
+          path: ${{ runner.temp }}/runner-release
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: runner-release-${{ needs.build.outputs.tag }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: runner-release
+          path: bundle
+      - name: Verify and publish the draft
+        working-directory: bundle
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          TAG_OBJECT: ${{ needs.build.outputs.tag_object }}
+          REVISION: ${{ needs.build.outputs.revision }}
+        run: |
+          tag_matches() {
+            gh api "repos/$GH_REPO/git/ref/tags/$TAG" |
+              jq -e --arg id "$TAG_OBJECT" \
+                '.object.type == "tag" and .object.sha == $id'
+            gh api "repos/$GH_REPO/git/tags/$TAG_OBJECT" |
+              jq -e --arg rev "$REVISION" \
+                '.object.type == "commit" and .object.sha == $rev'
+          }
+          releases_for_tag() {
+            gh api --paginate "repos/$GH_REPO/releases" |
+              jq -cs --arg tag "$TAG" \
+                '[.[][] | select(.tag_name == $tag) | {id, draft}]'
+          }
+
+          files=()
+          for target in linux-x64 darwin-arm64; do
+            name="kaoiro-runner-$TAG-$target.tar.gz"
+            files+=("$name" "$name.sha256")
+          done
+          printf '%s\n' "${files[@]}" | sort > expected-names
+          find assets -mindepth 1 -maxdepth 1 -printf '%f\n' |
+            sort | diff - expected-names
+          (
+            cd assets
+            for file in "${files[@]}"; do
+              test -f "$file" && test ! -L "$file" || exit 1
+            done
+            for archive in *.tar.gz; do
+              sha256sum "$archive" | cmp - "$archive.sha256"
+            done
+            sha256sum *.tar.gz | cmp - ../archives.sha256
+            sha256sum "${files[@]}" | sort > ../expected-assets
+          )
+          tag_matches
+          releases_for_tag | jq -e 'length == 0'
+          gh release create "$TAG" --verify-tag --draft --latest=false \
+            --notes-file notes.md
+          id=$(releases_for_tag |
+            jq -er 'select(length == 1 and .[0].draft) | .[0].id')
+          [[ "$id" =~ ^[1-9][0-9]*$ ]]
+          for i in "${!files[@]}"; do files[i]="assets/${files[i]}"; done
+          gh release upload "$TAG" "${files[@]}"
+
+          check_assets() {
+            gh api --paginate "repos/$GH_REPO/releases/$id/assets" |
+              jq -sre '
+                [.[][]] |
+                if all(.[]; .state == "uploaded" and
+                    ((.digest // "") | test("^sha256:[0-9a-f]{64}$")))
+                then .[] | "\(.digest | ltrimstr("sha256:"))  \(.name)"
+                else error("asset upload is incomplete or missing a digest")
+                end' | sort | diff - expected-assets
+          }
+          check_assets
+          tag_matches
+          gh api --method PATCH "repos/$GH_REPO/releases/$id" \
+            -F draft=false -f make_latest=false --jq .html_url
+          gh api "repos/$GH_REPO/releases/$id" |
+            jq -er --arg tag "$TAG" \
+              'select(.draft == false and .tag_name == $tag) | .html_url'
+          check_assets
+          tag_matches

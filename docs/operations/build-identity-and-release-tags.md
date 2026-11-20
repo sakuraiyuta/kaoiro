@@ -97,6 +97,29 @@ JSON and matching archive VERSION. A human label is never parsed as authority.
 Health and register must independently match the target full SHA: running a
 CLI subprocess alone does not prove the live runner registered.
 
+## Publish runner archives
+
+On the repository's `develop` branch, the release operator dispatches
+**Publish runner release** with the existing annotated `vYYYY.MM.DD.N` tag.
+The workflow builds Linux x64 and Darwin arm64 sequentially at the tagged
+commit. Its read-only build job passes the two archives, their SHA-256
+sidecars, and the tagged release note to the publishing job in the same run.
+The publishing job uses its repository-scoped Actions token. The workflow
+invocation does not authorize production downtime.
+
+The publishing job creates a draft for the existing tag, attaches all four
+files, and checks the uploaded names, states and digests before publication.
+If a release or draft already exists for the tag, the job stops. After an
+interrupted run, check the exact tag and release ID. If the release is
+published, verify the existing assets. If the release is still a draft,
+remove only the draft, retain the tag, and dispatch again with that tag.
+
+The artifact names are `kaoiro-runner-<tag>-<target>.tar.gz` and
+`kaoiro-runner-<tag>-<target>.tar.gz.sha256`. Build timestamps and tar mtimes
+can change when the same tag is rebuilt. Record the release URL, Actions run,
+and digest of the archive actually published in the release card.
+See [update from a published release](runner-update-and-rollback.md#update-from-a-published-release).
+
 ## Reader compatibility and rollback
 
 Health reports `build_identity_formats`. Before stopping the old runner, the
