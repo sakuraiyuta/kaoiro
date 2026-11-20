@@ -209,6 +209,12 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
         await wait(()=>wire.received.some(x=>x.event==="envelope" && x.payload.type==="state_change" && x.payload.state==="error"));
         expect(output).not.toContain('"event":"admitted_root"');
         expect(sends()).toHaveLength(0);
+        // The fail-stop aborts the CLI, so the persistent Monitor cannot keep
+        // this wrapper alive and the runner can relaunch it (issue #1188).
+        // 6 s turns a hang red; the measured exit was about 2.3 s.
+        const errorAt = Date.now();
+        while (child.exitCode === null && child.signalCode === null && Date.now() - errorAt < 6000) await delay(30);
+        expect({ code: child.exitCode, signal: child.signalCode }).toEqual({ code: 0, signal: null });
         return;
       }
       await wait(()=>issued.length===3 && toolResults.some((r:any)=>r.tool_use_id===issued[2].id));

@@ -929,14 +929,15 @@ export class AgentHost implements EngineAdapter {
   readonly #retiredResults: RetiredResult[] = [];
   #hostEnded = false;
   #query: Query | null = null;
-  /** Forwarded to `Options.abortController` so `close()` can bound the SDK's
-   *  own subprocess teardown (issue #391). Constructed once per `run()` —
-   *  the wrapper drives a single long-lived Query, unlike Codex's
-   *  per-turn AbortController. Aborting it triggers the SDK's internal
-   *  stdin-EOF -> ~2000ms SIGTERM -> ~5000ms SIGKILL escalation
-   *  (`ProcessTransport.close()`, measured against
-   *  `@anthropic-ai/claude-agent-sdk` 0.3.280's bundle; not remeasured on
-   *  0.3.289); an unhandled `return` of the prompt generator alone
+  /** Forwarded to `Options.abortController` so `close()` and the admission
+   *  and receipt-timeout fail-stops can bound the SDK's own subprocess
+   *  teardown (issue #391). Constructed once per `run()` — the wrapper
+   *  drives a single long-lived Query, unlike Codex's per-turn
+   *  AbortController. Aborting it triggers the SDK's internal stdin-EOF ->
+   *  SIGTERM after 2000ms -> SIGKILL 5000ms later escalation
+   *  (`ProcessTransport.close()`; the SIGTERM was measured at 2.00s on
+   *  `@anthropic-ai/claude-agent-sdk` 0.3.327, and bounded_spawn tries its
+   *  own SIGKILL first); an unhandled `return` of the prompt generator alone
    *  only closes stdin, with no escalation if the child never exits on its
    *  own. */
   #abort: AbortController | null = null;
@@ -1905,11 +1906,10 @@ export class AgentHost implements EngineAdapter {
     // late tool_result/result for that same turn must retain its token.
     if (this.#queue.length === 0) this.#wakeTurnBoundary();
     this.#wake();
-    // issue #391: bound the SDK-managed `claude` CLI subprocess. On SDK
-    // 0.3.280, returning the prompt generator only closed stdin on the SDK's
-    // schedule, with no guarantee the child exited if it ignored EOF; this
-    // was not remeasured on 0.3.289. Aborting triggers the SDK's stdin-EOF ->
-    // SIGTERM -> SIGKILL escalation regardless of queue state.
+    // issue #391: bound the SDK-managed `claude` CLI subprocess. Returning
+    // the prompt generator only closes stdin, and on SDK 0.3.327 the CLI
+    // stays until its background tasks end. Aborting triggers the SDK's
+    // stdin-EOF -> SIGTERM -> SIGKILL escalation regardless of queue state.
     this.#abort?.abort();
     return this.settleProbes();
   }
@@ -2161,6 +2161,11 @@ export class AgentHost implements EngineAdapter {
     onFreeze();
     this.#wakeTurnBoundary();
     this.#wake();
+    // Closing the input alone leaves the CLI alive while a background task
+    // runs, so this wrapper never exits and the runner never relaunches it.
+    // The watchdog fail-stop writes a blocked recovery checkpoint and is left
+    // to the operator, so it keeps the CLI.
+    if (cancellationKind !== "watchdog_fail_stop") this.#abort?.abort();
     return true;
   }
 
@@ -3653,13 +3658,10 @@ export class AgentHost implements EngineAdapter {
 
       }
     } catch (err) {
-      // issue #391: close() aborts #abort, and the SDK's ProcessTransport
-      // rejects the in-flight readMessages() iteration with an AbortError
-      // ("Claude Code process aborted by user") as part of that same abort
-      // (measured against @anthropic-ai/claude-agent-sdk 0.3.280; not
-      // remeasured on 0.3.289: the
-      // rejection's constructor is the SDK's own exported `AbortError`).
-      // That rejection is an expected SIDE EFFECT of our own close(), not a
+      // issue #391: aborting #abort makes the SDK reject the in-flight
+      // readMessages() iteration with its own exported `AbortError`
+      // ("Operation aborted" on @anthropic-ai/claude-agent-sdk 0.3.327).
+      // That rejection is an expected SIDE EFFECT of our own abort, not a
       // failure — propagating it would make a runner-initiated SIGTERM
       // report disconnectReason="crash" and a non-zero exit code for what
       // is an ordinary, requested shutdown.
@@ -3667,10 +3669,12 @@ export class AgentHost implements EngineAdapter {
       // Narrowly scoped to avoid masking a real fault: `this.#closed` alone
       // is not enough — #failStopForWatchdog also sets it (deliberately
       // leaving this same loop running per its own contract), so a genuine
-      // SDK/transport error arriving after a fail-stop must still
-      // propagate. `this.#abort` is aborted ONLY inside close(), so pairing
-      // the error's type with the signal's state identifies exactly the
-      // close()-caused rejection and nothing else.
+      // SDK/transport error arriving after a watchdog fail-stop must still
+      // propagate. `this.#abort` is aborted only by close() and by the
+      // admission and receipt-timeout fail-stops, so pairing the error's type
+      // with the signal's state identifies a rejection caused by our own
+      // abort. Once aborted, the SDK rejects with AbortError however the CLI
+      // ends, so a CLI crash after such a fail-stop also ends as a stop.
       if (!(err instanceof AbortError) || this.#abort?.signal.aborted !== true) {
         throw err;
       }

@@ -10446,7 +10446,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     } finally { releaseNotification.resolve(); host.close(); await running; stderr.mockRestore(); scheduled.mockRestore(); }
   });
 
-  it("fail-stops a missing root hook and cancels the queued input before it reaches Query", async () => {
+  it("fail-stops a missing root hook, cancels the queued input before it reaches Query, and aborts the SDK", async () => {
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const ready = deferred();
     const oldEnded = deferred();
@@ -10454,6 +10454,8 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     let now = 0;
     let nextInputResolved = false;
     let requirePendingClosure = true;
+    let sdkSignal: AbortSignal | undefined;
+    let freezes = 0;
     const cancellations: string[] = [];
     const decisions: string[] = [];
     const loggedResults: string[] = [];
@@ -10464,8 +10466,10 @@ describe("AgentHost phase-2 pushed input receipts", () => {
         if (cancellation?.kind) cancellations.push(cancellation.kind);
         else oldEnded.resolve();
       },
+      onAdmissionFailStop: () => { freezes += 1; },
       onPushedInputDecision: decision => decisions.push(`${decision.kind}:${decision.reason}`),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        sdkSignal = options.abortController?.signal;
         const input = prompt[Symbol.asyncIterator]();
         const signal = { signal: new AbortController().signal };
         await input.next();
@@ -10491,14 +10495,19 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await host.send("R");
       await oldEnded.promise;
       now = 2_001;
+      expect(sdkSignal?.aborted).toBe(false);
       const timedOut = host.tickPendingReceiptRootTimeout();
       requirePendingClosure = timedOut;
       const inputResolvedBeforeRelease = nextInputResolved;
+      const abortedAtTimeout = sdkSignal?.aborted;
+      const freezesAtTimeout = freezes;
       release.resolve();
       await running;
       expect(timedOut).toBe(true);
       expect(host.state).toBe("error");
       expect(inputResolvedBeforeRelease).toBe(false);
+      expect(abortedAtTimeout).toBe(true);
+      expect(freezesAtTimeout).toBe(1);
       expect(cancellations).toContain("receipt_timeout_fail_stop");
       expect(decisions).toEqual(["unknown:root_hook_timeout"]);
       expect(loggedResults).toEqual(["result"]);

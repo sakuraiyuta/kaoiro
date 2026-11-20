@@ -6,6 +6,7 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 
 import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
 import { describe, expect, it, vi } from "vitest";
+import { AbortError } from "@anthropic-ai/claude-agent-sdk";
 import type {
   Options,
   Query,
@@ -39,6 +40,7 @@ interface Rig {
   states: string[];
   decisions: Array<{ kind: string; reason?: string }>;
   warnings: string[];
+  hostEnds: string[];
   obs: Record<string, unknown>;
 }
 interface Ctx {
@@ -86,7 +88,7 @@ async function pull(next: Promise<IteratorResult<SDKUserMessage>>, ms = 60): Pro
 
 function makeRig(script: (c: Ctx) => AsyncGenerator<SDKMessage, void>): Rig {
   const rig = {
-    starts: [], ends: [], freezes: [], states: [], decisions: [], warnings: [], obs: {},
+    starts: [], ends: [], freezes: [], states: [], decisions: [], warnings: [], hostEnds: [], obs: {},
   } as unknown as Rig;
   const queryFn = ((args: QueryArgs) => {
     const c: Ctx = { input: args.prompt[Symbol.asyncIterator](), options: args.options, rig };
@@ -107,6 +109,7 @@ function makeRig(script: (c: Ctx) => AsyncGenerator<SDKMessage, void>): Rig {
     }),
     onAdmissionFailStop: ({ turnToken }) => rig.freezes.push(turnToken),
     onPushedInputDecision: ({ kind, reason }) => rig.decisions.push({ kind, ...(reason === undefined ? {} : { reason }) }),
+    onHostEnd: ({ kind }) => rig.hostEnds.push(kind),
   });
   return rig;
 }
@@ -910,7 +913,7 @@ describe("origin mismatch at an admitted notification turn (issue #426 step 0b)"
     { name: "no origin", origin: undefined },
     { name: "a peer origin", origin: { kind: "peer", senderTaskId: "child-a", handback: true } },
     { name: "a human origin", origin: { kind: "human" } },
-  ])("stops admission with the owner's token, without closing or aborting, for $name", async ({ origin }) => {
+  ])("stops admission with the owner's token and aborts the SDK without closing, for $name", async ({ origin }) => {
     const rig = makeRig(async function* (c) {
       yield* firstTurn(c, { background: true });
       yield taskNotification();
@@ -929,7 +932,7 @@ describe("origin mismatch at an admitted notification turn (issue #426 step 0b)"
     await play(rig);
     expect(rig.starts.map(({ kind }) => kind)).toEqual([undefined, "sdk_notification"]);
     expect(rig.obs).toEqual({
-      closeCalls: 0, aborted: false, freezes: 1, notificationEnds: 0, errorState: "error", pull: "ended",
+      closeCalls: 0, aborted: true, freezes: 1, notificationEnds: 0, errorState: "error", pull: "ended",
     });
     expect(rig.freezes).toEqual([rig.starts[1]!.token]);
     expect(rig.warnings.some((line) => line.includes("lacks task-notification ownership"))).toBe(true);
@@ -946,5 +949,98 @@ describe("origin mismatch at an admitted notification turn (issue #426 step 0b)"
     });
     await play(rig);
     expect(rig.obs).toEqual({ freezes: 0, notificationEnds: 1 });
+  });
+});
+
+/** Admits a notification turn and ends it with a result that lacks
+ * task-notification ownership: an admission fail-stop from the result path. */
+async function* admissionFailStop(c: Ctx): AsyncGenerator<SDKMessage, void> {
+  yield* firstTurn(c, { background: true });
+  yield taskNotification();
+  await prompt(c, "N", NOTE_TEXT());
+  yield res(1);
+}
+
+const abortedNow = (c: Ctx): boolean | null => c.options.abortController?.signal.aborted ?? null;
+
+// Which fail-stops abort the SDK (issue #1188): admission and receipt-timeout
+// fail-stops do, so a background task cannot keep the CLI alive; the watchdog
+// fail-stop does not, because the operator recovers it.
+describe("fail-stop abort scope (issue #1188)", () => {
+  it("leaves the SDK running after a watchdog fail-stop", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c, { background: true });
+      c.rig.obs.failStopped = c.rig.host.failStopForWatchdogAttributionUnknown();
+      c.rig.obs.aborted = abortedNow(c);
+      c.rig.obs.state = c.rig.states.at(-1);
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ failStopped: true, aborted: false, state: "error" });
+  });
+
+  it("swallows the SDK's AbortError after an admission fail-stop aborted it", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* admissionFailStop(c);
+      c.rig.obs.aborted = abortedNow(c);
+      throw new AbortError("Operation aborted");
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ aborted: true });
+    expect(rig.freezes).toHaveLength(1);
+  });
+
+  it("propagates an AbortError after a watchdog fail-stop, which does not abort", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      c.rig.host.failStopForWatchdogAttributionUnknown();
+      throw new AbortError("Operation aborted");
+    });
+    await expect(play(rig)).rejects.toBeInstanceOf(AbortError);
+  });
+
+  it("propagates a non-abort fault after an admission fail-stop", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* admissionFailStop(c);
+      throw new Error("transport exploded");
+    });
+    await expect(play(rig)).rejects.toThrow("transport exploded");
+  });
+
+  it("keeps a close() after the admission fail-stop harmless", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* admissionFailStop(c);
+      c.rig.obs.abortedByFailStop = abortedNow(c);
+      await c.rig.host.close();
+      c.rig.obs.aborted = abortedNow(c);
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ abortedByFailStop: true, aborted: true });
+    expect(rig.freezes).toHaveLength(1);
+  });
+
+  it("keeps the abort when the admission fail-stop follows close()", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c, { background: true });
+      yield taskNotification();
+      await prompt(c, "N", NOTE_TEXT());
+      void c.rig.host.close();
+      c.rig.obs.abortedByClose = abortedNow(c);
+      yield res(1);
+      c.rig.obs.freezes = c.rig.freezes.length;
+      c.rig.obs.aborted = abortedNow(c);
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ abortedByClose: true, freezes: 1, aborted: true });
+  });
+
+  it("still ends as stream_eof when the fail-stop comes from the stream end", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      await prompt(c, "F", "hand-back report");
+    });
+    await play(rig);
+    expect(rig.hostEnds).toEqual(["stream_eof"]);
+    expect(rig.freezes).toHaveLength(1);
+    expect(rig.warnings.some((line) => line.includes("SDK stream ended under a foreign root interval"))).toBe(true);
   });
 });
