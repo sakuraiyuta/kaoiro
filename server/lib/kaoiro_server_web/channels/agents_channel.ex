@@ -1401,13 +1401,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
               engine || "claude-code"
             )
 
-          with {:ok, _} <- KaoiroServer.DeliveryPolicies.ensure(agent_id, seed),
-               :ok <- publish_spawn(host_id, spawn_payload, cwd, engine) do
+          with :ok <- prepare_launch(agent_id, cwd, engine, seed) do
+            KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
+
+            unless ExternalEngine.external?(engine) do
+              SessionPointers.record(agent_id, nil, cwd, engine || "claude-code")
+            end
+
             {:reply, {:ok, %{"agent_id" => agent_id, "room_id" => launch_room_id(launch_room)}},
              socket}
           else
             {:error, reason} ->
-              if ExternalEngine.external?(engine), do: rollback_external_spawn(agent_id)
               _ = AgentActivity.resolve_transition(agent_id, request_id, false)
               {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
           end
@@ -2968,35 +2972,33 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  defp publish_spawn(host_id, %{"agent_id" => id} = payload, cwd, engine) do
-    topic = "runner:#{host_id}"
-
+  defp prepare_launch(id, cwd, engine, seed) do
     if ExternalEngine.external?(engine) do
       SessionPointers.record(id, nil, cwd, engine)
 
-      case SessionPointers.fetch(id) do
-        {:ok, %{engine: ^engine, cwd: ^cwd}} ->
-          KaoiroServerWeb.Endpoint.broadcast(topic, "spawn", payload)
+      with {:ok, %{engine: ^engine, cwd: ^cwd}} <- SessionPointers.fetch(id),
+           {:ok, _} <- KaoiroServer.DeliveryPolicies.ensure(id, seed) do
+        :ok
+      else
+        error ->
+          AgentDirectory.delete(id)
+          Rooms.purge(id)
+          deleted = delete_launch_pointer(id)
 
-        _ ->
-          {:error, :persistence_failed}
+          case {error, deleted} do
+            {{:error, reason}, :ok} -> {:error, reason}
+            _ -> {:error, :persistence_failed}
+          end
       end
     else
-      KaoiroServerWeb.Endpoint.broadcast(topic, "spawn", payload)
-      SessionPointers.record(id, nil, cwd, engine || "claude-code")
+      with {:ok, _} <- KaoiroServer.DeliveryPolicies.ensure(id, seed), do: :ok
     end
   end
 
-  defp rollback_external_spawn(id) do
-    AgentDirectory.delete(id)
-    Rooms.purge(id)
-    KaoiroServer.DeliveryPolicies.delete(id)
-
-    try do
-      SessionPointers.delete(id)
-    catch
-      :exit, _ -> {:error, :persistence_failed}
-    end
+  defp delete_launch_pointer(id) do
+    SessionPointers.delete(id)
+  catch
+    :exit, _ -> {:error, :persistence_failed}
   end
 
   defp live_agent?(agent_id) do
