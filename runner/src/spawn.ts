@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineKind, WrapperConfig } from "@kaoiro/protocol";
-import { storedEngineExecutable } from "./engines.js";
+import { resolveBundledLaunch, storedEngineExecutable } from "./engines.js";
 import type { LaunchFn, ManagedChild } from "./supervisor.js";
 
 /** The child-process surface toManagedChild needs; ChildProcess satisfies it. */
@@ -68,8 +68,9 @@ export function toManagedChild(child: ExitErrorChild, readRecovery?: () => Recov
  * (ADR-0076).
  */
 export function makeLauncher(command: string[] = selfCommand()): LaunchFn {
-  const [node, ...entry] = command;
-  if (node === undefined) throw new Error("makeLauncher: empty command");
+  const [executable, ...fixed] = command;
+  if (executable === undefined) throw new Error("makeLauncher: empty command");
+  const prefix: [string, ...string[]] = [executable, ...fixed];
   const dir = mkdtempSync(join(tmpdir(), "kaoiro-runner-"));
   let counter = 0;
 
@@ -93,6 +94,7 @@ export function makeLauncher(command: string[] = selfCommand()): LaunchFn {
     initialPrompt?: string,
     engine: EngineKind = "claude-code",
   ): ManagedChild => {
+    const { command: [program, ...args] } = resolveBundledLaunch(engine, prefix);
     const executable = storedEngineExecutable(engine);
     const configPath = join(dir, `${agentId}-${counter}.json`);
     const checkpointPath = `${configPath}.recovery`;
@@ -127,12 +129,13 @@ export function makeLauncher(command: string[] = selfCommand()): LaunchFn {
       }
     };
 
-    const args = [...entry, "wrapper", engine, "run", configPath];
     let child: ReturnType<typeof spawn>;
     try {
       writeRecoveryCheckpoint(checkpointPath, { version: 1, state: "initial" });
       writeFileSync(configPath, JSON.stringify(childConfig), { mode: 0o600 });
-      child = spawn(node, args, { cwd, stdio: "inherit", env: childEnv });
+      child = spawn(program, [...args, "run", configPath], {
+        cwd, stdio: "inherit", env: childEnv,
+      });
     } catch (error) {
       cleanup();
       throw error;

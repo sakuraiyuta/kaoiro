@@ -63,6 +63,17 @@ export function isEngine(value: unknown): value is EngineKind {
   return typeof value === "string" && Object.hasOwn(ENGINES, value);
 }
 
+type BundledLaunchDescriptor = {
+  readonly command: readonly [string, ...string[]];
+};
+
+export function resolveBundledLaunch(
+  engine: unknown, prefix: readonly [string, ...string[]],
+): BundledLaunchDescriptor {
+  if (!isEngine(engine)) throw new Error("Unknown bundled engine");
+  return { command: [...prefix, "wrapper", engine] };
+}
+
 export function hostLibc(): "glibc" | "musl" {
   const report = process.report.getReport() as { header: { glibcVersionRuntime?: string } };
   return report.header.glibcVersionRuntime ? "glibc" : "musl";

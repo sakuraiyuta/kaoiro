@@ -6,11 +6,79 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 import { makeLauncher, toManagedChild } from "../src/spawn.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import * as engines from "../src/engines.js";
 import { engineArtifact } from "../src/engines.js";
 
 // The built entry, started by this test's own node: the command a runner
 // started through `kaoiro runner` hands to its launcher.
 const ENTRY = [process.execPath, fileURLToPath(new URL("../dist/kaoiro.js", import.meta.url))];
+
+it("checks the prefix at creation and the engine before launch", () => {
+  expect(() => makeLauncher([])).toThrow("makeLauncher: empty command");
+  const launch = makeLauncher([""]);
+  const config = { agent_id: "invalid" } as never;
+  for (const id of ["unknown", "toString"]) {
+    expect(() => launch("invalid", config, tmpdir(), undefined, undefined,
+      id as never)).toThrow("Unknown bundled engine");
+  }
+  expect(() => launch("invalid", config, tmpdir(), undefined, undefined,
+    "grok")).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+});
+
+it.each(["claude-code", "codex", "antigravity", "grok"] as const)(
+  "spawns the resolved command for %s", async engine => {
+    const cwd = mkdtempSync(join(tmpdir(), "kaoiro launch "));
+    const entry = join(cwd, "capture.cjs");
+    const record = join(cwd, "observed.json");
+    const capture = `
+const fs = require("node:fs");
+fs.writeFileSync("observed.json", JSON.stringify({
+  executable: process.execPath, options: process.execArgv, argv: process.argv,
+}));
+`;
+    const options = ["--no-warnings", "--trace-deprecation"];
+    const prefix = [process.execPath, ...options, entry, ""];
+    const config = { agent_id: "observe" } as never;
+    const run = async (launch: ReturnType<typeof makeLauncher>) => {
+      const child = launch("observe", config, cwd, undefined, undefined, engine);
+      await new Promise<void>(resolve => child.on("exit", resolve));
+      expect(child.exitCode).toBe(0);
+      const seen = JSON.parse(readFileSync(record, "utf8"));
+      rmSync(record);
+      return seen;
+    };
+    try {
+      writeFileSync(entry, capture);
+      const launch = makeLauncher(prefix);
+      prefix.length = 0;
+      const file = expect.stringMatching(/observe-0\.json$/);
+      expect(await run(launch)).toEqual({
+        executable: process.execPath, options,
+        argv: [process.execPath, entry, "", "wrapper", engine, "run", file],
+      });
+
+      // A distinct command proves the launcher consumes the resolver result.
+      const original = engines.resolveBundledLaunch;
+      const spy = vi.spyOn(engines, "resolveBundledLaunch")
+        .mockImplementation((id, fixed) => {
+          const { command } = original(id, fixed);
+          return { command: [...command, "marker"] };
+        });
+      try {
+        writeFileSync(join(cwd, "wrapper"), capture);
+        expect(await run(makeLauncher([process.execPath]))).toEqual({
+          executable: process.execPath, options: [],
+          argv: [process.execPath, join(cwd, "wrapper"), engine, "marker",
+            "run", file],
+        });
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+);
 
 it("uses a newly acquired matching engine on the next spawn", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "kaoiro-store-spawn-"));
