@@ -2310,6 +2310,34 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         wait_until(fn -> KaoiroServer.PermissionSettings.get(agent_id) != nil end)
     end
 
+    test "external envelope uses the recorded launch engine for observers and session storage" do
+      id = "test.external-display"
+      engine = "sample-engine"
+      SessionPointers.record(id, nil, "/launch", engine)
+      assert %{engine: ^engine} = SessionPointers.get(id)
+      socket = join_wrapper(id)
+      @endpoint.subscribe("agents:lobby")
+      selected = %{"model" => "small", "model_source" => "launch"}
+
+      message =
+        envelope(id, "idle")
+        |> Map.put("session_id", "display-session")
+        |> Map.put("ext", %{"engine" => "display-label", "effective" => selected})
+
+      assert_reply push(socket, "envelope", message), :ok
+
+      assert_broadcast "envelope", %{
+        "agent_id" => ^id,
+        "session_id" => "display-session",
+        "ext" => %{"engine" => ^engine, "effective" => ^selected}
+      }
+
+      assert %{"engine" => ^engine} = AgentStates.snapshot()[id]["ext"]
+
+      assert %{engine: ^engine, session_id: "display-session", snapshot: ^selected} =
+               SessionPointers.get(id)
+    end
+
     test "external launches project session metadata and keep permissions server-owned" do
       id = "test.external-session"
       engine = "sample-engine"
