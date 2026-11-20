@@ -56,6 +56,7 @@ deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 tarball=
 root=
 allow_dirty=no
+expected_version=
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,6 +69,14 @@ while [ $# -gt 0 ]; do
     --allow-dirty)
       allow_dirty=yes
       shift
+      ;;
+    --expect-version)
+      if [ $# -lt 2 ] || [ -z "$2" ] || [ -n "$expected_version" ]; then
+        kaoiro_die "--expect-version needs one version" 64
+      fi
+      kaoiro_reject_option_like "$1" "$2"
+      expected_version=$2
+      shift 2
       ;;
     -h | --help)
       awk 'NR > 1 && /^set -/ { exit } NR > 1' "$0"
@@ -149,7 +158,7 @@ done
 # dist/build-info.json agree. Taking the id from anywhere else — a second
 # `cat VERSION`, or the archive's filename — is what let a tarball name its
 # directory after one build while carrying another.
-kaoiro_verify_release_tree "$tree"
+kaoiro_verify_release_tree "$tree" "$expected_version"
 id=$KAOIRO_VERIFIED_IDENTITY
 kaoiro_valid_release_id "$id" ||
   kaoiro_die "release carries an unusable identity: $id" 70
@@ -168,7 +177,7 @@ if [ -e "$target" ]; then
     # it: a release whose dist/cli.js had been deleted was reported as
     # "already installed" and left broken, and the update that followed
     # went on to activate it (reproduced 2026-08-16).
-    kaoiro_verify_release_tree "$target"
+    kaoiro_verify_release_tree "$target" "$expected_version"
     if [ "$KAOIRO_VERIFIED_IDENTITY" != "$id" ]; then
       # Same directory name, different build inside. Replacing it silently
       # would destroy whatever the running host may still be using, and

@@ -308,6 +308,7 @@ Main options:
 |---|---|---|
 | `--from-repo <path>` | — | Build a tarball from the repo and install it |
 | `--tarball <path>` | — | Install an existing tarball (for distribution hosts) |
+| `--from-release <tag>` | — | Fetch and verify a tagged GitHub release (Linux x64/systemd) |
 | `--target <os-arch>` | — | Build target, only with `--from-repo` (`darwin-arm64` or `linux-x64`) |
 | `--detach` | — | Queue update as a transient systemd user service via `systemd-run --user --no-block` |
 | `--service <name>` | `kaoiro-runner` | Target systemd user unit |
@@ -319,6 +320,32 @@ Never delete the release referenced by `current` / `previous`, regardless of
 `--keep`. The runner **does not resolve the Codex wrapper until the first Codex
 spawn**, so the active release continues to be read after startup; deleting it
 breaks a spawn that has not happened yet.
+
+#### Update from a published release
+
+With the new updater on Linux x64/systemd, pass the exact published
+`vYYYY.MM.DD.N` tag. This input excludes `--tarball`, `--from-repo`, recovery
+inputs, `--target`, and `--allow-dirty`. Install `curl` and `sha256sum` on the
+update host. For a detached update, check the worker result as above.
+
+```sh
+"$install_root/current/deploy/kaoiro-runner-update.sh" \
+  --from-release "$release_tag" --detach
+```
+
+The worker downloads the archive and its SHA-256 sidecar over HTTPS. It
+checks the digest before invoking the installer. The installer checks the
+expected unprefixed build version before placing or reusing a tree, so a
+wrong version cannot occupy the commit's release directory. SHA-256
+detects a mismatch in the retrieved files. A distribution origin that
+replaces both the archive and the sidecar can supply a matching pair.
+
+For the first upgrade from a release whose updater lacks `--from-release`,
+download the archive and sidecar from the approved release. Verify the
+archive against the digest recorded in the release card and use the existing
+`--tarball` path. The Darwin arm64 download is for
+[initial install](runner-install.md#running-as-a-service-systemd--launchd).
+Darwin and musl runtime are unverified for this publication path.
 
 #### Coordinated server and wrapper updates
 

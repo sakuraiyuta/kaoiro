@@ -1231,6 +1231,10 @@ export function verifyRelease(root, opts = {}) {
   const realRoot = realpathSync(root);
 
   const info = readBuildInfoStrict(root, realRoot);
+  if (opts.expectedVersion !== undefined &&
+      info.version !== opts.expectedVersion) {
+    fail(`Expected release version ${opts.expectedVersion}, got ${info.version}`);
+  }
   const identity = formatIdentity(info);
 
   // VERSION is the operator-facing copy of the identity. A tree where the two
@@ -1357,11 +1361,19 @@ export function verifyRelease(root, opts = {}) {
 function main(argv) {
   let root = null;
   const opts = {};
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
     if (arg === "--require-manifest") opts.requireManifest = true;
     else if (arg === "--require-deploy-manifest") { opts.requireDeployManifest = true; opts.requireManifest = true; }
     else if (arg === "--hash") opts.hash = true;
-    else if (arg.startsWith("-")) {
+    else if (arg === "--expect-version") {
+      const version = argv[++i];
+      if (opts.expectedVersion !== undefined || !isLandingBuildVersion(version)) {
+        process.stderr.write("verify-release: --expect-version needs one version\n");
+        process.exit(64);
+      }
+      opts.expectedVersion = version;
+    } else if (arg.startsWith("-")) {
       process.stderr.write(`verify-release: unknown option: ${arg}\n`);
       process.exit(64); // EX_USAGE
     } else if (root === null) root = arg;
