@@ -375,10 +375,12 @@ subagent runs. The abort closes the input, the SDK sends the CLI `SIGTERM`
 2 s later, and the wrapper attempts `SIGKILL` 4 s after the abort if the CLI
 is still alive, without waiting for it to exit. The running turn, background
 commands and subagents can be interrupted; their partial side effects remain,
-and after a `SIGKILL` background descendants can survive. When the stream
-ends, `#finishHost("stream_eof")` runs and `host.run()` returns, because the
-SDK's `AbortError` after the abort is absorbed; a CLI crash in this window
-ends the same way, without the CLI's stderr tail. If the remaining cleanup
+and after a `SIGKILL` background descendants can survive. On stream teardown,
+`#finishHost("stream_eof")` runs. `host.run()` returns normally after EOF or
+when it absorbs the SDK's `AbortError` with the host abort signal set. Other
+transport errors propagate and `runClaudeCli` reports `crash`. The SDK can
+also report a CLI crash after the abort as `AbortError`, hiding the crash and
+its stderr tail. If `host.run()` returns normally and the remaining cleanup
 completes, `runClaudeCli` (`wrapper/claude-code/src/cli.ts`) reports the
 disconnect reason `stop` and exits with code 0. A session-binding failure
 takes the same fail-stop and abort but also stops recovery: the host blocks
@@ -518,10 +520,10 @@ Its classifier paths and SDK setting boundary are in
   `AbortController` wired into `Options.abortController`, which drives the
   SDK's own subprocess escalation. Every fail-stop except the turn watchdog's
   aborts the same controller
-  ([recovery](#recovering-a-fail-stopped-claude-wrapper)). The host also holds the direct CLI child
-  until it exits, and attempts `SIGKILL` four seconds after host abort if it
-  is still alive, before runner reset's five-second boundary. This does not contain a tool's
-  `SIGTERM`-ignoring descendants. See
+  ([recovery](#recovering-a-fail-stopped-claude-wrapper)). The wrapper attempts
+  `SIGKILL` on its direct CLI child four seconds after host abort if it is
+  still alive; it does not wait for the child's exit. This does not contain
+  a tool's `SIGTERM`-ignoring descendants. See
   [adapter-contract.md](adapter-contract.md#sigterm-handling-and-process-termination-timing)
   for the measured timing and the runner-grace interaction.
 - Observation (message sequence) and control (input + interrupt + canUseTool)
