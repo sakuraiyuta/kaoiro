@@ -1,8 +1,8 @@
 ---
 title: Deployment troubleshooting
-description: Recovering a server container that failed to start after a host reboot, and troubleshooting runner Antigravity CLI presence or version warnings.
+description: Recovering a server container that failed to start after a host reboot, and troubleshooting runner Antigravity CLI presence, stale model lists, or version warnings.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-20
 related: [deployment]
 ---
 
@@ -30,11 +30,23 @@ identifies the known deployment state.
 
 ## Antigravity CLI (agy) not found or version warnings
 
-**Symptom.** The setup wizard fails with `antigravity CLI (agy) not found: ...`, or the runner journal reports ``runner: warn — antigravity `agy models` probe unavailable: antigravity CLI executable is missing; publishing the pinned 1.1.26 snapshot``.
+**Symptom.** The setup wizard fails with `antigravity CLI (agy) not found: ...`, or the runner journal reports ``runner: warn — antigravity `agy models` probe unavailable: ...; publishing the pinned 1.3.1 snapshot`` (or `probe failed` / `no parseable models`). On a running host, the dashboard's Antigravity model list can also lag behind an upstream `agy` release, or its reported `agy` version can disappear after a reload failure.
 
-**Diagnosis.** When the `antigravity` capability is enabled, the setup wizard (`runner/src/setup.ts:205-220`) presence-checks `agy` on `PATH` via `resolveAgyExecutable` and fails closed if missing. At runner startup and reload, the runner probes `agy --version` (`runner/src/antigravity-version.ts:1-5`, `runner/src/runner-cli.ts:185-209, 350-362`). If `agy` is absent from the service's execution `PATH`, catalog resolution degrades to the static snapshot with a stderr warning. Additionally, a changed `agy` version on config reload emits a warning to stderr (`runner: warn — antigravity agy version changed`).
+**Diagnosis.** When the `antigravity` capability is enabled, the setup wizard (`runner/src/setup.ts:205-220`) presence-checks `agy` on `PATH` via `resolveAgyExecutable` and fails closed if missing. At runner startup (`runner/src/runner-cli.ts:238-262`) and on every config reload while `antigravity` remains enabled (`runner/src/runner-cli.ts:458-506`), the runner probes both `agy models` (`runner/src/antigravity-catalog.ts:58-89`) and `agy --version` (`runner/src/antigravity-version.ts:1-77`). The runner does not poll `agy` on a timer, so an upstream `agy` self-update does not update the registered model catalog until startup or a config reload re-runs those probes. If either probe fails at startup or on reload, catalog resolution falls back to the pinned 1.3.1 snapshot with a stderr warning, and `agy --version` returns `null`, omitting `antigravity_cli_version` from the runner registration (`runner/src/config.ts:734-766`) so the version display disappears on the dashboard. Additionally, a changed `agy` version detected on config reload emits a warning to stderr (`runner: warn — antigravity agy version changed <old> -> <new>`, `runner/src/runner-cli.ts:557-565`).
 
-**Remedy.** Ensure `agy` is installed and its directory is added to `PATH` in `runner.env` ([When using nvm / fnm / asdf](runner-install.md#when-using-nvm--fnm--asdf)). Restart the runner service and verify the runner journal (`journalctl --user -u kaoiro-runner`) shows `runner: antigravity agy version <version>` without warnings. If `conversation_summaries.db` emits a schema mismatch warning, check its `user_version` as described in [Antigravity session index](runner-install.md#antigravity-session-index).
+**Remedy (missing CLI or schema warning).** Ensure `agy` is installed and its directory is added to `PATH` in `runner.env` ([When using nvm / fnm / asdf](runner-install.md#when-using-nvm--fnm--asdf)), or configure `antigravity.cli_path`. Restart the runner service and verify the runner journal (`journalctl --user -u kaoiro-runner`) shows `runner: antigravity agy version <version>` without warnings. If `conversation_summaries.db` emits a schema mismatch warning, check its `user_version` as described in [Antigravity session index](runner-install.md#antigravity-session-index).
+
+### Refreshing a stale model list or recovering from a failed reload probe
+
+Re-saving `runner.config.json` — even without changing its contents — triggers a config reload (`runner/src/runner-cli.ts:458-506`, pinned by `runner/test/antigravity-cli-wiring.test.ts`) that re-runs `agy models` and `agy --version` and republishes the runner registration without restarting running agents.
+
+**One re-save may not be enough after 15 minutes.** As directly observed with an isolated copy of `agy` 1.5.13 after its 15-minute updater cooldown, `agy models` spawns a background self-updater (`agy --bg-updater`) while immediately returning the current binary's model list. By inference from that behavior (not measured end-to-end across a live binary download and replacement), an out-of-date `agy` can respond to the first reload probe with the old model list while updating in the background:
+
+1. Save `runner.config.json` (unchanged contents are sufficient while `antigravity` is enabled).
+2. Check the runner journal (`journalctl --user -u kaoiro-runner`) for an `antigravity agy version` line (`runner: warn — antigravity agy version changed <old> -> <new>` when a reload observes a new version, or `runner: antigravity agy version <version>` after a service start) or inspect the model list and reported CLI version in the dashboard.
+3. If the version or model list is still old, wait for the background `agy` self-update to finish replacing the binary, then save `runner.config.json` once more.
+
+**Recovery from a failed reload probe.** When a reload probe fails (`executable_missing` / non-zero exit / timeout / unparseable output), the runner publishes the pinned 1.3.1 snapshot instead of the previous live list and drops the reported `agy` version (`antigravity_cli_version`). Once `agy` is healthy again, save `runner.config.json` again to re-probe and restore both the live model list and the version display. Whether a failed reload probe should keep the last published catalog instead of reverting to the 1.3.1 snapshot is tracked in [issue #1218](https://github.com/sakuraiyuta/kaoiro/issues/1218).
 
 ## Codex launches are refused: `CODEX_HOME` is unusable
 

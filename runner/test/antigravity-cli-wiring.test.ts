@@ -589,4 +589,89 @@ describe("runner CLI Antigravity config wiring", () => {
       stderrSpy.mockRestore();
     }
   });
+
+  it("re-probes agy models and updates registered models when reloading an unchanged config", async () => {
+    root = mkdtempSync(join(tmpdir(), "kaoiro-runner-agy-catalog-reload-"));
+    const executable = join(root, "agy");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, 0o755);
+    const configPath = join(root, "runner.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        host_id: "runner-catalog-reload-fixture",
+        server_url: "ws://runner.invalid/runner",
+        cwd_allowlist: [root],
+        capabilities: ["antigravity"],
+        antigravity: { cli_path: executable },
+      }),
+    );
+
+    let link: FakeRunnerLink | undefined;
+    let triggerReload: (() => void) | undefined;
+    let catalogCall = 0;
+    const resolveAntigravityCatalog = vi.fn(async () => {
+      catalogCall += 1;
+      return catalogCall === 1
+        ? [
+            { value: "", display_name: "account default" },
+            { value: "gemini-old", display_name: "Gemini Old" },
+          ]
+        : [
+            { value: "", display_name: "account default" },
+            { value: "gemini-new", display_name: "Gemini New" },
+          ];
+    });
+    const runtime = await runRunnerCli(
+      {
+        resolveCodexAuthMode: async () => "unknown",
+        resolveAntigravityCatalog,
+        resolveAgyVersion: async () => "agy-cli 1.0.0",
+        createRunnerLink: (_serverUrl, _hostId, options) => {
+          link = new FakeRunnerLink(options);
+          return link;
+        },
+        watchRunnerConfig: (path, onReload) => {
+          triggerReload = () => onReload(loadRunnerConfig(path));
+          return { close: () => {} };
+        },
+        installSignalHandlers: false,
+      },
+      [configPath],
+    );
+    try {
+      const antigravityModels = (register: RunnerRegister) =>
+        register.engines
+          ?.find((engine) => engine.id === "antigravity")
+          ?.models.map((model) => ({
+            value: model.value,
+            display_name: model.display_name,
+          }));
+
+      expect(resolveAntigravityCatalog).toHaveBeenCalledTimes(1);
+      expect(antigravityModels(link!.initialRegister)).toEqual([
+        { value: "", display_name: "account default" },
+        { value: "gemini-old", display_name: "Gemini Old" },
+      ]);
+
+      // Reload without editing runner.config.json (changedFields returns []);
+      // Antigravity remains enabled so the runner still re-probes the catalog.
+      triggerReload!();
+      await runtime!.waitForReloads();
+
+      expect(resolveAntigravityCatalog).toHaveBeenCalledTimes(2);
+      expect(resolveAntigravityCatalog).toHaveBeenNthCalledWith(
+        2,
+        { ok: true, path: executable },
+        30_000,
+      );
+      expect(link!.updatedRegisters).toHaveLength(1);
+      expect(antigravityModels(link!.updatedRegisters[0]!)).toEqual([
+        { value: "", display_name: "account default" },
+        { value: "gemini-new", display_name: "Gemini New" },
+      ]);
+    } finally {
+      runtime?.close();
+    }
+  });
 });
