@@ -69,6 +69,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.20.1](v2026.11.20.1.md) | 2026-11-20 | v2026.11.19.2 | Bundled runner and wrappers; Claude Code fail-stop recovery; explicit Codex authentication mode; Antigravity catalog refresh guidance. |
 | [v2026.11.19.2](v2026.11.19.2.md) | 2026-11-19 | v2026.11.19.1 | Shared engine acquisition and executable selection; bridge and hook subcommands; Claude Agent SDK 0.3.327; Codex 0.170.0 with GPT-6.2 and state-aware update and rollback. |
 | [v2026.11.19.1](v2026.11.19.1.md) | 2026-11-19 | v2026.11.18.1 | One kaoiro entry for the runner and all wrappers; prompts and resume targets in launch files; wrapper hot reload retired. |
 | [v2026.11.18.1](v2026.11.18.1.md) | 2026-11-18 | v2026.11.16.1 | The runner removes its own server credential from its environment right after reading it, so no wrapper, engine probe, engine or agent tool inherits it. |
