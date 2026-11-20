@@ -51,7 +51,7 @@ export interface RefreshEngineCatalogDeps {
   /** Live getter for the runner's Grok catalog (grok-catalog.ts), so a
    *  Claude refresh keeps it in the rebuilt register. */
   getGrokCatalog?: () => EngineModelInfo[] | undefined;
-  updateRegister: (register: RunnerRegister) => void;
+  updateRegister: (register: RunnerRegister<EngineKind>) => void;
   sendCatalogResult: (result: EngineCatalogResult) => void;
   /** issue #218: fixed for the process's whole lifetime (computed once at
    *  startup from the built artifact, never reloaded), so — unlike the

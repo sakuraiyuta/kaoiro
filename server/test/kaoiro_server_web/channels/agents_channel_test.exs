@@ -414,10 +414,219 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         %{
           policy: Keyword.get(opts, :policy, :accept_all),
           cwd_allowlist: Keyword.get(opts, :cwd_allowlist, ["/home/user/proj"]),
+          engines: Keyword.get(opts, :engines, []),
           capabilities: Keyword.get(opts, :capabilities, ["claude-code", "codex", "antigravity"])
         },
         self()
       )
+  end
+
+  defp external_host(host, operations) do
+    model = %{"value" => "small", "display_name" => "Small", "effort_levels" => ["low"]}
+
+    row = %{
+      "id" => "sample-engine",
+      "models" => [model],
+      "operations" => Map.put(Map.new(operations, &{&1, true}), "version", 1)
+    }
+
+    register_host(host, capabilities: ["sample-engine"], engines: [row])
+  end
+
+  test "external launch validates selection before issuing an identity" do
+    host = "external-launch"
+    external_host(host, ~w(spawn resume))
+    @endpoint.subscribe("runner:" <> host)
+    operator = join_as(:operator)
+
+    base = %{
+      "host_id" => host,
+      "cwd" => "/home/user/proj",
+      "persona" => "ao",
+      "engine" => "sample-engine"
+    }
+
+    for fields <-
+          for(
+            key <- ~w(permission_mode sandbox approval network_access),
+            do: %{key => nil}
+          ) ++
+            [
+              %{"network_access" => false},
+              %{"model" => nil},
+              %{"model" => ""},
+              %{"model" => 1},
+              %{"model" => "other"},
+              %{"effort" => "low"},
+              %{"model" => "small", "effort" => nil},
+              %{"model" => "small", "effort" => "high"},
+              %{"resume_session_id" => nil},
+              %{"resume_session_id" => ""},
+              %{"resume_session_id" => 1},
+              %{"delivery_policy" => "other"}
+            ] do
+      assert_reply push(operator, "spawn", Map.merge(base, fields)), :error, %{
+        reason: "invalid_payload"
+      }
+    end
+
+    refute_broadcast "spawn", _
+
+    for fields <- [
+          %{},
+          %{"model" => "small"},
+          %{"delivery_policy" => "on"},
+          %{
+            "model" => "small",
+            "effort" => "low",
+            "delivery_policy" => "off",
+            "resume_session_id" => "session-1"
+          }
+        ] do
+      ref = push(operator, "spawn", Map.merge(base, fields))
+      assert_broadcast "spawn", %{"agent_id" => id, "engine" => "sample-engine"} = frame
+      assert %{engine: "sample-engine", cwd: "/home/user/proj"} = SessionPointers.get(id)
+
+      assert Map.take(frame, ~w(model effort resume_session_id)) ==
+               Map.take(fields, ~w(model effort resume_session_id))
+
+      assert_reply ref, :ok, %{"agent_id" => ^id}
+    end
+  end
+
+  test "external refresh and history operations use the declaring host and operation" do
+    host = "external-history"
+    other = "external-other"
+    id = host <> ".saved"
+    engine = "sample-engine"
+    AgentDirectory.record(id, "ao", "Ao")
+    SessionPointers.record(id, "session-1", "/home/user/proj", engine)
+    assert %{engine: ^engine} = SessionPointers.get(id)
+    operator = join_as(:operator)
+    @endpoint.subscribe("runner:" <> host)
+    external_host(other, ~w(spawn resume refresh_engine_catalog enumerate_sessions))
+    refresh = %{"host_id" => host, "engine" => engine, "request_id" => "refresh-1"}
+    history = %{"agent_id" => id, "session_id" => "session-2"}
+    enumerate = %{"agent_id" => id, "host_id" => host}
+
+    assert_reply push(operator, "refresh_engine_catalog", refresh), :error, %{
+      reason: "unknown_host"
+    }
+
+    assert_reply push(operator, "resume_session", history), :error, %{reason: "unknown_host"}
+
+    for ops <- [[], ["resume"], ["spawn"]] do
+      external_host(host, ops)
+
+      assert_reply push(operator, "refresh_engine_catalog", refresh), :error, %{
+        reason: "engine_not_supported"
+      }
+
+      assert_reply push(operator, "enumerate_sessions", enumerate), :error, %{
+        reason: "engine_not_supported"
+      }
+
+      assert_reply push(operator, "resume_session", history), :error, %{
+        reason: "engine_not_supported"
+      }
+
+      assert_reply push(operator, "restore", %{"agent_id" => id}), :error, %{
+        reason: "engine_not_supported"
+      }
+    end
+
+    external_host(host, ~w(refresh_engine_catalog enumerate_sessions))
+    assert_reply push(operator, "refresh_engine_catalog", refresh), :ok
+    assert_broadcast "refresh_engine_catalog", %{"request_id" => "refresh-1", "engine" => ^engine}
+    assert_reply push(operator, "enumerate_sessions", enumerate), :ok
+    assert_broadcast "enumerate_sessions", %{"cwd" => "/home/user/proj", "engine" => ^engine}
+
+    for bad <- [Map.put(enumerate, "engine", "codex"), %{enumerate | "host_id" => other}] do
+      assert_reply push(operator, "enumerate_sessions", bad), :error, %{
+        reason: "engine_not_supported"
+      }
+    end
+
+    put_agent(id)
+    @endpoint.subscribe("wrapper:" <> id)
+
+    assert_reply push(operator, "set_permission_mode", %{"agent_id" => id, "mode" => "plan"}),
+                 :error,
+                 %{reason: "unsupported_permission_switch"}
+
+    refute_broadcast "set_permission_mode", _
+    assert KaoiroServer.PermissionModes.get(id) == nil
+
+    assert_reply push(operator, "set_permission", %{"agent_id" => id, "network_access" => false}),
+                 :error,
+                 %{reason: "unsupported_permission_switch"}
+
+    assert KaoiroServer.PermissionSettings.get(id) == nil
+
+    for ops <- [["spawn"], ["resume"]] do
+      external_host(host, ops)
+
+      assert_reply push(operator, "resume_session", history), :error, %{
+        reason: "engine_not_supported"
+      }
+    end
+
+    refute_broadcast "switch_session", _
+    refute_broadcast "spawn", _
+    assert %{session_id: "session-1"} = SessionPointers.get(id)
+    external_host(host, ~w(spawn resume))
+    assert_reply push(operator, "resume_session", history), :ok
+    assert_broadcast "switch_session", %{"agent_id" => ^id, "resume_session_id" => "session-2"}
+  end
+
+  defmodule UnwritablePointer do
+    use GenServer
+
+    def start_link(test),
+      do: GenServer.start_link(__MODULE__, test, name: KaoiroServer.SessionPointers)
+
+    def init(test), do: {:ok, test}
+    def handle_call({:get, _id}, _from, test), do: {:reply, nil, test}
+
+    def handle_call({:delete, id}, _from, test) do
+      send(test, {:rolled_back, id})
+      {:reply, :ok, test}
+    end
+
+    def handle_cast({:record, id, nil, _cwd, _engine, nil}, test) do
+      send(test, {:attempted_seed, id})
+      {:noreply, test}
+    end
+  end
+
+  test "an unreadable external launch seed rolls back before runner notification" do
+    alias KaoiroServer.{AgentActivity, DeliveryPolicies, Rooms}
+    host = "external-rollback"
+    external_host(host, ["spawn"])
+    operator = join_as(:operator)
+    @endpoint.subscribe("runner:" <> host)
+    {:ok, %{room_id: room}} = Rooms.create("Launch room")
+    :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, SessionPointers)
+    on_exit(fn -> Supervisor.restart_child(KaoiroServer.Supervisor, SessionPointers) end)
+    start_supervised!({UnwritablePointer, self()})
+
+    payload = %{
+      "host_id" => host,
+      "engine" => "sample-engine",
+      "persona" => "ao",
+      "cwd" => "/home/user/proj",
+      "room_id" => room
+    }
+
+    assert_reply push(operator, "spawn", payload), :error, %{reason: "persistence_failed"}
+    assert_receive {:attempted_seed, id}
+    assert_receive {:rolled_back, ^id}
+    refute_broadcast "spawn", _
+    assert AgentDirectory.get(id) == nil
+    assert {:ok, nil} = DeliveryPolicies.get(id)
+    assert {:ok, %{members: members}} = Rooms.snapshot()
+    refute Map.has_key?(members, id)
+    refute id in AgentActivity.pending_ids()
   end
 
   # The operator gate re-resolves the role from the credential (#148), so
@@ -5865,7 +6074,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "engine_not_supported"}
     end
 
-    test "operator の spawn: 未知 engine 値は invalid_engine" do
+    test "spawn rejects a syntactically valid external ID without a declaration" do
       host_id = "lab-pc-1g"
       register_host(host_id)
       socket = join_as(:operator)
@@ -5878,7 +6087,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "engine" => "gemini"
         })
 
-      assert_reply ref, :error, %{reason: "invalid_engine"}
+      assert_reply ref, :error, %{reason: "engine_not_supported"}
     end
 
     test "operator の spawn: initial_prompt を payload に載せる" do

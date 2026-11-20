@@ -19,6 +19,102 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
     Map.merge(%{"cwd_allowlist" => ["/home/user/proj"]}, extra)
   end
 
+  test "external declarations replace one host registration only after validation" do
+    host = "external-registration"
+    socket = join_runner(host)
+    id = String.duplicate("a", 64)
+    model = %{"value" => "small", "display_name" => "Small", "effort_levels" => ["low"]}
+    ops = %{"version" => 1, "spawn" => true}
+    row = %{"id" => id, "models" => [model], "operations" => ops}
+    legacy = Map.delete(row, "operations")
+    base = register_payload(%{"capabilities" => [id], "engines" => [row]})
+    defaults = %{id => false}
+    assert_reply push(socket, "register", Map.put(base, "in_flight_defaults", defaults)), :ok
+    saved = HostRegistry.get(host)
+    assert saved.in_flight_defaults == defaults
+
+    invalid_rows =
+      for(
+        value <- [
+          nil,
+          [],
+          false,
+          %{},
+          %{"version" => nil},
+          %{"version" => "1"},
+          %{"version" => 1.0},
+          %{"version" => 0},
+          %{"version" => -1}
+        ],
+        do: [%{row | "operations" => value}]
+      ) ++
+        for(
+          key <- ~w(spawn resume enumerate_sessions refresh_engine_catalog),
+          do: [%{row | "operations" => Map.put(ops, key, 1)}]
+        ) ++
+        for(
+          bad <- [
+            "claude",
+            "claude-code",
+            "codex",
+            "antigravity",
+            "grok",
+            id <> "b",
+            "Space",
+            "a_b",
+            "a\n",
+            "外"
+          ],
+          do: [%{row | "id" => bad}]
+        ) ++
+        for(
+          levels <- [nil, [], "low", [""], [1]],
+          do: [%{row | "models" => [%{model | "effort_levels" => levels}]}]
+        ) ++
+        [
+          [row, legacy],
+          [legacy, row],
+          [row, row],
+          [%{row | "models" => [model, model]}],
+          [%{row | "models" => [%{model | "value" => ""}]}]
+        ]
+
+    for rows <- invalid_rows do
+      assert_reply push(socket, "register", %{base | "engines" => rows}), :error, %{
+        reason: "invalid_engines"
+      }
+
+      assert HostRegistry.get(host) == saved
+    end
+
+    future = %{row | "operations" => %{"version" => 2, "spawn" => "unknown"}}
+
+    for {capabilities, rows, value} <- [
+          {[], [row], defaults},
+          {[id], [], defaults},
+          {[id], [legacy], defaults},
+          {[id], [future], defaults},
+          {[id], [%{row | "operations" => %{"version" => 1}}], defaults},
+          {[id], [row], %{id => nil}},
+          {[id], [row], []}
+        ] do
+      bad =
+        Map.merge(base, %{
+          "capabilities" => capabilities,
+          "engines" => rows,
+          "in_flight_defaults" => value
+        })
+
+      assert_reply push(socket, "register", bad), :error, %{reason: "invalid_register"}
+      assert HostRegistry.get(host) == saved
+    end
+
+    for rows <- [[future], [legacy, legacy], [%{legacy | "id" => "claude"}], [row]] do
+      assert_reply push(socket, "register", %{base | "engines" => rows}), :ok
+      assert HostRegistry.get(host).engines == rows
+    end
+  end
+
   test "stop_agent records a runner intent only for an agent owned by the host" do
     host_id = "runner-stop-origin"
     agent_id = host_id <> ".a"
