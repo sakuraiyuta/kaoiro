@@ -19,6 +19,7 @@ export async function nativeIdentity(release, layout = "legacy") {
   if (layout === "bundle") {
     const record = contained(root, join(root, "dist/codex-native.json"));
     const value = JSON.parse(readFileSync(record, "utf8"));
+    // Bundled pins use the X.Y.Z release form.
     if (typeof value?.path !== "string" || !value.path ||
         typeof value.version !== "string" ||
         !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}$/.test(value.version) ||

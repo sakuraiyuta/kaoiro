@@ -61,6 +61,8 @@ The updater executes the **candidate's** `deploy/kaoiro-runner-engines.sh`.
 For an already retained release, `switch` and `--rollback` do not require that
 script. To reinstall an older tarball, use its own tools or
 `kaoiro-runner-install.sh` followed by `kaoiro-runner-switch.sh`.
+For a bundled tarball, follow [Re-acquire an engine pin](#re-acquire-an-engine-pin)
+after switching to confirm its pins are present before launching its engines.
 
 ### Re-acquire an engine pin
 
@@ -223,6 +225,8 @@ For a same-pin return, recheck the saved digest and extract a fresh copy
 before stopping. Use that extraction's physical `kaoiro-runner-switch.sh
 --rollback` in the existing stop/switch/start sequence. Confirm that
 `previous` is the verified source. Recheck the running identity after return.
+To update again after rollback, repeat the boundary update with the same
+candidate tools after rechecking the source and the approved archive digest.
 
 The updater shipped with the bundle prunes after activation under the link
 lock. It keeps `current`, `previous`, releases protected by Codex state

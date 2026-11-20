@@ -19,7 +19,6 @@ node_bin="${KAOIRO_NODE:-node}"
 command -v "$node_bin" >/dev/null 2>&1 ||
   die_config "node not found: $node_bin (set KAOIRO_NODE)"
 
-# <install>/runner/deploy/<this script> -> <install>/runner/dist/kaoiro.js
 unset CDPATH
 deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 entry="$deploy_dir/../dist/kaoiro.mjs"

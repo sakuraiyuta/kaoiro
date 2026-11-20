@@ -378,10 +378,11 @@ musl and macOS arm64 are built but runtime unverified.
 
 ### Installation on the target host
 
-The target host needs Node.js 22 or later and registry access for missing managed pins. When the setup
-wizard asks for `host_id` and `server_url`, pair `server_url` with the
-`<host_id>:<token>` entry that the server's `.env` wizard issued: `wss://...`
-through nginx, or `ws://<PHX_HOST>:<PORT>/runner` for a direct-VPN deployment
+The target host needs Node.js 22 or later and registry access for missing
+managed pins. When the setup wizard asks for `host_id` and `server_url`, pair
+`server_url` with the `<host_id>:<token>` entry issued by the server's `.env`
+wizard. Use `wss://...` through nginx or `ws://<PHX_HOST>:<PORT>/runner` for
+a direct-VPN deployment
 ([network and login runbook](network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)).
 
 ```sh

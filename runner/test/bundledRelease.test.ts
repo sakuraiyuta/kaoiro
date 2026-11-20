@@ -113,6 +113,34 @@ it("rejects a different expected Codex native before changing links", () => {
   expect(existsSync(join(installed, "previous"))).toBe(false);
 });
 
+it("rejects matching malformed Codex hashes before changing links", () => {
+  const active = revisionOf("active-bundle");
+  const releases = join(installed, "releases");
+  const activeTree = writeBundleTree(join(releases, active), active);
+  writeReleaseTree(join(releases, legacy), legacy);
+  const current = join(installed, "current");
+  const previous = join(installed, "previous");
+  symlinkSync(`releases/${active}`, current);
+  symlinkSync(`releases/${legacy}`, previous);
+
+  // Equality alone would accept the same invalid digest in both releases.
+  for (const release of [activeTree, tree]) {
+    const path = join(release, "dist/codex-native.json");
+    const record = JSON.parse(readFileSync(path, "utf8"));
+    record.sha256 = "A".repeat(64);
+    writeFileSync(path, JSON.stringify(record));
+    writeBundleManifest(release);
+  }
+
+  const installation = install();
+  expect(installation.status, installation.stderr).toBe(0);
+  const result = switchTo(bundled);
+  expect(result.status, result.stderr).toBe(78);
+  expect(result.stderr).toContain("Invalid bundled Codex native identity");
+  expect(readlinkSync(current)).toBe(`releases/${active}`);
+  expect(readlinkSync(previous)).toBe(`releases/${legacy}`);
+});
+
 it("returns exit 78 from the installed shim when the entry is missing", () => {
   expect(install().status).toBe(0);
   expect(switchTo(bundled).status).toBe(0);
