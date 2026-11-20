@@ -392,9 +392,10 @@ export type PermissionMode =
   | "dontAsk"
   | "auto";
 
-/** Engine kinds a host can run (ADR-0032 F4a, ADR-0057 F1). The value set of
- *  the runner register `capabilities`, `SpawnMessage.engine`, and
- *  `ext.engine`. */
+/** Engine ID on the wire. The receiver validates external IDs and their operations. */
+export type EngineId = string;
+
+/** Bundled implementation keys known to this runner. */
 export type EngineKind = "claude-code" | "codex" | "antigravity" | "grok";
 
 /** ext.permission — the agent's current permission posture as the
@@ -591,7 +592,7 @@ export type PermissionSyncMessage = {
 );
 
 export interface PermissionSyncJoinRequest {
-  permission_sync?: { engine: EngineKind };
+  permission_sync?: { engine: EngineId };
 }
 
 export interface PermissionSyncJoinReply {
@@ -716,9 +717,16 @@ export interface EngineModelInfo {
 /** Launch catalog for one engine, sent by the runner in its register
  *  payload so the dashboard can build the three-stage launch select before
  *  any wrapper process exists (ADR-0032 F4bc). */
-export interface EngineCatalogEntry {
+export interface EngineCatalogEntry<Id extends EngineId = EngineId> {
+  operations?: {
+    version: 1;
+    spawn?: boolean;
+    resume?: boolean;
+    enumerate_sessions?: boolean;
+    refresh_engine_catalog?: boolean;
+  };
   launch_delivery_policy?: LaunchDeliveryPolicyMetadata;
-  id: EngineKind;
+  id: Id;
   models: EngineModelInfo[];
   /** Launch-time permission axes this engine offers as operator-selectable
    *  LaunchDialog controls, pre-spawn (ADR-0033 F3, ADR-0057 F4c) — declared
@@ -1604,24 +1612,22 @@ export interface DirectoryResult {
  *    `id` field only; `name` / `sprite_set` are ignored since the server SoT
  *    (ADR-0029) owns display metadata. Emits a deprecation warning at the
  *    server; scheduled for removal in the next major release. */
-export interface RunnerRegister {
-  in_flight_defaults?: InFlightDefaults;
+export interface RunnerRegister<Id extends EngineId = EngineId> {
+  in_flight_defaults?: InFlightDefaults<Id>;
   version: "0";
   host_id: string;
   personas?: WirePersona[];
   allowed_personas?: string[];
   blocked_personas?: string[];
   cwd_allowlist: string[];
-  /** Engine kinds this host can run (ADR-0032 F4a, ADR-0057 F1):
-   *  "claude-code" / "codex" / "antigravity". The legacy value "claude"
-   *  is normalized to "claude-code" by the server for one release window
-   *  (deprecation warn), then rejected. */
+  /** Engine IDs offered by this host. The server normalizes the legacy
+   *  capability alias "claude" to "claude-code". */
   capabilities?: string[];
   /** Launch catalog per engine (ADR-0032 F4bc): the models (and their
    *  effort levels) the dashboard offers in the engine -> model -> effort
    *  cascade of LaunchDialog. Sourced from each engine package's
    *  EngineCapability by the runner at register time. */
-  engines?: EngineCatalogEntry[];
+  engines?: EngineCatalogEntry<Id>[];
   /** Build identity (issue #218) — distinct from `version` above, which is
    *  the ADR-0015 WIRE PROTOCOL version (message-shape compatibility).
    *  `build_revision` is the full 40-char git SHA the running runner
@@ -1704,7 +1710,7 @@ export interface SpawnMessage {
   resume_session_id?: string;
   /** Engine to launch (ADR-0032 F4a, ADR-0057 F1). Omitted = "claude-code"
    *  (the pre-engine-select default), so old servers keep working. */
-  engine?: EngineKind;
+  engine?: EngineId;
   /** Launch-time model pick from the LaunchDialog cascade (ADR-0032
    *  F4bc), an EngineModelInfo.value. Omitted = engine default. */
   model?: string;
@@ -1863,7 +1869,7 @@ export interface RefreshEngineCatalog {
   version: "0";
   /** Target engine. Currently only "claude-code" needs live probing —
    *  Codex advertises statically (ADR-0035 F1). */
-  engine: EngineKind;
+  engine: EngineId;
   /** Correlation id for the paired EngineCatalogResult. Client-allocated
    *  UUIDv4; the runner echoes it verbatim. */
   request_id: string;
@@ -1923,7 +1929,7 @@ export interface RefreshModelsResult {
 export interface EngineCatalogResult {
   version: "0";
   host_id: string;
-  engine: EngineKind;
+  engine: EngineId;
   request_id: string;
   ok: boolean;
   reason?: EngineCatalogFailReason;
@@ -1949,7 +1955,7 @@ export interface EnumerateSessions {
    *  view; absent on the LaunchDialog path. */
   agent_id?: string;
   cwd: string;
-  engine?: EngineKind;
+  engine?: EngineId;
 }
 
 /** Minimal per-session metadata (T2: minimal, operator-only). mtime is the
@@ -1969,7 +1975,7 @@ export interface RunnerSessions {
   host_id: string;
   cwd: string;
   sessions: SessionMeta[];
-  engine?: EngineKind;
+  engine?: EngineId;
 }
 
 // Session-reset control flow (ADR-0036 F7, phase-17 17-1). The four-hop
