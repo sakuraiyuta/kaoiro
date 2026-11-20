@@ -61,6 +61,7 @@ a candidate.
 git diff --name-only <base>..<head> -- \
   'runner/deploy/**' \
   scripts/build-runner-tarball.sh scripts/build-release-manifest.mjs \
+  runner/scripts/build-release-bundle.mjs scripts/write-codex-native.mjs \
   scripts/build-identity.mjs scripts/with-build-identity.mjs \
   runner/src/kaoiro.ts runner/src/engines.ts \
   runner/src/spawn.ts runner/src/supervisor.ts runner/src/cli.ts \

@@ -36,7 +36,7 @@ export async function installArtifact(
   root: string, engine: EngineKind,
   artifact: { name: string; version: string; integrity: string },
   registry: string,
-  // The verifier does not require this file; Codex acquisition checks it.
+  // Codex acquisition checks the downloaded binary against this record.
   identityPath = process.env.KAOIRO_CODEX_NATIVE_IDENTITY,
 ): Promise<void> {
   const store = join(root, "engines");

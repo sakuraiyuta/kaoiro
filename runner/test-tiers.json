@@ -5,6 +5,8 @@
     "test/behaviour-default-composition.test.ts",
     "test/behaviour-relay-wiring.test.ts",
     "test/buildIdentityScript.test.ts",
+    "test/bundleRuntime.test.ts",
+    "test/bundledRelease.test.ts",
     "test/cli-entrypoint.test.ts",
     "test/codexHomeClassification.test.ts",
     "test/codexState.test.ts",

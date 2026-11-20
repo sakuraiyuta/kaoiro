@@ -1,3 +1,4 @@
+import "../../scripts/test/fixtures/test-isolation.mjs";
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync,
   rmSync, symlinkSync, writeFileSync,

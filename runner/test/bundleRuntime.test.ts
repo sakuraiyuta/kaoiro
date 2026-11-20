@@ -1,3 +1,4 @@
+import "../../scripts/test/fixtures/test-isolation.mjs";
 import { spawnSync } from "node:child_process";
 import {
   cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync,
