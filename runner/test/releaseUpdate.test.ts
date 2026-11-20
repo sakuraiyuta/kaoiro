@@ -352,8 +352,9 @@ describe("published runner release", () => {
             worker = argv.slice(argv.indexOf("--") + 1);
             expect(worker.slice(-2)).toEqual(["--from-release", tag]);
           }
-          const result = await promisify(execFile)(worker[0], worker.slice(1),
-            { env });
+          const [entry, ...workerArgs] = worker;
+          if (!entry) throw new Error("missing update worker");
+          const result = await promisify(execFile)(entry, workerArgs, { env });
           expect(result.stdout.trim()).toBe(B);
           expect(readlinkSync(join(root, "current"))).toBe("releases/" + B);
           expect(readlinkSync(join(root, "previous"))).toBe("releases/" + A);
