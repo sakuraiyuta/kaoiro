@@ -29,6 +29,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.DisconnectAttribution
+  alias KaoiroServer.ExternalEngine
   alias KaoiroServer.IngressOrder
   alias KaoiroServer.PeerSessionResetReplyReasons
   alias KaoiroServer.PersonaAssets
@@ -140,7 +141,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- Auth.authorize_wrapper(agent_id, socket.assigns[:wrapper_token]),
          {:ok, persona_id} <- fetch_persona_id(params),
          :ok <- authorize_persona(persona_id),
-         :ok <- reject_if_connected(agent_id) do
+         :ok <- reject_if_connected(agent_id),
+         {:ok, external_engine} <- SessionPointers.external_launch(agent_id) do
       _ = KaoiroServer.DeliveryPolicies.ensure(agent_id)
       {delivery, binding_token} = bind_delivery(agent_id, params)
 
@@ -242,6 +244,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
        )
        |> assign(:persona_id, persona_id)
        |> assign(:transition_id, transition_id)
+       |> assign(:external_engine, external_engine)
        |> assign(:permission_sync_engine, permission_sync_engine)
        |> assign(:wrapper_token, nil)}
     else
@@ -397,7 +400,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
           :ok
       end
 
-      case KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
+      case !socket.assigns[:external_engine] &&
+             KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
         mode when is_binary(mode) ->
           # ADR-0015 (issue #208): flat `version` frame key. The live relay
           # of this same event (`agents_channel.ex`'s `relay/5`) stamps it
@@ -492,7 +496,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp push_permission_sync(socket, agent_id) do
     case socket.assigns[:permission_sync_engine] do
       engine when is_binary(engine) ->
-        {control, next} = permission_sync_view(agent_id, engine)
+        {control, next} =
+          if socket.assigns[:external_engine],
+            do: {nil, nil},
+            else: permission_sync_view(agent_id, engine)
+
         push(socket, "permission_sync", %{version: "0", control: control, next: next})
 
       nil ->
@@ -653,6 +661,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
 
     with :ok <- validate(envelope, agent_id),
+         envelope = ExternalEngine.project_envelope(envelope, socket.assigns[:external_engine]),
          {:ok, inter_agent} <-
            preflight_inter_agent(
              envelope,
@@ -1092,6 +1101,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
     engine = socket.assigns[:permission_sync_engine]
 
     cond do
+      socket.assigns[:external_engine] ->
+        :ok
+
       # issue #359 M1: a permission_applied observation may omit turn_id ONLY for
       # an advisory engine with no per-turn identity (Antigravity, its negotiated
       # permission_sync engine). Reject the omission from any other engine's
@@ -2387,8 +2399,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
     engine =
       case envelope do
         %{"ext" => %{"engine" => e}}
-        when e in ["claude-code", "codex", "antigravity", "grok"] ->
-          e
+        when is_binary(e) ->
+          if ExternalEngine.bundled?(e) or ExternalEngine.external?(e), do: e
 
         _ ->
           nil
@@ -3066,10 +3078,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp maybe_put_reason(payload, _reason), do: payload
 
   defp maybe_put_resume_snapshot(payload, agent_id) do
-    case SessionPointers.get(agent_id) do
-      %{snapshot: snapshot} when is_map(snapshot) -> Map.put(payload, "resume_snapshot", snapshot)
-      _ -> payload
-    end
+    ExternalEngine.put_snapshot(payload, SessionPointers.get(agent_id))
   end
 
   # Decides whether an inter_agent_message may be accepted, WITHOUT

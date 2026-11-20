@@ -93,6 +93,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
+  alias KaoiroServer.ExternalEngine
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PermissionSettings
   alias KaoiroServer.PersonaAssets
@@ -944,7 +945,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # server free of engine-specific logic (mirrors ADR-0023's host-agnostic
   # relay stance for spawn/stop/restart).
   def handle_in("refresh_engine_catalog", payload, socket) do
-    relay_to_runner_guarded(socket, payload, "refresh_engine_catalog")
+    with :ok <- require_operator(socket, payload, "refresh_engine_catalog", "relaying"),
+         {:ok, host_id} <- fetch_host_id(payload),
+         :ok <- check_relay_size(Map.put(Map.delete(payload, "host_id"), "version", "0")),
+         :ok <- require_catalog_refresh(host_id, payload["engine"]) do
+      relay_to_runner(socket, payload, host_id, "refresh_engine_catalog")
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
   end
 
   # permission_mode switch for a running session (issue #58). Operator-only;
@@ -1059,6 +1067,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          :ok <- guard_against_reset_pending(role, payload),
          {:ok, envelope} <- fetch_agent_envelope(agent_id),
          :ok <- require_agent_connected(envelope),
+         :ok <- permit_bundled_permission(agent_id),
          :ok <- require_permission_switch_capability(envelope),
          :ok <- clamp_permission_patch(envelope, patch),
          {:ok, engine} <- fetch_agent_engine(envelope),
@@ -1329,10 +1338,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, persona} <- resolve_persona(host, payload),
          {:ok, display_name} <- resolve_spawn_display_name(persona, payload),
          {:ok, cwd} <- fetch_allowed_cwd(host, payload),
-         {:ok, engine} <- fetch_allowed_engine(host, payload),
+         {:ok, engine} <- fetch_allowed_engine(host, payload, :spawn),
          :ok <- validate_antigravity_approval(engine, payload),
          :ok <- validate_launch_policy(payload),
-         {:ok, agent_id} <- allocate_agent_id(host_id),
+         {:ok, agent_id} <- allocate_agent_id(host_id, engine),
          {:ok, launch_room} <- fetch_launch_room(payload),
          :ok <- require_known_room(launch_room),
          request_id <- generate_transition_id(),
@@ -1373,6 +1382,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # clears both.
       case place_in_room(agent_id, launch_room) do
         {:error, reason} ->
+          if ExternalEngine.external?(engine), do: AgentDirectory.delete(agent_id)
           _ = AgentActivity.resolve_transition(agent_id, request_id, false)
           {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
 
@@ -1391,15 +1401,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
               engine || "claude-code"
             )
 
-          case KaoiroServer.DeliveryPolicies.ensure(agent_id, seed) do
-            {:ok, _} ->
-              KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
-              SessionPointers.record(agent_id, nil, cwd, engine || "claude-code")
-
-              {:reply, {:ok, %{"agent_id" => agent_id, "room_id" => launch_room_id(launch_room)}},
-               socket}
-
+          with {:ok, _} <- KaoiroServer.DeliveryPolicies.ensure(agent_id, seed),
+               :ok <- publish_spawn(host_id, spawn_payload, cwd, engine) do
+            {:reply, {:ok, %{"agent_id" => agent_id, "room_id" => launch_room_id(launch_room)}},
+             socket}
+          else
             {:error, reason} ->
+              if ExternalEngine.external?(engine), do: rollback_external_spawn(agent_id)
               _ = AgentActivity.resolve_transition(agent_id, request_id, false)
               {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
           end
@@ -1425,8 +1433,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(socket, payload, "enumerate_sessions", "relaying"),
          {:ok, host_id} <- fetch_host_id(payload),
          {:ok, host} <- fetch_host(host_id),
-         {:ok, _engine} <- fetch_allowed_engine(host, payload),
-         {:ok, enriched} <- resolve_enumerate_cwd(payload) do
+         {:ok, scoped} <- scope_enumeration(host_id, payload),
+         {:ok, _engine} <- fetch_allowed_engine(host, scoped, :enumerate),
+         {:ok, enriched} <- resolve_enumerate_cwd(scoped) do
       relay_to_runner(socket, enriched, host_id, "enumerate_sessions")
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -1610,7 +1619,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, persona, display_name} <- agent_persona(agent_id),
          {:ok, session_id, cwd, engine} <- session_pointer(agent_id),
          {:ok, host} <- fetch_host(host_id_of(agent_id)),
-         {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}),
+         {:ok, engine} <-
+           fetch_allowed_engine(
+             host,
+             %{"engine" => engine},
+             if(session_id, do: :resume, else: :fresh)
+           ),
          request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
            build_restore_payload(
@@ -1655,8 +1669,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(role, payload, "resume_session"),
          :ok <- guard_against_reset_pending(role, payload),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
-         {:ok, session_id} <- fetch_resume_session_id(payload) do
-      if live_agent?(agent_id) do
+         {:ok, session_id} <- fetch_resume_session_id(payload),
+         live? = live_agent?(agent_id),
+         :ok <- require_live_resume(live?, agent_id) do
+      if live? do
         # Live-agent switch_session (ADR-0014 F1 追補, phase-15 D8): pipe the
         # agent's stored snapshot through so the swapped-in wrapper stamps
         # ext.resume_snapshot / ext.resume_drift on its first state_change.
@@ -2545,7 +2561,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
          relayed = wrapper_relay_payload(payload),
          :ok <- check_relay_size(relayed),
          {:ok, agent_id} <- fetch_agent_id(payload),
-         :ok <- check_keys(payload, key_checks) do
+         :ok <- check_keys(payload, key_checks),
+         :ok <- permit_relay(event, agent_id) do
       KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", event, relayed)
       {:reply, :ok, socket}
     else
@@ -2554,14 +2571,29 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # The shared operator + host_id + size guards for stop / restart /
-  # enumerate_sessions (spawn adds its own dedup, so it does not use this).
-  defp relay_to_runner_guarded(socket, payload, event) do
-    with :ok <- require_operator(socket, payload, event, "relaying"),
-         {:ok, host_id} <- fetch_host_id(payload) do
-      relay_to_runner(socket, payload, host_id, event)
-    else
-      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+  defp permit_relay("set_permission_mode", id), do: permit_bundled_permission(id)
+  defp permit_relay(_event, _id), do: :ok
+
+  defp permit_bundled_permission(id) do
+    case SessionPointers.external_launch(id) do
+      {:ok, nil} -> :ok
+      {:ok, _engine} -> {:error, :unsupported_permission_switch}
+      error -> error
+    end
+  end
+
+  defp require_catalog_refresh(host_id, engine) do
+    cond do
+      ExternalEngine.bundled?(engine) ->
+        :ok
+
+      ExternalEngine.external?(engine) ->
+        with {:ok, host} <- fetch_host(host_id),
+             {:ok, _} <- ExternalEngine.catalog_for(host, engine, ["refresh_engine_catalog"]),
+             do: :ok
+
+      true ->
+        {:error, :invalid_engine}
     end
   end
 
@@ -2911,14 +2943,59 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Allocate a unique instance agent_id under the host namespace (ADR-0024
   # D3: `<host>.<rand>`). The random suffix makes collisions negligible; still
   # reject rather than clobber a live agent on the off chance of a clash.
-  defp allocate_agent_id(host_id) do
+  defp allocate_agent_id(host_id, engine) do
     suffix = Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
     agent_id = host_id <> "." <> suffix
 
     cond do
-      not AgentId.valid?(agent_id) -> {:error, :invalid_host_id}
-      live_agent?(agent_id) -> {:error, :already_running}
-      true -> {:ok, agent_id}
+      not AgentId.valid?(agent_id) ->
+        {:error, :invalid_host_id}
+
+      live_agent?(agent_id) ->
+        {:error, :already_running}
+
+      ExternalEngine.external?(engine) ->
+        with {:ok, nil} <- SessionPointers.fetch(agent_id),
+             nil <- AgentDirectory.get(agent_id) do
+          {:ok, agent_id}
+        else
+          {:error, _} = error -> error
+          _ -> {:error, :already_running}
+        end
+
+      true ->
+        {:ok, agent_id}
+    end
+  end
+
+  defp publish_spawn(host_id, %{"agent_id" => id} = payload, cwd, engine) do
+    topic = "runner:#{host_id}"
+
+    if ExternalEngine.external?(engine) do
+      SessionPointers.record(id, nil, cwd, engine)
+
+      case SessionPointers.fetch(id) do
+        {:ok, %{engine: ^engine, cwd: ^cwd}} ->
+          KaoiroServerWeb.Endpoint.broadcast(topic, "spawn", payload)
+
+        _ ->
+          {:error, :persistence_failed}
+      end
+    else
+      KaoiroServerWeb.Endpoint.broadcast(topic, "spawn", payload)
+      SessionPointers.record(id, nil, cwd, engine || "claude-code")
+    end
+  end
+
+  defp rollback_external_spawn(id) do
+    AgentDirectory.delete(id)
+    Rooms.purge(id)
+    KaoiroServer.DeliveryPolicies.delete(id)
+
+    try do
+      SessionPointers.delete(id)
+    catch
+      :exit, _ -> {:error, :persistence_failed}
     end
   end
 
@@ -2998,13 +3075,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # because a fresh agent has no pointer yet — its snapshot would always
   # look up as nil.
   defp maybe_put_resume_snapshot(map, agent_id) do
-    case SessionPointers.get(agent_id) do
-      %{snapshot: snapshot} when is_map(snapshot) ->
-        Map.put(map, "resume_snapshot", snapshot)
-
-      _ ->
-        map
-    end
+    ExternalEngine.put_snapshot(map, SessionPointers.get(agent_id))
   end
 
   @sandbox_values ["read-only", "workspace-write", "danger-full-access"]
@@ -3254,21 +3325,81 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # F4a, ADR-0057 F1). Absent = nil (the runner defaults to claude-code),
   # so an old dashboard keeps working; an unknown or undeclared value is
   # rejected rather than silently launching the wrong engine.
-  @engine_values ["claude-code", "codex", "antigravity", "grok"]
-  defp fetch_allowed_engine(host, payload) do
-    case payload["engine"] do
-      nil ->
+  defp fetch_allowed_engine(host, payload, operation) do
+    id = payload["engine"]
+
+    cond do
+      is_nil(id) ->
         {:ok, nil}
 
-      engine when engine in @engine_values ->
-        if engine in Map.get(host, :capabilities, []) do
-          {:ok, engine}
-        else
-          {:error, :engine_not_supported}
-        end
+      ExternalEngine.bundled?(id) ->
+        if id in Map.get(host, :capabilities, []),
+          do: {:ok, id},
+          else: {:error, :engine_not_supported}
 
-      _ ->
+      ExternalEngine.external?(id) ->
+        operations =
+          case operation do
+            :enumerate ->
+              ["enumerate_sessions"]
+
+            :resume ->
+              ["spawn", "resume"]
+
+            :fresh ->
+              ["spawn"]
+
+            :spawn ->
+              if Map.has_key?(payload, "resume_session_id"),
+                do: ["spawn", "resume"],
+                else: ["spawn"]
+          end
+
+        with {:ok, row} <- ExternalEngine.catalog_for(host, id, operations),
+             :ok <- validate_external_picks(operation, row, payload),
+             do: {:ok, id}
+
+      true ->
         {:error, :invalid_engine}
+    end
+  end
+
+  defp validate_external_picks(:spawn, row, payload),
+    do: ExternalEngine.validate_spawn(row, payload, @session_id_pattern)
+
+  defp validate_external_picks(_operation, _row, _payload), do: :ok
+
+  defp scope_enumeration(host_id, %{"agent_id" => id} = payload) when is_binary(id) do
+    with {:ok, engine} <- SessionPointers.external_launch(id) do
+      cond do
+        is_nil(engine) ->
+          {:ok, payload}
+
+        host_id_of(id) == host_id and Map.get(payload, "engine", engine) == engine ->
+          {:ok, Map.put(payload, "engine", engine)}
+
+        true ->
+          {:error, :engine_not_supported}
+      end
+    end
+  end
+
+  defp scope_enumeration(_host_id, payload), do: {:ok, payload}
+
+  defp require_live_resume(false, _id), do: :ok
+
+  defp require_live_resume(true, id) do
+    case SessionPointers.external_launch(id) do
+      {:ok, nil} ->
+        :ok
+
+      {:ok, engine} ->
+        with {:ok, host} <- fetch_host(host_id_of(id)),
+             {:ok, _} <- ExternalEngine.catalog_for(host, engine, ["spawn", "resume"]),
+             do: :ok
+
+      error ->
+        error
     end
   end
 
@@ -3588,7 +3719,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with {:ok, persona, display_name} <- agent_persona(agent_id),
          {:ok, _sid, cwd, engine} <- session_pointer(agent_id),
          {:ok, host} <- fetch_host(host_id_of(agent_id)),
-         {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}),
+         {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}, :resume),
          request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
            build_restore_payload(

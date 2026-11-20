@@ -122,6 +122,19 @@ defmodule KaoiroServer.SessionPointers do
     GenServer.call(server, {:get, agent_id})
   end
 
+  def fetch(agent_id) do
+    {:ok, get(agent_id)}
+  catch
+    :exit, _ -> {:error, :persistence_failed}
+  end
+
+  def external_launch(agent_id) do
+    with {:ok, pointer} <- fetch(agent_id) do
+      engine = pointer && pointer.engine
+      {:ok, if(KaoiroServer.ExternalEngine.external?(engine), do: engine)}
+    end
+  end
+
   @doc "agent_id => %{session_id, cwd, engine, snapshot, effort_revision} for every known pointer."
   def all(server \\ __MODULE__) do
     GenServer.call(server, :all)
@@ -273,7 +286,18 @@ defmodule KaoiroServer.SessionPointers do
 
   def handle_cast({:record_session, agent_id, session_id, cwd, engine}, state) do
     launch_cwd = get_in(state.pointers, [agent_id, :cwd]) || cwd
-    persist_pointer(state, agent_id, session_id, launch_cwd, engine, nil)
+    launch_engine = get_in(state.pointers, [agent_id, :engine])
+
+    cond do
+      KaoiroServer.ExternalEngine.external?(launch_engine) ->
+        persist_pointer(state, agent_id, session_id, launch_cwd, launch_engine, nil)
+
+      KaoiroServer.ExternalEngine.external?(engine) ->
+        {:noreply, state}
+
+      true ->
+        persist_pointer(state, agent_id, session_id, launch_cwd, engine, nil)
+    end
   end
 
   def handle_cast({:record_snapshot, agent_id, snapshot}, state) do

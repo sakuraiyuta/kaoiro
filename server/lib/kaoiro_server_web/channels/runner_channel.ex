@@ -28,6 +28,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.AgentStates
   alias KaoiroServer.BuildIdentity
+  alias KaoiroServer.ExternalEngine
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.RunnerConnections
@@ -329,7 +330,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
     with {:ok, policy} <- parse_policy(payload),
          {:ok, capabilities} <- parse_capabilities(payload),
          {:ok, build_info} <- parse_build_info(payload),
-         {:ok, defaults} <- parse_in_flight_defaults(payload) do
+         {:ok, defaults} <- parse_in_flight_defaults(payload, capabilities) do
       attrs =
         %{policy: policy, cwd_allowlist: cwd_allowlist, in_flight_defaults: defaults}
         |> Map.merge(capabilities)
@@ -342,12 +343,14 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
   defp parse_register(_payload), do: {:error, :invalid_register}
 
-  defp parse_in_flight_defaults(payload) do
+  defp parse_in_flight_defaults(payload, capabilities) do
     value = Map.get(payload, "in_flight_defaults", %{})
 
     if is_map(value) and
          Enum.all?(value, fn {engine, enabled} ->
-           engine in ~w(claude-code codex antigravity grok) and is_boolean(enabled)
+           is_boolean(enabled) and
+             (ExternalEngine.bundled?(engine) or
+                match?({:ok, _}, ExternalEngine.catalog_for(capabilities, engine, ["spawn"])))
          end), do: {:ok, value}, else: {:error, :invalid_register}
   end
 
@@ -493,7 +496,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
       engines when is_list(engines) ->
         valid? = Enum.all?(engines, &valid_engine_catalog?/1)
 
-        if valid? do
+        if valid? and ExternalEngine.valid_declarations?(engines) do
           {:ok, %{engines: engines}}
         else
           {:error, :invalid_engines}

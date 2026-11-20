@@ -2310,6 +2310,77 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         wait_until(fn -> KaoiroServer.PermissionSettings.get(agent_id) != nil end)
     end
 
+    test "external launches project session metadata and keep permissions server-owned" do
+      id = "test.external-session"
+      engine = "sample-engine"
+      SessionPointers.record(id, nil, "/launch", engine)
+      assert %{engine: ^engine} = SessionPointers.get(id)
+      seed_permission_settings(id, "codex")
+      baseline = KaoiroServer.PermissionSettings.get(id)
+      KaoiroServer.PermissionModes.record(id, "plan")
+      assert KaoiroServer.PermissionModes.get(id) == "plan"
+
+      {reply, socket} =
+        join_wrapper_with_reply(id, "default", %{"permission_sync" => %{"engine" => "codex"}})
+
+      assert reply["permission_sync"]
+      assert_push "permission_sync", %{version: "0", control: nil, next: nil}
+      refute_push "set_permission_mode", _
+
+      selected = %{
+        "model" => "small",
+        "model_source" => "launch",
+        "effort" => "low",
+        "effort_source" => "launch"
+      }
+
+      axes = %{
+        "permission_mode" => "plan",
+        "sandbox" => "read-only",
+        "network_access" => false,
+        "approval" => "on-request"
+      }
+
+      ext = %{
+        "engine" => engine,
+        "cwd" => "/session",
+        "effective" => Map.merge(selected, axes),
+        "session_capabilities" => %{"supports_permission_switch" => true},
+        "permission_control" => permission_control(%{"status" => "applying"})
+      }
+
+      message = envelope(id, "idle") |> Map.put("session_id", "session-1") |> Map.put("ext", ext)
+      assert_reply push(socket, "envelope", message), :ok
+      projected = AgentStates.snapshot()[id]["ext"]
+      assert projected["engine"] == engine
+      assert projected["effective"] == selected
+      refute projected["session_capabilities"]["supports_permission_switch"]
+      refute Map.has_key?(projected, "permission_control")
+
+      assert %{engine: ^engine, cwd: "/launch", session_id: "session-1", snapshot: ^selected} =
+               SessionPointers.get(id)
+
+      assert KaoiroServer.PermissionSettings.get(id) == baseline
+
+      details = %{
+        "revision" => 0,
+        "requested" => %{"sandbox" => "read-only", "network_access" => false},
+        "reason" => "policy_mismatch"
+      }
+
+      assert_reply push(socket, "session_lifecycle", %{
+                     "kind" => "permission_failed",
+                     "at" => "2026-09-06T00:00:00Z",
+                     "details" => details
+                   }),
+                   :ok
+
+      refute Enum.any?(
+               SessionLifecycleEvents.list_for_agent(id),
+               &(&1.kind == "permission_failed")
+             )
+    end
+
     test "engine を宣言した join には reply に permission_sync: true が付く" do
       agent_id = "test.permsync-join-1"
 
