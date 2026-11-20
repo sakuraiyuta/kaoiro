@@ -2370,25 +2370,39 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
 
       ext = %{
-        "engine" => engine,
         "cwd" => "/session",
         "effective" => Map.merge(selected, axes),
         "session_capabilities" => %{"supports_permission_switch" => true},
         "permission_control" => permission_control(%{"status" => "applying"})
       }
 
-      message = envelope(id, "idle") |> Map.put("session_id", "session-1") |> Map.put("ext", ext)
-      assert_reply push(socket, "envelope", message), :ok
-      projected = AgentStates.snapshot()[id]["ext"]
-      assert projected["engine"] == engine
-      assert projected["effective"] == selected
-      refute projected["session_capabilities"]["supports_permission_switch"]
-      refute Map.has_key?(projected, "permission_control")
+      @endpoint.subscribe("agents:lobby")
 
-      assert %{engine: ^engine, cwd: "/launch", session_id: "session-1", snapshot: ^selected} =
-               SessionPointers.get(id)
+      for {reported, sid} <- [{engine, "session-1"}, {"codex", "session-2"}] do
+        message =
+          envelope(id, "idle")
+          |> Map.put("session_id", sid)
+          |> Map.put("ext", Map.put(ext, "engine", reported))
 
-      assert KaoiroServer.PermissionSettings.get(id) == baseline
+        assert_reply push(socket, "envelope", message), :ok
+
+        assert_broadcast "envelope", %{
+          "agent_id" => ^id,
+          "session_id" => ^sid,
+          "ext" => projected
+        }
+
+        assert projected["engine"] == engine
+        assert projected["effective"] == selected
+        assert projected["session_capabilities"]["supports_permission_switch"] == false
+        refute Map.has_key?(projected, "permission_control")
+        assert %{"session_id" => ^sid, "ext" => ^projected} = AgentStates.snapshot()[id]
+
+        assert %{engine: ^engine, cwd: "/launch", session_id: ^sid, snapshot: ^selected} =
+                 SessionPointers.get(id)
+
+        assert KaoiroServer.PermissionSettings.get(id) == baseline
+      end
 
       details = %{
         "revision" => 0,
