@@ -146,8 +146,11 @@ status and output file need exact equality
 ([evidence](../../evidence/claude/background-notification-admission-2026-10-14.md)).
 A Bash or Workflow `<summary>` may instead equal the
 [shortened form](#shortened-completion-summaries) of the SDK text.
-If a different notification prompt is rejected while a wrapper turn is live,
-an originless result cannot prove which prompt ended. The host stops admission
+While a wrapper turn is live, a prompt that is not uniquely recognized as the
+wrapper's input makes that interval ambiguous: it matches no pending wrapper
+input, also matches a pending notification, comes from the `system` source, or
+belongs to a session other than the interval's. An originless result then
+cannot prove which prompt ended. The host stops admission
 and revokes inter-agent send authority while keeping the wrapper owner until
 stream teardown. The wrapper reports `state=error` and stderr contains
 `notification result ownership ambiguous` and `notification result fail-stop`.
@@ -225,8 +228,9 @@ An occupancy failure (ambiguous interval, wrong session, missing or
 regressing `result_index`, session rebind frame, stream EOF) stops admission
 with no owning token and enters `error`; recovery is the procedure below. A
 result without the task-notification origin at an admitted notification turn
-stops admission the same way, but with that turn's token: the host does not
-abort the SDK, so a running child subagent finishes its work. A
+stops admission the same way, but with that turn's token. Both fail-stops
+abort the SDK, which stops a running child subagent or background command
+(see [recovery](#recovering-a-fail-stopped-claude-wrapper)). A
 foreign occupancy has no time bound: the hold lasts as long as the root
 computation.
 
@@ -358,13 +362,19 @@ process.) Under a runner, that process usually starts without operator action.
 
 **Automatic path.** `AgentHost#failStopAdmission`
 (`wrapper/claude-code/src/host.ts`) closes the host, cancels queued input that
-has not reached the SDK, and wakes the input iterator. `AgentHost#input()`
-then returns because the host is closed and its queue is empty, so the SDK
-closes the CLI's input. The CLI finishes the turn it is running, if any, and
-exits. The stream end runs `#finishHost("stream_eof")`, `host.run()` returns,
-and `runClaudeCli` (`wrapper/claude-code/src/cli.ts`) reports the disconnect
-reason `stop` and exits with code 0. The exit waits for the running turn,
-which can take minutes. The runner's `Supervisor#onExit`
+has not reached the SDK, and wakes the input iterator. For every fail-stop
+except the turn watchdog's, it then aborts the SDK the same way `host.close()`
+does. Closing the CLI's input alone would not end the CLI: it stays until its
+background commands end, and the SDK keeps the input open while a background
+subagent runs. The abort closes the input, the SDK sends the CLI `SIGTERM`
+2 s later, and the wrapper tries `SIGKILL` 4 s after the abort if the CLI is
+still alive. It stops the running turn, background commands and subagents;
+their partial side effects remain, and after a `SIGKILL` background
+descendants can survive. The stream end runs `#finishHost("stream_eof")`,
+`host.run()` returns, and `runClaudeCli` (`wrapper/claude-code/src/cli.ts`)
+reports the disconnect reason `stop` and exits with code 0. A CLI crash between
+the fail-stop and the CLI's exit ends the same way, without the CLI's stderr
+tail. The runner's `Supervisor#onExit`
 (`runner/src/supervisor.ts`) treats every exit it did not request (no stop,
 restart or reset in progress) as a crash, whatever the exit code, and
 `#relaunch` starts the wrapper again: up to `MAX_RESTARTS` (5) relaunches per
@@ -373,6 +383,11 @@ restart or reset in progress) as a crash, whatever the exit code, and
 or an exit more than 60 s into the window, starts a new window. Recoverable notification/result ownership and root-hook failures may use a
 new host with the last candidate/live checkpoint. Watchdog and contradictory
 session/native binding block automatic resume; the failed host never reopens.
+None of these steps has a guaranteed duration. In the
+[measurements](../../evidence/claude/issue-1188/fail-stop-abort-2026-11-20.md#runner-relaunch),
+the wrapper exited about 2.3 s after the fail-stop, the relaunched wrapper
+connected 2.86–2.91 s after it, and an input sent 1.5 s after that finished
+4.81–4.97 s after the fail-stop.
 
 **Session after relaunch.** The runner selects the latest launch-owned
 candidate/live checkpoint rather than its original spawn argument. A fresh id
@@ -381,12 +396,17 @@ before fresh; classified pre-init refusal may fall back fresh, whereas confirmed
 live or explicit resume refuses silent replacement. See
 [wrapper-exit recovery](../protocol/runner-control.md#wrapper-exit-session-recovery)
 for the structural Claude error predicate, restart refusal, cap and limits.
+When the relaunch resumes the session the aborted CLI ran, the first model
+request of the next input has carried a `<status>stopped</status>`
+task-notification for each Bash command and subagent the abort ended; this was
+measured for those two and is not guaranteed for every interruption. A fresh
+session does not receive it.
 
 **When the operator must act.**
 
 | Case | Why | Action |
 | --- | --- | --- |
-| Turn watchdog fail-stop | The watchdog stops the host when a turn stays inactive past its limit and does not end within the interrupt grace, or when it cannot interrupt the turn or attribute it. Closing the CLI's input is not expected to end such a turn, so the wrapper may never exit. This is inferred from the code and has not been measured. | Use the procedure below. |
+| Turn watchdog fail-stop | The watchdog stops the host when a turn stays inactive past its limit and does not end within the interrupt grace, or when it cannot interrupt the turn or attribute it. This fail-stop does not abort the SDK. Closing the CLI's input is not expected to end such a turn, so the wrapper may never exit (inferred from the code, not measured), and its blocked recovery checkpoint stops the runner from relaunching it even after it exits. | Use the procedure below. |
 | Pushed root ownership unavailable | The coordinator could not adopt a pushed root (`InterAgentTurnCoordinator#adoptPushedRoot` found no lease, or the root token already had a batch). `runClaudeCli` freezes only inter-agent admission and sends; the host is not closed, reports no `error`, keeps accepting operator input, and the wrapper does not exit. | Use the procedure below. |
 | Restart cap reached | An unrequested exit after 5 relaunches in the same window logs `exceeded restart cap; leaving down`, and the runner stops relaunching. | Remove the cause, then **復帰**. |
 | Context lost after a fresh relaunch | See the session paragraph above. | Switch the agent back to its earlier session. |
@@ -485,7 +505,9 @@ Its classifier paths and SDK setting boundary are in
 - Process termination on `SIGTERM` (issue #391): the CLI's `SIGTERM` handler
   calls `close()` directly, never `interrupt()`. `close()` aborts an
   `AbortController` wired into `Options.abortController`, which drives the
-  SDK's own subprocess escalation. The host also holds the direct CLI child
+  SDK's own subprocess escalation. Every fail-stop except the turn watchdog's
+  aborts the same controller
+  ([recovery](#recovering-a-fail-stopped-claude-wrapper)). The host also holds the direct CLI child
   until it exits or receives `SIGKILL` four seconds after host abort, before
   runner reset's five-second boundary. This does not contain a tool's
   `SIGTERM`-ignoring descendants. See
