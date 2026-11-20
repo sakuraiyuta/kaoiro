@@ -1,4 +1,4 @@
-import type { WorkSettingsSnapshot, WorkCapacityPatch } from "@kaoiro/protocol";
+import type { EngineCatalogEntry, WorkSettingsSnapshot, WorkCapacityPatch } from "@kaoiro/protocol";
 import { parseWorkSettings } from "./workSettings";
 import { hasValidBuildBranch, isLandingBuildVersion, isValidBuildVersion } from "./buildIdentityDomain";
 import { agentDisplayName } from "./personaName";
@@ -1329,11 +1329,17 @@ export interface ModelOption {
 /** Reads ext.models off an envelope into well-typed ModelOption entries
  *  (#54). Returns [] when the key is absent or malformed; viewers always get
  *  [] since ext is stripped for non-operators (#46). */
-export function modelsFrom(envelope: Envelope): ModelOption[] {
+export function modelsFrom(envelope: Envelope, external = false): ModelOption[] {
   const raw = envelope.ext?.models;
   if (!Array.isArray(raw)) return [];
   const out: ModelOption[] = [];
+  const seen = new Set<string>();
+  const duplicate = new Set<string>();
   for (const entry of raw) {
+    if (external && typeof entry?.value === "string") {
+      if (seen.has(entry.value)) duplicate.add(entry.value);
+      seen.add(entry.value);
+    }
     if (
       typeof entry === "object" &&
       entry !== null &&
@@ -1349,7 +1355,9 @@ export function modelsFrom(envelope: Envelope): ModelOption[] {
           : {}),
         ...(Array.isArray(m.effort_levels)
           ? {
-              effort_levels: m.effort_levels.filter(
+              effort_levels: external ? (m.effort_levels.every(
+                l => typeof l === "string" && l !== "",
+              ) ? [...new Set(m.effort_levels)] : []) : m.effort_levels.filter(
                 (l): l is string => typeof l === "string",
               ),
             }
@@ -1363,7 +1371,7 @@ export function modelsFrom(envelope: Envelope): ModelOption[] {
       });
     }
   }
-  return out;
+  return external ? out.filter(m => m.value !== "" && !duplicate.has(m.value)) : out;
 }
 
 /** payload of a type="log" envelope (protocol.md / ADR-0012).
@@ -2615,6 +2623,7 @@ export async function fetchServerHealth(base = ""): Promise<ServerHealth | null>
  *  payload. models reuses the ext.models entry shape (#54) so the launch
  *  cascade and the running-agent switcher share one renderer. */
 export interface EngineCatalog {
+  operations?: EngineCatalogEntry["operations"];
   launch_delivery_policy?: LaunchDeliveryPolicy | undefined;
   id: string;
   models: ModelOption[];
@@ -2627,6 +2636,28 @@ export interface EngineCatalog {
     sandbox: boolean;
     approval: boolean;
   };
+}
+
+export function bundledEngine(id: string): boolean {
+  return ["claude-code", "codex", "antigravity", "grok"].includes(id);
+}
+
+export function externalCatalog(host: HostInfo | undefined | null, id: string) {
+  if (bundledEngine(id) || id === "claude" || !/^[a-z][a-z0-9-]{0,63}$/.test(id) ||
+      !host?.capabilities?.includes(id)) return;
+  const rows = host.engines?.filter(row => row.id === id);
+  if (rows?.length !== 1) return;
+  const row = rows[0]!;
+  const ops = row.operations;
+  if (ops?.version !== 1 || !["spawn", "resume", "enumerate_sessions",
+    "refresh_engine_catalog"].every(key => !Object.hasOwn(ops, key) ||
+      typeof ops[key as keyof typeof ops] === "boolean")) return;
+  if (!row.models.every(m => m && typeof m.value === "string" && m.value !== "" &&
+      typeof m.display_name === "string" && (m.effort_levels === undefined ||
+        (Array.isArray(m.effort_levels) && m.effort_levels.length > 0 &&
+          m.effort_levels.every(e => typeof e === "string" && e !== ""))))) return;
+  if (new Set(row.models.map(m => m.value)).size !== row.models.length) return;
+  return row;
 }
 
 /** A live host the operator can launch agents on (ADR-0023 / #22). Derived
@@ -3434,6 +3465,14 @@ export function parseHosts(value: unknown): HostInfo[] {
           e.build_channel!,
           e.build_branch,
         );
+      const seen = new Set<string>();
+      const duplicate = new Set<string>();
+      const rows = Array.isArray(e.engines) ? e.engines : [];
+      for (const row of rows) {
+        if (typeof row?.id !== "string") continue;
+        if (seen.has(row.id)) duplicate.add(row.id);
+        seen.add(row.id);
+      }
       hosts.push({
         host_id: hostId,
         personas: e.personas,
@@ -3442,6 +3481,7 @@ export function parseHosts(value: unknown): HostInfo[] {
           ? { capabilities: e.capabilities }
           : {}),
         ...(Array.isArray(e.engines) ? { engines: e.engines.filter(engine => policyObject(engine) && typeof engine.id === "string" && Array.isArray(engine.models)).map(engine => ({ ...engine,
+          ...(duplicate.has(engine.id) ? { operations: undefined } : {}),
           launch_delivery_policy: parseLaunchDeliveryPolicy(engine.launch_delivery_policy) })) } : {}),
         ...(Object.hasOwn(e, "in_flight_defaults") ? { in_flight_defaults: e.in_flight_defaults } : {}),
         // issue #218: absent on a pre-#218 runner — only copy over when
@@ -5225,6 +5265,7 @@ export function connectKaoiro(
         host_id: p.host_id,
         cwd: p.cwd,
         sessions: parseSessions(p.sessions),
+        ...(typeof p.engine === "string" ? { engine: p.engine } : {}),
       });
     }
   });

@@ -1,6 +1,9 @@
 import type { Messages } from "../ja";
 
 export const launchDialog = {
+  noOperations: "No operations available",
+  selectAgain: "Select again",
+  retryEnumeration: "Reconnect to retry if the session list does not arrive.",
   runnerNoRevision:
     "This host does not report build revision information (old runner).",
   runnerRevisionUnknown:

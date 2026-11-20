@@ -1,4 +1,7 @@
 export const launchDialog = {
+  noOperations: "利用できる操作なし",
+  selectAgain: "選び直してください",
+  retryEnumeration: "一覧が届かない場合は、再接続して照会してください。",
   runnerNoRevision:
     "この host は build revision 情報を報告していません(古い runner)。",
   runnerRevisionUnknown:

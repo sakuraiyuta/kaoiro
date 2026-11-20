@@ -197,31 +197,35 @@ describe("LaunchDialog antigravity sandbox/approval/network_access (phase-34 A12
     );
   });
 
-  it("未知 engine + launch_permission_axes 宣言あり → 値駆動で sandbox/承認 select を出す (round 2 SF-R2-4)", async () => {
-    // SANDBOX_AXIS_ENGINES には無い engine 名でも、register の
-    // launch_permission_axes 宣言があれば表示できることを確認する —
-    // 逆に言えば engine 名 (antigravity/codex) 固定のロジックではない。
-    const host: HostInfo = {
-      host_id: "host-a",
-      personas: [{ id: "ao", name: "あお", sprite_set: "ao" }],
-      cwd_allowlist: ["/workspace"],
-      capabilities: ["claude-code", "future-engine"],
-      engines: [
-        { id: "claude-code", models: [] },
-        {
-          id: "future-engine",
-          models: [],
-          launch_permission_axes: { sandbox: true, approval: true },
-        },
-      ],
-    };
-    const { target } = await render([host]);
-    await selectValue(labelledSelect(target, "エンジン"), "future-engine");
-
-    expect(findLabel(target, "sandbox")).toBeDefined();
-    expect(findLabel(target, "承認")).toBeDefined();
-    expect([...labelledSelect(target, "承認").options].map((option) => option.value))
-      .not.toContain("local");
+  it.each([false, true])("external permission axes never enable launch controls (spawn: %s)", async (spawn) => {
+    const host = multiEngineHost();
+    host.capabilities = ["claude-code", "future-engine"];
+    host.engines = [{ id: "claude-code", models: [] }, {
+      id: "future-engine",
+      models: [],
+      launch_permission_axes: { sandbox: true, approval: true },
+      ...(spawn ? { operations: { version: 1, spawn: true } as const } : {}),
+    }];
+    const { target, conn } = await render([host]);
+    const engine = labelledSelect(target, "エンジン");
+    await selectValue(engine, "future-engine");
+    expect(engine.value).toBe("future-engine");
+    for (const label of ["sandbox", "承認", "ネットワークアクセス", "permission mode"]) {
+      expect(findLabel(target, label)).toBeUndefined();
+    }
+    expect(target.textContent?.includes("利用できる操作なし")).toBe(!spawn);
+    expect(!!target.querySelector("button[type=submit]")).toBe(spawn);
+    await submit(target);
+    expect(conn.spawn).toHaveBeenCalledTimes(spawn ? 1 : 0);
+    if (spawn) {
+      const payload = vi.mocked(conn.spawn).mock.calls[0]![0];
+      expect(payload).toMatchObject({
+        host_id: "host-a", engine: "future-engine", persona: "ao", cwd: "/workspace",
+      });
+      for (const key of ["permission_mode", "sandbox", "approval", "network_access"]) {
+        expect(Object.hasOwn(payload, key)).toBe(false);
+      }
+    }
   });
 
   it("宣言された engine で approval=false → 承認 select を出さない (値が false を上書きする)", async () => {
