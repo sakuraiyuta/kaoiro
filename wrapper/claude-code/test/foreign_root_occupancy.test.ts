@@ -913,7 +913,7 @@ describe("origin mismatch at an admitted notification turn (issue #426 step 0b)"
     { name: "no origin", origin: undefined },
     { name: "a peer origin", origin: { kind: "peer", senderTaskId: "child-a", handback: true } },
     { name: "a human origin", origin: { kind: "human" } },
-  ])("stops admission with the owner's token and aborts the SDK without closing, for $name", async ({ origin }) => {
+  ])("stops admission with the owner's token and aborts the SDK without calling close(), for $name", async ({ origin }) => {
     const rig = makeRig(async function* (c) {
       yield* firstTurn(c, { background: true });
       yield taskNotification();

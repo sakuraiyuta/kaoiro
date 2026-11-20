@@ -20,16 +20,19 @@ import { AgentHost } from "../src/host.js";
 const EXIT_CEILING_MS = 6_000;
 const FAIL_STOP = "notification result ownership ambiguous";
 
-const alive = (pid: number | undefined): boolean => {
-  if (pid === undefined) return false;
+/** The process's start time (field 22 of /proc/<pid>/stat), or undefined when
+ * it is gone or a zombie. Comparing it guards against a reused PID. */
+const procStart = (pid: number): string | undefined => {
   try {
     const stat = readFileSync(`/proc/${requirePositiveSafePid(pid)}/stat`, "utf8");
-    return stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
-  } catch { return false; }
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[0] === "Z" ? undefined : fields[19];
+  } catch { return undefined; }
 };
 const readPid = (path: string): number | undefined => {
   try { return requirePositiveSafePid(Number(readFileSync(path, "utf8").trim())); } catch { return undefined; }
 };
+const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const until = async (ready: () => boolean, ms: number): Promise<boolean> => {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) { if (ready()) return true; await delay(25); }
@@ -59,7 +62,7 @@ async function fixture(background: boolean) {
       : { type: "text", text: "" };
     const delta = bash
       ? { type: "input_json_delta", partial_json: JSON.stringify({ run_in_background: true, description: "bg sleep",
-        command: `sleep 60 & echo $! > ${marks}/sleep.pid; echo $$ > ${marks}/shell.pid; wait` }) }
+        command: `sleep 60 & echo $! > ${shellQuote(join(marks, "sleep.pid"))}; echo $$ > ${shellQuote(join(marks, "shell.pid"))}; wait` }) }
       : { type: "text_delta", text: "TURN-DONE" };
     const emit = (event: string, data: unknown) => response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -115,29 +118,48 @@ async function fixture(background: boolean) {
     const running = host.run(prompt).then(() => { outcome = "resolved"; }, () => { outcome = "rejected"; });
     return { host, states, warnings, running, turnEnds: () => turnEnds, outcome: () => outcome };
   };
+  // The background shell and its sleep, recorded with their start times on
+  // the first read so that later checks and the cleanup never touch a reused PID.
+  const recorded = new Map<string, { pid: number; start: string }>();
+  const backgroundStarted = () => ["shell", "sleep"].every(name => {
+    if (recorded.has(name)) return true;
+    const pid = readPid(join(marks, `${name}.pid`));
+    const start = pid === undefined ? undefined : procStart(pid);
+    if (pid === undefined || start === undefined) return false;
+    recorded.set(name, { pid, start });
+    return true;
+  });
+  const backgroundRunning = () => [...recorded.values()].some(({ pid, start }) => procStart(pid) === start);
   const cleanup = async () => {
-    for (const pid of [...clis.map(c => c.child.pid), readPid(join(marks, "shell.pid")), readPid(join(marks, "sleep.pid"))]) {
-      if (alive(pid)) process.kill(requirePositiveSafePid(pid), "SIGKILL");
+    try {
+      for (const { child } of clis) {
+        if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }
+      for (const { pid, start } of recorded.values()) {
+        if (procStart(pid) !== start) continue;
+        try { process.kill(pid, "SIGKILL"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      }
+    } finally {
+      provider.closeAllConnections(); await new Promise<void>(resolve => provider.close(() => resolve()));
+      rmSync(root, { recursive: true, force: true });
     }
-    provider.closeAllConnections(); await new Promise<void>(resolve => provider.close(() => resolve()));
-    rmSync(root, { recursive: true, force: true });
   };
-  const backgroundPids = () => [readPid(join(marks, "shell.pid")), readPid(join(marks, "sleep.pid"))];
-  return { start, clis, sessions, requests, backgroundPids, cleanup };
+  return { start, clis, sessions, requests, backgroundStarted, backgroundRunning, cleanup };
 }
 
 /** Runs one turn (optionally leaving a background Bash), then fails admission
  * with "/clear" and waits for the CLI to exit. */
 async function failStop(f: Awaited<ReturnType<typeof fixture>>, background: boolean) {
   const run = f.start("START-1188");
-  expect(await until(() => run.turnEnds() >= 1 && (!background || f.backgroundPids().every(alive)), 30_000)).toBe(true);
+  expect(await until(() => run.turnEnds() >= 1 && (!background || f.backgroundStarted()), 30_000)).toBe(true);
   void run.host.send("/clear").catch(() => {});
   expect(await until(() => run.states.includes("error"), 15_000)).toBe(true);
   const failedAt = Date.now();
   expect(run.warnings.some(line => line.includes(FAIL_STOP))).toBe(true);
   const cli = f.clis[0]!;
   const exited = await until(() => cli.exit !== undefined && run.outcome() !== undefined
-    && (!background || !f.backgroundPids().some(alive)), EXIT_CEILING_MS);
+    && (!background || !f.backgroundRunning()), EXIT_CEILING_MS);
   return { run, cli, exited, elapsedMs: Date.now() - failedAt };
 }
 

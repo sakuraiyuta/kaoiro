@@ -146,11 +146,16 @@ status and output file need exact equality
 ([evidence](../../evidence/claude/background-notification-admission-2026-10-14.md)).
 A Bash or Workflow `<summary>` may instead equal the
 [shortened form](#shortened-completion-summaries) of the SDK text.
-While a wrapper turn is live, a prompt that is not uniquely recognized as the
-wrapper's input makes that interval ambiguous: it matches no pending wrapper
-input, also matches a pending notification, comes from the `system` source, or
-belongs to a session other than the interval's. An originless result then
-cannot prove which prompt ended. The host stops admission
+While a turn is active (a wrapper turn or an admitted notification turn), a
+hook for a new prompt ID makes that interval ambiguous unless it is uniquely
+recognized as the wrapper's input. This applies after the earlier branches: a
+prompt ID already attributed to a turn, and any hook during a foreign
+occupancy, are handled there instead. A uniquely recognized input matches the
+active wrapper input (a notification turn has none), does not also match a
+pending notification, does not come from the `system` source, and belongs to
+the interval's session. Once the interval is ambiguous, its next result stops
+admission whatever its origin; a `task-notification` origin does not resolve
+the ambiguity. The host stops admission
 and revokes inter-agent send authority while keeping the wrapper owner until
 stream teardown. The wrapper reports `state=error` and stderr contains
 `notification result ownership ambiguous` and `notification result fail-stop`.
@@ -229,7 +234,7 @@ regressing `result_index`, session rebind frame, stream EOF) stops admission
 with no owning token and enters `error`; recovery is the procedure below. A
 result without the task-notification origin at an admitted notification turn
 stops admission the same way, but with that turn's token. Both fail-stops
-abort the SDK, which stops a running child subagent or background command
+abort the SDK, which can stop a running child subagent or background command
 (see [recovery](#recovering-a-fail-stopped-claude-wrapper)). A
 foreign occupancy has no time bound: the hold lasts as long as the root
 computation.
@@ -367,16 +372,22 @@ except the turn watchdog's, it then aborts the SDK the same way `host.close()`
 does. Closing the CLI's input alone would not end the CLI: it stays until its
 background commands end, and the SDK keeps the input open while a background
 subagent runs. The abort closes the input, the SDK sends the CLI `SIGTERM`
-2 s later, and the wrapper tries `SIGKILL` 4 s after the abort if the CLI is
-still alive. It stops the running turn, background commands and subagents;
-their partial side effects remain, and after a `SIGKILL` background
-descendants can survive. The stream end runs `#finishHost("stream_eof")`,
-`host.run()` returns, and `runClaudeCli` (`wrapper/claude-code/src/cli.ts`)
-reports the disconnect reason `stop` and exits with code 0. A CLI crash between
-the fail-stop and the CLI's exit ends the same way, without the CLI's stderr
-tail. The runner's `Supervisor#onExit`
+2 s later, and the wrapper attempts `SIGKILL` 4 s after the abort if the CLI
+is still alive, without waiting for it to exit. The running turn, background
+commands and subagents can be interrupted; their partial side effects remain,
+and after a `SIGKILL` background descendants can survive. When the stream
+ends, `#finishHost("stream_eof")` runs and `host.run()` returns, because the
+SDK's `AbortError` after the abort is absorbed; a CLI crash in this window
+ends the same way, without the CLI's stderr tail. If the remaining cleanup
+completes, `runClaudeCli` (`wrapper/claude-code/src/cli.ts`) reports the
+disconnect reason `stop` and exits with code 0. A session-binding failure
+takes the same fail-stop and abort but also stops recovery: the host blocks
+the checkpoint, and `runClaudeCli` throws the recovery failure instead of
+reporting `stop`. After the wrapper exits, the runner's `Supervisor#onExit`
 (`runner/src/supervisor.ts`) treats every exit it did not request (no stop,
-restart or reset in progress) as a crash, whatever the exit code, and
+restart or reset in progress) as a crash, whatever the exit code. It refuses
+recovery for exit code 79, an unreadable, invalid or blocked checkpoint, or a
+resume session another wrapper owns; otherwise
 `#relaunch` starts the wrapper again: up to `MAX_RESTARTS` (5) relaunches per
 `RESTART_WINDOW_MS` (60 s) window. Any launch other than an automatic relaunch
 (spawn or restore, restart, session switch, session reset, or reset rollback),
@@ -386,8 +397,8 @@ session/native binding block automatic resume; the failed host never reopens.
 None of these steps has a guaranteed duration. In the
 [measurements](../../evidence/claude/issue-1188/fail-stop-abort-2026-11-20.md#runner-relaunch),
 the wrapper exited about 2.3 s after the fail-stop, the relaunched wrapper
-connected 2.86–2.91 s after it, and an input sent 1.5 s after that finished
-4.81–4.97 s after the fail-stop.
+connected 2.86–2.91 s after it, and an input sent 1.5 s after the new
+wrapper's first state finished 4.81–4.97 s after the fail-stop.
 
 **Session after relaunch.** The runner selects the latest launch-owned
 candidate/live checkpoint rather than its original spawn argument. A fresh id
@@ -508,8 +519,8 @@ Its classifier paths and SDK setting boundary are in
   SDK's own subprocess escalation. Every fail-stop except the turn watchdog's
   aborts the same controller
   ([recovery](#recovering-a-fail-stopped-claude-wrapper)). The host also holds the direct CLI child
-  until it exits or receives `SIGKILL` four seconds after host abort, before
-  runner reset's five-second boundary. This does not contain a tool's
+  until it exits, and attempts `SIGKILL` four seconds after host abort if it
+  is still alive, before runner reset's five-second boundary. This does not contain a tool's
   `SIGTERM`-ignoring descendants. See
   [adapter-contract.md](adapter-contract.md#sigterm-handling-and-process-termination-timing)
   for the measured timing and the runner-grace interaction.

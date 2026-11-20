@@ -87,6 +87,11 @@ background task, the CLI and its background Bash end, and a resumed session
 receives the `stopped` notification. `compact_resume_native.test.ts` asserts
 that the `starved` wrapper process exits with code 0 in both ownership modes.
 The 6 s limit in these tests turns a hang red; it is not a latency claim.
+In the first CI run on commit `9acbeb30`
+([run 44691508512](https://github.com/sakuraiyuta/kaoiro/actions/runs/44691508512),
+`wrapper` job), the new native file took 12,447 ms for its 3 tests and the
+whole `compact_resume_native.test.ts` file 176,723 ms for its 15 tests; the
+share added by the `starved` assertion was not measured separately.
 Unit tests in `foreign_root_occupancy.test.ts` and `host.test.ts` pin which
 fail-stops abort and the `AbortError` handling.
 
