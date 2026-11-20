@@ -167,7 +167,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
 
   const goodExecStart = () => `${root}/current/deploy/kaoiro-runner-launch.sh`;
 
-describe("published runner release", () => {
+  describe("published runner release", () => {
     const tag = "v2026.11.20.1";
     const version = tag.slice(1);
     const name = "kaoiro-runner-" + tag + "-linux-x64.tar.gz";
@@ -175,7 +175,9 @@ describe("published runner release", () => {
       + tag + "/" + name;
 
     const fileFor = (buildVersion: string, revision = B) =>
-      makeReleaseTarball(work, revision, { buildVersion, buildBranch: "develop" });
+      makeReleaseTarball(mkdtempSync(join(work, "release-")), revision, {
+        buildVersion, buildBranch: "develop",
+      });
 
     const checksumFor = (archive: string) =>
       createHash("sha256").update(readFileSync(archive)).digest("hex")
@@ -301,9 +303,12 @@ describe("published runner release", () => {
     );
 
     it("refuses a held update lock before downloading", () => {
+      const download = join(dir, "download-attempted");
+      writeStub("curl", `: > ${JSON.stringify(download)}; exit 99`);
       mkdirSync(join(root, ".lock.update"));
       const result = runUpdate(["--from-release", tag], releaseEnv());
       expect(result.status, result.stderr).toBe(75);
+      expect(existsSync(download)).toBe(false);
       expect(readCalls()).toEqual([]);
       expect(readdirSync(join(root, "releases"))).toEqual([A]);
     });
