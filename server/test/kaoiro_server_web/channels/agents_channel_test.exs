@@ -579,14 +579,18 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert_broadcast "switch_session", %{"agent_id" => ^id, "resume_session_id" => "session-2"}
   end
 
-  defmodule UnwritablePointer do
+  defmodule FailingLaunchStore do
     use GenServer
 
-    def start_link(test),
-      do: GenServer.start_link(__MODULE__, test, name: KaoiroServer.SessionPointers)
+    def start_link({name, test}), do: GenServer.start_link(__MODULE__, test, name: name)
 
     def init(test), do: {:ok, test}
     def handle_call({:get, _id}, _from, test), do: {:reply, nil, test}
+
+    def handle_call({:ensure, id, _policy}, _from, test) do
+      send(test, {:delivery_seed, id, KaoiroServer.SessionPointers.get(id)})
+      {:reply, {:error, :policy_unknown}, test}
+    end
 
     def handle_call({:delete, id}, _from, test) do
       send(test, {:rolled_back, id})
@@ -599,34 +603,96 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  test "an unreadable external launch seed rolls back before runner notification" do
-    alias KaoiroServer.{AgentActivity, DeliveryPolicies, Rooms}
-    host = "external-rollback"
-    external_host(host, ["spawn"])
-    operator = join_as(:operator)
-    @endpoint.subscribe("runner:" <> host)
-    {:ok, %{room_id: room}} = Rooms.create("Launch room")
-    :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, SessionPointers)
-    on_exit(fn -> Supervisor.restart_child(KaoiroServer.Supervisor, SessionPointers) end)
-    start_supervised!({UnwritablePointer, self()})
+  for failed_store <- [SessionPointers, KaoiroServer.DeliveryPolicies] do
+    @failed_store failed_store
+    test "external launch rolls back before notification when #{inspect(failed_store)} fails" do
+      alias KaoiroServer.{AgentActivity, Rooms}
+      host = "external-rollback"
+      external_host(host, ["spawn"])
+      operator = join_as(:operator)
+      @endpoint.subscribe("runner:" <> host)
+      {:ok, %{room_id: room}} = Rooms.create("Launch room")
+      :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, @failed_store)
+      on_exit(fn -> Supervisor.restart_child(KaoiroServer.Supervisor, @failed_store) end)
+      start_supervised!({FailingLaunchStore, {@failed_store, self()}})
 
-    payload = %{
-      "host_id" => host,
-      "engine" => "sample-engine",
-      "persona" => "ao",
-      "cwd" => "/home/user/proj",
-      "room_id" => room
-    }
+      payload = %{
+        "host_id" => host,
+        "engine" => "sample-engine",
+        "persona" => "ao",
+        "cwd" => "/home/user/proj",
+        "room_id" => room
+      }
 
-    assert_reply push(operator, "spawn", payload), :error, %{reason: "persistence_failed"}
+      ref = push(operator, "spawn", payload)
+      id = assert_launch_rollback(@failed_store, ref)
+      refute_broadcast "spawn", _
+      assert AgentDirectory.get(id) == nil
+      assert {:ok, %{members: members}} = Rooms.snapshot()
+      refute Map.has_key?(members, id)
+      refute id in AgentActivity.pending_ids()
+      refute TokenDenylist.revoked?(id)
+    end
+  end
+
+  defp assert_launch_rollback(SessionPointers, ref) do
+    assert_reply ref, :error, %{reason: "persistence_failed"}
     assert_receive {:attempted_seed, id}
     assert_receive {:rolled_back, ^id}
-    refute_broadcast "spawn", _
-    assert AgentDirectory.get(id) == nil
-    assert {:ok, nil} = DeliveryPolicies.get(id)
-    assert {:ok, %{members: members}} = Rooms.snapshot()
-    refute Map.has_key?(members, id)
-    refute id in AgentActivity.pending_ids()
+    assert {:ok, nil} = KaoiroServer.DeliveryPolicies.get(id)
+    assert :dets.lookup(KaoiroServer.DeliveryPolicies, {:counter, id}) == []
+    id
+  end
+
+  defp assert_launch_rollback(KaoiroServer.DeliveryPolicies, ref) do
+    assert_reply ref, :error, %{reason: "policy_unknown"}
+    assert_receive {:delivery_seed, id, %{engine: "sample-engine", cwd: "/home/user/proj"}}
+    assert SessionPointers.get(id) == nil
+    refute_received {:rolled_back, ^id}
+    id
+  end
+
+  test "bundled spawns ensure delivery, notify the runner, then record the pointer" do
+    engines = ~w(claude-code codex antigravity grok)
+    host = "bundled-order"
+    register_host(host, capabilities: engines)
+    operator = join_as(:operator)
+    pid = operator.channel_pid
+
+    calls = [
+      {KaoiroServer.DeliveryPolicies, :ensure, 2},
+      {KaoiroServerWeb.Endpoint, :broadcast, 3},
+      {SessionPointers, :record, 4}
+    ]
+
+    for mfa <- calls do
+      :erlang.trace_pattern(mfa, true, [])
+    end
+
+    :erlang.trace(pid, true, [:call, :arity, {:tracer, self()}])
+
+    try do
+      for engine <- engines do
+        assert_reply push(operator, "spawn", %{
+                       "host_id" => host,
+                       "engine" => engine,
+                       "persona" => "ao",
+                       "cwd" => "/home/user/proj"
+                     }),
+                     :ok,
+                     %{"agent_id" => id}
+
+        for expected <- calls do
+          assert_receive {:trace, ^pid, :call, actual}
+          assert actual == expected
+        end
+
+        assert %{engine: ^engine} = SessionPointers.get(id)
+      end
+    after
+      :erlang.trace(pid, false, [:call])
+      for mfa <- calls, do: :erlang.trace_pattern(mfa, false, [])
+    end
   end
 
   # The operator gate re-resolves the role from the credential (#148), so
