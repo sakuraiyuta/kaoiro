@@ -3,12 +3,14 @@
   // declared personas, a cwd from the host allow-list, and an optional first
   // prompt, then asks the server to spawn. The server allocates the agent_id
   // and mints the per-agent token; this form never handles secrets.
+  import type { SessionEnumeration } from "./sessionEnumeration";
   import type {
-    HostInfo,
+    HostInfo, ModelOption,
     KaoiroConnection,
     RunnerSessions,
   } from "./protocol";
   import {
+    bundledEngine, externalCatalog,
     PERMISSION_MODE_AXES,
     SANDBOX_AXIS_ENGINES,
     resolveLaunchDefaultEffort,
@@ -24,6 +26,7 @@
     ingestWarnings = null,
     connection,
     sessions,
+    enumeration,
     rooms = [],
     serverBuildRevision = null,
     serverBuildDirty = null,
@@ -42,6 +45,7 @@
     ingestWarnings?: string[] | null;
     connection: KaoiroConnection;
     sessions: RunnerSessions | null;
+    enumeration?: SessionEnumeration;
     /** Server's own build_revision (issue #218, GET /api/health via
      *  fetchServerHealth) — null on a pre-#218 server or a failed fetch.
      *  Unlike round 1, this NOW surfaces its own warning below rather than
@@ -91,6 +95,9 @@
   let sessionId = $state("");
   let prompt = $state("");
   let engine = $state("claude-code");
+  let invalidPick = $state<"model" | "effort" | null>(null);
+  let history = $state<RunnerSessions | null>(null);
+  let historyNotice = $state("");
   let model = $state("");
   let effort = $state("");
   // The room the new agent starts in (issue #1081). The lobby is the default
@@ -252,8 +259,15 @@
   // Engine cascade (ADR-0032 F4bc): engine -> model -> optional effort.
   // The select is shown only when the host declares 2+ capabilities; a
   // single-engine host keeps the pre-engine UX (ADR-0032 F4a).
-  const engines = $derived(host?.capabilities ?? []);
-  const showEngineSelect = $derived(engines.length >= 2);
+  const engines = $derived([...new Set(host?.capabilities ?? [])]);
+  const bundled = $derived(bundledEngine(engine));
+  const external = $derived(externalCatalog(host, engine));
+  const ops = $derived(external?.operations);
+  const allowSpawn = $derived(bundled || ops?.spawn === true);
+  const allowList = $derived(bundled || ops?.enumerate_sessions === true);
+  const allowResume = $derived(bundled || (allowSpawn && ops?.resume === true));
+  const showEngineSelect = $derived(engines.length >= 2 || engine === "" ||
+    (!bundled && engines.length > 0));
   // Primitive derived so the auto-refresh $effect below tracks the boolean
   // (identity-stable across hosts broadcasts) rather than the `engines`
   // array reference — a hosts push that only updates models[].models
@@ -261,7 +275,7 @@
   // refresh $effect and bump the generation for no reason (藤 review 3-1).
   const hostSupportsClaude = $derived(engines.includes(CLAUDE_ENGINE));
   const engineModels = $derived(
-    host?.engines?.find((e) => e.id === engine)?.models ?? [],
+    (bundled ? host?.engines?.find((e) => e.id === engine) : external)?.models ?? [],
   );
   const selectedModel = $derived(
     engineModels.find((m) => m.value === model) ?? null,
@@ -278,9 +292,20 @@
       : null,
   );
   const effortLevels = $derived(
-    selectedModel?.effort_levels ?? [],
+    bundled ? selectedModel?.effort_levels ?? [] : [...new Set(selectedModel?.effort_levels)],
   );
+  function defaultEffort(choice: ModelOption | null | undefined): string {
+    const value = choice?.default_effort ?? "";
+    return bundled || choice?.effort_levels?.includes(value) ? value : "";
+  }
+  function selectTarget() {
+    model = effort = sessionId = "";
+    invalidPick = null;
+    manualEffortPick = false;
+    mode = "new";
+  }
   function chooseModel(event: Event): void {
+    invalidPick = null;
     model = (event.currentTarget as HTMLSelectElement).value;
     const choice = engineModels.find((m) => m.value === model);
     // issue #88: the persona's last-committed effort wins over the model's
@@ -295,10 +320,11 @@
       preferred: launchDefaults[personaId],
       effortLevels: choice?.effort_levels ?? [],
     });
-    effort = preferred ?? (choice?.default_effort ?? "");
+    effort = preferred ?? defaultEffort(choice);
     manualEffortPick = false;
   }
   function chooseEffort(event: Event): void {
+    invalidPick = null;
     effort = (event.currentTarget as HTMLSelectElement).value;
     manualEffortPick = true;
   }
@@ -312,15 +338,15 @@
     host?.engines?.find((e) => e.id === engine) ?? null,
   );
   const hasSandboxAxis = $derived(
-    engineCatalogEntry?.launch_permission_axes?.sandbox ??
-      SANDBOX_AXIS_ENGINES.has(engine),
+    bundled && (engineCatalogEntry?.launch_permission_axes?.sandbox ??
+      SANDBOX_AXIS_ENGINES.has(engine)),
   );
   // Approval is selectable only where the declared axis says so (currently
   // Antigravity; Codex's approval is upstream-fixed to "never" and not
   // offered here).
   const hasApprovalAxis = $derived(
-    engineCatalogEntry?.launch_permission_axes?.approval ??
-      engine === "antigravity",
+    bundled && (engineCatalogEntry?.launch_permission_axes?.approval ??
+      engine === "antigravity"),
   );
   $effect(() => {
     if (engine !== "antigravity" && approval === "local") {
@@ -335,7 +361,8 @@
   // Resume candidates only count when they match the current host+cwd (and
   // engine, when the reply carries one); a stale enumerate for another
   // selection must not be offered.
-  const candidates = $derived(
+  const candidates = $derived(!bundled ? (allowList && history?.host_id === hostId &&
+    history.cwd === cwd && history.engine === engine ? history.sessions : []) :
     sessions &&
       sessions.host_id === hostId &&
       sessions.cwd === cwd &&
@@ -348,8 +375,21 @@
   // changes. The list arrives asynchronously via onSessions (the `sessions`
   // prop).
   $effect(() => {
-    if (mode !== "resume" || hostId === "" || cwd === "") return;
-    void connection.enumerateSessions(hostId, cwd, engine).catch(() => {});
+    const h = hostId, dir = cwd, id = engine;
+    history = null;
+    historyNotice = "";
+    if (!allowList && mode === "resume") mode = "new";
+    if (mode !== "resume" || !h || !dir || !allowList || !canOperate()) return;
+    const send = () => connection.enumerateSessions(h, dir, id);
+    if (bundled) { void send().catch(() => {}); return; }
+    let current = true;
+    const hint = msg().launchDialog.retryEnumeration;
+    historyNotice = hint;
+    void enumeration?.read(h, id, dir, send, hint).then(
+      list => { if (current) { history = list; historyNotice = ""; } },
+      err => { if (current) historyNotice = String(err); },
+    );
+    return () => { current = false; };
   });
 
   // Option E, ADR-0039: trigger a live catalog refresh whenever a host is
@@ -360,8 +400,10 @@
   // Loading is held until the runner's catalog_result arrives (transport
   // disconnect / timeout / server ack failure all reject). Stale results
   // from a prior host/engine are dropped via generation compare (藤 review C).
+  const canRefresh = $derived(engine === CLAUDE_ENGINE ||
+    ops?.refresh_engine_catalog === true);
   async function triggerCatalogRefresh(force: boolean): Promise<void> {
-    if (hostId === "" || engine !== CLAUDE_ENGINE) return;
+    if (!hostId || !canRefresh || !canOperate()) return;
     const gen = ++refreshGeneration.current;
     const isCurrent = (): boolean =>
       alive.current && gen === refreshGeneration.current;
@@ -398,12 +440,12 @@
     // array identity does not re-fire this effect (藤 review 3-1).
     const h = hostId;
     const e = engine;
-    const supported = hostSupportsClaude;
+    const supported = e === CLAUDE_ENGINE ? hostSupportsClaude : canRefresh;
     // Any host/engine change invalidates pending waiters (藤 review C).
     // Bump BEFORE deciding whether to probe so a switch to Codex mid-flight
     // still marks the outstanding Claude refresh stale.
     refreshGeneration.current++;
-    if (h === "" || e !== CLAUDE_ENGINE || !supported) {
+    if (h === "" || !supported) {
       // Non-Claude / no-host: reset the UI so a lingering spinner or error
       // from the previous Claude session does not follow the operator into
       // Codex or a different host.
@@ -417,13 +459,18 @@
   // Keep engine valid for the host, and model/effort valid for the engine
   // catalog ("" = engine/model default, always allowed).
   $effect(() => {
-    if (engines.length > 0 && !engines.includes(engine)) {
+    if (engine && !bundled && !engines.includes(engine)) {
+      engine = "";
+      selectTarget();
+    } else if (engine && engines.length > 0 && !engines.includes(engine)) {
       engine = engines.includes("claude-code") ? "claude-code" : engines[0]!;
     }
     if (model !== "" && !engineModels.some((m) => m.value === model)) {
-      model = "";
+      if (!bundled) invalidPick = "model";
+      model = effort = "";
     }
     if (effort !== "" && !effortLevels.includes(effort)) {
+      if (!bundled && manualEffortPick) invalidPick = "effort";
       effort = "";
     }
   });
@@ -440,6 +487,7 @@
   // selection is not offered (also covers the initial empty state).
   $effect(() => {
     if (!hosts.some((h) => h.host_id === hostId)) {
+      if (hostId && !bundled) { engine = ""; selectTarget(); }
       hostId = hosts[0]?.host_id ?? "";
     }
     const h = host;
@@ -503,7 +551,7 @@
       // model's own default rather than leaving the PREVIOUS persona's
       // effort in place (ふじ review, must-fix 1).
       const choice = engineModels.find((m) => m.value === model);
-      effort = choice?.default_effort ?? "";
+      effort = defaultEffort(choice);
     }
   });
 
@@ -512,7 +560,11 @@
       hostId !== "" &&
       personaId !== "" &&
       cwd !== "" &&
-      (mode === "new" || sessionId !== ""),
+      allowSpawn && (bundled || (invalidPick === null &&
+        (model === "" || engineModels.some(m => m.value === model)) &&
+        (effort === "" || effortLevels.includes(effort)))) &&
+      (mode === "new" || (allowList && allowResume && sessionId !== "" &&
+        candidates.some(s => s.session_id === sessionId))),
   );
 
   async function launch(event: SubmitEvent): Promise<void> {
@@ -605,6 +657,7 @@
       >
         {msg().launchDialog.tabNew}
       </button>
+      {#if allowList}
       <button
         type="button"
         role="tab"
@@ -614,11 +667,13 @@
       >
         {msg().launchDialog.tabResume}
       </button>
+      {/if}
     </div>
 
     {#if hosts.length === 0}
       <p class="note">{msg().launchDialog.noHosts}</p>
     {:else}
+      {#if allowSpawn}
       <div class="delivery-choice">
         <label class="row"><input type="checkbox" checked={deliveryChoice === "on"} disabled={!deliveryEnabled || busy}
           onchange={(event) => { deliveryManual = true; deliveryChoice = event.currentTarget.checked ? "on" : "off"; }} />{msg().launchDialog.deliveryLabel}</label>
@@ -631,10 +686,14 @@
           deliveryDefault.source === "fallback" ? msg().launchDialog.hintFallbackOn : msg().launchDialog.hintHostDefault}</p>
         <p class="hint">{msg().launchDialog.deliveryDescription}</p>
       </div>
+      {/if}
 
       <label>
         {msg().launchDialog.host}
-        <select bind:value={hostId}>
+        <select value={hostId} onchange={e => {
+          if (!bundled) { engine = ""; selectTarget(); }
+          hostId = e.currentTarget.value;
+        }}>
           {#each hosts as h (h.host_id)}
             <option value={h.host_id}>{formatRunnerHostLabel(h)}</option>
           {/each}
@@ -680,7 +739,11 @@
       {#if showEngineSelect}
         <label>
           {msg().launchDialog.engine}
-          <select bind:value={engine}>
+          <select value={engine} onchange={e => {
+            if (!bundled || !bundledEngine(e.currentTarget.value)) selectTarget();
+            engine = e.currentTarget.value;
+          }}>
+            {#if !engine}<option value="">{msg().launchDialog.selectAgain}</option>{/if}
             {#each engines as e (e)}
               <option value={e}>{e === "grok" ? "Grok Build" : e}</option>
             {/each}
@@ -688,11 +751,14 @@
         </label>
       {/if}
 
+      {#if engine && !allowSpawn && !allowList && !canRefresh}
+        <p>{msg().launchDialog.noOperations}</p>
+      {/if}
       <!-- The room a new agent starts in (issue #1081). Shown only when the
            connection carries a rooms snapshot, which is how the grid treats
            that state too. Offered in both modes: the resume mode allocates a
            new agent id, so it has no stored room to keep (Q43 = A). -->
-      {#if rooms.length > 0}
+      {#if allowSpawn && rooms.length > 0}
         <label>
           {msg().launchDialog.room}
           <select bind:value={roomId}>
@@ -703,16 +769,17 @@
         </label>
       {/if}
 
-      {#if engineModels.length > 0}
+      {#if allowSpawn && (engineModels.length > 0 || invalidPick === "model")}
         <label>
           {msg().launchDialog.model}
           <select
-            value={model}
+            value={invalidPick === "model" ? undefined : model}
             onchange={chooseModel}
             aria-describedby={selectedResolvedModel
               ? "launch-model-resolution"
               : undefined}
           >
+            {#if invalidPick === "model"}<option value={undefined} disabled>{msg().launchDialog.selectAgain}</option>{/if}
             <option value="">{msg().launchDialog.defaultOption}</option>
             {#each engineModels as m (m.value)}
               <option value={m.value}>{m.display_name}</option>
@@ -726,7 +793,7 @@
         {/if}
       {/if}
 
-      {#if engine === CLAUDE_ENGINE}
+      {#if canRefresh}
         <!-- Option E, ADR-0039: manual force-refresh of the (host, engine)
              catalog. Claude only — Codex catalogs are static (ADR-0035 F1),
              so no button is offered for other engines. -->
@@ -746,10 +813,11 @@
         </div>
       {/if}
 
-      {#if effortLevels.length > 0}
+      {#if allowSpawn && (effortLevels.length > 0 || invalidPick === "effort")}
         <label>
           effort
-          <select value={effort} onchange={chooseEffort}>
+          <select value={invalidPick === "effort" ? undefined : effort} onchange={chooseEffort}>
+            {#if invalidPick === "effort"}<option value={undefined} disabled>{msg().launchDialog.selectAgain}</option>{/if}
             <option value="">{msg().launchDialog.defaultOption}</option>
             {#each effortLevels as l (l)}
               <option value={l}>{l}</option>
@@ -841,7 +909,7 @@
         />
       </label>
 
-      {#if mode === "new"}
+      {#if mode === "new" && allowSpawn}
         <label>
           {msg().launchDialog.initialPrompt}
           <textarea
@@ -850,11 +918,11 @@
             placeholder={msg().launchDialog.initialPromptPlaceholder}
           ></textarea>
         </label>
-      {:else}
+      {:else if mode === "resume" && allowList}
         <label>
           {msg().launchDialog.session}
           {#if candidates.length === 0}
-            <span class="note">{msg().launchDialog.noSessions}</span>
+            <span class="note">{historyNotice || msg().launchDialog.noSessions}</span>
           {:else}
             <select bind:value={sessionId}>
               {#each candidates as s (s.session_id)}
@@ -876,9 +944,11 @@
       <button type="button" class="ghost" onclick={onClose}>
         {msg().launchDialog.cancel}
       </button>
+      {#if allowSpawn && (mode === "new" || allowResume)}
       <button type="submit" disabled={!canLaunch}>
         {busy ? msg().launchDialog.launching : msg().launchDialog.launch}
       </button>
+      {/if}
     </div>
   </form>
   {/snippet}

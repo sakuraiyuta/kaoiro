@@ -59,6 +59,15 @@ The server saves the launch identity before notifying the runner and retains it
 across reconnects. External permission synchronization has empty control and
 next values. Only model and effort settings and their sources can be replayed.
 
+The dashboard offers external launch and history actions from the current
+host declaration. Removing a selected engine or model requires a new choice.
+The detail picker uses the launch directory reported in the session list and
+shows it alongside the candidates. This operator broadcast has no request or
+agent ID, so simultaneous requests from other tabs are indistinguishable
+when the host and engine match. A disconnected agent's detail restore
+requires both spawn and resume. Grid and bulk restore still ask the server,
+which can perform a fresh restore with spawn alone when no session is stored.
+
 ### Wrapper-exit session recovery
 
 The direct dist launcher gives each child a private version-1 recovery

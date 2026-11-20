@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SessionEnumeration } from "./lib/sessionEnumeration";
   import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { disposeMarkdownWorker } from "./lib/markdownWorker";
@@ -611,6 +612,7 @@
   let pendingSpawnTimer: ReturnType<typeof setTimeout> | undefined;
   // Latest resume candidates from enumerate_sessions (#22 phase-1); the
   // dialog matches them to its current host/cwd selection.
+  const enumeration = new SessionEnumeration();
   let runnerSessions = $state<RunnerSessions | null>(null);
   let deletingAllOffline = $state(false);
 
@@ -1113,6 +1115,8 @@
           // its own handshake per connection). The three independently pushed
           // snapshot projections go with them, before the first new frame
           // arrives, so a partial rejoin is absent rather than mixed-generation.
+          enumeration.reset();
+          runnerSessions = null;
           connectionGeneration += 1;
           agents = {};
           tasks = {};
@@ -1613,7 +1617,10 @@
             spawnErrors = rest;
           }
         },
-        onSessions: (result) => (runnerSessions = result),
+        onSessions: (result) => {
+          enumeration.receive(result);
+          runnerSessions = result;
+        },
         onAttachRejected: (payload) => {
           // wrapper-side upload rejection (file-upload spec / ADR-0025);
           // surface to operator via the shared transient notice channel.
@@ -1807,6 +1814,7 @@
     isOperator = false;
     policyStore.reset();
     showLaunch = false;
+    enumeration.reset();
     runnerSessions = null;
     deliveries = {};
     // Clear the identity ledger overlay so a re-connect / login starts
@@ -2327,6 +2335,7 @@
     {hosts}
     {connection}
     {ingestWarnings}
+    {enumeration}
     sessions={runnerSessions}
     rooms={roomList}
     serverBuildRevision={serverHealth?.build_revision ?? null}
@@ -2461,6 +2470,10 @@
           {directory}
           {connection}
           {manifest}
+          {hosts}
+          {enumeration}
+          detailActive={!showLaunch}
+          canOperate={() => isOperator && status === "connected"}
           sessions={runnerSessions}
           resetMode={sessionResets[selectedEnvelope.agent_id]?.mode ?? null}
           resetRequester={sessionResets[selectedEnvelope.agent_id]?.requester ?? null}

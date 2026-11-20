@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { SessionEnumeration } from "./sessionEnumeration";
   import { tick, untrack } from "svelte";
   import GrokPermissionPolicy from "./GrokPermissionPolicy.svelte";
   import DeliveryPolicyControl from "./DeliveryPolicyControl.svelte";
@@ -28,6 +29,7 @@
   import { formatBuildIdentity } from "./buildIdentity";
   import { deliveryPolicyNotice } from "./deliveryPolicyLabel";
   import {
+    bundledEngine, externalCatalog,
     engineFrom,
     disconnectFrom,
     disconnectLabel,
@@ -61,7 +63,7 @@
     userInputDialogAvailability,
   } from "./protocol";
   import type {
-    DirectoryEntry,
+    DirectoryEntry, HostInfo,
     Envelope,
     KaoiroConnection,
     PersonaManifest,
@@ -89,6 +91,7 @@
     connection = null,
     manifest = null,
     sessions = null,
+    hosts = [], enumeration, detailActive = true, canOperate = () => true,
     resetMode = null,
     resetRequester = null,
     origin = null,
@@ -121,6 +124,10 @@
      *  this agent, so a stale enumerate for another selection cannot leak in
      *  (same guard shape as LaunchDialog). */
     sessions?: RunnerSessions | null;
+    hosts?: HostInfo[];
+    enumeration?: SessionEnumeration;
+    detailActive?: boolean;
+    canOperate?: () => boolean;
     /** phase-17 17-9: the mode being reset when a session_reset is in
      *  flight for this agent ("new" | "clear"), else null. Sourced from
      *  App.svelte's sessionResets state, cleared on completed / failed. */
@@ -543,6 +550,12 @@
   // approval host-fixed to never (ADR-0033 F3), Antigravity with sandbox /
   // network / approval mutable under a launch ceiling (ADR-0057 F4c B0).
   const agentEngine = $derived(engineFrom(envelope));
+  const external = $derived(agentEngine !== null && !bundledEngine(agentEngine) && agentEngine !== "claude");
+  const originHostId = $derived(hostIdFromAgentId(envelope.agent_id));
+  const ops = $derived(agentEngine ? externalCatalog(
+    hosts.find(h => h.host_id === originHostId), agentEngine,
+  )?.operations : undefined);
+  const canResume = $derived(!external || (ops?.spawn === true && ops.resume === true));
   const permAxes = $derived(permissionFrom(envelope));
   const isCodexAgent = $derived(agentEngine === "codex");
   // ADR-0034 F1/F3: session-level capability advertise. Consumers here are
@@ -557,7 +570,7 @@
   // blocked by a permission gate (grok, issue #591). Absent for other engines.
   const permissionGate = $derived(permissionGateFrom(envelope));
   const permissionSwitchSupported = $derived(
-    sessionCaps?.supports_permission_switch === true,
+    !external && sessionCaps?.supports_permission_switch === true,
   );
   // Whether the wrapper reports a runtime-switchable Claude-style
   // permission_mode axis (enforcement stamped "mode", ADR-0033 F4 追補)
@@ -574,6 +587,7 @@
   // hides the picker in every case, including the control constraints
   // that outlive an unobserved sandbox.
   const permissionModeSwitchable = $derived.by(() => {
+    if (external) return false;
     if (permAxes?.enforcement !== undefined && permAxes.enforcement !== "mode")
       return false;
     if (permControl !== null && permControl.constraints.enforcement !== "mode")
@@ -683,7 +697,7 @@
   // Selectable models + per-model effort levels for the switch dialogs (#54).
   // Operator-only: ext is stripped for viewers (#46), so these stay empty and
   // the switch controls never render for non-operators.
-  const models = $derived(modelsFrom(envelope));
+  const models = $derived(modelsFrom(envelope, external));
   /** Resolves a status key against the catalog. A value-exact hit always
    *  wins alone; canonical fallback returns every non-empty resolved_model
    *  match so callers can fail closed over their shared effort domain. */
@@ -722,6 +736,7 @@
       const active = findCatalogEntries(key);
       if (active.length > 0) return active;
     }
+    if (external) return key == null ? models : [];
     const realDefault = models.find((model) => model.value === "default");
     if (realDefault !== undefined) return [realDefault];
     return key === null || key === undefined ? models : [];
@@ -734,6 +749,7 @@
     const levels = new Set(
       effortLevelsForCatalogEntries(effortCatalogEntries()),
     );
+    if (external) return [...levels];
     return EFFORT_ORDER.filter((level) => levels.has(level));
   });
 
@@ -1263,7 +1279,7 @@
   // is hidden once disconnected). The server fills the resume session_id
   // from its SessionPointer, so we no longer gate on client-side session_id;
   // a missing pointer is surfaced via spawnError (ADR-0030 D8).
-  const canRestore = $derived(envelope.state === "disconnected");
+  const canRestore = $derived(canOperate() && canResume && envelope.state === "disconnected");
   let restoring = $state(false);
 
   // Resume-swap picker (ADR-0014): offered for both live and disconnected
@@ -1272,7 +1288,9 @@
   // whose wrapper has not yet emitted ext still enumerates. The existing
   // "復帰" button (one-shot, latest session) is kept for disconnected agents
   // as the quick path; this picker is the "pick a specific session" path.
-  const canResumeSession = $derived(connection !== null);
+  const canResumeSession = $derived(connection !== null && canOperate() &&
+    (!external || (detailActive && ops?.enumerate_sessions === true)));
+  let history = $state<RunnerSessions | null>(null);
   let resumePickerOpen = $state(false);
   let resuming = $state(false);
   // Error message from the last enumerate attempt (e.g. no_session for an
@@ -1287,6 +1305,8 @@
   // shown ONLY if it was requested for the currently-viewed agent.
   let resumeReplyAgentId = $state<string | null>(null);
   const resumeCandidates = $derived.by(() => {
+    if (external) return canResumeSession && resumeReplyAgentId === envelope.agent_id &&
+      history?.engine === agentEngine && history?.host_id === originHostId ? history.sessions : [];
     if (!sessions) return [];
     if (resumeReplyAgentId !== envelope.agent_id) return [];
     if (sessions.host_id !== hostIdFromAgentId(envelope.agent_id)) return [];
@@ -1297,27 +1317,30 @@
   // Track which agent the reply belongs to and surface rejection reasons
   // (no_session for an agent with no SessionPointer cwd, etc.).
   $effect(() => {
-    if (!resumePickerOpen || !connection) return;
-    const requestedAgentId = envelope.agent_id;
-    // The previous reply is not for this request until the fresh one lands;
-    // resumeReplyAgentId is bumped only on success below.
+    history = null;
     resumeReplyAgentId = null;
     resumeError = null;
-    void connection.enumerateAgentSessions(requestedAgentId).then(
-      () => {
-        // Only claim the singleton reply if we're still viewing the same
-        // agent (the operator may have switched away mid-flight).
-        if (envelope.agent_id === requestedAgentId) {
-          resumeReplyAgentId = requestedAgentId;
-        }
-      },
-      (err) => {
-        if (envelope.agent_id === requestedAgentId) {
-          resumeError =
-            err instanceof Error ? err.message : msg().agentDetail.resumeCandidatesFailed;
-        }
-      },
-    );
+    if (!canResumeSession) { resumePickerOpen = false; return; }
+    if (!resumePickerOpen || !connection) return;
+    const id = envelope.agent_id;
+    const api = connection;
+    const send = () => api.enumerateAgentSessions(id);
+    const hint = msg().launchDialog.retryEnumeration;
+    const request = external && agentEngine
+      ? enumeration?.read(originHostId, agentEngine, undefined, send, hint)
+      : send();
+    if (external) resumeError = hint;
+    let current = true;
+    void request?.then(list => {
+      if (!current || envelope.agent_id !== id) return;
+      history = list ?? null;
+      resumeReplyAgentId = id;
+      resumeError = null;
+    }, err => {
+      if (current) resumeError = err instanceof Error ? err.message :
+        msg().agentDetail.resumeCandidatesFailed;
+    });
+    return () => { current = false; };
   });
   // Close the picker + drop stale reply attribution on agent switch (the
   // component is reused, not re-keyed).
@@ -1427,10 +1450,10 @@
   );
   const switchState = $derived(modelSwitchStateFrom(envelope));
   const modelSwitchSupported = $derived(
-    sessionCaps?.supports_model_switch === true,
+    canOperate() && sessionCaps?.supports_model_switch === true,
   );
   const effortSwitchSupported = $derived(
-    sessionCaps?.supports_effort_switch === true,
+    canOperate() && sessionCaps?.supports_effort_switch === true,
   );
   const attachmentTypes = $derived(sessionCaps?.attachment_types);
   const attachmentsSupported = $derived(
@@ -1649,7 +1672,7 @@
   }
   let refreshingModels = $state(false);
   function refreshModels(): void {
-    if (!connection) return;
+    if (!connection || !canOperate() || agentEngine !== "claude-code") return;
     if (refreshingModels) return;
     // ADR-0039 F9 v2 = 藤 review D2a: the returned promise now resolves
     // ONLY when the wrapper's paired refresh_models_result envelope
@@ -1692,6 +1715,7 @@
   function chooseModel(value: string): void {
     modelMenuOpen = false;
     if (!connection) return;
+    if (!canOperate() || !modelSwitchSupported || !models.some(m => m.value === value)) return;
     if (value === activeModel?.value) return;
     // Reflect the alias immediately while the authoritative ext.model catches
     // up; the value sent to the wrapper remains this catalog alias.
@@ -1710,6 +1734,7 @@
   function chooseEffort(level: string): void {
     effortMenuOpen = false;
     if (!connection) return;
+    if (!canOperate() || !effortSwitchSupported || !effortLevels.includes(level)) return;
     if (level === effectiveEffort) return;
     pendingEffort = level;
     switchNotice = null;
@@ -1799,7 +1824,7 @@
   });
   function choosePermissionMode(value: string): void {
     permMenuOpen = false;
-    if (!connection) return;
+    if (!connection || !canOperate() || !permissionModeSwitchable) return;
     // bypassPermissions is a 2-step pick (#58 issue body): confirm before
     // sending so a misclick never silently turns off every tool guard. The
     // SDK additionally requires the wrapper to have been started with
@@ -2114,7 +2139,7 @@
   function sendPermission(patch: SetPermissionPatch): void {
     sandboxMenuOpen = false;
     approvalMenuOpen = false;
-    if (onSetPermission === undefined) return;
+    if (!canOperate() || external || onSetPermission === undefined) return;
     permActionError = null;
     // The detail view is reused across agents rather than re-keyed, so
     // this continuation owns nothing after its await: clearing the state
@@ -3261,7 +3286,7 @@
   // agent_id with resume from the server's session pointer. Non-destructive,
   // so no confirm.
   function restoreAgent(): void {
-    if (!connection || restoring) return;
+    if (!connection || restoring || !canRestore) return;
     void run(async () => {
       restoring = true;
       try {
@@ -3277,7 +3302,10 @@
   // first unless it's already idle/done/waiting_input (mirrors stopAgent's
   // gate). Disconnected has no work to lose; skip the confirm.
   function chooseResumeSession(sessionId: string): void {
-    if (!connection || resuming || sessionId === "") return;
+    const agentId = envelope.agent_id;
+    const valid = () => canResumeSession && canResume && resumePickerOpen &&
+      envelope.agent_id === agentId && resumeCandidates.some(s => s.session_id === sessionId);
+    if (!connection || resuming || !sessionId || !valid()) return;
     if (
       envelope.state !== "disconnected" &&
       !STOP_SAFE_STATES.has(envelope.state)
@@ -3288,6 +3316,7 @@
       );
       if (!ok) return;
     }
+    if (!valid()) return;
     resumePickerOpen = false;
     void run(async () => {
       resuming = true;
@@ -3637,7 +3666,7 @@
                       onclick={toggleModelMenu}
                     >{msg().agentDetail.switchButton}</button>
                   {/if}
-                  {#if connection && agentEngine === "claude-code"}
+                  {#if connection && canOperate() && agentEngine === "claude-code"}
                     <button
                       type="button"
                       class="cc-refresh"
@@ -3650,7 +3679,7 @@
                       onclick={refreshModels}
                     >↻</button>
                   {/if}
-                  {#if modelMenuOpen}
+                  {#if modelMenuOpen && canOperate() && modelSwitchSupported}
                     <ul
                       class="switch-menu"
                       role="listbox"
@@ -3699,7 +3728,7 @@
                       onclick={toggleEffortMenu}
                     >{msg().agentDetail.switchButton}</button>
                   {/if}
-                  {#if effortMenuOpen}
+                  {#if effortMenuOpen && canOperate() && effortSwitchSupported}
                     <ul
                       class="switch-menu"
                       role="listbox"
@@ -4105,6 +4134,7 @@
             {resuming ? msg().agentDetail.resumeSwapping : msg().agentDetail.resumeSwap}
           </button>
           {#if resumePickerOpen}
+            {#if external && history}<p class="note">{history.cwd}</p>{/if}
             <ul class="resume-menu" role="listbox" aria-label={msg().agentDetail.resumeMenuAria}>
               {#if resumeError}
                 <li class="empty" role="alert">
@@ -4115,6 +4145,7 @@
               {:else}
                 {#each resumeCandidates as s (s.session_id)}
                   <li>
+                    {#if canResume}
                     <button
                       type="button"
                       role="option"
@@ -4126,6 +4157,9 @@
                         ? ` — ${s.mtime}`
                         : ""}
                     </button>
+                    {:else}
+                      {s.summary ?? s.session_id}
+                    {/if}
                   </li>
                 {/each}
               {/if}
