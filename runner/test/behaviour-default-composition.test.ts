@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
+import { CODEX_AUTH_MODE_UNSET_WARNING } from "../src/codex-auth.js";
 
 // Default-composition gates keep the real factories, launcher and consumers.
 // The runner starts in a closed environment; a test-owned endpoint speaks enough
@@ -88,6 +89,8 @@ interface Endpoint {
   wrapperJoins: Map<string, Record<string, unknown>>;
   /** Every upgrade on the runner's path, in order. */
   runnerUpgrades: Array<{ url: string; socket: Duplex }>;
+  /** Every register payload pushed by the runner, in order. */
+  runnerRegisters: Array<Record<string, unknown>>;
 }
 
 /** Serves both sockets: the runner's (`/runner`, joined on `runner:*`) and the
@@ -100,6 +103,7 @@ async function startEndpoint(
   const sockets = new Set<Duplex>();
   const wrapperJoins = new Map<string, Record<string, unknown>>();
   const runnerUpgrades: Endpoint["runnerUpgrades"] = [];
+  const runnerRegisters: Endpoint["runnerRegisters"] = [];
   const server = createServer();
   server.on("upgrade", (request, socket) => {
     sockets.add(socket);
@@ -136,6 +140,9 @@ async function startEndpoint(
         if (event === "phx_join" && isRunner && topic.startsWith("runner:")) {
           onRunnerJoined(send, topic);
         }
+        if (event === "register" && isRunner && topic.startsWith("runner:")) {
+          runnerRegisters.push(payload);
+        }
         if (event === "phx_join" && !isRunner && topic.startsWith("wrapper:")) {
           wrapperJoins.set(topic, payload);
           send([joinRef, null, topic, "persona_prompt", { version: "0", prompt: "gate persona prompt" }]);
@@ -146,7 +153,7 @@ async function startEndpoint(
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("no port");
-  return { server, port: address.port, sockets, wrapperJoins, runnerUpgrades };
+  return { server, port: address.port, sockets, wrapperJoins, runnerUpgrades, runnerRegisters };
 }
 
 function waitFor(
@@ -615,7 +622,7 @@ if (isMainThread) {
 }
 `;
 
-// Stands in for the engine CLIs the runner probes through PATH.
+// Stands in for engine CLIs on PATH: grok is probed; codex traps any unexpected doctor call.
 const SHELL_RECORDER = `#!/bin/sh
 dir=$${RECORDS_ENV}
 present=
@@ -636,7 +643,6 @@ interface ChildRecord {
 const RECORDED_CHILDREN: Array<{ name: string; matches: (role: string) => boolean }> = [
   { name: "Claude wrapper", matches: (role) => role === "wrapper claude-code run" },
   { name: "Claude probe", matches: (role) => role === "wrapper claude-code probe" },
-  { name: "codex doctor", matches: (role) => role === "codex doctor" },
   { name: "Grok probe", matches: (role) => role === "grok --no-auto-update" },
 ];
 
@@ -691,16 +697,22 @@ describe("runner credential (issue #1169)", () => {
         }]);
       });
       try {
-        // No `codex.auth_mode`: the runner asks `codex doctor`, its first child.
-        writeFileSync(
-          configPath,
-          JSON.stringify({
-            host_id: "fixture-host",
-            server_url: `ws://127.0.0.1:${endpoint.port}/runner`,
-            cwd_allowlist: [root],
-            capabilities: ["claude-code", "codex", "grok"],
-          }),
-        );
+        const baseConfig = {
+          host_id: "fixture-host",
+          server_url: `ws://127.0.0.1:${endpoint.port}/runner`,
+          cwd_allowlist: [root],
+          capabilities: ["claude-code", "codex", "grok"],
+        };
+        const codexModelsOf = (register: Record<string, unknown>): unknown[] | undefined => {
+          const engines = register.engines as Array<{ id: string; models: unknown[] }> | undefined;
+          return engines?.find((engine) => engine.id === "codex")?.models;
+        };
+        const codexRecords = () =>
+          readRecords().filter((record) => record.role.startsWith("codex "));
+        const warningCount = () =>
+          output.split(CODEX_AUTH_MODE_UNSET_WARNING).length - 1;
+        // No `codex.auth_mode`: startup resolves "unknown" with guidance and never starts `codex doctor`.
+        writeFileSync(configPath, JSON.stringify(baseConfig));
         const started = spawn(
           process.execPath,
           ["--import", tsxLoader, "src/kaoiro.ts", "runner", configPath],
@@ -747,6 +759,23 @@ describe("runner credential (issue #1169)", () => {
 
         const recordsOf = (child: (typeof RECORDED_CHILDREN)[number]) =>
           readRecords().filter((record) => child.matches(record.role));
+        if (!(await waitUntil(() => endpoint.runnerRegisters.length >= 1, 30_000))) {
+          problems.push("startup: no register received");
+        } else {
+          const initialModels = codexModelsOf(endpoint.runnerRegisters[0]!);
+          if (!Array.isArray(initialModels) || initialModels.length !== 0) {
+            problems.push(`startup: expected empty codex models, got ${JSON.stringify(initialModels)}`);
+          }
+        }
+        if (!(await waitUntil(() => warningCount() >= 1, 30_000))) {
+          problems.push("startup: missing unset codex.auth_mode guidance warning");
+        } else if (warningCount() !== 1) {
+          problems.push(`startup: expected 1 guidance warning, got ${warningCount()}`);
+        }
+        if (codexRecords().length > 0) {
+          problems.push(`startup: unexpected codex child ${JSON.stringify(codexRecords())}`);
+        }
+
         await waitUntil(() => RECORDED_CHILDREN.every((child) => recordsOf(child).length > 0), 60_000);
         for (const child of RECORDED_CHILDREN) {
           const found = recordsOf(child);
@@ -756,6 +785,53 @@ describe("runner credential (issue #1169)", () => {
           }
         }
 
+        // Reload 1: adding explicit auth_mode populates the standard Codex catalog without calling codex.
+        const beforeApikey = endpoint.runnerRegisters.length;
+        writeFileSync(
+          configPath,
+          JSON.stringify({ ...baseConfig, codex: { auth_mode: "apikey" } }),
+        );
+        if (
+          !(await waitUntil(
+            () => endpoint.runnerRegisters.slice(beforeApikey).some((r) => (codexModelsOf(r)?.length ?? 0) > 0),
+            30_000,
+          ))
+        ) {
+          problems.push("reload(apikey): expected non-empty codex models register");
+        }
+        if (warningCount() !== 1) {
+          problems.push(`reload(apikey): expected warning count to stay 1, got ${warningCount()}`);
+        }
+        if (codexRecords().length > 0) {
+          problems.push(`reload(apikey): unexpected codex child ${JSON.stringify(codexRecords())}`);
+        }
+
+        // Reload 2: removing auth_mode returns to empty standard catalog with guidance and still never calls codex.
+        const beforeRemoval = endpoint.runnerRegisters.length;
+        writeFileSync(configPath, JSON.stringify(baseConfig));
+        if (
+          !(await waitUntil(
+            () =>
+              endpoint.runnerRegisters
+                .slice(beforeRemoval)
+                .some((r) => {
+                  const models = codexModelsOf(r);
+                  return Array.isArray(models) && models.length === 0;
+                }),
+            30_000,
+          ))
+        ) {
+          problems.push("reload(unset): expected empty codex models register");
+        }
+        if (!(await waitUntil(() => warningCount() >= 2, 30_000))) {
+          problems.push(`reload(unset): expected 2nd guidance warning, got ${warningCount()}`);
+        } else if (warningCount() !== 2) {
+          problems.push(`reload(unset): expected 2 guidance warnings, got ${warningCount()}`);
+        }
+        if (codexRecords().length > 0) {
+          problems.push(`reload(unset): unexpected codex child ${JSON.stringify(codexRecords())}`);
+        }
+
         // A dropped socket reconnects the way a server restart does: the same
         // client socket, with the params it was built with.
         endpoint.runnerUpgrades[0]?.socket.destroy();
@@ -763,6 +839,9 @@ describe("runner credential (issue #1169)", () => {
           problems.push("reconnection: the runner did not join again");
         } else if (tokenOf(endpoint.runnerUpgrades.length - 1) !== PLANTED_TOKEN) {
           problems.push("reconnection: the token is not in the connect URL");
+        }
+        if (codexRecords().length > 0) {
+          problems.push(`final: unexpected codex child ${JSON.stringify(codexRecords())}`);
         }
       } catch (error) {
         primary = error;

@@ -32,7 +32,12 @@ import {
 } from "./behaviour-settings.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler, type RefreshEngineCatalogDeps } from "./engine_catalog_refresh.js";
-import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
+import {
+  CODEX_AUTH_MODE_UNSET_WARNING,
+  type CodexAuthMode,
+  resolveCodexAuthMode,
+  shouldWarnUnsetCodexAuthMode,
+} from "./codex-auth.js";
 import { resolveAntigravityCatalog } from "./antigravity-catalog.js";
 import { resolveAgyVersion } from "./antigravity-version.js";
 import { GrokCatalog, probeGrokCatalog, type GrokCatalogProbeOptions } from "./grok-catalog.js";
@@ -220,12 +225,8 @@ export async function runRunnerCli(
   // Read per Phoenix log line, so a reload changes it without a reconnect.
   let heartbeatLogging = resolveHeartbeatLogging(config, process.env);
 
-  // Phase-24: explicit `codex.auth_mode` > doctor detection > "unknown"。
-  // `resolveCodexAuthMode` never invokes doctor when the config declares
-  // an explicit value, so a runner environment whose PATH has no `codex`
-  // binary still gets the correct catalog (dogfood 環境依存回帰対策)。
-  // Detection fails closed internally and never relays doctor output,
-  // which may contain credential-presence details alongside the auth mode.
+  // Explicit `codex.auth_mode` is used verbatim; unset resolves to "unknown"
+  // without running `codex doctor` (issue #1214).
   let codexAuthMode: CodexAuthMode = await resolveCodex({
     nextCodex: config.codex,
     nextEnabled: isCodexEnabled(config),
@@ -276,6 +277,14 @@ export async function runRunnerCli(
     process.stderr.write(
       `runner: error — ${codexHomeIssue}; Codex launches are refused until it is fixed\n`,
     );
+  }
+  if (
+    shouldWarnUnsetCodexAuthMode({
+      nextCodex: config.codex,
+      nextEnabled: isCodexEnabled(config),
+    })
+  ) {
+    process.stderr.write(CODEX_AUTH_MODE_UNSET_WARNING);
   }
 
   // link is assigned just below; the supervisor only calls sendResult after a
@@ -427,10 +436,9 @@ export async function runRunnerCli(
   };
 
   // ---- Config hot-reload (dogfood/dev の DX 用) ----------------------------
-  // watchRunnerConfig の onReload は同期。Reload 内で codex doctor を回す
-  // ケースがあるので Promise chain で直列化する: 立て続けの保存で
-  // detectCodexAuthMode が同時進行するのを避け、"最後の書き" が最終状態に
-  // 反映される順序性を保つ。
+  // watchRunnerConfig の onReload は同期。Reload 内で非同期プローブ等を
+  // 回すので Promise chain で直列化し、立て続けの保存でも "最後の書き" が
+  // 最終状態に反映される順序性を保つ。
   let reloadQueue: Promise<void> = Promise.resolve();
   const applyReload = async (
     next: RunnerConfig,
@@ -469,16 +477,12 @@ export async function runRunnerCli(
     }
     const prevCodexEnabled = isCodexEnabled(config);
     const nextCodexEnabled = isCodexEnabled(next);
-    // Phase-24: hot reload の分岐は resolver に集約。explicit → explicit /
-    // explicit → absent / absent → explicit / off → on / on → off の 5
-    // 遷移が一貫して policy に従う。explicit set 時は必ず doctor 非呼出。
+    // Explicit `codex.auth_mode` or "unknown"; never runs `codex doctor`.
     const nextCodexAuthMode = await resolveCodex({
       nextCodex: next.codex,
       nextEnabled: nextCodexEnabled,
-      prevCodex: config.codex,
-      prevEnabled: prevCodexEnabled,
-      prevMode: codexAuthMode,
     });
+    // A queued reload can start after close().
     if (closed) return;
     // ADR-0057 F6: re-probe on every reload while enabled (quota-free, no
     // TTL cache to preserve); clear the catalog when the operator disables
@@ -553,6 +557,16 @@ export async function runRunnerCli(
       if (reconnect) link.reconnect(config.server_url, config.host_id, priorRegister);
       else link.updateRegister(priorRegister);
       throw error;
+    }
+    if (
+      shouldWarnUnsetCodexAuthMode({
+        nextCodex: next.codex,
+        nextEnabled: nextCodexEnabled,
+        prevCodex: previous.config.codex,
+        prevEnabled: prevCodexEnabled,
+      })
+    ) {
+      process.stderr.write(CODEX_AUTH_MODE_UNSET_WARNING);
     }
     if (
       previous.antigravityVersion !== null &&

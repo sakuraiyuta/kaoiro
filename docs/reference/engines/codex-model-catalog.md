@@ -74,16 +74,14 @@ for every account. See the [dated adoption evidence](../../evidence/codex-app-se
 - **The entitlement-determination asymmetry remains**: The catalog relies on
   the operator declaration; it can be reconsidered when the SDK gains an
   enumeration API.
-- **The authentication mode can also be declared explicitly (phase-24)**:
-  Write `codex.auth_mode` (`"chatgpt"` / `"apikey"`) in `runner.config.json`
-  to resolve it with priority **explicit declaration > `codex doctor` detection
-  > `"unknown"`**, skipping doctor detection itself. This addresses a regression
-  where the catalog became empty when the runner PATH lacked a codex binary.
-  The declaration is metadata only for catalog selection; the runner neither
-  supplies nor changes credentials. A mistaken declaration misaligns catalog
-  and actual entitlement, so an explicit request for an unsupported model /
-  effort fails loudly with 400/404 and falls into existing `switch_error`
-  rollback. There is no implicit inference from `chatgpt_plan`.
+- **Explicit authentication mode declaration (issue #1214)**:
+  The runner does not run `codex doctor`. Declare `codex.auth_mode`
+  (`"apikey"`, or `"chatgpt"` with `codex.chatgpt_plan`) in
+  `runner.config.json` to advertise the standard catalog; when omitted, the
+  runner resolves `"unknown"` with a guidance warning (standard catalog is
+  empty; explicit `codex.extra_models` remain). See
+  [Runner configuration](../configuration/runner.md#codex-configuration) for
+  the authoritative rules.
 - **Switch execution model**: A switch preserves the current turn and applies
   from the next turn ([ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md)
   F1). An invalid slug fails loudly with 400/404 at turn start and rolls back

@@ -118,7 +118,7 @@ config-related checks report the following:
 
 | Field | Path | Purpose |
 |---|---|---|
-| `auth.credentials.details["stored auth mode"]` | `~/.codex/auth.json` | Identifies `chatgpt` / `apikey` (available to kaoiro) |
+| `auth.credentials.details["stored auth mode"]` | `~/.codex/auth.json` | Historical note (0.144.1): upstream emits `"api_key"` (with underscore), not `"apikey"`; runner `codex doctor` detection was removed in issue #1214 |
 | `auth.credentials.details["stored API key"]` | Same as above | Whether an API key is also used |
 | `auth.credentials.details["stored ChatGPT tokens"]` | Same as above | ChatGPT token storage status |
 | `config.load.details["model"]` | `~/.codex/config.toml` | Explicitly selected value or `<default>` |
@@ -141,9 +141,9 @@ always produces undefined. Test fixtures must also match this actual shape
 - The **account-default model name** (one of Astra / Sol6 / Luna6 / Sol / Terra / Luna)
 - The **entitled-model set** (the slugs that do not return 400/404 for this account)
 
-kaoiro can parse `codex doctor --json` through to authentication-mode
-identification, but beyond that relies on operator input or waiting for the
-upstream SDK to expose the information.
+Runner-side `codex doctor` detection was later removed in issue #1214 (see the
+2026-11-20 measurement section below); kaoiro now relies on explicit
+`codex.auth_mode` and `codex.chatgpt_plan` in `runner.config.json`.
 
 ## Primary-information references
 
@@ -399,3 +399,25 @@ entitlements. CLI 0.170.0 completed short turns for both; 0.164.0 rejected
 both with `model_not_found`. Versions 0.165.0 through 0.169.x were not tested.
 kaoiro keeps its existing Free/Go and API-key catalog policies; inclusion does
 not establish entitlement for other accounts.
+
+## `codex doctor` isolation measurement (2026-11-20)
+
+Isolated runs of pinned Codex CLI 0.170.0
+(SHA-256 `880819aab735adcf16f36cd628940b9f1e652a36c01d10a5d32f83cc84902971`)
+with `codex doctor --json --no-color` in disposable `bwrap --clearenv`
+environments (no production `CODEX_HOME` or real credentials) established the
+basis for removing `codex doctor` detection on issue #1214:
+
+- **API-key string mismatch**: With a synthetic API-key `auth.json`,
+  `auth.credentials.details["stored auth mode"]` returned `"api_key"` (verified
+  in upstream `rust-v0.144.1`, `rust-v0.160.0`, and `rust-v0.170.0`), whereas
+  the removed runner parser checked for `"apikey"`.
+- **Helper state under writable non-`/tmp` `CODEX_HOME`**: Even the pinned
+  binary created `tmp/arg0-linux` (`0700`) and ran janitor cleanup; on non-zero
+  exit or external timeout, lock and helper symlink entries remained in that
+  directory.
+- **Outbound network traffic**: When config loaded, `doctor` ran HTTP
+  connectivity and update checks against the active provider and attempted
+  Responses WebSocket checks when enabled; when config loading failed, it still
+  probed the default endpoint over HTTP. Offline runs exited non-zero or hit
+  the runner's timeout.

@@ -1,239 +1,178 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  detectCodexAuthMode,
-  parseCodexAuthMode,
+  CODEX_AUTH_MODE_UNSET_WARNING,
+  type CodexAuthModeWarningInput,
   resolveCodexAuthMode,
+  shouldWarnUnsetCodexAuthMode,
 } from "../src/codex-auth.js";
+import { buildRegister, type RunnerConfig } from "../src/config.js";
 
-function doctorReport(mode: unknown): unknown {
+function baseConfig(codex?: RunnerConfig["codex"]): RunnerConfig {
   return {
-    checks: {
-      "auth.credentials": {
-        details: {
-          "stored auth mode": mode,
-          "stored API key": "secret-api-key-marker",
-          "stored ChatGPT tokens": "secret-token-marker",
-        },
-      },
-    },
+    host_id: "codex-auth-test",
+    server_url: "ws://runner.invalid/runner",
+    cwd_allowlist: ["/tmp"],
+    capabilities: ["codex"],
+    ...(codex === undefined ? {} : { codex }),
   };
 }
 
-describe("parseCodexAuthMode", () => {
-  it.each(["chatgpt", "apikey"] as const)("%s を正規化する", (mode) => {
-    expect(parseCodexAuthMode(doctorReport(mode))).toBe(mode);
-  });
-
-  it("field 欠落と未知値を unknown にする", () => {
-    expect(parseCodexAuthMode({ checks: {} })).toBe("unknown");
-    expect(parseCodexAuthMode(doctorReport("device-code"))).toBe("unknown");
-  });
-});
-
-describe("detectCodexAuthMode", () => {
-  it("doctor JSON から stored auth mode だけを返す", async () => {
-    const mode = await detectCodexAuthMode(async () => ({
-      stdout: JSON.stringify(doctorReport("chatgpt")),
-    }));
-    expect(mode).toBe("chatgpt");
-  });
-
-  it.each([
-    ["実行失敗", async () => Promise.reject(new Error("secret in error"))],
-    ["JSON parse失敗", async () => ({ stdout: "secret malformed output" })],
-    [
-      "field欠落",
-      async () => ({
-        stdout: JSON.stringify({ checks: { "auth.credentials": {} } }),
-      }),
-    ],
-  ])("%s は unknown + token非露出warnにする", async (_name, runDoctor) => {
-    const stderr = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true);
-    try {
-      await expect(detectCodexAuthMode(runDoctor)).resolves.toBe("unknown");
-      const warning = stderr.mock.calls.flat().join("");
-      expect(warning).toContain("model catalog will be empty");
-      expect(warning).not.toContain("secret in error");
-      expect(warning).not.toContain("secret malformed output");
-      expect(warning).not.toContain("secret-api-key-marker");
-      expect(warning).not.toContain("secret-token-marker");
-    } finally {
-      stderr.mockRestore();
-    }
-  });
-});
-
-/** Phase-24: explicit `codex.auth_mode` > doctor detection > "unknown".
- *  Injectable policy resolver — CLI startup と hot reload の両方から呼ばれる
- *  ため、doctor 呼出回数を含めて全遷移を pin する。explicit 経路で
- *  doctor が絶対に呼ばれないことは runner 環境 PATH に codex binary が
- *  無い場合の catalog 空回帰対策そのもの (dogfood 直接原因)。 */
-describe("resolveCodexAuthMode (Phase-24 startup + hot reload policy)", () => {
-  function makeDetect(returnMode: "chatgpt" | "apikey" | "unknown") {
-    const fn = vi.fn(async () => returnMode);
-    return fn as ReturnType<typeof vi.fn> &
-      (() => Promise<"chatgpt" | "apikey" | "unknown">);
-  }
-
-  // ---- Startup 経路 (prev* 未定義) ----
-  describe("startup", () => {
-    it("Codex disabled → 'unknown' で doctor 非呼出", async () => {
-      const detect = makeDetect("chatgpt");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { chatgpt_plan: "plus" },
-        nextEnabled: false,
-        detect,
-      });
-      expect(mode).toBe("unknown");
-      expect(detect).not.toHaveBeenCalled();
-    });
-
-    it("explicit chatgpt → doctor 非呼出で採用", async () => {
-      const detect = makeDetect("apikey");
-      const mode = await resolveCodexAuthMode({
+describe("resolveCodexAuthMode", () => {
+  it("returns unknown when Codex is disabled", async () => {
+    expect(
+      await resolveCodexAuthMode({
         nextCodex: { auth_mode: "chatgpt", chatgpt_plan: "plus" },
-        nextEnabled: true,
-        detect,
-      });
-      expect(mode).toBe("chatgpt");
-      expect(detect).not.toHaveBeenCalled();
-    });
-
-    it("explicit apikey → doctor 非呼出で採用", async () => {
-      const detect = makeDetect("chatgpt");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { auth_mode: "apikey" },
-        nextEnabled: true,
-        detect,
-      });
-      expect(mode).toBe("apikey");
-      expect(detect).not.toHaveBeenCalled();
-    });
-
-    it("auth_mode absent → doctor に fallback (返り値をそのまま採用)", async () => {
-      const detect = makeDetect("apikey");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { chatgpt_plan: "plus" },
-        nextEnabled: true,
-        detect,
-      });
-      expect(mode).toBe("apikey");
-      expect(detect).toHaveBeenCalledTimes(1);
-    });
-
-    it("chatgpt_plan からの暗黙推定は禁止 (auth_mode 未指定なら plan があっても doctor)", async () => {
-      const detect = makeDetect("apikey");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { chatgpt_plan: "plus" },
-        nextEnabled: true,
-        detect,
-      });
-      // apikey が返る = chatgpt_plan="plus" を根拠に chatgpt に決めていない。
-      expect(mode).toBe("apikey");
-    });
+        nextEnabled: false,
+      }),
+    ).toBe("unknown");
   });
 
-  // ---- Hot reload 経路 (prev* 定義済み) ----
-  describe("hot reload", () => {
-    it("next disabled → 'unknown' で doctor 非呼出 (prev mode を破棄)", async () => {
-      const detect = makeDetect("chatgpt");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: {},
+  it.each(["chatgpt", "apikey"] as const)(
+    "returns explicit %s verbatim when Codex is enabled",
+    async (mode) => {
+      expect(
+        await resolveCodexAuthMode({
+          nextCodex: { auth_mode: mode },
+          nextEnabled: true,
+        }),
+      ).toBe(mode);
+    },
+  );
+
+  it("returns unknown when auth_mode is unset, without inferring from chatgpt_plan", async () => {
+    expect(
+      await resolveCodexAuthMode({
+        nextCodex: undefined,
+        nextEnabled: true,
+      }),
+    ).toBe("unknown");
+    expect(
+      await resolveCodexAuthMode({
+        nextCodex: { chatgpt_plan: "plus" },
+        nextEnabled: true,
+      }),
+    ).toBe("unknown");
+  });
+});
+
+describe("shouldWarnUnsetCodexAuthMode", () => {
+  it("documents apikey, chatgpt + chatgpt_plan, and standard-catalog scope in the warning text", () => {
+    expect(CODEX_AUTH_MODE_UNSET_WARNING).toContain("runner: warn — ");
+    expect(CODEX_AUTH_MODE_UNSET_WARNING).toContain("codex.auth_mode");
+    expect(CODEX_AUTH_MODE_UNSET_WARNING).toContain("standard Codex model catalog is empty");
+    expect(CODEX_AUTH_MODE_UNSET_WARNING).toContain('"apikey"');
+    expect(CODEX_AUTH_MODE_UNSET_WARNING).toContain('"chatgpt"');
+    expect(CODEX_AUTH_MODE_UNSET_WARNING).toContain("codex.chatgpt_plan");
+  });
+
+  it.each<[string, CodexAuthModeWarningInput, boolean]>([
+    [
+      "Codex disabled on startup",
+      { nextCodex: undefined, nextEnabled: false },
+      false,
+    ],
+    [
+      "Codex disabled on reload (on -> off)",
+      {
+        nextCodex: undefined,
         nextEnabled: false,
-        prevCodex: { auth_mode: "chatgpt" },
+        prevCodex: { auth_mode: "apikey" },
         prevEnabled: true,
-        prevMode: "chatgpt",
-        detect,
-      });
-      expect(mode).toBe("unknown");
-      expect(detect).not.toHaveBeenCalled();
-    });
-
-    it("explicit → explicit 変更 (chatgpt → apikey) は doctor 非呼出", async () => {
-      const detect = makeDetect("chatgpt");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { auth_mode: "apikey" },
-        nextEnabled: true,
-        prevCodex: { auth_mode: "chatgpt" },
-        prevEnabled: true,
-        prevMode: "chatgpt",
-        detect,
-      });
-      expect(mode).toBe("apikey");
-      expect(detect).not.toHaveBeenCalled();
-    });
-
-    it("explicit → absent (operator が pin を外した) は doctor 再走", async () => {
-      const detect = makeDetect("apikey");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { chatgpt_plan: "plus" },
-        nextEnabled: true,
-        prevCodex: { auth_mode: "chatgpt" },
-        prevEnabled: true,
-        prevMode: "chatgpt",
-        detect,
-      });
-      expect(mode).toBe("apikey");
-      expect(detect).toHaveBeenCalledTimes(1);
-    });
-
-    it("off → on (absent) は doctor 実行", async () => {
-      const detect = makeDetect("chatgpt");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { chatgpt_plan: "plus" },
+      },
+      false,
+    ],
+    [
+      "enabled and unset on startup",
+      { nextCodex: undefined, nextEnabled: true },
+      true,
+    ],
+    [
+      "enabled and unset with chatgpt_plan on startup",
+      { nextCodex: { chatgpt_plan: "plus" as const }, nextEnabled: true },
+      true,
+    ],
+    [
+      "steady-state unset reload (enabled + unset -> enabled + unset)",
+      {
+        nextCodex: { chatgpt_plan: "plus" as const },
         nextEnabled: true,
         prevCodex: undefined,
-        prevEnabled: false,
-        prevMode: "unknown",
-        detect,
-      });
-      expect(mode).toBe("chatgpt");
-      expect(detect).toHaveBeenCalledTimes(1);
-    });
-
-    it("off → on (explicit) は doctor 非呼出で採用", async () => {
-      const detect = makeDetect("apikey");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { auth_mode: "chatgpt" },
-        nextEnabled: true,
-        prevCodex: undefined,
-        prevEnabled: false,
-        prevMode: "unknown",
-        detect,
-      });
-      expect(mode).toBe("chatgpt");
-      expect(detect).not.toHaveBeenCalled();
-    });
-
-    it("absent → absent enabled 継続 → 現 mode 維持 (doctor 非呼出)", async () => {
-      const detect = makeDetect("apikey");
-      const mode = await resolveCodexAuthMode({
-        nextCodex: { chatgpt_plan: "plus" },
-        nextEnabled: true,
-        prevCodex: { chatgpt_plan: "plus" },
         prevEnabled: true,
-        prevMode: "chatgpt",
-        detect,
-      });
-      expect(mode).toBe("chatgpt");
-      expect(detect).not.toHaveBeenCalled();
-    });
-
-    it("absent → absent enabled 継続 で prevMode 欠落なら 'unknown' 継承", async () => {
-      const detect = makeDetect("apikey");
-      const mode = await resolveCodexAuthMode({
+      },
+      false,
+    ],
+    [
+      "off -> on with unset auth_mode",
+      {
         nextCodex: undefined,
         nextEnabled: true,
         prevCodex: undefined,
+        prevEnabled: false,
+      },
+      true,
+    ],
+    [
+      "off -> on with explicit auth_mode",
+      {
+        nextCodex: { auth_mode: "chatgpt" as const },
+        nextEnabled: true,
+        prevCodex: undefined,
+        prevEnabled: false,
+      },
+      false,
+    ],
+    [
+      "explicit apikey on startup",
+      { nextCodex: { auth_mode: "apikey" as const }, nextEnabled: true },
+      false,
+    ],
+    [
+      "explicit chatgpt on reload",
+      {
+        nextCodex: { auth_mode: "chatgpt" as const, chatgpt_plan: "plus" as const },
+        nextEnabled: true,
+        prevCodex: { auth_mode: "apikey" as const },
         prevEnabled: true,
-        detect,
-      });
-      expect(mode).toBe("unknown");
-      expect(detect).not.toHaveBeenCalled();
-    });
+      },
+      false,
+    ],
+    [
+      "explicit -> absent reload while Codex stays enabled",
+      {
+        nextCodex: { chatgpt_plan: "plus" as const },
+        nextEnabled: true,
+        prevCodex: { auth_mode: "apikey" as const },
+        prevEnabled: true,
+      },
+      true,
+    ],
+  ])("%s", (_label, input, expected) => {
+    expect(shouldWarnUnsetCodexAuthMode(input)).toBe(expected);
+  });
+});
+
+describe("buildRegister with resolved codexAuthMode", () => {
+  const codexModels = (config: RunnerConfig, mode: "chatgpt" | "apikey" | "unknown") =>
+    buildRegister(config, undefined, mode).engines?.find((e) => e.id === "codex")
+      ?.models ?? [];
+
+  it("keeps extra_models when auth_mode is unset (unknown) while standard catalog is empty", () => {
+    const extra = [{ value: "custom-model", display_name: "Custom" }];
+    expect(codexModels(baseConfig(), "unknown")).toEqual([]);
+    expect(codexModels(baseConfig({ extra_models: extra }), "unknown")).toEqual(
+      extra,
+    );
   });
 
+  it("advertises standard catalog for apikey and for chatgpt with chatgpt_plan, but empty for chatgpt without plan", () => {
+    expect(codexModels(baseConfig({ auth_mode: "apikey" }), "apikey").length).toBeGreaterThan(0);
+    expect(codexModels(baseConfig({ auth_mode: "chatgpt" }), "chatgpt")).toEqual([]);
+    expect(
+      codexModels(
+        baseConfig({ auth_mode: "chatgpt", chatgpt_plan: "plus" }),
+        "chatgpt",
+      ).length,
+    ).toBeGreaterThan(0);
+  });
 });

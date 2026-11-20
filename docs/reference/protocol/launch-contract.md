@@ -2,7 +2,7 @@
 title: Launch contract between the runner and a wrapper
 description: How the runner finds, starts, configures, supervises and stops a wrapper process ("contract 1"), the engine-specific work the runner does outside that contract, and the paths a wrapper hands to its engine.
 status: accepted
-last_updated: 2026-11-18
+last_updated: 2026-11-20
 related: [protocol, architecture]
 ---
 
@@ -55,7 +55,7 @@ responsibilities are not part of contract 1
 | In-process imports | Imports code from all four wrapper packages: model catalogs, the behaviour settings grammar, `agy` executable resolution, the Codex home check, and the Claude probe client. |
 | Pre-launch checks | Refuses a Codex launch when `CODEX_HOME` is unusable, an Antigravity launch when the `agy` executable is no longer available, and an initial Antigravity launch whose permissions exceed the host's Antigravity ceiling. |
 | Session existence | Answers "does this session exist" per engine. For Claude Code, Codex and Antigravity it reads the engine's native session store. For Grok it asks the engine over ACP (`session/list`, paged) and does not read Grok's files. |
-| Engine probes | Runs `codex doctor`, `agy models`, `agy --version`, the Claude probe script and a Grok ACP `initialize` itself. |
+| Engine probes | Runs `agy models`, `agy --version`, the Claude probe script and a Grok ACP `initialize` itself. |
 | Catalog in the register | Builds the per-engine catalog entry of the runner's register message. |
 | Release and deploy tooling | Carries update and rollback tooling for Codex state, and release verification requires each `node_modules/@kaoiro/<engine>/dist/cli.js`. |
 

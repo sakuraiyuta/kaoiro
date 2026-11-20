@@ -53,10 +53,10 @@ export interface SetupAnswers {
   token: string;
   /** Absolute path to node, for hosts where a version manager owns it. */
   nodePath?: string;
-  /** Only meaningful when capabilities include codex. Explicit values keep the
-   *  runner from shelling out to `codex doctor` (phase-24). The literals must
-   *  match `CodexConfig["auth_mode"]` in config.ts — `parseRunnerConfig`
-   *  rejects anything else. */
+  /** Only meaningful when capabilities include codex. When omitted, the
+   *  runner resolves `"unknown"` and advertises no standard Codex catalog.
+   *  The literals must match `CodexConfig["auth_mode"]` in config.ts —
+   *  `parseRunnerConfig` rejects anything else. */
   codexAuthMode?: "chatgpt" | "apikey";
 }
 

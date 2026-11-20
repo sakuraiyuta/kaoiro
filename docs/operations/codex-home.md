@@ -1,7 +1,7 @@
 ---
 title: "Codex home for production"
 status: implemented
-last_updated: 2026-11-05
+last_updated: 2026-11-20
 ---
 
 # Codex home for production
@@ -67,9 +67,9 @@ CODEX_HOME="$H" "$BIN" login status   # expect: Logged in using ChatGPT
   the default `login` uses a browser flow on the host.
 - `auth.json` is never copied from `~/.codex`: two logins are independent
   sessions, and a copy would share refresh-token state.
-- Log in before the runner restart. With no credentials the runner cannot read
-  the auth mode and publishes an empty Codex model catalog; setting
-  `codex.auth_mode` in `runner.config.json` removes that ordering dependence.
+- Log in before spawning Codex agents. The runner does not run `codex doctor`;
+  to advertise the standard Codex model catalog, declare `codex.auth_mode` (and
+  `codex.chatgpt_plan` for ChatGPT auth) in `runner.config.json`.
 
 ## What the new home contains
 

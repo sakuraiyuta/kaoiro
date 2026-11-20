@@ -255,3 +255,19 @@ per-plan curation precedent (see the plan × model table in
 generalises that same precedent into an operator-facing declaration so
 the curated snapshot's inherent lag behind upstream releases has a
 stopgap that does not require a kaoiro release.
+
+## Addendum (2026-11-20): removal of `codex doctor` auth-mode detection
+
+**Decision.** Remove the runner's `codex doctor` auth-mode detection fallback
+(operator decision on issue #1214, option 2b). The runner uses only explicit
+`codex.auth_mode`; when Codex is enabled and `codex.auth_mode` is unset, it
+resolves `"unknown"` and logs a guidance warning (the standard catalog is empty
+while explicit `codex.extra_models` remain). This ADR's status remains Accepted.
+
+**Origin.** Isolated measurements of pinned Codex 0.170.0 `doctor --json
+--no-color` showed that API-key auth reports `"api_key"` (mismatched with the
+old `"apikey"` parser), creates helper symlinks and locks under writable
+non-`/tmp` `CODEX_HOME` that remain on failure/timeout, and initiates outbound
+HTTP/WebSocket checks during runner startup. See
+[codex/model-catalog.md](../evidence/codex/model-catalog.md) and
+[Runner configuration](../reference/configuration/runner.md#codex-configuration).

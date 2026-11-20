@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-11-18
+last_updated: 2026-11-20
 ---
 
 # Runner configuration
@@ -298,16 +298,18 @@ establish them.
 `runner.config.json`'s `codex` block passes Codex-engine-specific settings.
 
 - `auth_mode` (`"chatgpt"` / `"apikey"`) — explicit declaration of the auth mode
-  used for Codex adapter catalog resolution (phase-24). Precedence is
-  **explicit declaration > codex CLI `doctor` detection > `"unknown"`**;
-  declaring a mode skips detection so the catalog is not empty even without a
-  codex binary in the runner's `PATH`. This is only declarative metadata for
-  catalog selection; the runner neither attaches nor modifies credentials. It
-  does not implicitly infer from `chatgpt_plan` (to avoid misclassifying a config
-  that specifies a plan despite using API-key auth). A misdeclaration drifts the
-  catalog from actual entitlements, causing explicit requests for unsupported
-  models / efforts to fail loudly on the SDK side and fall back to the existing
-  `switch_error` rollback.
+  used for Codex catalog resolution. The runner does not run `codex doctor`.
+  When Codex is enabled and `auth_mode` is omitted, the runner resolves
+  `"unknown"` and logs a guidance warning: the standard Codex model catalog is
+  empty while any declared `codex.extra_models` remain. To advertise the
+  standard catalog, set `"apikey"`, or set `"chatgpt"` together with
+  `chatgpt_plan`. Reloading updates the runner register and subsequent wrapper
+  launches; running wrappers pick up the new catalog on their next launch.
+  This is only declarative metadata for catalog selection; the runner neither
+  attaches nor modifies credentials, and never infers `auth_mode` from
+  `chatgpt_plan`. A misdeclaration drifts the catalog from actual entitlements,
+  causing explicit requests for unsupported models / efforts to fail loudly on
+  the SDK side and fall back to the existing `switch_error` rollback.
 - `chatgpt_plan` — operator-declared ChatGPT plan (used for catalog resolution;
   ignored under API-key auth).
 - `extra_models` (`EngineModelInfo[]`, issue #292) — lets the operator

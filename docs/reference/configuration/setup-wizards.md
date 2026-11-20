@@ -2,7 +2,7 @@
 title: Setup wizards (configuration / env generation)
 description: Exact contract for the interactive wizards that generate the server .env and runner configuration (runner.config.json / runner.env).
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-20
 related: [deployment]
 ---
 
@@ -80,7 +80,7 @@ startup**.
 | Server URL | Same, `server_url` | Required | `ws://` or `wss://`. Production requires `wss://` through `force_ssl`. |
 | Launch-permitted cwd | Same, `cwd_allowlist` | Required | At least one absolute path; a blank line finishes input. |
 | Capabilities | Same, `capabilities` | Optional | Enable/disable `claude-code` / `codex` / `antigravity` independently. Fall back to `claude-code` if all are off. Enabling `antigravity` presence-checks `agy` on PATH right away: found prints its resolved path and `agy --version`; missing fails the wizard with an install-on-PATH hint (issue #387). The wizard does not read `antigravity.cli_path` — that field is manual-edit only (see below), applied on the next runner start, not by re-running setup. |
-| Codex auth mode | Same, `codex.auth_mode` | Optional | Only if capabilities include Codex. An explicit value avoids running `codex doctor` (phase-24). |
+| Codex auth mode | Same, `codex.auth_mode` | Optional | Only if capabilities include Codex. Recommended: when omitted, the runner resolves `"unknown"` and advertises no standard Codex model catalog. |
 | Runner token | `KAOIRO_RUNNER_TOKEN` in `runner.env` | Required when exposed | Manual entry / automatic generation. **Never write it to config JSON.** |
 | Node path | Same, `KAOIRO_NODE` | Optional | systemd user units / launchd start with a minimal PATH, so fix it to an absolute path when using a version manager. |
 

@@ -100,22 +100,12 @@ export type ChatGptPlan =
 export interface CodexConfig extends CodexBehaviourConfig {
   /** Applies to subsequent wrapper lifetimes, including resume. Omitted = app-server. */
   backend?: "exec" | "app-server";
-  /** Explicit auth mode declaration for the Codex adapter's catalog resolve
-   *  (Phase-24, dogfood 環境依存の catalog 空回帰対策)。closed-enum:
-   *  `"chatgpt"` or `"apikey"`。Priority explicit > doctor detection >
-   *  `"unknown"`: 明示宣言があれば `detectCodexAuthMode` (codex CLI の
-   *  `doctor` サブコマンド依存) をスキップし、runner 環境の PATH に codex
-   *  binary が無くても catalog を正しく解決する。auth_mode は catalog
-   *  selection 用の宣言 metadata のみで、runner は credential (OAuth token
-   *  / API key 等、Codex 側の credential store / environment) を付与も変更
-   *  もしない — その意味で escalation にならない。誤宣言時は catalog が
-   *  実 entitlement からずれ、unsupported な model / effort の explicit
-   *  request が SDK 側で loud fail → 既存 switch_error rollback に到達し
-   *  うる。auth 実体の invalid credentials エラーになるかどうかは runtime
-   *  の credential store / SDK 実装依存で、config だけからは断定しない。
-   *  `chatgpt_plan` からの暗黙推定は禁止 (API-key auth で plan が設定されて
-   *  いる config を誤判定するため)。旧 config 互換: 未指定なら現行の doctor
-   *  detection にフォールバック、失敗時は "unknown"。 */
+  /** Explicit auth mode declaration for Codex catalog resolution:
+   *  `"chatgpt"` or `"apikey"`. When omitted while Codex is enabled, the
+   *  runner resolves `"unknown"` with a guidance warning (standard catalog
+   *  is empty; explicit `extra_models` remain) and does not run
+   *  `codex doctor`. Metadata only: the runner neither supplies nor alters
+   *  credentials, and never infers `auth_mode` from `chatgpt_plan`. */
   auth_mode?: "chatgpt" | "apikey";
   chatgpt_plan?: ChatGptPlan;
   /** Toggle for Codex's internal sub-agent spawning (ADR-0038 F2). Effective
@@ -651,7 +641,7 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
  *  launch catalog per capability (ADR-0032 F4bc). Claude advertises a
  *  versioned optimistic bootstrap snapshot which the SDK's account-aware
  *  ext.models replaces after init (#107); Codex resolves its curated list
- *  from the detected auth mode and operator-declared ChatGPT plan
+ *  from the configured auth mode and operator-declared ChatGPT plan
  *  (ADR-0035); Antigravity's `antigravityCatalogOverride` is the caller's
  *  `resolveAntigravityCatalog()` result (ADR-0057 F6) — absent falls back
  *  to the pinned 1.1.26 snapshot, matching how a probe failure inside that
