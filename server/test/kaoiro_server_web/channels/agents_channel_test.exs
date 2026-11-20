@@ -483,6 +483,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             do: %{key => nil}
           ) ++
             [
+              %{"permission_mode" => "bypassPermissions"},
+              %{"sandbox" => "danger-full-access"},
+              %{"approval" => "never"},
+              %{"network_access" => true},
               %{"network_access" => false},
               %{"model" => nil},
               %{"model" => ""},
