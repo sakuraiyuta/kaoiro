@@ -137,9 +137,12 @@ jobs:
           releases_for_tag | jq -e 'length == 0'
           gh release create "$TAG" --verify-tag --draft --latest=false \
             --notes-file notes.md
-          id=$(releases_for_tag |
-            jq -er 'select(length == 1 and .[0].draft) | .[0].id')
-          [[ "$id" =~ ^[1-9][0-9]*$ ]]
+          draft_url=$(gh release view "$TAG" --json apiUrl,isDraft,tagName |
+            jq -er --arg tag "$TAG" \
+              'select(.isDraft == true and .tagName == $tag) | .apiUrl')
+          id=${draft_url##*/}
+          [[ "$id" =~ ^[1-9][0-9]*$ &&
+            "$draft_url" == "https://api.github.com/repos/$GH_REPO/releases/$id" ]]
           for i in "${!files[@]}"; do files[i]="assets/${files[i]}"; done
           gh release upload "$TAG" "${files[@]}"
 
