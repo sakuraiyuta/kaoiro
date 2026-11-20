@@ -1,3 +1,4 @@
+import "./isolation.setup";
 import { describe, expect, it, vi } from "vitest";
 import { externalCatalog, modelsFrom, parseHosts, type Envelope } from "../src/lib/protocol";
 import { SessionEnumeration } from "../src/lib/sessionEnumeration";
