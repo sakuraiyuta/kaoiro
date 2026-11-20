@@ -673,6 +673,7 @@ describe("runner credential (issue #1169)", () => {
 
       let joins = 0;
       let output = "";
+      let stderrOutput = "";
       let runner: ChildProcess | undefined;
       let runnerGroup: RunnerGroup | undefined;
       let runnerClosed = false;
@@ -710,7 +711,7 @@ describe("runner credential (issue #1169)", () => {
         const codexRecords = () =>
           readRecords().filter((record) => record.role.startsWith("codex "));
         const warningCount = () =>
-          output.split(CODEX_AUTH_MODE_UNSET_WARNING).length - 1;
+          stderrOutput.split(CODEX_AUTH_MODE_UNSET_WARNING).length - 1;
         // No `codex.auth_mode`: startup resolves "unknown" with guidance and never starts `codex doctor`.
         writeFileSync(configPath, JSON.stringify(baseConfig));
         const started = spawn(
@@ -734,7 +735,11 @@ describe("runner credential (issue #1169)", () => {
         );
         runner = started;
         started.stdout?.on("data", (chunk) => (output += String(chunk)));
-        started.stderr?.on("data", (chunk) => (output += String(chunk)));
+        started.stderr?.on("data", (chunk) => {
+          const text = String(chunk);
+          output += text;
+          stderrOutput += text;
+        });
         if (started.pid !== undefined) {
           runnerGroup = openRunnerGroup(started.pid);
           liveGroups.add(runnerGroup);
