@@ -433,6 +433,37 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     register_host(host, capabilities: ["sample-engine"], engines: [row])
   end
 
+  test "ordinary external spawn requires a declaration on the addressed host" do
+    declaring = "external-declaring"
+    target = "external-target"
+    external_host(declaring, ["spawn"])
+    register_host(target)
+    declaring_topic = "runner:" <> declaring
+    @endpoint.subscribe(declaring_topic)
+    @endpoint.subscribe("runner:" <> target)
+    operator = join_as(:operator)
+
+    request = %{
+      "host_id" => target,
+      "engine" => "sample-engine",
+      "persona" => "ao",
+      "cwd" => "/home/user/proj"
+    }
+
+    assert_reply push(operator, "spawn", request), :error, %{reason: "engine_not_supported"}
+    refute_broadcast "spawn", _
+
+    assert_reply push(operator, "spawn", %{request | "host_id" => declaring}), :ok, %{
+      "agent_id" => id
+    }
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: ^declaring_topic,
+      event: "spawn",
+      payload: %{"agent_id" => ^id, "engine" => "sample-engine"}
+    }
+  end
+
   test "external launch validates selection before issuing an identity" do
     host = "external-launch"
     external_host(host, ~w(spawn resume))
