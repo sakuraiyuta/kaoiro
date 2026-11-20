@@ -88,6 +88,9 @@ case "$release_parent" in
     ;;
 esac
 
+entry="$deploy_dir/../dist/kaoiro.mjs"
+[ -f "$entry" ] || entry="$deploy_dir/../dist/kaoiro.js"
+
 # --version (issue #218 round 2 MF-5, ふじ 差し戻し): forwarded to the
 # entry point BEFORE the config-existence check below. A first-run host
 # with no config yet (setup wizard not run) must still be able to answer
@@ -101,7 +104,6 @@ if [ "${1:-}" = "--version" ]; then
   node_bin="${KAOIRO_NODE:-node}"
   command -v "$node_bin" >/dev/null 2>&1 ||
     die_config "node not found: $node_bin (set KAOIRO_NODE in $env_file)"
-  entry="$deploy_dir/../dist/kaoiro.js"
   [ -f "$entry" ] ||
     die_config "runner not built: $entry (run 'pnpm -C runner build')"
   exec "$node_bin" "$entry" "$@"
@@ -147,9 +149,6 @@ command -v "$node_bin" >/dev/null 2>&1 ||
 # scripts/build-runner-tarball.sh writes one. `dist/build-info.json` — which
 # IS checked — is the identity both profiles carry (ADR-0053).
 #
-# <install>/runner/deploy/<this script> -> <install>/runner/dist/kaoiro.js
-entry="$deploy_dir/../dist/kaoiro.js"
-
 # EVERY verification failure becomes exit 78, and that mapping is the point.
 # A tree that passes a hand-written sentinel list but is missing one module
 # fails at import instead, with node's own exit 1 — which
@@ -193,8 +192,8 @@ elif [ "$verify_status" -ne 0 ]; then
 fi
 
 # The verifier accepts a release from before the entry, which has no
-# dist/kaoiro.js (it is a rollback target), so a tree that lost its entry
-# together with the manifest line passes above. Stop it here, as 78.
+# dist/kaoiro.js (it is a rollback target). Refuse a physical entry missing
+# from a retained old tree even if its manifest no longer lists it.
 [ -f "$entry" ] ||
   die_config "incomplete install: $entry is missing (repo checkout: run 'pnpm -C runner build', release: reinstall it)"
 

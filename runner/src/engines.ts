@@ -89,11 +89,23 @@ export function engineBinaryPath(
   return join(packageDir, "vendor", triple, "bin", "codex");
 }
 
+declare const __KAOIRO_BUNDLED__: true | undefined;
+
 export function storedEngineExecutable(engine: EngineKind): string | undefined {
   const store = process.env.KAOIRO_ENGINE_STORE_DIR;
-  const artifact = engineArtifact(engine);
-  if (!store || !artifact) return undefined;
-  const dir = join(store, `${artifact.name.split("/")[1]}@${artifact.version}`);
-  const binary = engineBinaryPath(engine, dir);
-  return existsSync(binary) ? binary : undefined;
+  if (store) {
+    const artifact = engineArtifact(engine);
+    if (artifact) {
+      const version = `${artifact.name.split("/")[1]}@${artifact.version}`;
+      const binary = engineBinaryPath(engine, join(store, version));
+      if (existsSync(binary)) return binary;
+    }
+  }
+  if (typeof __KAOIRO_BUNDLED__ !== "undefined" &&
+      ENGINES[engine].artifactName !== undefined) {
+    throw new Error(
+      `Pinned ${engine} executable is missing; run the release's engines install`,
+    );
+  }
+  return undefined;
 }

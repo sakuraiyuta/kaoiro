@@ -328,11 +328,11 @@ Engine acquisition and its failure handling are described in
 The acquisition path is verified on Linux x64 with glibc. Artifacts for macOS
 arm64 and musl are produced but have not been verified.
 
-Create a self-contained archive requiring only the Node runtime (issue #70,
-revised 2026-07-25 in [ADR-0018](../adr/0018-runner-distribution.md)).
-Because wrappers, engine CLIs (Claude Code / codex are bundled as actual
-platform-specific npm packages), and native modules are all included, **neither
-`pnpm install` nor building is required on the target host**.
+The archive ships the runner and wrappers as `dist/kaoiro.mjs`, native
+image libraries, metadata and deploy tools. The target host needs Node,
+and bootstrap or update fetches configured Claude and Codex pins into
+the engine store. Build and package-manager dependencies stay on the
+build host. See [ADR-0018](../adr/0018-runner-distribution.md).
 
 The host that builds the tarball needs the full toolchain (Node and pnpm):
 workspace resolution happens at build time, not on the target host.
@@ -373,13 +373,12 @@ exiting with 75 if it cannot be acquired, so **run the 2 architectures
 sequentially** (if a lock remains after abnormal termination, delete the
 directory).
 
-Measured size (tar.gz): darwin-arm64 **256 MB** / linux-x64 **368 MB**. Engine
-CLI packages account for most of the size. The linux version includes musl
-variants as well, supporting both glibc and musl.
+The Linux archive includes both glibc and musl image libraries. Linux
+musl and macOS arm64 are built but runtime unverified.
 
 ### Installation on the target host
 
-The target host needs Node.js 22 or later and nothing else. When the setup
+The target host needs Node.js 22 or later and registry access for missing managed pins. When the setup
 wizard asks for `host_id` and `server_url`, pair `server_url` with the
 `<host_id>:<token>` entry that the server's `.env` wizard issued: `wss://...`
 through nginx, or `ws://<PHX_HOST>:<PORT>/runner` for a direct-VPN deployment
@@ -388,13 +387,7 @@ through nginx, or `ws://<PHX_HOST>:<PORT>/runner` for a direct-VPN deployment
 ```sh
 tar xzf kaoiro-runner-<rev>-linux-x64.tar.gz
 cd kaoiro-runner-<rev>-linux-x64
-
-./deploy/kaoiro-runner-install.sh ../kaoiro-runner-<rev>-linux-x64.tar.gz
-./deploy/kaoiro-runner-switch.sh <release-id>
-
-cd <install-root>/current/deploy
-./kaoiro-runner-setup.sh           # Interactively generate configuration
-./kaoiro-runner-launch.sh          # Foreground launch for connectivity check
+./deploy/kaoiro-runner-bootstrap.sh ../kaoiro-runner-<rev>-linux-x64.tar.gz
 ```
 
 For later invocations, use the scripts under `<install-root>/current/deploy/`.

@@ -14,8 +14,19 @@ function contained(root, path) {
   return real;
 }
 
-export async function nativeIdentity(release) {
+export async function nativeIdentity(release, layout = "legacy") {
   const root = realpathSync(release);
+  if (layout === "bundle") {
+    const record = contained(root, join(root, "dist/codex-native.json"));
+    const value = JSON.parse(readFileSync(record, "utf8"));
+    if (typeof value?.path !== "string" || !value.path ||
+        typeof value.version !== "string" ||
+        !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}$/.test(value.version) ||
+        typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256)) {
+      throw new Error("Invalid bundled Codex native identity");
+    }
+    return value;
+  }
   const cli = contained(root, join(root, "node_modules/@kaoiro/codex/dist/cli.js"));
   const fromWrapper = createRequire(cli); // codex-recovery-rethrow: sdk-require
   const sdkManifest = (fromWrapper.resolve.paths("@openai/codex-sdk") ?? [])

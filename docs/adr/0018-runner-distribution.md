@@ -199,6 +199,23 @@ probe is now a subcommand that the entry imports by package name; its
 declaration stays, and the runner declares the two modules of its own that the
 entry imports.
 
+### Bundled runner release
+
+The runner and wrappers ship as `dist/kaoiro.mjs` with target native
+image libraries. The builder lists every shipped file in the manifest
+except the manifest itself. The deploy verifier checks identity,
+containment, manifest digests when installing or switching, and the
+required entries for the target. Its old-layout verification still
+checks the package closure. The new build needs no runtime asset
+declarations.
+
+For the boundary update, verify the candidate archive before executing
+its tools. Use the tools from that same archive when rolling back to the
+source. Keep the source pin and native SHA-256 for that update.
+Managed engines live in the shared store. Acquisition verifies the
+Codex native binary once; the bundled release's state guard uses its
+recorded identity. Old-layout guards still resolve the in-tree binary.
+
 ## Consequences
 
 ### Positive

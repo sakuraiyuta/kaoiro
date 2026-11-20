@@ -85,11 +85,19 @@ relayed to wrappers; they get their URL from the runner's own `server_url`.
 
 ## Engine store
 
-Release installations share `<install-root>/engines/<name>@<version>/` across
-releases. At each wrapper spawn and Claude catalog probe, the runner uses the
-stored executable when the running release's pin is present; otherwise it uses
-the engine in its release tree. The launch shim supplies the store location.
-Acquiring a different pin does not change the engine used by a running runner.
+Release installations share `<install-root>/engines/<name>@<version>/`.
+Old-layout releases prefer a present store pin and otherwise use their
+bundled engine. The bundled JavaScript release needs a stored executable
+for each managed engine it starts. A missing pin causes wrapper spawn
+or the Claude catalog probe to fail. The launch shim supplies the store
+location. Acquiring a different pin leaves the running release's choice
+unchanged.
+
+Configuration reload, switch and rollback do not acquire pins. Keep pins
+used by retained rollback targets. When enabling an engine later or replacing
+a damaged version, follow the [re-acquisition procedure][engine-reacquisition].
+
+[engine-reacquisition]: ../../operations/runner-update-and-rollback.md#re-acquire-an-engine-pin
 
 ## Other `runner.config.json` and env fields
 

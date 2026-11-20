@@ -128,7 +128,7 @@ async function release(root, id) {
   const tree = join(root, "releases", id);
   const v = verifyRelease(tree, { requireManifest: true, requireDeployManifest: true, hash: true });
   must(v.identity === id, "Release directory identity mismatch");
-  const { sha256 } = await nativeIdentity(tree);
+  const { sha256 } = await nativeIdentity(tree, v.layout);
   return { id, sha256 };
 }
 function capable(root, id) {

@@ -39,24 +39,46 @@ pin needs no network request; a missing pin requires access to the npm registry.
 Acquisition has no timeout: if the registry stalls, update waits before
 stopping the runner; interrupt the update to stop waiting.
 
-Once a host acquires a pin, spawned engines can differ from the binary in the
-release tree, while the switch guard continues to hash the tree's binary.
-The change starts on each host at its first successful bootstrap
-or update acquisition; see the
-[design decision](../adr/0076-single-kaoiro-entry-point.md).
+Managed engine behavior depends on the release and operation.
 
-These tools require the candidate's `deploy/kaoiro-runner-engines.sh` and
-therefore cannot install older tarballs without it. Use `switch` or `--rollback`
-for an already retained release. To reinstall an older tarball, use its own
-tools or `kaoiro-runner-install.sh` followed by `kaoiro-runner-switch.sh`.
+| Tool and operation | If a managed pin is missing |
+| --- | --- |
+| Old-layout runner, wrapper spawn or Claude catalog probe | Uses the release tree's bundled engine. |
+| Bundled runner, wrapper spawn | Fails when the required managed engine is missing from the store. |
+| Bundled runner, Claude catalog probe | Fails when its Claude pin is missing from the store. |
+| Update with acquisition | Fetches the candidate's enabled pins before stopping the service. A failed download leaves the current release running. |
+| Bootstrap with acquisition | Fetches enabled pins before the first switch. A failed download prevents activation. |
+| `switch` | Changes the selected release without acquisition. |
+| `--rollback` | Restores the previous release link without acquisition. Its next managed spawn needs that release's pin in the store. |
+| Configuration reload that enables an engine | Does not acquire pins. Fetch the newly enabled pin before launching that engine from a bundled release. |
 
-The store is not cleaned automatically. An operator may manually remove an
-unused version or an abandoned `.staging-*` directory after confirming no
-operation is using it. If a store directory is damaged, remove that version
-after confirming it is not in use; the next update or bootstrap can acquire it
-again. Until then, a missing executable falls back to the release tree. Do not
-remove the release directory of a running runner: it starts wrappers from that
-release. See the
+For old-layout releases, the switch guard hashes the binary inside the
+release. For bundled releases it compares the recorded native identity.
+Acquisition verifies the acquired binary against the release's record.
+The switch guard does not rehash the store after acquisition.
+
+The updater executes the **candidate's** `deploy/kaoiro-runner-engines.sh`.
+For an already retained release, `switch` and `--rollback` do not require that
+script. To reinstall an older tarball, use its own tools or
+`kaoiro-runner-install.sh` followed by `kaoiro-runner-switch.sh`.
+
+### Re-acquire an engine pin
+
+On the runner host, apply the intended `capabilities` before acquisition.
+When repairing a damaged version, remove only that version's store directory
+after confirming it is unused by active agents or operations. Keep healthy
+pins used by retained rollback targets. From the runner user's shell use
+the current release's acquisition tool with the runner's install root:
+
+```sh
+"$install_root/current/deploy/kaoiro-runner-engines.sh" \
+  install --install-dir "$install_root"
+```
+
+The script uses the runner's usual configuration and fetches enabled pins
+that are absent. It does not restart the service or change either release
+link. Confirm the expected pin is present before launching the engine.
+The engine store is not pruned automatically. See the
 [engine store contract](../reference/configuration/runner.md#engine-store).
 
 ## Build identity preconditions
@@ -185,6 +207,28 @@ Confirm (7)'s `--version` matches the value recorded in (1) and `status` is
 
 **After migration, the repo's `dist` is no longer the live path.** The repo is a
 build source; `pnpm -C runner build` does not affect the running runner.
+
+### First update from the old layout to the bundle
+
+Use this path from the source identified in the release card. The source
+and candidate must carry the same Codex native SHA-256. Check the approved
+archive digest before extracting it privately. Invoke the candidate's
+physical `deploy/kaoiro-runner-update.sh` with `--tarball`, the explicit
+install root and service, and `--detach`. Keep the approved archive and
+digest for recovery. Old tools reject the bundle during verification.
+On an existing installation, bootstrap can switch `current` without
+restarting an active runner; use the updater for this transition.
+
+For a same-pin return, recheck the saved digest and extract a fresh copy
+before stopping. Use that extraction's physical `kaoiro-runner-switch.sh
+--rollback` in the existing stop/switch/start sequence. Confirm that
+`previous` is the verified source. Recheck the running identity after return.
+
+The updater shipped with the bundle prunes after activation under the link
+lock. It keeps `current`, `previous`, releases protected by Codex state
+records and the newest `--keep` valid release directories (default 3).
+Re-read the retained set after the update. A retired snapshot no longer
+protects its source. Name only measured rollback targets in the card.
 
 ### 4.6.2 Subsequent updates
 

@@ -93,13 +93,13 @@ export function makeLauncher(command: string[] = selfCommand()): LaunchFn {
     initialPrompt?: string,
     engine: EngineKind = "claude-code",
   ): ManagedChild => {
+    const executable = storedEngineExecutable(engine);
     const configPath = join(dir, `${agentId}-${counter}.json`);
     const checkpointPath = `${configPath}.recovery`;
     counter += 1;
     const toolHome = engine === "codex"
       ? mkdtempSync(join(dir, "codex-tool-")) : undefined;
     const childConfig = { ...config, recovery_checkpoint_path: checkpointPath };
-    const executable = storedEngineExecutable(engine);
     if (executable === undefined) delete childConfig.engine_executable;
     else childConfig.engine_executable = executable;
     if (toolHome === undefined) delete childConfig.codex_tool_home;

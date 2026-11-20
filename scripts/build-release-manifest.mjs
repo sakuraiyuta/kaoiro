@@ -127,7 +127,7 @@ function codexRuntimeFiles(root) {
   ];
 }
 
-function collect(root, dir, files, all = false) {
+function collect(root, dir, files, all = false, bundled = false) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     // withFileTypes reports link-ness, not the target's type, so a symlinked
@@ -135,10 +135,13 @@ function collect(root, dir, files, all = false) {
     // arbitrary links would record paths outside the release it describes —
     // the same confusion between "in the tree" and "reachable from the tree"
     // that let an archive install itself as a link out of the install root.
-    if (entry.isDirectory()) collect(root, path, files, all);
+    if (bundled && path === join(root, "MANIFEST.json")) continue;
+    if (entry.isDirectory()) collect(root, path, files, all, bundled);
     else if (entry.isFile() && (all || CODE_FILE_RE.test(entry.name))) {
       const rel = relative(root, path).split(sep).join("/");
       files[rel] = createHash("sha256").update(readFileSync(path)).digest("hex");
+    } else if (bundled) {
+      runtimeFailure(`unexpected non-file in bundled release: ${path}`);
     }
   }
 }
@@ -192,28 +195,30 @@ function firstPartyDists(root) {
 }
 
 function main(argv) {
-  const root = argv[0];
-  if (root === undefined || argv.length > 1) {
+  const [root, mode] = argv;
+  if (!root || argv.length > 2 || (mode && mode !== "--bundled")) {
     process.stderr.write(
-      "usage: build-release-manifest.mjs <release-root>\n",
+      "usage: build-release-manifest.mjs <release-root> [--bundled]\n",
     );
-    process.exit(64); // EX_USAGE
+    process.exit(64);
   }
-  const files = {};
-  for (const rel of ["dist", ...firstPartyDists(root)]) {
-    const dir = join(root, rel);
-    // The wrapper roots are pnpm links; statSync follows them on purpose.
-    // A missing one is a broken deploy tree, not an empty section.
-    if (!statSync(dir).isDirectory()) {
-      process.stderr.write(`build-release-manifest: not a directory: ${dir}\n`);
-      process.exit(70); // EX_SOFTWARE
+  const files = Object.create(null);
+  if (mode === "--bundled") {
+    collect(root, root, files, true, true);
+  } else {
+    for (const rel of ["dist", ...firstPartyDists(root)]) {
+      const dir = join(root, rel);
+      if (!statSync(dir).isDirectory()) {
+        runtimeFailure(`expected a directory: ${dir}`);
+      }
+      collect(root, dir, files);
     }
-    collect(root, dir, files);
+    for (const file of codexRuntimeFiles(root)) {
+      files[file.rel] = createHash("sha256")
+        .update(readFileSync(file.real)).digest("hex");
+    }
+    collect(root, join(root, "deploy"), files, true);
   }
-  for (const file of codexRuntimeFiles(root)) {
-    files[file.rel] = createHash("sha256").update(readFileSync(file.real)).digest("hex");
-  }
-  collect(root, join(root, "deploy"), files, true);
   const count = Object.keys(files).length;
   if (count === 0) {
     process.stderr.write("build-release-manifest: manifest would be empty\n");

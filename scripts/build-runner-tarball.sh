@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Build a self-contained runner tarball (issue #70, ADR-0018).
+# Build a bundled runner and wrapper tarball (ADR-0018).
 #
-# The output needs nothing but a Node runtime on the target host: the wrapper
-# packages, their engine CLIs (Claude Code / codex ship as platform-specific
-# npm packages) and every native module are inside. Setting it up is
-# "unpack -> edit config -> run", with no pnpm install / build / workspace
-# resolution on the deployment host.
+# The deployment host needs Node. Bootstrap and update fetch enabled managed
+# engine CLIs into the engine store. The archive contains the JS bundle,
+# native image libraries, release metadata and deploy tools.
 #
 #   scripts/build-runner-tarball.sh [--target <os>-<arch>] [--out <dir>]
 #
@@ -29,8 +27,7 @@
 #      inject-workspace-packages=true.
 #   2. Its output path is resolved relative to the workspace, so an absolute
 #      target silently breaks (it tried to mkdir /Users/tmp for /tmp/x).
-#   3. It honours .gitignore for the deployed package itself — runner's
-#      `files` list in package.json is what keeps dist/ in the archive.
+#   3. runner's package.json files list keeps dist/ in the build input.
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
@@ -186,28 +183,17 @@ supportedArchitectures:
 YAML
 fi
 
-echo "build-runner-tarball: pnpm deploy"
-pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/$name" --legacy >/dev/null
+echo "build-runner-tarball: staging build dependencies"
+pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/input" --legacy >/dev/null
 
-# The launch shim resolves ../dist/kaoiro.js from its own directory, so the
-# deploy tree needs no rearranging: deploy/ and dist/ are already siblings.
-[[ -f "$stage/$name/dist/kaoiro.js" ]] || {
-  echo "build-runner-tarball: dist/kaoiro.js missing from the deploy tree" >&2
-  exit 70 # EX_SOFTWARE
-}
-[[ -x "$stage/$name/deploy/kaoiro-runner-launch.sh" ]] || {
-  echo "build-runner-tarball: launch shim missing or not executable" >&2
-  exit 70
-}
-printf '%s\n' "$version_string" >"$stage/$name/VERSION"
-node "$root/scripts/write-codex-native.mjs" "$stage/$name" "$target"
-
-# MANIFEST.json — the runtime module closure, so a release with ONE missing
-# module is rejected before it starts (issue #219 round 2, ふじ 差し戻し
-# must-fix 3). See scripts/build-release-manifest.mjs for what it covers and
-# what it deliberately leaves out.
-echo "build-runner-tarball: writing MANIFEST.json"
-node "$root/scripts/build-release-manifest.mjs" "$stage/$name"
+tree="$stage/$name"
+mkdir -p "$tree/dist"
+cp -R "$stage/input/deploy" "$tree/deploy"
+cp "$stage/input/README.md" "$stage/input/runner.config.example.json" "$tree/"
+cp "$build_info" "$tree/dist/"
+printf '%s\n' "$version_string" >"$tree/VERSION"
+node scripts/write-codex-native.mjs "$stage/input" "$target" "$tree"
+node runner/scripts/build-release-bundle.mjs "$stage/input" "$tree" "$target"
 
 # The workspace injection is restored before the final source check.
 if [[ -f "$ws_backup" ]]; then cp "$ws_backup" "$ws"; fi

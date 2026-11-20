@@ -22,6 +22,7 @@
     "@kaoiro/protocol": "workspace:*",
     "@types/node": "^22.10.0",
     "@types/phoenix": "^1.6.7",
+    "esbuild": "0.28.1",
     "tsx": "^4.22.4",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0",
@@ -30,13 +31,6 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "kaoiro": {
-    "runtimeAssets": [
-      "dist/cli.js",
-      "dist/engine_install.js",
-      "dist/setup-cli.js"
-    ]
   },
   "dependencies": {
     "@kaoiro/claude-code": "workspace:*",

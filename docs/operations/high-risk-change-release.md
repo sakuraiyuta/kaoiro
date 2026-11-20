@@ -163,6 +163,10 @@ production ran from a repo checkout.
 
    The install prints the release id on stdout, and the switch prints the id
    that `current` now names. That id is the `<expected-release-id>` below.
+   For the first bundle rollout, use the candidate's own verified tools
+   for this installation and the boundary update. When rehearsing wrapper
+   operations, acquire the fixture's pins in its isolated engine store.
+   This start check exercises the runner and shim through connection setup.
 3. Save the block below as a file (`gate.sh`) and run it with `sh gate.sh
    <launch-shim> <expected-release-id>`. It is a script: it uses `exit`, so
    pasting it into an interactive shell would close that shell. **Do not go on to
@@ -342,7 +346,7 @@ Node. What it does not cover:
 
    ```sh
    systemctl --user status kaoiro-runner --no-pager -l |
-     grep -cE 'dist/kaoiro\.js wrapper |node_modules/\.pnpm/@kaoiro\+'
+     grep -cE 'dist/kaoiro\.(m)?js wrapper |node_modules/\.pnpm/@kaoiro\+'
    ```
 
    The count must be 0. The first pattern matches a wrapper started through

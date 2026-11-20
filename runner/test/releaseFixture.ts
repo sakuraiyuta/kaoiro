@@ -540,3 +540,50 @@ export function treeDigest(root: string): string {
   walk(root);
   return hash.digest("hex");
 }
+
+export function writeBundleTree(tree: string, revision: string): string {
+  writeReleaseTree(tree, revision, { manifest: false });
+  for (const rel of [
+    "node_modules", "package.json", "dist/cli.js", "dist/stub_dep.js",
+    "dist/kaoiro.js",
+  ]) {
+    rmSync(join(tree, rel), { recursive: true });
+  }
+  const put = (rel: string, content: string) => {
+    const path = join(tree, rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  };
+  put("dist/kaoiro.mjs", `
+import { readFileSync } from "node:fs";
+if (process.argv[2] === "--version") {
+  console.log(readFileSync(new URL("./build-info.json", import.meta.url), "utf8"));
+} else if (process.argv[2] === "runner") {
+  console.log("bundled runner started");
+} else if (process.argv[2] !== "engines") {
+  process.exitCode = 64;
+}
+`);
+  put("dist/codex-native.json", JSON.stringify({
+    path: "vendor/bin/codex",
+    version: "0.153.4",
+    sha256: createHash("sha256").update("#!/bin/sh\nexit 0\n").digest("hex"),
+  }));
+  const target = `${process.platform}-${process.arch}`;
+  for (const variant of target === "linux-x64"
+    ? ["linux-x64", "linuxmusl-x64"] : [target]) {
+    put(`node_modules/@img/sharp-${variant}/lib/sharp-${variant}-0.35.2.node`, "native");
+    const library = target === "darwin-arm64"
+      ? "libvips-cpp.8.18.3.dylib" : "libvips-cpp.so.8.18.3";
+    put(`node_modules/@img/sharp-libvips-${variant}/lib/${library}`, "libvips");
+  }
+  writeBundleManifest(tree);
+  return tree;
+}
+
+export function writeBundleManifest(tree: string): void {
+  const script = fileURLToPath(
+    new URL("../../scripts/build-release-manifest.mjs", import.meta.url),
+  );
+  execFileSync(process.execPath, [script, tree, "--bundled"]);
+}

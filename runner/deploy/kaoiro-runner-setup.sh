@@ -22,7 +22,8 @@ command -v "$node_bin" >/dev/null 2>&1 ||
 # <install>/runner/deploy/<this script> -> <install>/runner/dist/kaoiro.js
 unset CDPATH
 deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
-entry="$deploy_dir/../dist/kaoiro.js"
+entry="$deploy_dir/../dist/kaoiro.mjs"
+[ -f "$entry" ] || entry="$deploy_dir/../dist/kaoiro.js"
 [ -f "$entry" ] ||
   die_config "wizard not built: $entry (run 'pnpm -C runner build')"
 

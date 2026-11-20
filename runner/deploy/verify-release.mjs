@@ -43,6 +43,50 @@ import vm from "node:vm";
 
 /** Artifacts a repo-direct checkout must carry even when it has no
  * MANIFEST.json. A real release's manifest covers these first-party files. */
+const BUNDLE_ENTRY = "dist/kaoiro.mjs";
+const OLD_CODEX_ENTRY = "node_modules/@kaoiro/codex/dist/cli.js";
+
+const imageVariants = {
+  "linux-x64": ["linux-x64", "linuxmusl-x64"],
+  "darwin-arm64": ["darwin-arm64"],
+};
+
+function variantsFor(target) {
+  if (!Object.hasOwn(imageVariants, target)) {
+    fail(`Unsupported bundled release target: ${target}`);
+  }
+  return imageVariants[target];
+}
+
+export function nativeImagePackages(target) {
+  return variantsFor(target).flatMap((variant) => [
+    `sharp-${variant}`, `sharp-libvips-${variant}`,
+  ]);
+}
+
+function verifyBundleFiles(paths, target) {
+  for (const path of [
+    BUNDLE_ENTRY, "dist/build-info.json", "dist/codex-native.json",
+  ]) {
+    if (!paths.includes(path)) fail(`MANIFEST.json omits required ${path}`);
+  }
+  for (const variant of variantsFor(target)) {
+    const native = `node_modules/@img/sharp-${variant}/lib/`;
+    const vips = `node_modules/@img/sharp-libvips-${variant}/lib/`;
+    const entry = new RegExp(`^sharp-${variant}-[0-9.]+\\.node$`);
+    const library = variant === "darwin-arm64"
+      ? /^libvips-cpp(?:\.[0-9.]+)?\.dylib$/
+      : /^libvips-cpp\.so(?:\.[0-9.]+)?$/;
+    for (const [dir, pattern] of [[native, entry], [vips, library]]) {
+      const matches = paths.filter((path) => path.startsWith(dir) &&
+        pattern.test(path.slice(dir.length)));
+      if (matches.length !== 1) {
+        fail(`Expected one native entry in MANIFEST.json under ${dir}`);
+      }
+    }
+  }
+}
+
 const SENTINELS = [
   "dist/kaoiro.js",
   "dist/cli.js",
@@ -1205,7 +1249,8 @@ export function verifyRelease(root, opts = {}) {
 
   const manifestRaw = readOptionalFile(root, "MANIFEST.json");
   if (manifestRaw === null) {
-    if (opts.requireManifest === true) {
+    if (opts.requireManifest === true ||
+        lstatType(join(root, BUNDLE_ENTRY)) !== "missing") {
       fail("MANIFEST.json is missing (not a release built by the builder)");
     }
     // WHAT MAKES A TREE repo-direct IS THE ABSENCE OF A VERSION FILE, NOT AN
@@ -1237,6 +1282,9 @@ export function verifyRelease(root, opts = {}) {
   }
 
   const manifest = parseManifest(manifestRaw);
+  const paths = manifest.map(([path]) => path);
+  const bundled = paths.includes(BUNDLE_ENTRY) ||
+    lstatType(join(root, BUNDLE_ENTRY)) !== "missing";
   const listed = new Set();
   for (const [rel, digest] of manifest) {
     const real = containedRealPath(root, realRoot, rel);
@@ -1246,7 +1294,7 @@ export function verifyRelease(root, opts = {}) {
     }
   }
 
-  if (opts.requireDeployManifest === true) {
+  if (bundled || opts.requireDeployManifest === true) {
     const required = [
       "kaoiro-runner-common.sh", "kaoiro-runner-launch.sh",
       "kaoiro-runner-install.sh", "kaoiro-runner-switch.sh",
@@ -1259,6 +1307,13 @@ export function verifyRelease(root, opts = {}) {
       const real = containedRealPath(root, realRoot, `deploy/${name}`);
       if (!listed.has(real)) fail(`MANIFEST.json omits required deploy/${name}`);
     }
+  }
+
+  if (bundled) {
+    if (paths.includes(OLD_CODEX_ENTRY)) fail("Mixed release layout");
+    if (version === null) fail("VERSION is missing from the bundled release");
+    verifyBundleFiles(paths, opts.target ?? `${process.platform}-${process.arch}`);
+    return { identity, checked: manifest.length, manifest: true, layout: "bundle" };
   }
 
   for (const runtimeFile of codexRuntimeFiles(root, realRoot)) {
@@ -1293,7 +1348,10 @@ export function verifyRelease(root, opts = {}) {
       }
     }
   }
-  return { identity, checked: manifest.length, manifest: true };
+  if (!paths.includes(OLD_CODEX_ENTRY)) {
+    fail(`MANIFEST.json omits required ${OLD_CODEX_ENTRY}`);
+  }
+  return { identity, checked: manifest.length, manifest: true, layout: "legacy" };
 }
 
 function main(argv) {
