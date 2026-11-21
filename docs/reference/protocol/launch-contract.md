@@ -78,3 +78,35 @@ followed by `wrapper <engine> <verb>`.
 - [Runner control and launch](runner-control.md).
 - [Wrapper configuration](../configuration/wrapper.md).
 - [ADR-0075](../../adr/0075-runner-engine-launch-contract.md).
+
+### Configured commands
+
+The runner invokes a configured argv followed by `describe` from the config
+file's directory. Return one UTF-8 JSON object on stdout and exit zero within
+2 seconds. The runner limits stdout to 16,384 raw bytes and ignores stderr.
+Discovery uses a private process group. On timeout, overflow or shutdown the
+runner sends TERM, allows one second, sends KILL if needed, and allows one
+more second for cleanup. Do not leave background processes.
+
+```json
+{"version":1,"id":"sample-engine","models":[],"operations":{"version":1,"spawn":true}}
+```
+
+The four top-level keys are required. The ID must match the configured row.
+Operations require version 1 and spawn true. The only other keys are
+`resume`, `enumerate_sessions` and `refresh_engine_catalog`, each absent or
+false. Provide up to 32 models with unique nonempty `value` and nonempty
+`display_name` (256 UTF-8 bytes each). Optional `effort_levels` contains
+1–16 distinct nonempty strings of up to 64 bytes. Optional `default_effort`
+must occur in this model's levels. Unknown keys invalidate the declaration.
+
+Launch appends `run` and the private launch-file path to the same fixed
+argv, with the selected working directory. Neither verb receives the
+runner credential variables or CODEX_HOME. The file supplies the dedicated
+wrapper token and transition ID. The ordinary wrapper join, recovery
+checkpoint and turn contracts apply. A disconnected agent without a stored
+session ID may fresh-restore under the same agent ID. Only the selected
+model/effort pairs and their sources can be reapplied. A stored session ID
+requires resume support. Install the receiving server and dashboard before
+enabling external engines. To roll back, stop the external agents, remove
+their configuration and restart the runner before reverting the server.

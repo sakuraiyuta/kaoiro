@@ -9,6 +9,7 @@ import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 
 import type {
   CodexWorkSnapshot,
+  EngineCatalogEntry,
   EngineKind,
   EngineModelInfo,
   ModelSource,
@@ -30,6 +31,7 @@ import { codexHomeProblem as defaultCodexHomeProblem } from "@kaoiro/codex";
 import type { CodexAuthMode } from "./codex-auth.js";
 import type { BehaviourRelay } from "./behaviour-settings.js";
 import type { ChatGptPlan } from "./config.js";
+import { externalPicks } from "./external-engines.js";
 import { isEngine } from "./engines.js";
 import {
   agyFailureDetail,
@@ -95,7 +97,7 @@ export type LaunchFn = (
   cwd: string,
   resumeSessionId?: string,
   initialPrompt?: string,
-  engine?: EngineKind,
+  engine?: string,
 ) => ManagedChild;
 
 type MaybePromise<T> = T | Promise<T>;
@@ -119,7 +121,7 @@ export interface ParsedSpawn {
    *  `WrapperConfig.display_name` (required) always gets a value. */
   displayName?: string;
   cwd: string;
-  engine: EngineKind;
+  engine: string;
   serverUrl?: string;
   token?: string;
   initialPrompt?: string;
@@ -168,7 +170,15 @@ export interface ParsedSpawn {
   applyResumeSnapshot?: boolean;
 }
 
+function externalNeedsSession(parsed: ParsedSpawn, recovery?: RecoverySnapshot): boolean {
+  if (isEngine(parsed.engine)) return false;
+  const record = recovery?.ok ? recovery.record : undefined;
+  return parsed.resumeSessionId !== undefined || record?.state === "live"
+    || (record?.state === "unbound" && record.candidate_id !== undefined);
+}
+
 export interface SupervisorOptions {
+  externalCatalog?: (id: string) => EngineCatalogEntry | undefined;
   hostId: string;
   cwdAllowlist: string[];
   launch: LaunchFn;
@@ -305,7 +315,9 @@ const PERMISSION_MODE_VALUES: readonly string[] = [
 
 /** Validates the rest of a `spawn` message (agent_id already read). Returns
  *  null when a required field is missing or ill-typed. */
-export function parseSpawn(payload: unknown): ParsedSpawn | null {
+export function parseSpawn(
+  payload: unknown, externalCatalog?: SupervisorOptions["externalCatalog"],
+): ParsedSpawn | null {
   if (!isObject(payload)) return null;
   const persona = parsePersona(payload.persona);
   if (persona === null) return null;
@@ -320,11 +332,8 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   }
   // engine (ADR-0032 F4a, ADR-0057 F1): absent = claude-code; an unknown
   // value is a fail-loud reject, not a silent fallback to the wrong engine.
-  let engine: EngineKind = "claude-code";
-  if (payload.engine !== undefined) {
-    if (!isEngine(payload.engine)) return null;
-    engine = payload.engine;
-  }
+  const engine = payload.engine === undefined ? "claude-code" : payload.engine;
+  if (typeof engine !== "string") return null;
   const parsed: ParsedSpawn = {
     persona,
     cwd: payload.cwd,
@@ -336,6 +345,18 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   if (token !== undefined) parsed.token = token;
   const prompt = optionalString(payload.initial_prompt);
   if (prompt !== undefined && prompt !== "") parsed.initialPrompt = prompt;
+  // External choices are validated against the currently advertised declaration.
+  if (!isEngine(engine)) {
+    const row = externalCatalog?.(engine);
+    if (!row || row.id !== engine || row.operations?.spawn !== true) return null;
+    const picks = externalPicks(payload, row);
+    if (!picks) return null;
+    if ("display_name" in payload && typeof payload.display_name !== "string") return null;
+    if (typeof payload.display_name === "string") parsed.displayName = payload.display_name;
+    const requestId = nonEmptyString(payload.request_id);
+    if (requestId !== undefined) parsed.requestId = requestId;
+    return Object.assign(parsed, picks);
+  }
   const resume = optionalString(payload.resume_session_id);
   if (resume !== undefined) parsed.resumeSessionId = resume;
   // Launch-time picks (ADR-0032 F4bc / ADR-0033 F3), relayed into the
@@ -715,7 +736,10 @@ export class Supervisor {
   /** The latest enumeration's probe; a newer request or stopAll aborts it. */
   #enumerationAbort: AbortController | null = null;
 
+  readonly #externalCatalog: SupervisorOptions["externalCatalog"];
+
   constructor(options: SupervisorOptions) {
+    this.#externalCatalog = options.externalCatalog;
     this.#hostId = options.hostId;
     this.#cwdAllowlist = options.cwdAllowlist;
     this.#launch = options.launch;
@@ -745,7 +769,7 @@ export class Supervisor {
   }
 
   observeCodexWork(): CodexWorkSnapshot | null {
-    const known = (engine: EngineKind) => ["claude-code", "codex", "antigravity", "grok"].includes(engine);
+    const known = (engine: string) => ["claude-code", "codex", "antigravity", "grok"].includes(engine);
     const children = [...this.#children];
     const spawns = [...this.#pendingSpawns];
     const switches = [...this.#pendingSwitches];
@@ -798,7 +822,7 @@ export class Supervisor {
     const requestId = isObject(payload)
       ? nonEmptyString(payload.request_id)
       : undefined;
-    const parsed = parseSpawn(payload);
+    const parsed = parseSpawn(payload, this.#externalCatalog);
     if (parsed === null) {
       this.#fail(agentId, "error", requestId);
       return;
@@ -809,6 +833,10 @@ export class Supervisor {
     }
     if (this.#children.has(agentId) || this.#pendingSpawns.has(agentId)) {
       this.#fail(agentId, "already_running", requestId);
+      return;
+    }
+    if (!isEngine(parsed.engine)) {
+      this.#launchSpawn(agentId, parsed);
       return;
     }
     const resume = parsed.resumeSessionId;
@@ -902,7 +930,8 @@ export class Supervisor {
       ? nonEmptyString(payload.request_id)
       : undefined;
     const preflight = entry.child.readRecovery?.();
-    if (preflight !== undefined && (!preflight.ok || preflight.record.state === "blocked")) {
+    if (externalNeedsSession(entry.parsed, preflight)
+        || (preflight !== undefined && (!preflight.ok || preflight.record.state === "blocked"))) {
       process.stderr.write(`runner: restart recovery refused for ${agentId}; ${this.#recoveryDiagnostic(entry, preflight)}; child retained; use applicable switch/reset/restore or stop\n`);
       this.#fail(agentId, "error", requestId);
       return;
@@ -950,7 +979,7 @@ export class Supervisor {
     if (!isObject(payload)) return;
     const requestId = nonEmptyString(payload.request_id);
     const resume = optionalString(payload.resume_session_id);
-    if (resume === undefined || resume === "") {
+    if (!isEngine(entry.parsed.engine) || resume === undefined || resume === "") {
       this.#fail(agentId, "error", requestId);
       return;
     }
@@ -1001,7 +1030,7 @@ export class Supervisor {
   ): void {
     // The child can stop/crash while Codex I/O is pending. Never resurrect or
     // mutate a stale entry after the scan completes.
-    if (this.#children.get(agentId) !== entry || entry.stopping) return;
+    if (this.#children.get(agentId) !== entry || entry.stopping || !isEngine(entry.parsed.engine)) return;
     const requestId = nonEmptyString(payload.request_id);
     if (!exists) {
       process.stderr.write(
@@ -1146,6 +1175,11 @@ export class Supervisor {
     const mode = payload.mode;
     if (requestId === undefined || requestId === "") return;
     if (mode !== "new" && mode !== "clear") return;
+    if (!isEngine(entry.parsed.engine)) {
+      this.#sendResetResult({ version: "0", host_id: this.#hostId, agent_id: agentId,
+        mode, request_id: requestId, ok: false, reason: "unsupported_session_reset" });
+      return;
+    }
     if (!this.#launchable(agentId, entry.parsed)) {
       this.#sendResetResult({
         version: "0",
@@ -1477,6 +1511,7 @@ export class Supervisor {
   }
 
   #launchable(agentId: string, parsed: ParsedSpawn): boolean {
+    if (!isEngine(parsed.engine)) return !!this.#externalCatalog?.(parsed.engine);
     if (parsed.engine === "codex") {
       // Fail closed: with an unusable CODEX_HOME every Codex wrapper would exit
       // at once and crash-loop until the restart cap. Other engines are
@@ -1509,6 +1544,19 @@ export class Supervisor {
     parsed: ParsedSpawn,
     antigravityCeiling?: AntigravityCeiling,
   ): WrapperConfig {
+    if (!isEngine(parsed.engine)) {
+      return {
+        agent_id: agentId, persona: parsed.persona,
+        display_name: parsed.displayName ?? parsed.persona.name,
+        server_url: parsed.serverUrl ?? this.#wrapperServerUrl,
+        ...(parsed.token === undefined ? {} : { server_token: parsed.token }),
+        ...(parsed.requestId === undefined ? {} : { transition_id: parsed.requestId }),
+        ...(parsed.model === undefined ? {} : { model: parsed.model }),
+        ...(parsed.modelSource === undefined ? {} : { model_source: parsed.modelSource }),
+        ...(parsed.effort === undefined ? {} : { effort: parsed.effort }),
+        ...(parsed.effortSource === undefined ? {} : { effort_source: parsed.effortSource }),
+      };
+    }
     return resolveWrapperConfig(
       agentId,
       parsed,
@@ -1756,7 +1804,7 @@ export class Supervisor {
 
   #selectRecovery(agentId: string, entry: ChildEntry): boolean {
     const snapshot = entry.child.recovery;
-    if (entry.child.exitCode === 79 || (snapshot !== undefined && (!snapshot.ok || snapshot.record.state === "blocked"))) {
+    if (externalNeedsSession(entry.parsed, snapshot) || entry.child.exitCode === 79 || (snapshot !== undefined && (!snapshot.ok || snapshot.record.state === "blocked"))) {
       process.stderr.write(`runner: recovery refused for ${agentId}: ${entry.child.exitCode === 79 ? "checkpoint_unavailable" : this.#recoveryDiagnostic(entry)}; use restore or offline resume_session\n`);
       return false;
     }

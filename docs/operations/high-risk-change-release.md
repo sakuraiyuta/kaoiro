@@ -67,6 +67,7 @@ git diff --name-only <base>..<head> -- \
   runner/src/spawn.ts runner/src/supervisor.ts runner/src/cli.ts \
   runner/src/runner-cli.ts runner/src/config.ts runner/src/config-watcher.ts \
   runner/src/transport.ts runner/src/args.ts runner/src/delivery-settings.ts \
+  runner/src/external-engines.ts runner/src/grok_acp_probe.ts \
   runner/src/permission_ceiling.ts runner/src/resume_snapshot.ts \
   wrapper/core/src/recovery_checkpoint.ts wrapper/core/src/self_command.ts
 
@@ -253,6 +254,10 @@ rm -rf -- "$probe"; echo "GATE PASS"
    as the id. A dirty checkout puts `-dirty` in `rev=`, so the block stops.
 5. Leave evidence in the tracker: the layout, the release id, the block's exit
    status, and the one `runner: host=` line it matched (values stay out).
+
+The four-key override selects only `claude-code` before discovery. Even if
+the copied configuration lists external engines, none runs during this gate.
+Test configured external commands separately with their capability enabled.
 
 What the block fixes:
 

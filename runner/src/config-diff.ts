@@ -19,6 +19,7 @@ const RELOAD_FIELDS: Record<keyof RunnerConfig, true> = {
   cwd_allowlist: true,
   context_work_budget_percent: true,
   capabilities: true,
+  external_engines: true,
   personas: true,
   allowed_personas: true,
   blocked_personas: true,

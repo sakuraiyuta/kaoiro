@@ -8,8 +8,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { EngineKind, WrapperConfig } from "@kaoiro/protocol";
-import { resolveBundledLaunch, storedEngineExecutable } from "./engines.js";
+import type { WrapperConfig } from "@kaoiro/protocol";
+import { isEngine, resolveBundledLaunch, storedEngineExecutable } from "./engines.js";
 import type { LaunchFn, ManagedChild } from "./supervisor.js";
 
 /** The child-process surface toManagedChild needs; ChildProcess satisfies it. */
@@ -67,7 +67,10 @@ export function toManagedChild(child: ExitErrorChild, readRecovery?: () => Recov
  * kaoiro entry; a wrapper is `<command...> wrapper <engine> run <launch file>`
  * (ADR-0076).
  */
-export function makeLauncher(command: string[] = selfCommand()): LaunchFn {
+export function makeLauncher(
+  command: string[] = selfCommand(),
+  externalCommand?: (id: string) => readonly [string, ...string[]] | undefined,
+): LaunchFn {
   const [executable, ...fixed] = command;
   if (executable === undefined) throw new Error("makeLauncher: empty command");
   const prefix: [string, ...string[]] = [executable, ...fixed];
@@ -92,10 +95,13 @@ export function makeLauncher(command: string[] = selfCommand()): LaunchFn {
     cwd: string,
     resumeSessionId?: string,
     initialPrompt?: string,
-    engine: EngineKind = "claude-code",
+    engine = "claude-code",
   ): ManagedChild => {
-    const { command: [program, ...args] } = resolveBundledLaunch(engine, prefix);
-    const executable = storedEngineExecutable(engine);
+    const argv = isEngine(engine)
+      ? resolveBundledLaunch(engine, prefix).command : externalCommand?.(engine);
+    if (!argv) throw new Error("Unknown bundled engine or unconfigured external engine");
+    const [program, ...args] = argv;
+    const executable = isEngine(engine) ? storedEngineExecutable(engine) : undefined;
     const configPath = join(dir, `${agentId}-${counter}.json`);
     const checkpointPath = `${configPath}.recovery`;
     counter += 1;

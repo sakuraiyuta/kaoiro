@@ -17,7 +17,8 @@ import { createDeliverySnapshot, deliveryBehaviourRelay } from "./delivery-setti
 //   server-minted signed-token path (issue #133).
 
 import { codexHome, codexHomeProblem } from "@kaoiro/codex";
-import type { EngineModelInfo } from "@kaoiro/protocol";
+import { ExternalEngines } from "./external-engines.js";
+import type { EngineModelInfo, RunnerRegister } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
 import {
   formatBuildIdentity,
@@ -177,6 +178,28 @@ export async function runRunnerCli(
   dependencies: RunnerCliDependencies = {},
   argv: string[] = process.argv.slice(2),
 ): Promise<RunnerCliRuntime | undefined> {
+  const startup = new AbortController();
+  const interrupt = () => startup.abort();
+  const handleSignals = dependencies.installSignalHandlers ?? true;
+  if (handleSignals) {
+    process.on("SIGINT", interrupt);
+    process.on("SIGTERM", interrupt);
+  }
+  try {
+    return await startRunner(dependencies, argv, startup.signal);
+  } catch (error) {
+    if (!startup.signal.aborted || error !== startup.signal.reason) throw error;
+  } finally {
+    if (handleSignals) {
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", interrupt);
+    }
+  }
+}
+
+async function startRunner(
+  dependencies: RunnerCliDependencies, argv: string[], signal: AbortSignal,
+): Promise<RunnerCliRuntime | undefined> {
   const parseArgs = dependencies.parseRunnerArgs ?? parseRunnerArgs;
   const loadConfig = dependencies.loadRunnerConfig ?? loadRunnerConfig;
   const applyOverride = dependencies.applyServerUrlOverride ?? applyServerUrlOverride;
@@ -225,6 +248,10 @@ export async function runRunnerCli(
   // Read per Phoenix log line, so a reload changes it without a reconnect.
   let heartbeatLogging = resolveHeartbeatLogging(config, process.env);
 
+  const startupRows = config.external_engines;
+  const external = await ExternalEngines.discover(config, configPath, signal);
+  signal.throwIfAborted();
+
   // Explicit `codex.auth_mode` is used verbatim; unset resolves to "unknown"
   // without running `codex doctor` (issue #1214).
   let codexAuthMode: CodexAuthMode = await resolveCodex({
@@ -236,6 +263,7 @@ export async function runRunnerCli(
   // probe on every startup/reload is the whole refresh story — this engine
   // carries no TTL cache and is absent from LIVE_PROBE_ENGINES (no manual
   // refresh_engine_catalog support, engine_catalog_refresh.ts).
+  signal.throwIfAborted();
   let antigravityExecutable: AgyExecutableResolution | undefined =
     isAntigravityEnabled(config)
       ? resolveExecutable(config.antigravity?.cli_path)
@@ -254,10 +282,12 @@ export async function runRunnerCli(
   // file exists for runner-side probe results) — compared only across
   // reloads of THIS process; a fresh runner process has no "last register"
   // to diff against, which is intentional (see design decision below).
+  signal.throwIfAborted();
   let antigravityVersion: string | null =
     antigravityExecutable === undefined
       ? null
       : await resolveVersion(antigravityExecutable, antigravityProbeTimeoutMs);
+  signal.throwIfAborted();
   if (antigravityVersion !== null) {
     process.stderr.write(`runner: antigravity agy version ${antigravityVersion}\n`);
   }
@@ -325,7 +355,8 @@ export async function runRunnerCli(
   const supervisor = createSupervisor({
     hostId: config.host_id,
     ...initialRuntime,
-    launch: createLauncher(),
+    launch: createLauncher(undefined, id => external.command(id)),
+    externalCatalog: id => appliedRegister.engines?.find(row => row.id === id && row.operations?.spawn),
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
     sendResetResult: (result) => link.sendResetResult(result),
@@ -354,12 +385,16 @@ export async function runRunnerCli(
     getAntigravityCatalog: () => antigravityCatalog,
     getAntigravityCliVersion: () => antigravityVersion ?? undefined,
     getGrokCatalog: () => grokCatalog.current(),
-    updateRegister: (register) => { link.updateRegister(register); appliedRegister = register; },
+    updateRegister: (register) => {
+      const next = external.register(register, config);
+      link.updateRegister(next);
+      appliedRegister = next;
+    },
     sendCatalogResult: (result) => link.sendCatalogResult(result),
     buildInfo,
   });
 
-  let appliedRegister = buildRegister(
+  let appliedRegister: RunnerRegister = external.register(buildRegister(
       config,
       antigravityVersion ?? undefined,
       codexAuthMode,
@@ -368,7 +403,7 @@ export async function runRunnerCli(
       antigravityCatalog,
       appliedDelivery,
       grokCatalog.current(),
-    );
+    ), config);
 
   link = createRunnerLink(config.server_url, config.host_id, {
     ...(token === undefined || token === "" ? {} : { token }),
@@ -421,7 +456,7 @@ export async function runRunnerCli(
     }
     void grokCatalog.refresh().then((changed) => {
       if (!changed || closed) return;
-      appliedRegister = buildRegister(
+      const next = external.register(buildRegister(
         config,
         antigravityVersion ?? undefined,
         codexAuthMode,
@@ -430,8 +465,9 @@ export async function runRunnerCli(
         antigravityCatalog,
         appliedDelivery,
         grokCatalog.current(),
-      );
-      link.updateRegister(appliedRegister);
+      ), config);
+      link.updateRegister(next);
+      appliedRegister = next;
     });
   };
 
@@ -459,6 +495,11 @@ export async function runRunnerCli(
         seenAfterReload,
       ),
     ];
+    if (JSON.stringify(next.external_engines ?? []) !== JSON.stringify(startupRows ?? [])) {
+      behaviourLines.push("runner: external_engines changed; restart the runner to apply\n");
+    } else if (external.needsRestart(next.capabilities)) {
+      behaviourLines.push("runner: newly selected external engine requires a runner restart\n");
+    }
     const nextDelivery = createDeliverySnapshot(next);
     const nextBehaviourRelay = deliveryBehaviourRelay(next, nextEnvironment, nextDelivery);
     const nextHeartbeatLogging = resolveHeartbeatLogging(next, nextEnvironment);
@@ -527,7 +568,7 @@ export async function runRunnerCli(
     // Preserve any live-probed Claude catalog on reload so operators do not
     // silently regress to the bootstrap default entry (ADR-0039).
     const claudeOverride = claudeCatalog.getStale() ?? undefined;
-    const nextRegister = buildRegister(
+    const nextRegister = external.register(buildRegister(
       next,
       nextAntigravityVersion ?? undefined,
       nextCodexAuthMode,
@@ -536,7 +577,7 @@ export async function runRunnerCli(
       nextAntigravityCatalog,
       nextDelivery,
       grokCatalog.current(),
-    );
+    ), next);
     const previous = { config, fileConfig, appliedDelivery, appliedRegister, behaviourRelay, runtimeSettings,
       codexAuthMode, antigravityExecutable, antigravityProbeTimeoutMs, antigravityCatalog, antigravityVersion, heartbeatLogging };
     const priorRegister = appliedRegister;

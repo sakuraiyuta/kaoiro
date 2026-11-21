@@ -75,6 +75,7 @@ export interface RunnerConfig {
    * its 60% default. */
   context_work_budget_percent?: number;
   capabilities?: string[];
+  external_engines?: unknown[];
   codex?: CodexConfig;
   antigravity?: AntigravityConfig;
   claude_code?: ClaudeCodeConfig;
@@ -429,6 +430,12 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
     );
   }
 
+  if (raw.external_engines !== undefined) {
+    if (!Array.isArray(raw.external_engines)) {
+      throw new ConfigError("external_engines must be an array");
+    }
+    config.external_engines = raw.external_engines;
+  }
   if (raw.capabilities !== undefined) {
     config.capabilities = parseStringList(
       raw.capabilities,

@@ -432,3 +432,27 @@ through the same behaviour registry; deprecated environment overrides are
 Session enumeration and the resume existence check run a short-lived Grok
 over ACP `session/list` (see the
 [Grok engine reference](../engines/grok-acp.md#cold-resume-and-session-discovery)).
+
+### External engines
+
+Register a trusted local executable with an optional `external_engines` array:
+
+```json
+{"external_engines":[{"id":"sample-engine","command":["/usr/bin/python3","/opt/example engines/sample.py"]}]}
+```
+
+Each row accepts exactly `id` and `command`. The ID starts with a lowercase
+ASCII letter, contains only lowercase letters, digits or hyphens, and is at
+most 64 bytes. Bundled IDs and `claude` are reserved. The first argv element
+must be an absolute executable path. No shell or PATH lookup is involved.
+Fixed arguments retain their boundaries, including empty strings.
+
+With no explicit `capabilities`, the runner selects bundled engines and up
+to 16 valid external rows in file order. An explicit capability list also
+filters external rows **before execution**. A capability alone supplies no
+command. Duplicates disable every row with that ID. A bad row or declaration
+is reported by ID (or array index) and omitted. An invalid configuration
+file still fails validation. Discovery occurs once at startup. Restart to
+add, edit or repair a command. Reload may narrow the advertised set or
+reselect an already discovered row. Catalog refresh and reconnect reuse the
+startup declarations. See the [launch contract](../protocol/launch-contract.md).
