@@ -331,6 +331,22 @@ defmodule KaoiroServer.AgentStatesTest do
                AgentStates.wire_projection(%{id => Map.put(raw, "persona", large)}, engines)
     end
 
+    test "a non-external disconnect never records the wrapper's engine label", %{store: store} do
+      id = "agent-display-only"
+      live = envelope(id, %{"ext" => %{"engine" => "display-label"}})
+
+      for engine <- [nil | ~w(claude-code codex antigravity grok claude)] do
+        :ok = AgentStates.put(live, owner: self(), server: store)
+
+        assert {:ok, %{"state" => "disconnected", "ext" => ext}} =
+                 AgentStates.disconnect(id, self(), "t1", server: store, external_engine: engine)
+
+        refute Map.has_key?(ext, "engine")
+        {_, engines} = AgentStates.operator_snapshot(store)
+        refute Map.has_key?(engines, id)
+      end
+    end
+
     test "owner が一致すれば disconnected を導出して保存する", %{store: store} do
       owner = self()
 

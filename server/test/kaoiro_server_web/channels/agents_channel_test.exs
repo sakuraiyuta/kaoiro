@@ -4683,6 +4683,26 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
     end
 
+    test "a second disconnect without an external ID clears it before an operator joins" do
+      id = "test.disconnect-twice"
+      engine = "sample-engine"
+      :ok = AgentStates.put(state_with_ext(id), owner: self())
+      assert {:ok, _} = AgentStates.disconnect(id, self(), "t1", external_engine: engine)
+      assert {_, %{^id => ^engine}} = AgentStates.operator_snapshot()
+
+      assert {:ok, _} = AgentStates.disconnect(id, self(), "t2")
+      {_, engines} = AgentStates.operator_snapshot()
+      refute Map.has_key?(engines, id)
+
+      join_as(:operator)
+
+      assert_push "snapshot", %{
+        "agents" => %{^id => %{"state" => "disconnected", "ts" => "t2", "ext" => ext}}
+      }
+
+      refute Map.has_key?(ext, "engine")
+    end
+
     test "viewer への snapshot からも ext が落ちる" do
       agent_id = "test.ext-3"
       :ok = AgentStates.put(state_with_ext(agent_id))
