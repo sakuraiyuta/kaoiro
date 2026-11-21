@@ -1,5 +1,5 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,6 +57,19 @@ describe("external engine registration", () => {
     const { root, found } = await discover(rows);
     expect(found.command("sample")).toBeUndefined();
     expect(() => readFileSync(join(root, "argv"))).toThrow();
+  });
+
+  it("distinguishes invalid UTF-8 from an execution failure", async () => {
+    const write = vi.spyOn(process.stderr, "write");
+    try {
+      const { register } = await discover([
+        fixture("broken", "process.stdout.write(Buffer.from([255]))"), valid,
+      ]);
+      expect(write).toHaveBeenCalledWith("runner: external engine broken unavailable: invalid_utf8\n");
+      expect(register.capabilities).toEqual(["grok", "sample"]);
+    } finally {
+      write.mockRestore();
+    }
   });
 
   it("skips an unselected external command before discovery", async () => {

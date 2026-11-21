@@ -30,22 +30,25 @@ function model(value: unknown): value is EngineModelInfo {
       || (typeof value.default_effort === "string" && levels.includes(value.default_effort)));
 }
 
+// Only errors raised here carry a public diagnostic. System errors may include argv.
+class DescribeFailure extends Error {}
+
 function declaration(bytes: Buffer, id: string): EngineCatalogEntry {
   let decoded: string;
   try { decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
-  catch { throw new Error("invalid_utf8"); }
+  catch { throw new DescribeFailure("invalid_utf8"); }
   let raw: unknown;
-  try { raw = JSON.parse(decoded); } catch { throw new Error("invalid_json"); }
-  if (!object(raw) || !onlyKeys(raw, ["version", "id", "models", "operations"])) throw new Error("invalid_declaration");
-  if (raw.version !== 1) throw new Error("unsupported_version");
-  if (raw.id !== id) throw new Error("id_mismatch");
+  try { raw = JSON.parse(decoded); } catch { throw new DescribeFailure("invalid_json"); }
+  if (!object(raw) || !onlyKeys(raw, ["version", "id", "models", "operations"])) throw new DescribeFailure("invalid_declaration");
+  if (raw.version !== 1) throw new DescribeFailure("unsupported_version");
+  if (raw.id !== id) throw new DescribeFailure("id_mismatch");
   const ops = raw.operations;
   const optional = ["resume", "enumerate_sessions", "refresh_engine_catalog"];
   if (!object(ops) || !onlyKeys(ops, ["version", "spawn", ...optional])
       || ops.version !== 1 || ops.spawn !== true
-      || optional.some(key => key in ops && ops[key] !== false)) throw new Error("invalid_operations");
+      || optional.some(key => key in ops && ops[key] !== false)) throw new DescribeFailure("invalid_operations");
   if (!Array.isArray(raw.models) || raw.models.length > 32 || !raw.models.every(model)
-      || new Set(raw.models.map(row => row.value)).size !== raw.models.length) throw new Error("invalid_models");
+      || new Set(raw.models.map(row => row.value)).size !== raw.models.length) throw new DescribeFailure("invalid_models");
   return { id, models: raw.models, operations: { version: 1, spawn: true } };
 }
 
@@ -64,23 +67,23 @@ async function describe(command: Command, cwd: string, signal: AbortSignal): Pro
     return await new Promise<Buffer>((ok, fail) => {
       const chunks: Buffer[] = [];
       let size = 0;
-      abort = () => fail(new Error("aborted"));
-      deadline = setTimeout(() => fail(new Error("timeout")), 2_000);
+      abort = () => fail(new DescribeFailure("aborted"));
+      deadline = setTimeout(() => fail(new DescribeFailure("timeout")), 2_000);
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
       child.once("error", (err: NodeJS.ErrnoException) =>
-        fail(new Error(err.code === "ENOENT" ? "not_found" : "cannot_execute")));
+        fail(new DescribeFailure(err.code === "ENOENT" ? "not_found" : "cannot_execute")));
       child.stdout.on("data", (chunk: Buffer) => {
         size += chunk.length;
         if (size > 16_384) {
           child.stdout.pause();
-          fail(new Error("output_limit"));
+          fail(new DescribeFailure("output_limit"));
         } else chunks.push(chunk);
       });
-      child.stdout.once("error", () => fail(new Error("read_failed")));
+      child.stdout.once("error", () => fail(new DescribeFailure("read_failed")));
       child.once("close", (code, sig) => {
         if (code === 0 && sig === null) ok(Buffer.concat(chunks));
-        else fail(new Error(sig ? "signalled" : "nonzero_exit"));
+        else fail(new DescribeFailure(sig ? "signalled" : "nonzero_exit"));
       });
     });
   } finally {
@@ -91,7 +94,7 @@ async function describe(command: Command, cwd: string, signal: AbortSignal): Pro
       await endProbeGroup(pid);
       if (probeGroupAlive(pid)) {
         child.stdout.destroy();
-        throw new Error("cleanup_unconfirmed");
+        throw new DescribeFailure("cleanup_unconfirmed");
       }
     }
     child.stdout.destroy();
@@ -153,9 +156,7 @@ export class ExternalEngines {
         found.#ready.set(id, { command: raw.command, row: declaration(bytes, id) });
       } catch (error) {
         signal.throwIfAborted();
-        // Only our fixed reasons are safe to publish. A spawn error may carry argv.
-        const reason = error instanceof Error ? error.message : "";
-        diagnostic(id, /^[a-z_]+$/.test(reason) ? reason : "cannot_execute");
+        diagnostic(id, error instanceof DescribeFailure ? error.message : "cannot_execute");
       }
     }
     return found;
