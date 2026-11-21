@@ -8273,6 +8273,48 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "切断時の disconnected 導出" do
+    test "disconnect uses the recorded launch ID without sharing it in the peer directory" do
+      @endpoint.subscribe("agents:lobby")
+      peer = join_wrapper("test.disconnect-observer")
+
+      for {recorded, reported} <- [
+            {"sample-engine", "display-label"},
+            {"sample-engine", nil},
+            {nil, "display-label"}
+          ] do
+        id = "test.disconnect-#{System.unique_integer([:positive])}"
+
+        if recorded do
+          SessionPointers.record(id, nil, "/launch", recorded)
+          assert %{engine: ^recorded} = SessionPointers.get(id)
+        end
+
+        socket = join_wrapper(id)
+        ext = if reported, do: %{"engine" => reported}, else: %{}
+        message = envelope(id, "idle") |> Map.merge(%{"session_id" => "session-a", "ext" => ext})
+        assert_reply push(socket, "envelope", message), :ok
+        Process.unlink(socket.channel_pid)
+        :ok = close(socket)
+
+        assert_broadcast "envelope", %{
+          "agent_id" => ^id,
+          "state" => "disconnected",
+          "session_id" => "session-a",
+          "ext" => wire
+        }
+
+        assert wire["disconnect"] == %{"origin" => "unplanned", "reason" => "socket_lost"}
+
+        if recorded,
+          do: assert(wire["engine"] == recorded),
+          else: refute(Map.has_key?(wire, "engine"))
+
+        assert_reply push(peer, "directory_request", %{}), :ok, %{"agents" => agents}
+        assert %{"state" => "disconnected"} = row = Enum.find(agents, &(&1["agent_id"] == id))
+        refute Map.has_key?(row, "engine")
+      end
+    end
+
     test "channel 終了で disconnected を broadcast し snapshot を更新する" do
       agent_id = "test.disc-1"
       @endpoint.subscribe("agents:lobby")

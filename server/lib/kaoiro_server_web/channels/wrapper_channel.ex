@@ -2632,7 +2632,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     planned? = PlannedDisconnects.active?(agent_id)
 
-    case AgentStates.disconnect(agent_id, self(), ts, planned: planned?) do
+    opts = [planned: planned?, external_engine: socket.assigns[:external_engine]]
+
+    case AgentStates.disconnect(agent_id, self(), ts, opts) do
       {:ok, envelope} ->
         # ADR-0048 F1: the parent's departure discards its tasks. Piggy-
         # backs on AgentStates.disconnect/3's own owner check succeeding

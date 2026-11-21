@@ -23,7 +23,7 @@ for the SDK's **settled message/callback contract and derivation mapping**.
 | `waiting_input` | Turn complete, waiting for next instruction | After `SDKResultMessage`, waiting for streaming input | Waiting |
 | `done` | Instant of turn completion | `SDKResultMessage` (success) | Happy (→ `waiting_input`) |
 | `error` | Error/retry | `SDKResultMessage` (error_*/is_error) | Concerned |
-| `disconnected` | Wrapper connection lost; `ext.disconnect?` identifies a validated origin/reason pair when the disconnect was terminal | Server-derived | Unknown/absent |
+| `disconnected` | Wrapper connection lost; for external launches the server projects the recorded launch ID as `ext.engine` only to operators and admins on the disconnect notice and join snapshot; `ext.disconnect?` identifies a validated origin/reason pair when the disconnect was terminal | Server-derived | Unknown/absent |
 
 Control (gap 1) is also settled: streaming input (`AsyncIterable<SDKUserMessage>`),
 `Query.interrupt()`, and `canUseTool` complete within one Query ([agent-sdk-events](../engines/claude-events.md)).

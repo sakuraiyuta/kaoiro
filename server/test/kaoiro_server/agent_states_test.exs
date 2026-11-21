@@ -279,6 +279,58 @@ defmodule KaoiroServer.AgentStatesTest do
       %{store: store}
     end
 
+    test "recorded disconnect engine survives overlays, not a new owner", %{store: store} do
+      id = "agent-external"
+      engine = "sample-engine"
+      live = envelope(id, %{"ext" => %{"engine" => "display-label"}})
+      :ok = AgentStates.put(live, owner: self(), server: store)
+      opts = [server: store, external_engine: engine, planned: true]
+
+      assert {:ok, %{"ext" => %{"engine" => ^engine} = ext}} =
+               AgentStates.disconnect(id, self(), "t1", opts)
+
+      assert ext == %{"engine" => engine}
+      assert AgentStates.snapshot(store)[id]["ext"] == %{}
+
+      view = KaoiroServer.DeliveryPolicies.State.view(nil, nil)
+      :ok = AgentStates.overlay_delivery_policy(id, view, server: store)
+      assert {states, %{^id => ^engine} = engines} = AgentStates.operator_snapshot(store)
+      assert states[id]["ext"] == %{"delivery_policy" => view}
+      assert {projected, false} = AgentStates.wire_projection(states, engines)
+      assert projected[id]["ext"] == %{"engine" => engine, "delivery_policy" => view}
+
+      next_owner = spawn(fn -> :ok end)
+      :ok = AgentStates.put(live, owner: next_owner, server: store)
+      assert :noop = AgentStates.disconnect(id, self(), "t2", opts)
+      assert {states, engines} = AgentStates.operator_snapshot(store)
+      assert engines == %{}
+      assert states[id]["state"] == "idle"
+    end
+
+    test "only disconnected external engines survive snapshot compaction" do
+      id = "compact-disconnected"
+      raw = envelope(id, %{"state" => "disconnected", "ext" => %{}})
+
+      for engine <- ~w(claude-code codex antigravity grok claude) ++ [nil] do
+        assert {%{^id => ^raw}, false} =
+                 AgentStates.wire_projection(%{id => raw}, %{id => engine})
+      end
+
+      live = envelope(id)
+      engines = %{id => "sample-engine"}
+      assert {%{^id => ^live}, false} = AgentStates.wire_projection(%{id => live}, engines)
+      large = String.duplicate("x", 8_000_000)
+
+      assert {%{^id => compact}, true} =
+               AgentStates.wire_projection(%{id => Map.put(raw, "payload", large)}, engines)
+
+      assert compact["ext"] == %{"engine" => "sample-engine"}
+      refute Map.has_key?(compact, "payload")
+
+      assert {%{}, true} =
+               AgentStates.wire_projection(%{id => Map.put(raw, "persona", large)}, engines)
+    end
+
     test "owner が一致すれば disconnected を導出して保存する", %{store: store} do
       owner = self()
 

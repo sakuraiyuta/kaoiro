@@ -66,6 +66,7 @@ defmodule KaoiroServer.AgentStates do
 
   alias KaoiroServer.TransportLimits
   alias KaoiroServer.DisconnectAttribution
+  alias KaoiroServer.ExternalEngine
 
   # Wrapper connections may be unauthenticated (dev mode), so cap the map
   # to keep fabricated agent_ids from growing memory without bound.
@@ -183,7 +184,8 @@ defmodule KaoiroServer.AgentStates do
   def disconnect(agent_id, owner, ts, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     planned? = Keyword.get(opts, :planned, false)
-    GenServer.call(server, {:disconnect, agent_id, owner, ts, planned?})
+    external_engine = Keyword.get(opts, :external_engine)
+    GenServer.call(server, {:disconnect, agent_id, owner, ts, planned?, external_engine})
   end
 
   @doc "Records one owner-bound disconnect intent after validating its closed origin/reason pair."
@@ -318,19 +320,24 @@ defmodule KaoiroServer.AgentStates do
     GenServer.call(server, :snapshot)
   end
 
+  @doc "Raw states and their recorded external disconnect IDs for an operator join."
+  def operator_snapshot(server \\ __MODULE__), do: GenServer.call(server, :operator_snapshot)
+
   @doc """
   Returns the bounded join-time wire projection without changing the
   control-plane snapshot used by session-reset checks.
   """
   def wire_projection, do: snapshot() |> wire_projection()
 
-  def wire_projection(envelopes) when is_map(envelopes) do
+  def wire_projection(envelopes, external_engines \\ %{}) when is_map(envelopes) do
     {agents, incomplete?, _bytes} =
       envelopes
       |> Enum.sort_by(fn {agent_id, envelope} ->
         {if(pending_envelope?(envelope), do: 0, else: 1), agent_id}
       end)
       |> Enum.reduce({%{}, false, 0}, fn {agent_id, envelope}, {agents, incomplete?, bytes} ->
+        engine = external_engines[agent_id]
+        envelope = project_disconnect_engine(envelope, engine)
         entry_bytes = wire_entry_bytes(agent_id, envelope)
 
         cond do
@@ -344,7 +351,7 @@ defmodule KaoiroServer.AgentStates do
             {agents, true, bytes}
 
           true ->
-            compacted = compact_envelope(envelope)
+            compacted = envelope |> compact_envelope() |> project_disconnect_engine(engine)
             compacted_bytes = wire_entry_bytes(agent_id, compacted)
 
             if bytes + compacted_bytes + 1 <= @wire_projection_bytes do
@@ -626,14 +633,21 @@ defmodule KaoiroServer.AgentStates do
     end
   end
 
-  def handle_call({:disconnect, agent_id, owner, ts, planned?}, _from, state) do
+  def handle_call({:disconnect, agent_id, owner, ts, planned?, engine}, _from, state) do
     case state.agents do
       %{^agent_id => %{envelope: envelope, owner: ^owner} = entry} ->
         disconnect = select_disconnect(entry.disconnect_intents, owner, state.now_ms.())
         derived = disconnected_envelope(envelope, ts, if(planned?, do: nil, else: disconnect))
 
         updated = %{entry | envelope: derived, disconnect_intents: %{}}
-        {:reply, {:ok, derived}, put_agent(state, agent_id, updated)}
+
+        updated =
+          if ExternalEngine.external?(engine),
+            do: Map.put(updated, :disconnected_external_engine, engine),
+            else: Map.delete(updated, :disconnected_external_engine)
+
+        {:reply, {:ok, project_disconnect_engine(derived, engine)},
+         put_agent(state, agent_id, updated)}
 
       _ ->
         {:reply, :noop, state}
@@ -778,6 +792,21 @@ defmodule KaoiroServer.AgentStates do
     {:reply, Map.new(state.agents, fn {id, %{envelope: env}} -> {id, env} end), state}
   end
 
+  def handle_call(:operator_snapshot, _from, state) do
+    snapshot =
+      Enum.reduce(state.agents, {%{}, %{}}, fn {id, entry}, {states, engines} ->
+        engines =
+          case entry do
+            %{disconnected_external_engine: engine} -> Map.put(engines, id, engine)
+            _ -> engines
+          end
+
+        {Map.put(states, id, entry.envelope), engines}
+      end)
+
+    {:reply, snapshot, state}
+  end
+
   def handle_call(:histories, _from, state) do
     histories =
       for {id, %{history: h}} <- state.agents, h != [], into: %{}, do: {id, Enum.reverse(h)}
@@ -893,6 +922,16 @@ defmodule KaoiroServer.AgentStates do
 
     {:reply, ids, state}
   end
+
+  defp project_disconnect_engine(%{"state" => "disconnected"} = envelope, engine) do
+    if ExternalEngine.external?(engine) do
+      Map.update(envelope, "ext", %{"engine" => engine}, &Map.put(&1, "engine", engine))
+    else
+      envelope
+    end
+  end
+
+  defp project_disconnect_engine(envelope, _engine), do: envelope
 
   defp incomplete_payload(agents), do: %{"agents" => agents, "snapshot_incomplete" => true}
 

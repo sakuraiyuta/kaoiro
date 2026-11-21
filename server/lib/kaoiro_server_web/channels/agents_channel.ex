@@ -335,7 +335,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_info(:after_join, socket) do
     role = socket.assigns[:role]
 
-    states = AgentStates.snapshot()
+    {states, external_engines} =
+      if role in @operator_capable_roles,
+        do: AgentStates.operator_snapshot(),
+        else: {AgentStates.snapshot(), %{}}
 
     agents =
       states
@@ -349,7 +352,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       end)
       |> Map.new()
 
-    {agents, snapshot_incomplete?} = AgentStates.wire_projection(agents)
+    {agents, snapshot_incomplete?} = AgentStates.wire_projection(agents, external_engines)
 
     # issue #170 (ADR-0048 F3): the active task set rides the dedicated
     # join-time task_snapshot frame. Operator-only (こはく決定 2026-08-09):

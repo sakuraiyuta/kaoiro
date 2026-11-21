@@ -4647,6 +4647,42 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert pushed["ext"]["cwd"] == "/home/user/secret-project"
     end
 
+    for role <- [:viewer, :operator, :admin] do
+      @tag disconnect_role: role
+      test "disconnected external agent on #{role} notice and join", %{disconnect_role: role} do
+        id = "test.disconnect-#{role}"
+        engine = "sample-engine"
+        :ok = AgentStates.put(state_with_ext(id), owner: self())
+        _first = join_as(role)
+        assert_push "snapshot", %{"agents" => %{^id => %{"state" => "thinking"}}}
+
+        assert {:ok, notice} = AgentStates.disconnect(id, self(), "t1", external_engine: engine)
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", notice)
+        assert_push "envelope", %{"agent_id" => ^id, "state" => "disconnected"} = frame
+
+        if role == :viewer do
+          refute Map.has_key?(frame, "ext")
+        else
+          assert frame["ext"]["engine"] == engine
+        end
+
+        policy = KaoiroServer.DeliveryPolicyAdmission.snapshot(id).view
+        :ok = AgentStates.overlay_delivery_policy(id, policy)
+        _next = join_as(role)
+
+        assert_push "snapshot", %{
+          "agents" => %{^id => %{"state" => "disconnected", "ext" => ext}}
+        }
+
+        if role == :viewer do
+          assert ext == %{"delivery_policy" => policy}
+        else
+          assert ext["delivery_policy"] == policy
+          assert ext["engine"] == engine
+        end
+      end
+    end
+
     test "viewer への snapshot からも ext が落ちる" do
       agent_id = "test.ext-3"
       :ok = AgentStates.put(state_with_ext(agent_id))
