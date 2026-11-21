@@ -70,6 +70,9 @@ describe("external engine registration", () => {
     ["root key", { ...declaration, unknown: false }],
     ["operation key", { ...declaration, operations: { ...catalog.operations, unknown: false } }],
     ["model key", { ...declaration, models: [{ ...catalog.models[0], description: "no" }] }],
+    ["non-string default", { ...declaration, models: [{
+      value: "v", display_name: "v", effort_levels: ["low"], default_effort: 1,
+    }] }],
     ["default alone", { ...declaration, models: [{ value: "v", display_name: "v", default_effort: "x" }] }],
     ["unknown ABI", { ...declaration, version: 2 }],
   ])("isolates a bad declaration (%s) from a healthy sibling", async (_name, raw) => {

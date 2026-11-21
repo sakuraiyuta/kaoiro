@@ -26,7 +26,8 @@ function model(value: unknown): value is EngineModelInfo {
   if (levels === undefined) return value.default_effort === undefined;
   return Array.isArray(levels) && levels.length >= 1 && levels.length <= 16
     && levels.every(level => bounded(level, 64)) && new Set(levels).size === levels.length
-    && (value.default_effort === undefined || levels.includes(value.default_effort));
+    && (value.default_effort === undefined
+      || (typeof value.default_effort === "string" && levels.includes(value.default_effort)));
 }
 
 function declaration(bytes: Buffer, id: string): EngineCatalogEntry {
