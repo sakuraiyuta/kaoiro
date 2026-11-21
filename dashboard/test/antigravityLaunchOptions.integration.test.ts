@@ -7,6 +7,9 @@ import "./isolation.setup";
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { makeReactiveLaunchDialogProps } from "./reactiveProps.svelte";
+import { SessionEnumeration } from "../src/lib/sessionEnumeration";
+import type { EngineCatalog, ModelOption } from "../src/lib/protocol";
 import LaunchDialog from "../src/lib/LaunchDialog.svelte";
 import type { HostInfo, KaoiroConnection } from "../src/lib/protocol";
 
@@ -79,18 +82,13 @@ async function render(hosts: HostInfo[] = [multiEngineHost()]) {
   const target = document.createElement("div");
   document.body.append(target);
   const conn = makeConnection();
-  const component = mount(LaunchDialog, {
-    target,
-    props: {
-      hosts,
-      connection: conn,
-      sessions: null,
-      onClose: vi.fn(),
-    },
-  });
+  const enumeration = new SessionEnumeration();
+  const initial = { hosts, connection: conn, sessions: null, enumeration, onClose: vi.fn() };
+  const props = makeReactiveLaunchDialogProps(initial);
+  const component = mount(LaunchDialog, { target, props });
   mounted.push(component);
   await tick();
-  return { target, conn };
+  return { target, conn, props, enumeration };
 }
 
 function labelledSelect(target: Element, label: string): HTMLSelectElement {
@@ -251,5 +249,75 @@ describe("LaunchDialog antigravity sandbox/approval/network_access (phase-34 A12
 
     expect(findLabel(target, "sandbox")).toBeDefined();
     expect(findLabel(target, "承認")).toBeUndefined();
+  });
+});
+
+function externalHost(flags: EngineCatalog["operations"], models: ModelOption[] = []) {
+  const host = multiEngineHost();
+  host.capabilities = ["sample"];
+  host.engines = [{ id: "sample", models, operations: flags }];
+  return host;
+}
+
+describe("external launch declarations", () => {
+  it.each([false, true])("requires resume for the selected session (resume=%s)", async resume => {
+    const { target, conn, enumeration } = await render([
+      externalHost({ version: 1, spawn: true, enumerate_sessions: true, resume }),
+    ]);
+    target.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click();
+    await tick();
+    expect(conn.enumerateSessions).toHaveBeenCalledWith("host-a", "/workspace", "sample");
+    enumeration.receive({ host_id: "host-a", cwd: "/workspace", engine: "sample",
+      sessions: [{ session_id: "saved" }] });
+    await vi.waitFor(() => expect(labelledSelect(target, "セッション").value).toBe("saved"));
+    expect(!!target.querySelector("button[type=submit]")).toBe(resume);
+    await submit(target);
+    expect(conn.spawn).toHaveBeenCalledTimes(resume ? 1 : 0);
+    if (resume) expect(conn.spawn).toHaveBeenCalledWith(expect.objectContaining({
+      engine: "sample", resume_session_id: "saved",
+    }));
+  });
+
+  it.each([false, true])("rejects the legacy launch ID (catalog row=%s)", async row => {
+    const host = multiEngineHost();
+    host.capabilities = ["claude"];
+    host.engines = row ? [{id: "claude", models: [], operations: {version: 1, spawn: true}}] : [];
+    const { target, conn } = await render([host]);
+    expect(labelledSelect(target, "エンジン").value).toBe("claude");
+    expect(target.textContent).toContain("利用できる操作なし");
+    await submit(target);
+    expect(conn.spawn).not.toHaveBeenCalled();
+  });
+
+  it("offers a new launch without history or catalog refresh", async () => {
+    const { target, conn } = await render([externalHost({ version: 1, spawn: true })]);
+    expect(target.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(target.querySelector(".catalog-refresh button")).toBeNull();
+    expect(conn.enumerateSessions).not.toHaveBeenCalled();
+    expect(conn.refreshEngineCatalog).not.toHaveBeenCalled();
+    await submit(target);
+    expect(conn.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["model", "effort"])("requires an explicit choice after losing %s", async axis => {
+    const ops = { version: 1, spawn: true } as const;
+    const model = { value: "custom", display_name: "Custom", effort_levels: ["light", "deep"] };
+    const { target, conn, props } = await render([externalHost(ops, [model])]);
+    await selectValue(labelledSelect(target, "モデル"), "custom");
+    await selectValue(labelledSelect(target, "effort"), "deep");
+    props.hosts = [externalHost(ops, axis === "model" ? [] : [{ ...model, effort_levels: ["light"] }])];
+    await tick();
+    const pick = labelledSelect(target, axis === "model" ? "モデル" : "effort");
+    expect(pick.querySelector("option[disabled]")).not.toBeNull();
+    expect(target.querySelector<HTMLButtonElement>("button[type=submit]")!.disabled).toBe(true);
+    await submit(target);
+    expect(conn.spawn).not.toHaveBeenCalled();
+    await selectValue(pick, "");
+    await submit(target);
+    expect(conn.spawn).toHaveBeenCalledTimes(1);
+    const [payload] = vi.mocked(conn.spawn).mock.calls[0]!;
+    expect(payload).not.toHaveProperty("effort");
+    if (axis === "model") expect(payload).not.toHaveProperty("model");
+    else expect(payload.model).toBe("custom");
   });
 });

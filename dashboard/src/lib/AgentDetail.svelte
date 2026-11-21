@@ -550,6 +550,7 @@
   // approval host-fixed to never (ADR-0033 F3), Antigravity with sandbox /
   // network / approval mutable under a launch ceiling (ADR-0057 F4c B0).
   const agentEngine = $derived(engineFrom(envelope));
+  // Already-running wrappers can still report the legacy Claude engine name.
   const external = $derived(agentEngine !== null && !bundledEngine(agentEngine) && agentEngine !== "claude");
   const originHostId = $derived(hostIdFromAgentId(envelope.agent_id));
   const ops = $derived(agentEngine ? externalCatalog(
