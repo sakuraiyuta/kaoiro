@@ -59,6 +59,15 @@ describe("external engine registration", () => {
     expect(() => readFileSync(join(root, "argv"))).toThrow();
   });
 
+  it("advertises a model that has no effort controls", async () => {
+    const minimal = { value: "standard", display_name: "Standard" };
+    const { register } = await discover([
+      fixture("sample", output({ ...declaration, models: [minimal] })),
+    ]);
+    expect(register.engines?.find(row => row.id === "sample")?.models)
+      .toEqual([minimal]);
+  });
+
   it("distinguishes invalid UTF-8 from an execution failure", async () => {
     const write = vi.spyOn(process.stderr, "write");
     try {
