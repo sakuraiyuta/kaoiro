@@ -2,7 +2,7 @@
 title: Launch contract between the runner and a wrapper
 description: How the runner finds, starts, configures, supervises and stops a wrapper process ("contract 1"), the engine-specific work the runner does outside that contract, and the paths a wrapper hands to its engine.
 status: accepted
-last_updated: 2026-11-20
+last_updated: 2026-11-21
 related: [protocol, architecture]
 ---
 
@@ -73,13 +73,7 @@ followed by `wrapper <engine> <verb>`.
 | Claude Code | None to the engine. The runner and the Claude wrapper, through the probe client, start `<entry> wrapper claude-code probe` with the command of contract 1. |
 | Grok | None. The wrapper serves an HTTP MCP endpoint on loopback and hands its URL to Grok. |
 
-## Related
-
-- [Runner control and launch](runner-control.md).
-- [Wrapper configuration](../configuration/wrapper.md).
-- [ADR-0075](../../adr/0075-runner-engine-launch-contract.md).
-
-### Configured commands
+## Configured commands
 
 The runner invokes a configured argv followed by `describe` from the config
 file's directory. Return one UTF-8 JSON object on stdout and exit zero within
@@ -110,3 +104,9 @@ model/effort pairs and their sources can be reapplied. A stored session ID
 requires resume support. Install the receiving server and dashboard before
 enabling external engines. To roll back, stop the external agents, remove
 their configuration and restart the runner before reverting the server.
+
+## Related
+
+- [Runner control and launch](runner-control.md).
+- [Wrapper configuration](../configuration/wrapper.md).
+- [ADR-0075](../../adr/0075-runner-engine-launch-contract.md).

@@ -261,6 +261,7 @@ describe("spawn-only external child recovery", () => {
   const message = { ...spawnMsg, engine: "sample", initial_prompt: "first" };
   function externalHarness() {
     return harness({
+      contextWorkBudgetPercent: 50,
       externalCatalog: id => id === "sample" ? {
         id, models: [], operations: { version: 1, spawn: true },
       } : undefined,
@@ -271,6 +272,9 @@ describe("spawn-only external child recovery", () => {
   it("rejects session operations before touching the child or the store", () => {
     const h = externalHarness();
     h.sup.handleSpawn(message);
+    expect(Object.keys(h.configs[0]!).sort()).toEqual([
+      "agent_id", "display_name", "persona", "server_token", "server_url",
+    ]);
     h.sup.handleSwitchSession({ ...message, resume_session_id: "next",
       request_id: "switch" });
     expect(h.results.at(-1)).toMatchObject({

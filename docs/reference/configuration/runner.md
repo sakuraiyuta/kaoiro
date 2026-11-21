@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-11-20
+last_updated: 2026-11-21
 ---
 
 # Runner configuration

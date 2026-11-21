@@ -218,7 +218,7 @@ describe("toManagedChild", () => {
   });
 });
 
-it("the default launcher isolates every built wrapper before its first action", async () => {
+it("the launcher isolates bundled and configured commands before their first action", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "fuji464-runner-"));
   const previous = { CODEX_HOME: process.env.CODEX_HOME, NODE_OPTIONS: process.env.NODE_OPTIONS,
     FUJI464_CAPTURE: process.env.FUJI464_CAPTURE };
@@ -227,22 +227,30 @@ it("the default launcher isolates every built wrapper before its first action", 
 const path = require('node:path');
 const configPath = process.argv.at(-1);
 fs.writeFileSync(path.join(process.env.FUJI464_CAPTURE, path.basename(configPath) + '.result'),
-  JSON.stringify({ home: process.env.CODEX_HOME ?? null, config: JSON.parse(fs.readFileSync(configPath, 'utf8')) }));
+  JSON.stringify({ argv: process.argv.slice(1, -1), mode: fs.statSync(configPath).mode & 0o777,
+    home: process.env.CODEX_HOME ?? null, config: JSON.parse(fs.readFileSync(configPath, 'utf8')) }));
 process.exit(0);`);
   try {
     process.env.CODEX_HOME = join(scratch, "state");
     process.env.NODE_OPTIONS = `--require=${capture}`;
     process.env.FUJI464_CAPTURE = scratch;
-    const launch = makeLauncher(ENTRY);
-    for (const engine of ["codex", "claude-code", "antigravity", "grok"] as const) {
+    const launch = makeLauncher(ENTRY, id => id === "sample"
+      ? [process.execPath, capture, "fixed arg", ""] : undefined);
+    const engines = ["codex", "claude-code", "antigravity", "grok", "sample"];
+    for (const [index, engine] of engines.entries()) {
       const id = `fuji464-${engine}`;
       await new Promise<void>((resolve, reject) => {
         const child = launch(id, { agent_id: id, codex_tool_home: process.env.CODEX_HOME } as never, scratch, undefined, undefined, engine);
         child.on("exit", resolve);
         setTimeout(() => reject(new Error(`${engine} did not exit`)), 10_000).unref();
       });
-      const resultFile = join(scratch, `${id}-${["codex", "claude-code", "antigravity", "grok"].indexOf(engine)}.json.result`);
-      const result = JSON.parse(readFileSync(resultFile, "utf8")) as { home: string | null; config: { codex_tool_home?: string } };
+      const resultFile = join(scratch, `${id}-${index}.json.result`);
+      const result = JSON.parse(readFileSync(resultFile, "utf8")) as { argv: string[]; mode: number; home: string | null; config: { codex_tool_home?: string } };
+      if (engine === "sample") {
+        expect(result.argv).toEqual([capture, "fixed arg", "", "run"]);
+        expect(result.mode).toBe(0o600);
+        expect(Object.keys(result.config).sort()).toEqual(["agent_id", "recovery_checkpoint_path"]);
+      }
       if (engine === "codex") {
         expect(result.home).toBe(process.env.CODEX_HOME);
         expect(result.config.codex_tool_home).not.toBe(result.home);

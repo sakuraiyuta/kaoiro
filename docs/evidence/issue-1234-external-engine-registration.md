@@ -1,6 +1,12 @@
+---
+title: External engine startup and declaration checks
+status: recorded
+last_updated: 2026-11-21
+---
+
 # External engine startup and declaration checks
 
-The runner bundle built from
+Measured on 2026-11-21. The runner bundle built from
 `4bb56e8d3ca2c9b6cec9b8e1fd054bc7be137892` had SHA-256
 `17f3d053df1cfc179faba50f5000266af45cc6e07e2eaf510ac39eb106fa239f`.
 All six [CI jobs](https://github.com/sakuraiyuta/kaoiro/actions/runs/44867190400)

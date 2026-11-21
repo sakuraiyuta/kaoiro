@@ -154,3 +154,7 @@ The AgentDetail engine / kaoiro tab split.
 Browser caching of persona sprite images.
 
 - [browser-cache-2026-11-14.md](issue-1105/browser-cache-2026-11-14.md) — real endpoint headers and Chromium cache reuse before the design and on the implementation: repeats reach the server 0 times under the long-lived private cache, re-download under no-store once the image is collected or the page reloads, and 401 for uncached URLs after revocation.
+
+## External engine registration
+
+- [External engine startup and declaration checks](issue-1234-external-engine-registration.md) — 2026-11-21 measurements of startup, receiver compatibility, restore, rollback and a live peer exchange.
