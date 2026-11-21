@@ -15,6 +15,15 @@ import type { Envelope, KaoiroHandlers } from "../src/lib/protocol";
 
 const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
+  actions: {
+    restore: vi.fn(async () => {}),
+    enumerateAgentSessions: vi.fn(async () => {}),
+    resumeSession: vi.fn(async () => {}),
+    setModel: vi.fn(async () => {}),
+    setEffort: vi.fn(async () => {}),
+    refreshModels: vi.fn(async () => ({ ok: true })),
+    setPermissionMode: vi.fn(async () => {}),
+  },
 }));
 
 vi.mock("../src/lib/protocol", async (importOriginal) => {
@@ -31,7 +40,7 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         sendInstruction: () => {},
         sendInterrupt: () => {},
         stop: async () => {},
-        restore: async () => {},
+        ...captured.actions,
         deleteAgent: async () => {},
         renameAgent: async () => {},
         setPermission: async () => null,
@@ -103,6 +112,7 @@ function rowByLabel(label: string): HTMLElement | null {
 
 beforeEach(() => {
   captured.handlers = null;
+  vi.clearAllMocks();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown) => {
@@ -170,5 +180,55 @@ describe("App.svelte sandbox picker operator gate (issue #305 D)", () => {
     await tick();
 
     expect(rowByLabel("sandbox 変更")).toBeNull();
+  });
+});
+
+describe("App detail operator actions", () => {
+  it.each(["operator", "viewer", "offline"])("applies role and connection state: %s", async role => {
+    const h = await mountApp();
+    h.onStatus("connected");
+    if (role !== "viewer") h.onHosts?.([], false);
+    const agent = switchCapableEnvelope();
+    agent.ext = {
+      engine: "claude-code", model: "m", permission_mode: "default",
+      models: [{ value: "m", display_name: "M", effort_levels: ["low", "high"] }],
+      session_capabilities: {
+        supports_attachments: false, supports_user_input_dialog: true,
+        supports_model_switch: true, supports_effort_switch: true,
+        supports_permission_mode_switch: true,
+      },
+    };
+    h.onSnapshot({ [agent.agent_id]: agent });
+    await tick();
+    await openDetailFromGrid();
+    h.onSnapshot({ [agent.agent_id]: { ...agent, state: "disconnected" } });
+    if (role === "offline") h.onStatus("disconnected");
+    await tick();
+    const detail = document.querySelector(".detail")!;
+    expect(detail.textContent).toContain(agent.agent_id);
+    for (const selector of ["button.restore", "button.resume-swap", "button.cc-refresh"]) {
+      expect(!!detail.querySelector(selector), selector).toBe(role === "operator");
+    }
+    for (const label of ["model", "effort"]) {
+      expect(!!rowByLabel(label)?.querySelector("button.cc-switch"), label).toBe(role === "operator");
+    }
+    const mode = detail.querySelector<HTMLButtonElement>("button.cc-perm-switch");
+    expect(mode).not.toBeNull();
+    mode!.click();
+    await tick();
+    const options = detail.querySelectorAll<HTMLButtonElement>(
+      '.cc-perm-switchbox [role="option"]',
+    );
+    const plan = [...options].find(option => option.textContent?.trim().startsWith("plan"));
+    expect(plan).toBeDefined();
+    plan!.click();
+    await tick();
+    if (role === "operator") {
+      expect(captured.actions.setPermissionMode).toHaveBeenCalledExactlyOnceWith(
+        agent.agent_id, "plan",
+      );
+    } else {
+      for (const spy of Object.values(captured.actions)) expect(spy).not.toHaveBeenCalled();
+    }
   });
 });
