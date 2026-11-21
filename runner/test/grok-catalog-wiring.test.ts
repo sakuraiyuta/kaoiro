@@ -61,7 +61,11 @@ function groupAlive(pgid: number): boolean {
   }
 }
 
-async function start(scenario: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+async function start(
+  scenario: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+  configFields: Record<string, unknown> = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "kaoiro-grok-catalog-wiring-"));
   dirs.push(root);
   const scenarioPath = join(root, "scenario.json");
@@ -69,7 +73,7 @@ async function start(scenario: Record<string, unknown>, extra: Record<string, un
   writeFileSync(scenarioPath, JSON.stringify(scenario));
   const configPath = join(root, "runner.config.json");
   const config = (budget: number) => ({ host_id: "grok-catalog-fixture", server_url: "ws://runner.invalid/runner",
-    cwd_allowlist: [root], capabilities: ["claude-code", "grok"], context_work_budget_percent: budget });
+    cwd_allowlist: [root], capabilities: ["claude-code", "grok"], context_work_budget_percent: budget, ...configFields });
   writeFileSync(configPath, JSON.stringify(config(50)));
   let link: FakeRunnerLink | undefined;
   let triggerReload: (() => void) | undefined;
@@ -111,14 +115,23 @@ describe("grok catalog in the runner register", () => {
   }, 10_000);
 
   it("keeps the probed catalog when a Claude refresh rebuilds the register", async () => {
+    const row = { id: "sample", models: [], operations: { version: 1, spawn: true } };
+    const output = JSON.stringify({ version: 1, ...row });
+    const command = [process.execPath, "-e", "process.stdout.write(process.argv[1])", output];
     const h = await start({ initMeta: modelState }, {
       catalogProbe: async () => ({ ok: true, models: [{ value: "claude-x", display_name: "X" }], elapsed_ms: 1, source: "init" }),
+    }, {
+      capabilities: ["claude-code", "grok", row.id], external_engines: [{ id: row.id, command }],
     });
     try {
       await vi.waitFor(() => expect(h.link.updatedRegisters).toHaveLength(1));
       h.link.options.onRefreshEngineCatalog!({ version: "0", engine: "claude-code", request_id: "r1" });
       await vi.waitFor(() => expect(h.link.updatedRegisters).toHaveLength(2));
       expect(grokModels(h.link.updatedRegisters[1]!)).toEqual(["default", "grok-4.7"]);
+      for (const register of [h.link.initialRegister, ...h.link.updatedRegisters]) {
+        expect(register.capabilities).toContain(row.id);
+        expect(register.engines?.find(engine => engine.id === row.id)).toEqual(row);
+      }
     } finally {
       h.runtime.close();
     }

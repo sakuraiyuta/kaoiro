@@ -21,7 +21,7 @@ import {
   readAgentId,
   resolveWrapperConfig,
 } from "../src/supervisor.js";
-import type { ManagedChild } from "../src/supervisor.js";
+import type { ManagedChild, SupervisorOptions } from "../src/supervisor.js";
 import type { AgyExecutableResolution } from "@kaoiro/antigravity";
 import { resolveAgyExecutable } from "@kaoiro/antigravity";
 
@@ -164,6 +164,7 @@ function harness(
     sessions?: SessionMeta[] | Promise<SessionMeta[]>;
     exists?: boolean | Promise<boolean>;
     useDefaultSessionQueries?: boolean;
+    externalCatalog?: SupervisorOptions["externalCatalog"];
     wrapperServerUrl?: string;
     now?: () => number;
     resetTerminationGraceMs?: number;
@@ -194,6 +195,7 @@ function harness(
   let launchCall = 0;
   const sup = new Supervisor({
     hostId: "lab-pc-1",
+    ...(opts.externalCatalog && { externalCatalog: opts.externalCatalog }),
     cwdAllowlist: opts.cwdAllowlist ?? allowlist,
     wrapperServerUrl: opts.wrapperServerUrl ?? "ws://localhost:4000/wrapper",
     launch: (_agentId, config, _cwd, resumeSessionId, initialPrompt) => {
@@ -254,6 +256,93 @@ function harness(
     last: () => children[children.length - 1]!,
   };
 }
+
+describe("spawn-only external child recovery", () => {
+  const message = { ...spawnMsg, engine: "sample", initial_prompt: "first" };
+  function externalHarness() {
+    return harness({
+      externalCatalog: id => id === "sample" ? {
+        id, models: [], operations: { version: 1, spawn: true },
+      } : undefined,
+      get exists(): boolean { throw new Error("unexpected session lookup"); },
+    });
+  }
+
+  it("rejects session operations before touching the child or the store", () => {
+    const h = externalHarness();
+    h.sup.handleSpawn(message);
+    h.sup.handleSwitchSession({ ...message, resume_session_id: "next",
+      request_id: "switch" });
+    expect(h.results.at(-1)).toMatchObject({
+      request_id: "switch", ok: false, reason: "error",
+    });
+    h.sup.handleResetSession({ ...message, mode: "new", request_id: "reset" });
+    expect(h.resetResults.at(-1)).toMatchObject({
+      request_id: "reset", ok: false, reason: "unsupported_session_reset",
+    });
+    expect(h.last().kills).toBe(0);
+    expect(h.children).toHaveLength(1);
+  });
+
+  it.each([
+    { state: "live", session_id: "existing" },
+    { state: "unbound", candidate_id: "existing" },
+    { state: "blocked", reason: "session_unusable" },
+  ])("retains the child on restart and checks the final checkpoint %j", record => {
+    const h = externalHarness();
+    h.sup.handleSpawn(message);
+    const child = h.last();
+    const final = { ok: true, record: { version: 1, ...record } };
+    Object.assign(child, { readRecovery: () => final });
+    h.sup.handleRestart({ ...message, request_id: "held" });
+    expect(child.kills).toBe(0);
+    expect(h.results.at(-1)).toMatchObject({ request_id: "held", ok: false });
+    Object.assign(child, {
+      readRecovery: () => ({ ok: true, record: { version: 1, state: "unbound" } }),
+      recovery: final,
+    });
+    h.sup.handleRestart({ ...message, request_id: "changed" });
+    expect(child.kills).toBe(1);
+    child.exit();
+    expect(h.children).toHaveLength(1);
+    expect(h.results.at(-1)).toMatchObject({ request_id: "changed", ok: false });
+  });
+
+  it("restarts an unbound child without repeating its prompt; exit 79 stops it", () => {
+    const h = externalHarness();
+    h.sup.handleSpawn(message);
+    const recovery = { ok: true, record: { version: 1, state: "unbound" } };
+    Object.assign(h.last(), { readRecovery: () => recovery, recovery });
+    h.sup.handleRestart({ ...message, request_id: "fresh" });
+    expect(h.last().kills).toBe(1);
+    h.last().exit();
+    expect(h.prompts).toEqual(["first", undefined]);
+    expect(h.resumes).toEqual([undefined, undefined]);
+    Object.assign(h.last(), { recovery, exitCode: 79 });
+    h.last().exit();
+    expect(h.children).toHaveLength(2);
+  });
+
+  it("correlates invalid external restore replies and accepts the next fresh spawn", () => {
+    const h = externalHarness();
+    const invalid = [
+      { resume_session_id: "existing" }, { resume_snapshot: {} },
+      { apply_resume_snapshot: "true" },
+      { apply_resume_snapshot: true, resume_snapshot: { model: 1 } },
+      { apply_resume_snapshot: true, resume_snapshot: { approval: "never" } },
+      { apply_resume_snapshot: true, resume_snapshot: { model: "removed" } },
+    ];
+    for (const [i, fields] of invalid.entries()) {
+      const request_id = String(i);
+      h.sup.handleSpawn({ ...message, request_id, ...fields });
+      expect(h.results.at(-1)).toMatchObject({ request_id, ok: false, reason: "error" });
+    }
+    expect(h.children).toHaveLength(0);
+    h.sup.handleSpawn({ ...message, request_id: "valid", apply_resume_snapshot: true });
+    expect(h.children).toHaveLength(1);
+    expect(h.results.at(-1)).toMatchObject({ request_id: "valid", ok: true });
+  });
+});
 
 describe("readAgentId", () => {
   it("有効な agent_id を返す", () => {
