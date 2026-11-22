@@ -42,7 +42,7 @@ call the case needs).
 | N4 `BypassSandbox` | workspace-write, on-request, network on | `run_command` with `BypassSandbox: true` asked and was approved; the command wrote its file | pass |
 | N5 kaoiro tool | workspace-write, on-request, network off | `mcp_kaoiro_whoami` allowed with no dialog; result | pass |
 | N6 background output | danger-full-access, never | `run_command`, two Stop requests answered `continue` while the model polled with `manage_task` and read the output, then `stop`; the command's output was in the reply | pass |
-| N7 subagent report | danger-full-access, never | `invoke_subagent`; the subagent's own calls arrived with another conversation ID (`send_message` denied as agent-internal, `mcp_kaoiro_*` allowed); two `continue`, then `stop` for the subagent's and the parent's loops; the report text was in the reply | pass under the first judge; undetermined under the current one (below) |
+| N7 subagent report | danger-full-access, never | `invoke_subagent`; the subagent's own calls arrived with another conversation ID (`send_message` denied as agent-internal, `mcp_kaoiro_*` allowed); two `continue`, then `stop` for the subagent's and the parent's loops; the report text was in the reply | pass under the first judge; undetermined under the current one; pass on the rerun (below) |
 | N8 cancel during a subagent | danger-full-access, never | the interrupt came once the subagent's `run_command` hook was seen; the turn ended `interrupted`; no `agy` process was alive afterwards | pass |
 | N9 cancel during a held prompt | danger-full-access, never | first run (`sleep 120; echo late`): the first Stop request was answered `stop`, so the prompt was never held and the case could not be judged. Retry (`sleep 20; echo kaoiro-n9-done`, same wording): `run_command` allowed, the Stop request answered `continue`, the interrupt ended the turn `interrupted`, and no `agy` process was alive afterwards | pass on the retry |
 | N10 permission switch | workspace-write to danger-full-access | the first turn's `agy` had `--sandbox`; after `set_permission` the second turn ran on a new process without it, and the permission state became `applied` | pass |
@@ -59,6 +59,22 @@ has no subagent read of such a file, so it is undetermined under the current
 judge. The N6 judge now also requires a parent `manage_task` or `read_file`
 after the first `continue`; the N6 record above has both, so its verdict is
 unchanged.
+
+N6 and N7 were run again under the current judges on commit `3e983b84`,
+under the conditions above, with a budget of 4 prompts (one retry each).
+Each passed on its first attempt; 2 prompts were used. Conversation IDs are
+shown by their last 8 characters; the marker is not printed.
+
+| Case | Parent session | Gate record (in order) | Verdict |
+|---|---|---|---|
+| N6 | `59590eb8` | `run_command` allow, Stop `continue`, `manage_task` allow, `read_file` allow, `manage_task` allow three times, Stop `stop`; all from the parent; the reply held the command's output | pass |
+| N7 | `3f4f7bb4` | parent `invoke_subagent` allow; subagent `a87b938e`: `run_command` and `read_file` naming the marker file, allowed; parent Stop `continue` twice; parent `manage_task` and `manage_subagents` only; subagent `send_message` denied three times; Stop `stop` for the subagent, then for the parent; the reply held the marker | pass |
+
+The judges' negative controls run in the same file without the opt-in, as
+part of the package's test suite (the live run itself selected only N6 and
+N7). They include an N7 record whose reply holds the marker with no subagent report
+(undetermined) and N6 records without a parent read after the `continue`
+(undetermined).
 
 ## `edit_file` hook requests
 
