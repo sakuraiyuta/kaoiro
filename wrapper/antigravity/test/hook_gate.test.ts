@@ -176,7 +176,7 @@ describe("HookGateServer: framing", () => {
     let release!: () => void;
     const released = new Promise<void>((resolve) => { release = resolve; });
     const seen: string[] = [];
-    const { server } = await start({
+    const { server, faults } = await start({
       preToolUse: async (request) => {
         seen.push(request.callId);
         await released;
@@ -199,7 +199,9 @@ describe("HookGateServer: framing", () => {
       });
     });
     expect(answer.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(answer)).toEqual({ decision: "allow" });
     expect(seen).toEqual(["c1"]);
+    expect(faults).toEqual([]);
   });
 
   it("waits for the newline of a request split across writes", async () => {
