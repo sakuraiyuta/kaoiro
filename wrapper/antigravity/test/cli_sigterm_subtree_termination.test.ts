@@ -1,6 +1,4 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { antigravitySubcommandPrefix } from "../src/subcommand.js";
-import { selfCommand } from "@kaoiro/wrapper-core";
 // issue #379 M1: without a handler, Node's default SIGTERM behavior kills
 // this process immediately (no close(), no group signal, no escalation).
 // This test proves the registered handler's FULL effect end to end: SIGTERM
@@ -20,13 +18,14 @@ import { selfCommand } from "@kaoiro/wrapper-core";
 // (well-established Node behavior, not this repo's code) but DOES prove
 // everything this repo's code is responsible for: the handler exists, calls
 // close(), and close() actually cleans up a real subtree.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
-import { embeddedPidMarkerWriter, readPidMarker } from "../../core/test/pid_marker.js";
+import { readPidMarker } from "../../core/test/pid_marker.js";
+import { writeFakeAgy } from "./fake_agy_executable.js";
 import { runAntigravityCli } from "../src/cli.js";
 
 const isLinux = process.platform === "linux";
@@ -74,53 +73,32 @@ function forceKill(rawPid: unknown, signal: SignalBackend = (pid, value) => proc
   }
 }
 
-/** Real "agy": spawns a real grandchild that ignores SIGTERM, writes both
- *  pids once the grandchild's own SIGTERM handler is registered (avoiding
- *  the same startup race `subtree_termination_real_process.test.ts` guards
- *  against), and streams ACTIVE forever so the turn stays open. */
+/** Real "agy" (fixtures/fake-agy-acp.mjs): a SUBTREE prompt starts a real
+ *  grandchild that ignores SIGTERM and publishes both pids; the leader ignores
+ *  SIGTERM too, so only the grace-bounded SIGKILL ends them. */
 function writeFixture(root: string): {
   executable: string;
   selfPidFile: string;
   grandchildPidFile: string;
   grandchildReadyFile: string;
 } {
-  const executable = join(root, "agy-fixture.mjs");
   const selfPidFile = join(root, "self.pid");
   const grandchildPidFile = join(root, "grandchild.pid");
   const grandchildReadyFile = join(root, "grandchild.ready");
   const grandchildScript = join(root, "grandchild.mjs");
-  writeFileSync(grandchildScript, `#!${process.execPath}
-import { writeFileSync } from "node:fs";
+  writeFileSync(grandchildScript, `import { writeFileSync } from "node:fs";
 process.on("SIGTERM", () => {});
 writeFileSync(${JSON.stringify(grandchildReadyFile)}, "");
 setInterval(() => {}, 1_000);
 `);
-  chmodSync(grandchildScript, 0o755);
-  const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
-  writeFileSync(executable, `#!${process.execPath}
-import { spawn } from "node:child_process";
-import { renameSync, writeFileSync } from "node:fs";
-const publishPidMarker = ${embeddedPidMarkerWriter()};
-const args = process.argv.slice(2);
-const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-if (args[0] === "models") {
-  process.stdout.write("fixture-model\\tFixture Model\\n");
-} else if (args[0] === "-p" && args[1] === "/hooks") {
-  const customization = args[args.lastIndexOf("--add-dir") + 1];
-  process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
-} else if (args[0] === "--print") {
-  line({ event: "init", conversation_id: "cid-cli-sigterm", init: { tools: [] } });
-  const grandchild = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(grandchildScript)}], { stdio: "ignore" });
-  publishPidMarker(${JSON.stringify(grandchildPidFile)}, grandchild.pid, { writeFileSync, renameSync });
-  publishPidMarker(${JSON.stringify(selfPidFile)}, process.pid, { writeFileSync, renameSync });
-  // Ignores SIGTERM itself too, so only the grace-bounded SIGKILL ends it.
-  process.on("SIGTERM", () => {});
-  setInterval(() => line({ event: "step_update", step_update: { conversation_id: "cid-cli-sigterm", step_index: 1, state: "ACTIVE", step_type: "agent_response", text_delta: "." } }), 50);
-} else {
-  process.exitCode = 2;
-}
-`);
-  chmodSync(executable, 0o755);
+  const executable = writeFakeAgy(root, {
+    env: {
+      FAKE_AGY_PID_FILE: selfPidFile,
+      FAKE_AGY_GRANDCHILD: grandchildScript,
+      FAKE_AGY_GRANDCHILD_PID_FILE: grandchildPidFile,
+      FAKE_AGY_IGNORE_TERM: "1",
+    },
+  });
   return { executable, selfPidFile, grandchildPidFile, grandchildReadyFile };
 }
 
@@ -175,7 +153,7 @@ describe.skipIf(!isLinux)("Antigravity CLI SIGTERM subtree termination (issue #3
       onHostCreated: () => {
         queueMicrotask(() => {
           void (options.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(
-            inbound(1, "run the fixture"),
+            inbound(1, "SUBTREE"),
           );
         });
       },

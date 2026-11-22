@@ -1,5 +1,5 @@
 export { ANTIGRAVITY_ENGINE, antigravityCatalogSnapshot, catalogFromAgyModels, parseAgyModelsOutput } from "./catalog.js";
-export { AntigravityHost, initialStatusExt, isGateRegistered } from "./host.js";
+export { AntigravityHost, initialStatusExt } from "./host.js";
 export {
   AntigravityInterAgentTurnCoordinator,
 } from "./inter_agent_turn_coordinator.js";
@@ -18,7 +18,7 @@ export type {
   TurnWatchdogWarning,
 } from "./turn_watchdog.js";
 export { AntigravityGate, GateServer, TOOL_CLASS_BY_NAME } from "./gate.js";
-export { CustomizationDir, sweepStaleCustomizationDirs } from "./customization.js";
+export { CustomizationDir, checkHookList, sweepStaleCustomizationDirs } from "./customization.js";
 export { ToolHost } from "./toolhost.js";
 export { effectiveNetworkAccess } from "./network_access.js";
 export { applyAntigravityEnvDefaultModel, resolveAntigravitySources } from "./source_resolution.js";

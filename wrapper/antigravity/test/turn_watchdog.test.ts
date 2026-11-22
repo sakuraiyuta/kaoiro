@@ -45,6 +45,41 @@ class FakeTimers {
 }
 
 describe("Antigravity TurnWatchdog", () => {
+  it("treats its cancel as final: progress after an inactivity interrupt keeps the abort grace running (D19)", () => {
+    const timers = new FakeTimers();
+    const interrupts: string[] = [];
+    const failStops: string[] = [];
+    const watchdog = new TurnWatchdog({
+      settings: { inactivityMs: 1_000, abortGraceMs: 60, toolTimeoutMs: 10_000 },
+      onWarning: () => {},
+      requestInterrupt: (token) => {
+        interrupts.push(token);
+        return true;
+      },
+      failStop: (token) => {
+        failStops.push(token);
+        return true;
+      },
+      failStopUnattributed: () => {
+        throw new Error("unexpected unattributed fail-stop");
+      },
+      nowMs: () => timers.now,
+      setTimer: timers.set,
+      clearTimer: timers.clear,
+    });
+    watchdog.start("turn-a");
+    timers.advance(1_000);
+    expect(interrupts).toEqual(["turn-a"]);
+    timers.advance(30);
+    watchdog.progress("turn-a");
+    watchdog.toolStart("turn-a", 1, "run_command");
+    timers.advance(29);
+    expect(failStops).toEqual([]);
+    timers.advance(1);
+    expect(failStops).toEqual(["turn-a"]);
+    expect(interrupts).toEqual(["turn-a"]);
+  });
+
   it("resets on agy stream progress, then requests interrupt and exact fail-stop", () => {
     const timers = new FakeTimers();
     const warnings: TurnWatchdogWarning[] = [];

@@ -1,18 +1,21 @@
-import { selfCommand, type RecoveryReporter } from "@kaoiro/wrapper-core";
-import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { basename, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import { RequestError, type PromptResponse, type SessionNotification } from "@agentclientprotocol/sdk";
+import { selfCommand, type RecoveryReporter } from "@kaoiro/wrapper-core";
 import {
+  boundErrorDetail,
   clipText,
-  effectiveStatusEnvelopeFields,
-  withAgentMarker,
   initialMachineState,
   logEntryToPayload,
   makeLog,
   makeResult,
   makeStateChange,
   mergeExtraModels,
+  permissionSyncFailure,
   stepState,
+  withAgentMarker,
+  writeRedactedStderr,
   type EngineAdapter,
   type Envelope,
   type InterAgentErrorClassifyInput,
@@ -28,8 +31,8 @@ import {
   type ToolDescriptor,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
-import { boundErrorDetail, writeRedactedStderr, permissionSyncFailure } from "@kaoiro/agent-common";
-import { clipUtf16Head, PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
+import { MCP_NOT_CONNECTED, ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import type {
   EngineModelInfo,
   PermissionAxesExt,
@@ -40,194 +43,113 @@ import type {
   PermissionSyncMessage,
   WrapperPermissionLifecycleMessage,
 } from "@kaoiro/protocol";
-import {
-  agyEventToEvents,
-  agyEventIsSuccessfulResult,
-  agyEventHasQuotaExhaustionMarker,
-  agyEventToQuotaExhaustion,
-  agyEventToLogs,
-  agyEventToResult,
-  agyEventToSessionId,
-  parseAgyStreamLine,
-  type AgyStreamEvent,
-} from "./adapter.js";
+import { activityProjection, classifyUpdate, toolName } from "./acp_events.js";
+import { CallVerifier, type VerificationFault } from "./call_verification.js";
 import { antigravityCatalogSnapshot, parseAgyModelsOutput } from "./catalog.js";
-import { DEFAULT_AGY_PROBE_TIMEOUT_MS, resolveAgyExecutable, type AgyExecutableFailureReason, type AgyExecutableResolution } from "./cli-path.js";
-import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCustomizationDirs } from "./customization.js";
-import { DEFAULT_EPOCH_IDLE_MS, epochSpecsEqual, type EpochEndReason, type EpochSpec } from "./epoch.js";
-import { AntigravityGate, GateServer, type AntigravityLaunchConfig, type GateServerOptions } from "./gate.js";
-import { effectiveNetworkAccess } from "./network_access.js";
-import { antigravitySubcommandPrefix } from "./subcommand.js";
-import { ceilingExceeded, type SwitchCeiling } from "./permission_switch.js";
-import { nonInteractiveToolEnv } from "./tool_child_env.js";
-import { ToolHost } from "./toolhost.js";
-import { DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS } from "./turn_watchdog.js";
-import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdog.js";
-import { signalSubtree, signalTarget, terminateWithGrace, type GraceTerminationHandle, type SignalTargetOperation } from "./subtree_termination.js";
+import { DEFAULT_AGY_PROBE_TIMEOUT_MS, resolveAgyExecutable, type AgyExecutableResolution } from "./cli-path.js";
 import {
-  DEFAULT_USAGE_PROBE_TIMEOUT_MS,
-  USAGE_PROBE_INTERVAL_MS,
-  USAGE_PROBE_STOP_TIMEOUT_MS,
-  modelToUsageFamily,
-  hasCompleteAgyUsageBuckets,
-  parseAgyUsageOutput,
-  startAgyUsageProbe,
-  type AgyUsageFamily,
-  type AgyUsageRateLimit,
-  type AgyUsageRateLimits,
-  type AgyUsageProbeRun,
-  type AgyUsageProbeSpawn,
-  type UsageProbeClosedResult,
-} from "./usage_probe.js";
+  CustomizationDir,
+  GATE_DEADLINE_MS,
+  checkHookList,
+  sweepStaleCustomizationDirs,
+} from "./customization.js";
+import { AcpToolPolicy, type AntigravityLaunchConfig } from "./gate.js";
+import { Generation, type AcpAgyChild } from "./generation.js";
+import { HookGateServer, type HookGateServerOptions, type PreToolUseRequest } from "./hook_gate.js";
+import { reportedPair, splitSlug, switchModel } from "./model_selection.js";
+import { effectiveNetworkAccess } from "./network_access.js";
+import { ceilingExceeded, type SwitchCeiling } from "./permission_switch.js";
+import { answerStop, type StopRequest } from "./stop_answer.js";
+import { antigravitySubcommandPrefix } from "./subcommand.js";
+import { signalSubtree, signalTarget, terminateWithGrace, type GraceTerminationHandle, type SignalTargetOperation } from "./subtree_termination.js";
+import { nonInteractiveToolEnv } from "./tool_child_env.js";
+import type { TurnWatchdogInterruptCause } from "./turn_watchdog.js";
+import { DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS, DEFAULT_TURN_WATCHDOG_INACTIVITY_MS } from "./turn_watchdog.js";
 
-const STALE_TERMINAL_429_DETAIL =
-  "antigravity_terminal_429_unconfirmed: terminal result contained RESOURCE_EXHAUSTED, but /usage showed quota remaining; the conversation may be repeating an old error. Consider resetting the session.";
-const STALE_TERMINAL_429_THRESHOLD_DETAIL =
-  "antigravity_terminal_429_unconfirmed: the last two same-family confirmations showed quota remaining; the conversation may be repeating an old error. Consider resetting the session.";
-// issue #379 M2: must stay below the tightest outer bound that can SIGKILL
-// this wrapper PROCESS itself while `close()`'s own escalation is pending --
-// currently the runner's reset-relaunch grace (`RESET_TERMINATION_GRACE_MS`
-// = 5s, runner/src/supervisor.ts). systemd's `TimeoutStopSec` (30s) is looser
-// and not the binding constraint.
+/** Below the runner's reset-relaunch grace (5 s), which can SIGKILL this
+ *  wrapper while a close is pending. */
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
+const DEFAULT_MCP_READY_TIMEOUT_MS = 15_000;
+const GATE_FAULT_REASON = "antigravity_gate_unobserved_tool";
+const TAMPER_REASON = "antigravity_customization_tampered";
+const UNEXPECTED_PERMISSION_REASON = "antigravity_unexpected_permission_request";
+const DELIVERY_UNCONFIRMED = "antigravity_delivery_unconfirmed";
+const AUTH_REQUIRED = "antigravity_auth_required";
 
-/** issue #377 Stage 2: the two fixed background-task lifecycle lines agy
- *  prints to stderr (measured verbatim,
- *  docs/evidence/antigravity/print-mode-background-tasks.md probe 2 --
- *  `root agent idle; waiting up to %s for %d background task(s)` /
- *  `terminating %d background task(s) on exit`). Matched exactly so no
- *  other, unbounded stderr text is ever forwarded to the lifecycle log. */
-const EPOCH_STDERR_WAITING_PATTERN = /^root agent idle; waiting up to \S+ for \d+ background task\(s\)$/;
-const EPOCH_STDERR_TERMINATING_PATTERN = /^terminating \d+ background task\(s\) on exit$/;
-
-/** issue #371 Design v2: `#runTurn` decides no terminal outcome itself --
- *  it returns one of these, and `#drainTurns`'s `finally` is the single
- *  place that projects an outcome into callbacks (`#terminalError` /
- *  `#publishTerminalResult` / rate-limit update / model promote-rollback /
- *  `onInterruptSettled` / `onTurnBoundary` / `onTurnEnd`). Invariant:
- *  `#currentTurnToken !== null` iff this turn's outcome has not yet been
- *  projected. Exception: `onWatchdogFailStop` deliberately fires while
- *  identity is still live (it reads `#activeTurnToken`); the queued turns
- *  it also settles never held identity at all. */
-type TurnOutcome =
-  | { kind: "stale" }
-  | { kind: "skipped" }
-  | { kind: "permission_sync_timeout" }
-  | { kind: "recovery_rejected"; detail: string; probeResult: "failed" | "child_launch_failed" }
-  | { kind: "error"; detail: string; classify: InterAgentErrorClassifyInput; attemptedModel: string | null | undefined }
-  | { kind: "result"; event: AgyStreamEvent; attemptedModel: string | null }
-  | {
-      kind: "interrupted";
-      attemptedModel: string | null;
-      exit: { code: number | null; signal: NodeJS.Signals | null } | null;
-      requestedAt: string | undefined;
-    };
-
-type GateFaultClass =
-  | "customization_tampered"
-  | "stream_correlation_unprovable"
-  | "tool_completion_unobserved";
-
-type GateProbeResult = "started" | "passed" | "failed" | "child_launch_failed" | "budget_exhausted" | "not_run_sticky" | "suppressed_latched";
-
-interface GateFaultRecord {
-  faultClass: GateFaultClass;
-  toolName: string;
-  detail: string;
-  faultKey: string;
-  tripCount: number;
+/** The identifying fields of the "Authentication required" error captured
+ *  from `agy` 1.5.14 without credentials. */
+function isAuthRequired(error: RequestError): boolean {
+  return error.code === -32000 && error.message === "Authentication required";
 }
 
-interface QueuedTurn {
+/** The first action of a stop decides its deadline (design L3). */
+type StopRoute = "interrupt" | "watchdog" | "gate_fault" | "permission" | "close" | "pre_ack" | "fail_stop";
+
+export type GenerationEndReason = "retired" | "start_failed" | StopRoute;
+
+interface Input {
   text: string;
   conversationIds?: readonly string[];
   turnToken?: string;
 }
 
-interface RateLimitOverlay {
-  value: AgyUsageRateLimit;
-  origin: "positive_reset_delay" | "ambiguous_terminal_429" | "unconfirmed_terminal_429";
-  family: AgyUsageFamily | null;
-  createdAtMs: number;
+/** Why the prompt's wait ended. */
+type Settlement =
+  | { kind: "response"; response: PromptResponse }
+  | { kind: "rpc_error"; error: RequestError }
+  | { kind: "closed" }
+  | { kind: "stopped" }
+  | { kind: "skipped" }
+  | { kind: "start_failed"; detail: string; permissionSyncTimeout?: boolean };
+
+interface Active {
+  token: string;
+  conversationIds: readonly string[];
+  /** Aborts when a stop latches; a start step waiting on it gives up. */
+  readonly stopped: AbortController;
+  stop: StopRoute | null;
+  interruptedAt: string | null;
+  generation: Generation | null;
+  toolHost: ToolHost | null;
+  gateServer: HookGateServer | null;
+  verifier: CallVerifier | null;
+  probe: { stop(): void } | null;
+  sessionId: string | undefined;
+  observedSessionId: string | undefined;
+  window: AbortController | null;
+  delivery: "pending" | "attempted" | "confirmed";
+  acked: boolean;
+  /** The prompt's wait ended. */
+  resolved: boolean;
+  /** The outcome was decided (design L2); nothing changes it afterwards. */
+  settled: boolean;
+  settle: ((settlement: Settlement) => void) | null;
+  preAckTimer: unknown;
+  abortDeadline: { atMs: number; timer: unknown } | null;
+  termination: GraceTerminationHandle | null;
+  gateFault: string | null;
+  toolTimeout: boolean;
+  unexpectedPermission: boolean;
+  processError: string | null;
+  submission: PermissionSubmission | null;
+  evidence: boolean;
+  continuations: number;
+  seenCalls: Set<string>;
+  steps: Map<string, number>;
+  text: string;
+  assistantText: string;
+  resultText: string;
 }
 
-interface PendingTerminal429Confirmation {
-  family: AgyUsageFamily;
-  overlayCreatedAtMs: number;
+class Stopped extends Error {
+  constructor() {
+    super("antigravity input stopped");
+  }
 }
 
-/** issue #377 Stage 2: the live state of one epoch (one `agy` process
- *  spanning several turns). `endingReason` is set BEFORE the process is
- *  actually signalled to end, by whichever call site (interrupt/close/
- *  watchdog/tamper/gate_broken/spec_change/idle_ttl) decided to end it --
- *  the epoch's own close handler reads it to know this death was requested,
- *  as opposed to a spontaneous exit (`null`). `resolveDeath` lets `#endEpoch`
- *  await the child's actual closure instead of merely arming a signal. */
-interface EpochRuntime {
-  serial: number;
-  child: SpawnedAgy;
-  spec: EpochSpec;
-  toolHost: ToolHost;
-  gateServer: GateServer;
-  turns: number;
-  idleTtlTimer: unknown | null;
-  endingReason: EpochEndReason | null;
-  deathPromise: Promise<void> | null;
-  resolveDeath: (() => void) | null;
-  stdinErrored: boolean;
-  pendingDeliverySettle: ((result: TurnDelivery) => void) | null;
-  closeAfterExitTimer: ReturnType<typeof setTimeout> | null;
-}
+class StartFailure extends Error {}
 
-/** The turn currently owning the epoch's shared stdout stream. The epoch-
- *  level reader routes `result` events to `resolveResult` and folds every
- *  other event into this turn's own state (mirroring Stage 1's per-turn
- *  `#handleEvent` + tool ACTIVE/DONE correlation) -- exactly the
- *  `readableLines`/`#waitForChild` role Stage 1 attached per turn, now
- *  attached once per epoch and keyed off whichever turn is in flight. */
-interface InFlightTurn {
-  epochSerial: number;
-  turnToken: string;
-  gate: AntigravityGate;
-  assistantText: Map<number, string>;
-  correlationFailure: string | null;
-  faultClass: GateFaultClass | null;
-  faultKey: string | null;
-  epochDeathError: Error | null;
-  resolveResult: (event: AgyStreamEvent | null) => void;
-}
-
-export interface SpawnedAgy {
-  stdout: NodeJS.ReadableStream;
-  stderr: NodeJS.ReadableStream;
-  stdin: NodeJS.WritableStream;
-  /** Diagnostic-only (issue #371 `interrupt_requested` lifecycle event).
-   *  Optional so existing fakes that construct a `SpawnedAgy` without it
-   *  still satisfy the interface. */
-  pid?: number | undefined;
-  /** issue #379 M3: read at SIGKILL-escalation fire time to confirm the
-   *  target is still running before signalling -- a pid can be reused once
-   *  the process has actually exited. Optional so a fake that never tracks
-   *  exit state is treated as always-alive (matches a real `ChildProcess`
-   *  before `exit`). */
-  exitCode?: number | null | undefined;
-  signalCode?: NodeJS.Signals | null | undefined;
-  once(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
-  /** issue #379: fires before `close` (no stdio-drain wait), so cancelling
-   *  a pending escalation here frees it sooner than waiting for `close`. */
-  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
-  once(event: "error", listener: (error: Error) => void): this;
-  kill(signal?: NodeJS.Signals): boolean;
-}
-
-type TurnDelivery = "ok" | "not_attempted" | "attempted";
-
-/** A missing exit field stays alive. Treating `undefined` as exited would
- *  mark every fake that never records an exit as dead. */
-function childHasExited(child: SpawnedAgy): boolean {
-  return (child.exitCode ?? null) !== null
-    || (child.signalCode ?? null) !== null;
-}
+export interface SpawnedAgy extends AcpAgyChild {}
 
 export interface GateProbe {
   stdout: NodeJS.ReadableStream;
@@ -244,12 +166,11 @@ export interface AntigravityHostOptions {
   onState: (envelope: Envelope) => void;
   onLog?: (envelope: Envelope) => void;
   onSessionId?: (sessionId: string) => void;
-  /** Persists a wrapper-observed permission lifecycle event (ADR-0057 F4c
-   *  Stage B0, issue #359). The CLI forwards it to the server as a
-   *  `session_lifecycle` report (permission_applied / permission_failed). */
   onPermissionLifecycle?: (event: WrapperPermissionLifecycleMessage) => void;
+  /** The delivery acknowledgement: fired once per prompt, after delivery is
+   *  confirmed (design L7). */
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
-  /** Synchronous final check before writing the user input to the epoch. */
+  /** Synchronous final check before the prompt is written. */
   prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
   onTurnEnd?: (info: {
     turnToken: string;
@@ -258,84 +179,25 @@ export interface AntigravityHostOptions {
     cancellation?:
       | { kind: "watchdog_fail_stop"; started: false }
       | { kind: "interrupt"; reason: "interrupted" };
-    /** issue #396: true iff agy itself produced a `result` stream event for
-     *  this turn -- NOT whether the turn succeeded. Set for a `result`
-     *  outcome even when it carries `is_error: true` or an exhausted quota;
-     *  false for `stale` / `interrupted` / `error` (wrapper-detected:
-     *  tamper, gate violation, tool_timeout, crash, no-result) outcomes,
-     *  where agy itself never confirmed anything. Same meaning as Codex's
-     *  `terminal?: "turn.completed" | "turn.failed"`
-     *  (`wrapper/codex/src/host.ts`), collapsed to a boolean because
-     *  Antigravity has no SDK-side success/failure sub-type of its own to
-     *  distinguish. A consumer that must act only on a real turn boundary
-     *  (the deferred session reset, ADR-0043 D3) reads this rather than
-     *  inferring from `error`/`cancellation` alone. */
+    /** True when `agy` answered the prompt (any stop reason), not when the
+     *  turn succeeded. */
     terminal: boolean;
   }) => void;
   onTurnBoundary?: (info: { turnToken: string }) => void;
   onTurnProgress?: (info: { turnToken: string }) => void;
-  /** issue #377 Stage 2 N4: one epoch (agy process) ended, for any of the
-   *  reasons in `EpochEndReason`. Fired at most once per epoch, from the
-   *  moment its child is confirmed closed. Excludes a spontaneous exit
-   *  while a turn was in flight -- that settles as the turn's own error
-   *  (`agy_exit_without_result` / `epoch_exit_before_turn`), not this. */
-  onEpochEnded?: (info: {
-    reason: EpochEndReason;
-    code: number | null;
-    signal: NodeJS.Signals | null;
-    turns: number;
-  }) => void;
-  /** issue #377 Stage 2: a stream-json line arrived while no turn owned the
-   *  epoch's stream (no in-flight turn to attribute it to). Bounded on
-   *  purpose -- no free text -- mirroring the stderr capture below. */
-  onOutOfTurnEvent?: (
-    info:
-      | { eventKind: "init" }
-      | { eventKind: "step_update"; stepIndex?: number; stepType?: string; state?: string }
-      | { eventKind: "result"; status?: string },
-  ) => void;
-  /** issue #377 Stage 2: one of the two fixed background-task lifecycle
-   *  lines agy prints to stderr (`EPOCH_STDERR_LINE_PATTERNS`), and only
-   *  those -- every other stderr line is drained and discarded, never
-   *  forwarded, so no free-form CLI text reaches the lifecycle log. */
-  onEpochStderrLine?: (info: { kind: "waiting" | "terminating" }) => void;
-  /** A parsed `step_update` tool step went ACTIVE / left ACTIVE. The
-   *  watchdog keys its absolute tool deadline on `stepIndex`. */
+  /** One `agy acp` process exited. */
+  onGenerationEnded?: (info: { serial: number; reason: GenerationEndReason; code: number | null; signal: NodeJS.Signals | null }) => void;
+  /** Activity or other input outside a prompt's window: recorded with its
+   *  kind and call ID only, never projected onto a turn. */
+  onOutOfTurnEvent?: (info: { eventKind: string; callId?: string }) => void;
   onToolStart?: (info: { turnToken: string; stepIndex: number; toolName: string }) => void;
   onToolEnd?: (info: { turnToken: string; stepIndex: number }) => void;
-  onWatchdogFailStop?: (info: {
-    turnToken?: string;
-    conversationIds: readonly string[];
-    attribution: "exact" | "unattributed";
-  }) => void;
-  /** issue #371: `interrupt()` targeted an active turn — fired synchronously
-   *  from `interrupt()` itself, once per call that has a turn to target
-   *  (an idle interrupt fires neither this nor `onInterruptSettled`). */
-  onInterruptRequested?: (info: {
-    turnToken: string;
-    pendingPermission: boolean;
-    pendingQuestion: boolean;
-    childPid: number | null;
-  }) => void;
-  /** issue #371: the interrupted turn reached settlement (state back at
-   *  rest). Fired at most once per `onInterruptRequested`. */
-  onInterruptSettled?: (info: {
-    turnToken: string;
-    exitCode: number | null;
-    signal: NodeJS.Signals | null;
-    elapsedMs: number;
-  }) => void;
-  onGateRecoveryLifecycle?: (info: {
-    event: "gate_fault" | "gate_recovery";
-    faultClass: GateFaultClass;
-    toolName: string;
-    tripCount: number;
-    probeResult: GateProbeResult;
-    detail: string;
-  }) => void;
-  /** issue #371 S1: `send()` resolved without starting a turn (closed /
-   *  gate-broken / fail-stopped) — the caller's own promise never rejects
-   *  for this, so it cannot otherwise learn the reason. */
+  onWatchdogFailStop?: (info: { turnToken?: string; conversationIds: readonly string[]; attribution: "exact" | "unattributed" }) => void;
+  onInterruptRequested?: (info: { turnToken: string; pendingPermission: boolean; pendingQuestion: boolean; childPid: number | null }) => void;
+  onInterruptSettled?: (info: { turnToken: string; exitCode: number | null; signal: NodeJS.Signals | null; elapsedMs: number }) => void;
+  /** The gate fault latched (design D3): admission stays closed until the
+   *  wrapper restarts or the session is reset. */
+  onGateFault?: (info: { reason: string; detail: string }) => void;
   onSendRejected?: (info: {
     turnToken?: string;
     conversationIds?: readonly string[];
@@ -345,18 +207,8 @@ export interface AntigravityHostOptions {
   permissionBroker: PermissionBroker;
   questionBroker?: Pick<QuestionBroker, "close">;
   resumeSessionId?: string;
-  /** Whether the server accepted this session's permission_sync negotiation
-   *  (ADR-0057 F4c Stage B0, issue #359 M1). Gates the supports_permission_switch
-   *  advertisement (Codex parity): a legacy server that cannot sync leaves the
-   *  selector unadvertised, fail-closed. When true, the constructor seeds the
-   *  revision-0 baseline control so the server can allocate switch revisions. */
   permissionSyncSupported?: boolean;
-  /** Resolves once the server's permission_sync for the current connection has
-   *  been applied (or immediately when sync is unsupported). Awaited before each
-   *  turn's gate is built so a durable control/next relayed on reconnect lands
-   *  before the gate reads the cell. */
   waitForPermissionSync?: () => Promise<void>;
-  dangerouslySkipPermissions?: boolean;
   nodePath?: string;
   nodeArgs?: readonly string[] | undefined;
   entryPath?: string;
@@ -364,207 +216,48 @@ export interface AntigravityHostOptions {
   spawn?: (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => SpawnedAgy;
   /** Test-only seam. Production uses the checked PID/process-group signal gate. */
   signalTarget?: SignalTargetOperation;
-  /** Injectable for tests (issue #371): controls the timing of the
-   *  pre-spawn `ToolHost.listen` await so a test can interrupt while it is
-   *  still pending. Defaults to the real static method. */
-  toolHostListen?: (descriptors: ToolDescriptor[]) => Promise<ToolHost>;
-  /** Injectable for tests (issue #371), same rationale as `toolHostListen`
-   *  for the pre-spawn `GateServer.listen` await. */
-  gateServerListen?: (options: GateServerOptions) => Promise<GateServer>;
+  toolHostListen?: (descriptors: ToolDescriptor[], options: { turnSignal: () => AbortSignal | null }) => Promise<ToolHost>;
+  gateServerListen?: (options: HookGateServerOptions) => Promise<HookGateServer>;
   probeSpawn?: (command: string, args: string[], options: { cwd: string }) => GateProbe;
   modelsProbeSpawn?: (command: string, args: string[], options: { cwd: string }) => GateProbe;
-  verifyGate?: (args: string[]) => Promise<boolean>;
   gateProbeTimeoutMs?: number;
-  /** Grace period (issue #379) between the initial SIGTERM and the SIGKILL
-   *  escalation for an operator `interrupt()` or a gate-correlation-failure
-   *  kill. Defaults to the CLI's resolved `TurnWatchdog` abort grace so the
-   *  same "how long to wait for a clean exit" value applies everywhere. */
+  /** The grace a cancel waits before SIGKILL (design L3). */
   abortGraceMs?: number;
-  /** Grace period (issue #379 M2) between SIGTERM and SIGKILL specifically
-   *  for `close()`. Deliberately separate from `abortGraceMs` and much
-   *  shorter by default: an outer supervisor (runner reset:
-   *  `RESET_TERMINATION_GRACE_MS` = 5s, or systemd `TimeoutStopSec` = 30s)
-   *  may SIGKILL this wrapper PROCESS itself before a 60s abort grace could
-   *  ever fire, which would leave the agy subtree orphaned with only the
-   *  initial SIGTERM delivered. Keep this below the tightest outer bound. */
+  /** The grace of close and of ordinary retirement. */
   closeGraceMs?: number;
-  /** issue #377 Stage 2 M7: idle-epoch lifetime bound (`KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS`,
-   *  read by the CLI entrypoint via `readEpochIdleMs`). Cleared at turn
-   *  dequeue (before spec comparison / a possible respawn) and re-armed only
-   *  once that turn's own result/error has settled, so the TTL can never
-   *  fire mid-spawn or mid-delivery-ack. */
-  epochIdleMs?: number;
-  /** Injectable for tests (fake-timer pins): controls the idle-TTL timer
-   *  only, independent of `subtree_termination`'s own grace timers. */
-  epochIdleSetTimer?: (callback: () => void, delayMs: number) => unknown;
-  epochIdleClearTimer?: (timer: unknown) => void;
+  /** The bound on an unconfirmed delivery: the watchdog's inactivity timeout. */
+  preAckBoundMs?: number;
+  mcpReadyTimeoutMs?: number;
   probeModels?: () => Promise<EngineModelInfo[] | null>;
   warn?: (message: string) => void;
   now?: () => string;
-  usageProbeSpawn?: AgyUsageProbeSpawn;
-  usageProbeTimeoutMs?: number;
-  usageProbeStopTimeoutMs?: number;
-  usageProbeIntervalMs?: number;
-  usageProbeFloorSetTimer?: (callback: () => void, delayMs: number) => unknown;
-  usageProbeFloorClearTimer?: (timer: unknown) => void;
-}
-
-function validToolName(value: unknown): value is string {
-  return typeof value === "string" && value !== "";
-}
-
-const MEASURED_INVALID_ARGUMENTS =
-  /^invalid arguments:(?:\n- (?:additional properties '[^'\n]{1,128}' not allowed|missing property '[^'\n]{1,128}'))+$/;
-
-function isMeasuredPreExecutionInvalidToolCall(
-  step: Extract<AgyStreamEvent, { event: "step_update" }>['step_update'],
-): boolean {
-  const error = step.tool_info?.error;
-  return step.step_type === "tool" &&
-    step.state === "ERROR" &&
-    error?.type === "TOOL_ERROR" &&
-    typeof error.message === "string" &&
-    MEASURED_INVALID_ARGUMENTS.test(error.message);
-}
-
-/** One identity for a tool step: the top-level `tool_name` and
- *  `tool_info.name` must agree when both are present (ADR-0057 F4b). */
-function correlatedToolName(topLevelName: unknown, nestedName: unknown): unknown {
-  return topLevelName === undefined
-    ? nestedName
-    : nestedName === undefined
-      ? topLevelName
-      : validToolName(topLevelName) && validToolName(nestedName) && topLevelName === nestedName
-        ? topLevelName
-        : null;
-}
-
-function hasEmptyUsageBucket(limits: AgyUsageRateLimits): boolean {
-  return [...limits.values()].some((limit) => limit.status === "blocked" || limit.utilization >= 1);
-}
-
-function hasOnlyPositiveUsageBuckets(limits: AgyUsageRateLimits, family: AgyUsageFamily): boolean {
-  return hasCompleteAgyUsageBuckets(limits, family) && [...limits.values()].every(
-    (limit) => limit.status !== "blocked" && limit.utilization < 1,
-  );
-}
-
-function readableLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
-  let buffer = "";
-  stream.setEncoding("utf8");
-  stream.on("data", (chunk: string) => {
-    buffer += chunk;
-    let newline = buffer.indexOf("\n");
-    while (newline !== -1) {
-      onLine(buffer.slice(0, newline));
-      buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf("\n");
-    }
-  });
-  stream.on("end", () => {
-    if (buffer !== "") onLine(buffer);
-  });
-}
-
-export interface ExpectedGateRegistration {
-  source: string;
-  command: string;
-  timeoutSeconds: number;
-}
-
-export function isGateRegistered(value: unknown, expected: ExpectedGateRegistration): boolean {
-  const registrations: Record<string, unknown>[] = [];
-  const visit = (node: unknown): void => {
-    if (Array.isArray(node)) {
-      for (const item of node) visit(item);
-      return;
-    }
-    if (typeof node !== "object" || node === null) return;
-    const record = node as Record<string, unknown>;
-    if (record.source === expected.source) registrations.push(record);
-    for (const child of Object.values(record)) visit(child);
-  };
-  visit(value);
-  if (registrations.length !== 1) return false;
-  const actions = registrations[0]!.actions;
-  if (!Array.isArray(actions) || actions.length !== 1) return false;
-  const action = actions[0];
-  return typeof action === "object" && action !== null
-    && (action as Record<string, unknown>).event === "PreToolUse"
-    && (action as Record<string, unknown>).matcher === "*"
-    && (action as Record<string, unknown>).command === expected.command
-    && (action as Record<string, unknown>).timeout_seconds === expected.timeoutSeconds;
+  setTimer?: (callback: () => void, delayMs: number) => unknown;
+  clearTimer?: (timer: unknown) => void;
+  nowMs?: () => number;
 }
 
 export function initialStatusExt(
   config: AntigravityLaunchConfig,
-  // issue #292 (phase-34 Stage B6): same merge as the constructor's own
-  // #catalog assignment below, applied as the default so a caller that
-  // omits `models` (the two direct unit tests below) still sees a
-  // declared model, not only the production call site which always
-  // passes the current #catalog explicitly.
   models = mergeExtraModels(antigravityCatalogSnapshot(), config.antigravity_extra_models),
-  // issue #359 M1: gate the supports_permission_switch advertisement on a
-  // successful permission_sync negotiation (Codex parity). Defaults false so a
-  // caller computing the pre-negotiation status advertises no selector, and a
-  // legacy server that cannot sync stays fail-closed.
   permissionSyncSupported = false,
 ): Record<string, unknown> {
   const sandbox = config.sandbox ?? "workspace-write";
   const approval = config.approval ?? "on-request";
-  // ADR-0057 F4c Stage B0 (issue #359): advertise the per-axis runtime
-  // permission-switch ceilings the runner resolved and relayed. All three
-  // must be present (the runner always relays them together for antigravity);
-  // a legacy runner that omits them keeps Stage A behaviour — no advertised
-  // clamp, supports_permission_switch fail-closed absent. The wrapper is the
-  // source of truth for these; the server clamps against them (first gate)
-  // and setPermission re-checks fail-closed (final gate).
-  const switchAxes =
-    config.max_sandbox !== undefined &&
-    config.max_approval !== undefined &&
-    config.max_network_access !== undefined
-      ? {
-          sandbox: { max: config.max_sandbox },
-          network_access: { max: config.max_network_access },
-          approval: { max: config.max_approval },
-        }
-      : undefined;
+  const ceiling =
+    config.max_sandbox !== undefined && config.max_approval !== undefined && config.max_network_access !== undefined
+      ? { max_sandbox: config.max_sandbox, max_approval: config.max_approval, max_network_access: config.max_network_access }
+      : null;
   return {
-    ...effectiveStatusEnvelopeFields({
-      engine: "antigravity",
-      permission: { sandbox, approval },
-      resolved: {
-        ...(config.model === undefined ? {} : { model: config.model }),
-        ...(config.model_source === undefined ? {} : { model_source: config.model_source }),
-        ...(config.effort === undefined ? {} : { effort: config.effort }),
-        ...(config.effort_source === undefined ? {} : { effort_source: config.effort_source }),
-        sandbox,
-        network_access: effectiveNetworkAccess(sandbox, config.network_access ?? false),
-        // ADR-0057 F4c requires resume drift detection to compare approval too.
-        approval,
-      },
-    }),
+    engine: "antigravity",
+    model: config.model ?? "",
+    ...(config.model_source === undefined ? {} : { model_source: config.model_source }),
     models,
+    supports_effort_switch: false,
     permission: { sandbox, approval, enforcement: "advisory" },
-    session_capabilities: {
-      supports_attachments: false,
-      supports_user_input_dialog: true,
-      supports_model_switch: true,
-      supports_effort_switch: false,
-      supports_context_usage: false,
-      // issue #381: `new` and `clear` both map to the same fresh-relaunch
-      // operation for this engine (no distinct primitive in the agy CLI
-      // surface); the server's AgentStates/ClearWatermarks produce the
-      // display difference (ADR-0057 F7).
-      supports_session_reset: true,
-      session_reset_modes: ["new", "clear"],
-      ...(switchAxes === undefined || !permissionSyncSupported
-        ? {}
-        : {
-            supports_permission_switch: true,
-            permission_switch_axes: switchAxes,
-          }),
-    },
+    network_access: effectiveNetworkAccess(sandbox, config.network_access ?? false),
+    ...(ceiling !== null && permissionSyncSupported
+      ? { supports_permission_switch: true, permission_switch_axes: ["sandbox", "network_access", "approval"], ...ceiling }
+      : {}),
   };
 }
 
@@ -573,128 +266,39 @@ export class AntigravityHost implements EngineAdapter {
   readonly #options: AntigravityHostOptions;
   readonly #signalTarget: SignalTargetOperation;
   readonly #now: () => string;
-  #machine: MachineState = initialMachineState();
-  #closed = false;
-  #running: SpawnedAgy | null = null;
-  #sessionId: string | null;
-  #turnQueue: QueuedTurn[] = [];
-  #customization: CustomizationDir | null = null;
-  #pendingPermission: PendingPermissionExt | null = null;
-  #permissionWaitLeases = new Map<string, { turnToken: string; source: "bridge" | "native" }>();
-  #permissionWaitBaseState: KaoiroState | null = null;
-  #pendingQuestion: PendingQuestionExt | null = null;
-  #lastRevision = 0;
-  #gateBroken = false;
-  #gateSticky = false;
-  #gateFault: GateFaultRecord | null = null;
-  #gateTripCount = 0;
-  #seenGateFaultKeys = new Set<string>();
-  #nextEpochSerial = 1;
-  #recoveryCandidate: QueuedTurn | null = null;
-  #recoveryPhase: "held" | "probing" | null = null;
-  #rejectingGateBrokenQueue = false;
-  #recoveryProbation = false;
-  #recoveryFaultDuringDelivery: GateFaultRecord | null = null;
-  #recoveryAttemptWindowStartMs: number | null = null;
-  #recoveryAttemptsInWindow = 0;
-  #turnStartReached = false;
-  #turnActive = false;
-  #activeTurnToken: string | null = null;
-  #activeTurnConversationIds: readonly string[] = [];
-  #activeTurnToolTimeout: ToolTimeoutInfo | null = null;
-  #watchdogFailStopped = false;
-  #lifecycleGeneration = 0;
-  /** The turnToken `#drainTurns` is currently processing, from the moment
-   *  it dequeues a turn until the turn's `finally` clears it. Set earlier
-   *  than `#activeTurnToken` (which only appears once the agy child has
-   *  actually spawned), so `interrupt()` can record which turn it targets
-   *  even during the pre-spawn setup phase. */
-  #currentTurnToken: string | null = null;
-  /** The model `#runTurn` attempted for the current turn, once computed,
-   *  mirroring the `attemptedModel` local variable so a settlement outside
-   *  `#runTurn` can roll back the same attempt (and only that attempt). */
-  #currentAttemptedModel: string | null = null;
-  /** issue #371: a one-shot record of the turn `interrupt()` targeted,
-   *  written synchronously before the generation bump. Any later exit path
-   *  that notices the stale generation consults it to tell "this turn was
-   *  operator-interrupted" apart from any other cause (close, watchdog
-   *  fail-stop, a genuine error) — the generation counter itself has
-   *  already moved on by then. Cleared once the matching turn settles. */
-  #interruptRecord: { turnToken: string; generation: number; at: string } | null = null;
-  /** Exit info from the most recent agy child close, read by the interrupt
-   *  settlement path for the `interrupt_settled` lifecycle event. */
-  #lastChildExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  #toolHost: ToolHost | null = null;
-  #gateServer: GateServer | null = null;
-  // issue #377 Stage 2: the live epoch (one agy process spanning several
-  // turns), if any is currently spawned. `#toolHost`/`#gateServer`/
-  // `#running` mirror `#epoch`'s own fields while it is alive (kept in sync
-  // by `#spawnEpoch` and the epoch's close handler), so `interrupt()` and
-  // `close()`'s existing kill calls need no changes of their own -- ending
-  // `#running` already ends the epoch that owns it. `#failStopForWatchdog`
-  // and `requestInterruptForTurn` keep the same kill calls too, but each
-  // gained one new line, `#markEpochEnding(...)`, since a SIGTERM/SIGKILL
-  // now ends the whole multi-turn epoch rather than a single per-turn
-  // process, and the epoch's close handler needs that reason recorded.
-  #epoch: EpochRuntime | null = null;
-  #inFlightTurn: InFlightTurn | null = null;
-  readonly #epochIdleMs: number;
-  readonly #setEpochIdleTimer: (callback: () => void, delayMs: number) => unknown;
-  readonly #clearEpochIdleTimer: (timer: unknown) => void;
-  #gateProbe: GateProbe | null = null;
-  #cancelGateProbe: (() => void) | null = null;
-  #catalog: EngineModelInfo[] = antigravityCatalogSnapshot();
+  readonly #nowMs: () => number;
+  readonly #setTimer: (callback: () => void, delayMs: number) => unknown;
+  readonly #clearTimer: (timer: unknown) => void;
   readonly #agyExecutable: AgyExecutableResolution;
   readonly #probeTimeoutMs: number;
   readonly #abortGraceMs: number;
   readonly #closeGraceMs: number;
-  // issue #379: the single live SIGTERM->grace->SIGKILL escalation for
-  // `#running`, if any. issue #377 Stage 2: a new epoch is only spawned
-  // after the previous one's close is confirmed (`#endEpoch` awaits its
-  // `deathPromise`), and `#armOrShortenTermination` reuses this same handle
-  // via `shortenGraceTo` rather than creating a second one -- so at most
-  // one of these is ever outstanding.
-  #activeTermination: GraceTerminationHandle | null = null;
+  readonly #preAckBoundMs: number;
+  #machine: MachineState = initialMachineState();
+  #closed = false;
+  #failStopped = false;
+  #gateFault: { reason: string; detail: string } | null = null;
+  #queue: Input[] = [];
+  #draining = false;
+  #active: Active | null = null;
+  #previousExit: Promise<unknown> = Promise.resolve();
+  #sessionId: string | null;
+  #announcedSessionId: string | null = null;
+  #serial = 0;
+  #running: Promise<void> | null = null;
+  #customization: CustomizationDir | null = null;
+  #catalog: EngineModelInfo[];
   #pendingModel: string | null = null;
   #switchError: Record<string, unknown> | null = null;
-  // ADR-0057 F4c Stage B0 (issue #359): a server-accepted permission switch
-  // awaiting the next execution boundary (applied at the start of the next
-  // turn so a running gate is never mutated mid-turn), and the latest control
-  // record echoed to the server as ext.permission_control so it can advance
-  // pending -> applied / failed.
-  #pendingPermissionSwitch:
-    | { revision: number; requested: PermissionConfiguration }
-    | null = null;
-  // A switch whose config took effect this turn but whose applied observation
-  // waits for the engine's init to confirm session identity (M4).
-  #pendingAppliedObservation:
-    | { submission: PermissionSubmission; approval: PermissionAxesExt["approval"] }
-    | null = null;
+  #pendingPermission: PendingPermissionExt | null = null;
+  #pendingQuestion: PendingQuestionExt | null = null;
+  #leases = new Map<string, { turnToken: string; source: "native" | "mcp" }>();
+  #lastRevision = 0;
+  #pendingPermissionSwitch: { revision: number; requested: PermissionConfiguration } | null = null;
   #permissionControl: PermissionControlExt | null = null;
   #lastEffectivePermission: PermissionObservation | null = null;
-  // issue #359 M1: whether the server accepted permission_sync for this
-  // connection. Gates the supports_permission_switch advertisement and seeds
-  // the revision-0 baseline; updated on every join reply (setPermissionSyncSupported).
-  #permissionSyncSupported = false;
+  #permissionSyncSupported: boolean;
   readonly #toolNames = new Map<string, string>();
-  #usageSnapshot: { family: AgyUsageFamily; capturedAtMs: number; limits: AgyUsageRateLimits } | null = null;
-  #rateLimitOverlay: RateLimitOverlay | null = null;
-  #staleTerminal429Family: AgyUsageFamily | null = null;
-  #staleTerminal429Count = 0;
-  #pendingTerminal429Confirmation: PendingTerminal429Confirmation | null = null;
-  #usageProbeRun: { family: AgyUsageFamily; startedAtMs: number; run: AgyUsageProbeRun } | null = null;
-  #usageProbeLastFailureStartedAtMs: number | null = null;
-  #usageProbeFailureFamily: AgyUsageFamily | null = null;
-  #usageProbeFailureCount = 0;
-  #usageProbeRequested = false;
-  readonly #usageProbeTimeoutMs: number;
-  readonly #usageProbeStopTimeoutMs: number;
-  readonly #usageProbeIntervalMs: number;
-  readonly #setUsageProbeFloorTimer: (callback: () => void, delayMs: number) => unknown;
-  readonly #clearFloorTimerFn: (timer: unknown) => void;
-  #usageProbeFloorTimer: unknown | null = null;
-  #usageProbeFloorTimerFamily: AgyUsageFamily | null = null;
-  #usageProbeFloorTimerDeadlineMs: number | null = null;
   #closePromise: Promise<void> | null = null;
 
   constructor(config: WrapperConfig, options: AntigravityHostOptions) {
@@ -702,60 +306,33 @@ export class AntigravityHost implements EngineAdapter {
     if (this.#config.approval === "on-failure") {
       throw new Error("antigravity approval=on-failure is unsupported");
     }
-    // issue #292 (phase-34 Stage B6): layer antigravity_extra_models on top
-    // of the pinned snapshot before the live probe below (#refreshCatalog)
-    // has a chance to run, so a declared model is visible even if the
-    // probe never completes (agy binary absent, timeout, unparsable
-    // output).
-    this.#catalog = mergeExtraModels(
-      antigravityCatalogSnapshot(),
-      this.#config.antigravity_extra_models,
-    );
+    this.#catalog = mergeExtraModels(antigravityCatalogSnapshot(), this.#config.antigravity_extra_models);
     this.#options = options;
     this.#signalTarget = options.signalTarget ?? signalTarget;
     this.#agyExecutable = options.agyPath === undefined
       ? resolveAgyExecutable(this.#config.antigravity_cli_path)
       : { ok: true, path: options.agyPath };
-    this.#probeTimeoutMs = options.gateProbeTimeoutMs
-      ?? this.#config.antigravity_probe_timeout_ms
-      ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
+    this.#probeTimeoutMs = options.gateProbeTimeoutMs ?? this.#config.antigravity_probe_timeout_ms ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
     this.#abortGraceMs = options.abortGraceMs ?? DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS;
     this.#closeGraceMs = options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS;
-    this.#epochIdleMs = options.epochIdleMs ?? DEFAULT_EPOCH_IDLE_MS;
-    this.#setEpochIdleTimer = options.epochIdleSetTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
-    this.#clearEpochIdleTimer = options.epochIdleClearTimer ?? ((timer) => clearTimeout(timer as never));
+    this.#preAckBoundMs = options.preAckBoundMs ?? DEFAULT_TURN_WATCHDOG_INACTIVITY_MS;
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = options.now ?? (() => new Date().toISOString());
-    this.#usageProbeTimeoutMs = options.usageProbeTimeoutMs ?? DEFAULT_USAGE_PROBE_TIMEOUT_MS;
-    this.#usageProbeStopTimeoutMs = options.usageProbeStopTimeoutMs ?? USAGE_PROBE_STOP_TIMEOUT_MS;
-    this.#usageProbeIntervalMs = options.usageProbeIntervalMs ?? USAGE_PROBE_INTERVAL_MS;
-    this.#setUsageProbeFloorTimer = options.usageProbeFloorSetTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
-    this.#clearFloorTimerFn = options.usageProbeFloorClearTimer ?? ((timer) => clearTimeout(timer as never));
-    // issue #359 M1: with sync negotiated, seed the revision-0 baseline control
-    // (Codex parity) so the first status snapshot carries ext.permission_control
-    // and the server can allocate switch revisions against it. Without it the
-    // first set_permission is rejected as permission_not_ready. A reconnect's
-    // durable control (applyPermissionSync) later supersedes this baseline.
+    this.#nowMs = options.nowMs ?? (() => performance.now());
+    this.#setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.#clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as never));
     this.#permissionSyncSupported = options.permissionSyncSupported ?? false;
-    if (this.#permissionSyncSupported) {
-      this.#permissionControl = this.#baselineControl();
-    }
+    if (this.#permissionSyncSupported) this.#permissionControl = this.#baselineControl();
     sweepStaleCustomizationDirs();
     void this.#refreshCatalog();
   }
 
-  /** The grace this host gives an interrupted or gate-failed `agy` before SIGKILL. */
   get abortGraceMs(): number {
     return this.#abortGraceMs;
   }
 
-  /** The idle-epoch lifetime this host arms its idle timer with. */
-  get epochIdleMs(): number {
-    return this.#epochIdleMs;
-  }
-
   get state(): KaoiroState {
-    return this.#gateBroken ? "error" : this.#machine.state;
+    return this.#gateFault !== null ? "error" : this.#machine.state;
   }
 
   async run(prompt?: string): Promise<void> {
@@ -770,266 +347,118 @@ export class AntigravityHost implements EngineAdapter {
     });
   }
 
-  async send(
-    text: string,
-    attachmentIds?: string[],
-    conversationIds?: readonly string[],
-    turnToken?: string,
-  ): Promise<void> {
-    if (this.#closed || this.#watchdogFailStopped) {
+  async send(text: string, attachmentIds?: string[], conversationIds?: readonly string[], turnToken?: string): Promise<void> {
+    const reject = (reason: "closed" | "gate_broken" | "watchdog_fail_stopped" | "attachments_unsupported"): void =>
       this.#notifySendRejected({
         ...(turnToken === undefined ? {} : { turnToken }),
         ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
-        // Most specific first: a watchdog fail-stop also sets `#closed`, and
-        // a customization tamper (`#gateBroken`) can co-occur with either.
-        reason: this.#watchdogFailStopped ? "watchdog_fail_stopped" : "closed",
+        reason,
       });
-      return;
-    }
-    if (this.#gateBroken && attachmentIds !== undefined && attachmentIds.length > 0) {
-      this.#notifySendRejected({
-        ...(turnToken === undefined ? {} : { turnToken }),
-        ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
-        reason: "gate_broken",
-      });
-      return;
-    }
+    if (this.#failStopped) return reject("watchdog_fail_stopped");
+    if (this.#closed) return reject("closed");
+    if (this.#gateFault !== null) return reject("gate_broken");
     if (attachmentIds !== undefined && attachmentIds.length > 0) {
       this.#warn("antigravity: attachments are unsupported");
-      this.#notifySendRejected({
-        ...(turnToken === undefined ? {} : { turnToken }),
-        ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
-        reason: "attachments_unsupported",
-      });
-      return;
+      return reject("attachments_unsupported");
     }
-    if (this.#gateBroken) {
-      if (!this.#gateSticky && this.#recoveryCandidate === null && !this.#rejectingGateBrokenQueue) {
-        const candidate: QueuedTurn = {
-          text,
-          ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
-          ...(turnToken === undefined ? {} : { turnToken }),
-        };
-        this.#recoveryCandidate = candidate;
-        this.#recoveryPhase = "held";
-        this.#turnQueue.push(candidate);
-        void this.#drainTurns();
-      } else {
-        this.#notifySendRejected({
-          ...(turnToken === undefined ? {} : { turnToken }),
-          ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
-          reason: "gate_broken",
-        });
-      }
-      return;
-    }
-    this.#clearUsageProbeFloorTimer();
     this.#apply({ kind: "user_send" });
-    this.#turnQueue.push({
+    this.#queue.push({
       text,
       ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
       ...(turnToken === undefined ? {} : { turnToken }),
     });
-    void this.#drainTurns();
+    void this.#drain();
   }
 
-  /** Starts the startup `/usage` probe unless its guards decline. */
-  probeRateLimits(): void {
-    this.#maybeStartUsageProbe();
-  }
-
-  /** The capability supplied to inter-agent tools only while this agy turn runs. */
+  /** The turn token inter-agent tools act for, only while a prompt's window
+   *  is open. */
   activeInterAgentTurnToken(): string | null {
-    return this.#activeTurnToken;
+    const active = this.#active;
+    return active !== null && active.window !== null && !active.settled ? active.token : null;
   }
 
-  beginPermissionWaitLease(
-    turnToken: string,
-    source: "bridge" | "native",
-  ): string | null {
+  beginPermissionWaitLease(turnToken: string, source: "native" | "mcp"): string | null {
+    const active = this.#active;
     if (
       this.#closed ||
-      this.#watchdogFailStopped ||
-      this.#interruptRecord?.turnToken === turnToken ||
-      this.#activeTurnToken !== turnToken
+      active === null ||
+      active.token !== turnToken ||
+      active.window === null ||
+      active.settled ||
+      active.stop !== null
     ) return null;
-    if (this.#permissionWaitLeases.size === 0) {
-      if (this.#machine.state !== "tool_running") {
-        throw new Error(`permission wait requires tool_running, got ${this.#machine.state}`);
-      }
-      this.#permissionWaitBaseState = this.#machine.state;
-    } else if (this.#machine.state !== "waiting_permission") {
-      throw new Error(`overlapping permission wait requires waiting_permission, got ${this.#machine.state}`);
-    }
     const leaseId = randomUUID();
-    const wasEmpty = this.#permissionWaitLeases.size === 0;
-    this.#permissionWaitLeases.set(leaseId, { turnToken, source });
+    const wasEmpty = this.#leases.size === 0;
+    this.#leases.set(leaseId, { turnToken, source });
     if (wasEmpty) this.#apply({ kind: "permission_request" });
     return leaseId;
   }
 
   endPermissionWaitLease(leaseId: string): boolean {
-    const owner = this.#permissionWaitLeases.get(leaseId);
+    const owner = this.#leases.get(leaseId);
     if (owner === undefined) return false;
-    this.#permissionWaitLeases.delete(leaseId);
-    if (this.#permissionWaitLeases.size !== 0) return true;
-    const baseState = this.#permissionWaitBaseState;
-    this.#permissionWaitBaseState = null;
-    if (
-      baseState === "tool_running" &&
-      this.#activeTurnToken === owner.turnToken &&
-      this.#machine.state === "waiting_permission"
-    ) {
+    this.#leases.delete(leaseId);
+    if (this.#leases.size !== 0) return true;
+    const active = this.#active;
+    if (active !== null && active.token === owner.turnToken && !active.settled && this.#machine.state === "waiting_permission") {
       this.#apply({ kind: "permission_resolved" });
     }
     return true;
   }
 
   async interrupt(): Promise<void> {
-    // issue #371: record the interrupt target synchronously, before the
-    // generation bump, so the settlement invariant in `#drainTurns` can
-    // recognize this specific turn's ending as an operator interrupt no
-    // matter which exit path in `#runTurn` first notices the stale
-    // generation. No current turn (idle interrupt) leaves no record, so no
-    // result / lifecycle event is produced and the next `send()` simply
-    // starts under the new generation.
-    // issue #371 Design v2 N3 (kohaku design review round 1): a record is
-    // created -- and `onInterruptRequested` fires -- only the FIRST time
-    // this turn is interrupted, so a second press repeats the kill routine
-    // below without adding a duplicate lifecycle event ("once each" per
-    // the docs stays true).
-    if (this.#currentTurnToken !== null && this.#interruptRecord?.turnToken !== this.#currentTurnToken) {
-      this.#interruptRecord = {
-        turnToken: this.#currentTurnToken,
-        generation: this.#lifecycleGeneration,
-        at: this.#now(),
-      };
-      this.#options.onInterruptRequested?.({
-        turnToken: this.#currentTurnToken,
-        pendingPermission: this.#pendingPermission !== null,
-        pendingQuestion: this.#pendingQuestion !== null,
-        childPid: this.#running?.pid ?? null,
-      });
-    }
-    this.#lifecycleGeneration += 1;
-    // Preserve queued turns (issue #358): an ordinary interrupt aborts only
-    // the active turn (via the generation bump + SIGTERM below). Queued
-    // inter-agent turns are already accepted deliveries, so dropping them
-    // silently would strand the sender's delivery ledger with no ack and no
-    // notice. The drain loop's `finally` re-kick picks them up after the
-    // active turn unwinds, running each under the new generation with its
-    // own delivery token. Antigravity rejects attachments at `send()`, so
-    // the queue never holds a temp turn to discard (unlike Codex). Queue
-    // retirement on close / fail-stop is issue #354's explicit path.
+    const active = this.#active;
     this.#options.permissionBroker.close();
     this.#options.questionBroker?.close();
-    this.#clearPendingAfterInterrupt();
-    this.#gateServer?.close();
-    this.#toolHost?.close();
-    this.#cancelGateProbe?.();
-    if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
-    this.#usageProbeRequested = false;
-    this.#stopUsageProbe("abort");
-    // issue #377 Stage 2: ends the whole epoch, not just the active turn --
-    // an idle interrupt (no `#currentTurnToken`) now has a live process to
-    // stop, unlike Stage 1 where idle meant no process existed at all. The
-    // next `send()` sees `#epoch === null` and spawns fresh with
-    // `--conversation <this session's id>` (M6 keeps `#sessionId` current).
-    void this.#endEpoch("interrupt");
-  }
-
-  /** issue #379: arms a SIGTERM->grace->SIGKILL escalation for `#running`
-   *  if none is active yet; otherwise shortens the already-armed one to
-   *  `graceMs` (never lengthens, never re-sends SIGTERM). This single
-   *  method is what keeps a repeat `interrupt()` from re-signalling
-   *  (calling it again with the SAME graceMs computes a later candidate
-   *  deadline, which `shortenGraceTo` treats as a no-op) and what lets
-   *  `close()` shrink an `interrupt()`-armed 60s grace down to its own
-   *  short `closeGraceMs` (M2) using the same call. */
-  #armOrShortenTermination(graceMs: number): void {
-    if (this.#activeTermination !== null) {
-      this.#activeTermination.shortenGraceTo(graceMs);
-      return;
+    this.#clearPendingAfterStop();
+    if (active === null || active.settled) return;
+    if (active.interruptedAt === null) {
+      active.interruptedAt = this.#now();
+      this.#options.onInterruptRequested?.({
+        turnToken: active.token,
+        pendingPermission: this.#pendingPermission !== null,
+        pendingQuestion: this.#pendingQuestion !== null,
+        childPid: active.generation?.child.pid ?? null,
+      });
     }
-    if (this.#running === null) return;
-    this.#activeTermination = terminateWithGrace(this.#running, { graceMs, signalTarget: this.#signalTarget });
+    this.#stopActive(active, "interrupt");
   }
 
+  /** The watchdog's interrupt: cancels the prompt; the watchdog owns the
+   *  grace. */
   requestInterruptForTurn(turnToken: string, cause?: TurnWatchdogInterruptCause): boolean {
-    if (
-      this.#activeTurnToken !== turnToken ||
-      this.#watchdogFailStopped ||
-      this.#closed
-    ) {
-      return false;
-    }
-    // The CLI already logs the watchdog warning; the host only keeps the
-    // cause so settlement can override the CLI's terminal record.
-    if (cause?.kind === "tool_timeout") this.#activeTurnToolTimeout = cause;
-    // issue #379: no grace armed here -- `TurnWatchdog` already owns that
-    // timing itself (it arms its own `abortGraceMs` timer between this call
-    // and `failStopTurnForWatchdog`); arming a second one here would double
-    // the effective wait before an unresponsive watchdog-flagged turn dies.
-    this.#markEpochEnding("watchdog");
-    return this.#running !== null && signalSubtree(this.#running, "SIGTERM", this.#signalTarget);
+    const active = this.#active;
+    if (active === null || active.token !== turnToken || active.settled || this.#closed) return false;
+    if (cause?.kind === "tool_timeout") active.toolTimeout = true;
+    return this.#stopActive(active, "watchdog");
   }
 
   failStopTurnForWatchdog(turnToken: string): boolean {
-    if (
-      this.#activeTurnToken !== turnToken ||
-      this.#watchdogFailStopped ||
-      this.#closed
-    ) {
-      return false;
-    }
-    return this.#failStopForWatchdog("exact");
+    const active = this.#active;
+    if (this.#failStopped || this.#closed || active === null || active.token !== turnToken) return false;
+    return this.#failStop("exact");
   }
 
   failStopForWatchdogAttributionUnknown(): boolean {
-    if (this.#watchdogFailStopped) return false;
-    return this.#failStopForWatchdog("unattributed");
+    if (this.#failStopped) return false;
+    return this.#failStop("unattributed");
   }
 
   close(): Promise<void> {
     if (this.#closePromise !== null) return this.#closePromise;
     this.#closed = true;
-    this.#clearUsageProbeFloorTimer();
-    this.#pendingTerminal429Confirmation = null;
-    this.#lifecycleGeneration += 1;
-    const queued = this.#turnQueue.splice(0);
-    this.#recoveryCandidate = null;
-    this.#recoveryPhase = null;
-    for (const turn of queued) {
-      this.#notifySendRejected({
-        ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
-        ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
-        reason: "closed",
-      });
-    }
+    for (const input of this.#queue.splice(0)) this.#rejectInput(input, "closed");
     this.#options.permissionBroker.close();
     this.#options.questionBroker?.close();
-    this.#clearPendingAfterInterrupt();
-    this.#gateServer?.close();
-    this.#toolHost?.close();
-    this.#cancelGateProbe?.();
-    if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
-    this.#usageProbeRequested = false;
-    const probeRun = this.#usageProbeRun?.run ?? null;
-    if (probeRun !== null) this.#stopUsageProbe("host_close");
-    // issue #379 M2: closeGraceMs, not abortGraceMs -- an outer supervisor
-    // (runner reset / systemd stop) can SIGKILL this wrapper process well
-    // before a 60s abort grace would fire, so close() always shortens down
-    // to its own short bound rather than trusting whatever was already
-    // armed (including a longer grace an `interrupt()` call just started,
-    // e.g. the SIGINT handler's `interrupt().finally(() => close())`).
-    const epochClose = this.#endEpoch("close");
-    this.#customization?.close();
-    this.#customization = null;
-    const probeClose = probeRun?.completion.then(() => undefined) ?? Promise.resolve();
-    this.#closePromise = Promise.all([
-      epochClose.catch(() => {}),
-      probeClose.catch(() => {}),
-    ]).then(() => undefined);
+    this.#clearPendingAfterStop();
+    const active = this.#active;
+    if (active !== null && !active.settled) this.#stopActive(active, "close");
+    this.#closePromise = (async () => {
+      await this.#running?.catch(() => {});
+      await this.#previousExit.catch(() => {});
+      this.#customization?.close();
+      this.#customization = null;
+    })();
     return this.#closePromise;
   }
 
@@ -1040,277 +469,57 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   async setEffort(_level: string): Promise<void> {
-    throw new Error("antigravity effort switching is unavailable in Stage A");
+    throw new Error("antigravity effort switching is unavailable; the level is part of the model slug");
   }
 
-  /** This session's advertised per-axis permission-switch ceiling, or null when
-   *  the runner relayed no clamp (a legacy runner — Stage A, switching off). */
-  #permissionCeiling(): SwitchCeiling | null {
-    const { max_sandbox, max_approval, max_network_access } = this.#config;
-    if (
-      max_sandbox === undefined ||
-      max_approval === undefined ||
-      max_network_access === undefined
-    ) {
-      return null;
-    }
-    return {
-      sandbox: max_sandbox,
-      approval: max_approval,
-      network_access: max_network_access,
-    };
-  }
-
-  /** The cell currently enforced (the launch defaults until a switch applies). */
-  #currentCell(): Required<PermissionConfiguration> {
-    return {
-      sandbox: this.#config.sandbox ?? "workspace-write",
-      network_access: this.#config.network_access ?? false,
-      approval: this.#config.approval ?? "on-request",
-    };
-  }
-
-  #permissionConstraints(
-    approval: PermissionAxesExt["approval"],
-  ): PermissionControlExt["constraints"] {
-    // enforcement is always "advisory" for antigravity (the --sandbox flag has
-    // no OS effect; the gate inspects tool arguments, ADR-0057 F4). approval is
-    // required by the control shape but, unlike Codex's fixed "never", is not
-    // rendered for antigravity (ext.permission carries the observed value); the
-    // current effective approval is the truthful contract to report.
-    return { approval, enforcement: "advisory" };
-  }
-
-  /** The revision-0 baseline control emitted once permission_sync is negotiated
-   *  (Codex parity, issue #359 M1): the launch cell as `pending` with no
-   *  submitted / effective evidence, so the server seeds its ledger and
-   *  allocates switch revisions against it. */
-  #baselineControl(): PermissionControlExt {
-    const cell = this.#currentCell();
-    return {
-      revision: 0,
-      requested: cell,
-      status: "pending",
-      constraints: this.#permissionConstraints(cell.approval),
-    };
-  }
-
-  /** Called by the CLI after each join reply (Codex parity, issue #359 M1). A
-   *  legacy server that cannot sync leaves the selector unadvertised. A
-   *  re-negotiated connection re-seeds the baseline only when no control exists
-   *  yet — a durable control adopted by applyPermissionSync is preserved. */
   setPermissionSyncSupported(supported: boolean): void {
     if (this.#permissionSyncSupported === supported) return;
     this.#permissionSyncSupported = supported;
-    if (supported && this.#permissionControl === null) {
-      this.#permissionControl = this.#baselineControl();
-    }
+    if (supported && this.#permissionControl === null) this.#permissionControl = this.#baselineControl();
     this.#emitState(this.#machine.state);
   }
 
-  /** Applies the server's permission_sync for this connection (issue #359 M1).
-   *  On reconnect the server relays the durable control and the cell that
-   *  should be enforced (`next`); this re-applies `next` to #config so the next
-   *  turn's gate reads it and adopts the durable control. Unlike a live
-   *  set_permission it emits no applied observation — the switch already applied
-   *  before the disconnect.
-   *
-   *  The wrapper is the final gate (M7): the relayed `next` is checked against
-   *  the launch ceiling BEFORE the server's control or its evidence is adopted.
-   *  A violation is refused fail-closed with the SAME semantics as a live
-   *  set_permission — permission_failed, reason "exceeds_launch_ceiling",
-   *  rolled_back_to = the current cell — and the over-ceiling control /
-   *  effective / last_effective is NOT adopted, so #config and the last
-   *  effective observation stay at their current in-ceiling values. */
   applyPermissionSync(message: PermissionSyncMessage): void {
     if (message.control === null) return;
     const control = message.control;
-    // A stale relay cannot regress an already-adopted higher revision.
     if (control.revision < (this.#permissionControl?.revision ?? -1)) return;
     const current = this.#currentCell();
     const next = message.next.requested;
-    // The server relays approval for antigravity; keep the current value if a
-    // legacy sandbox/network-only next omits it. Resolved to a concrete value so
-    // #config.approval (non-optional) never receives undefined.
     const approval = next.approval ?? current.approval;
-    const cell: PermissionConfiguration = {
-      sandbox: next.sandbox,
-      network_access: next.network_access,
-      approval,
-    };
+    const cell: PermissionConfiguration = { sandbox: next.sandbox, network_access: next.network_access, approval };
     const ceiling = this.#permissionCeiling();
     const violation = ceiling === null ? null : ceilingExceeded(cell, ceiling);
     if (violation !== null) {
-      // Fail-closed BEFORE adopting the control or its (possibly forged)
-      // evidence: report failed against the current cell, exactly as a live
-      // set_permission does, and leave #config / #lastEffectivePermission alone.
-      this.#permissionControl = {
-        revision: message.next.revision,
-        requested: cell,
-        status: "failed",
-        constraints: this.#permissionConstraints(current.approval),
-        reason: "exceeds_launch_ceiling",
-        rolled_back_to: current,
-        ...(this.#lastEffectivePermission === null
-          ? {}
-          : { last_effective: this.#lastEffectivePermission }),
-      };
-      this.#emitState(this.#machine.state);
-      this.#options.onPermissionLifecycle?.({
-        version: "0",
-        kind: "permission_failed",
-        at: this.#now(),
-        details: {
-          revision: message.next.revision,
-          requested: cell,
-          reason: "exceeds_launch_ceiling",
-          rolled_back_to: current,
-        },
-      });
-      this.#warn(`antigravity: permission_sync rejected: ${violation}`);
+      this.#rejectOverCeiling(message.next.revision, cell, current, violation, "permission_sync");
       return;
     }
-    // Within ceiling: adopt the durable control and re-apply next to #config.
     this.#permissionControl = control;
-    if (control.status === "applied") {
-      this.#lastEffectivePermission = control.effective;
-    } else if (control.last_effective !== undefined) {
-      this.#lastEffectivePermission = control.last_effective;
-    }
+    if (control.status === "applied") this.#lastEffectivePermission = control.effective;
+    else if (control.last_effective !== undefined) this.#lastEffectivePermission = control.last_effective;
     this.#config.sandbox = cell.sandbox;
     this.#config.network_access = cell.network_access;
     this.#config.approval = approval;
+    // A durable next that was never applied is captured by the next turn.
+    if (control.status !== "applied" && message.next.revision > 0) {
+      this.#pendingPermissionSwitch = { revision: message.next.revision, requested: cell };
+    }
     this.#emitState(this.#machine.state);
   }
 
-  /** Applies a staged permission switch at the start of a turn (ADR-0057 F4c
-   *  Stage B0): mutates #config so the turn's fresh gate enforces the new cell.
-   *  The switch is reported as `applying` here (submitted captured, no
-   *  effective yet) and only PROMOTED to `applied` once the engine's `init`
-   *  event confirms this turn's session identity — session_id / turn_id are
-   *  engine-observed and must never be manufactured from a wrapper token
-   *  (protocol.md, PermissionObservation; #confirmAppliedPermission). */
-  #applyPendingPermissionSwitch(turnToken: string): void {
-    const pending = this.#pendingPermissionSwitch;
-    if (pending === null) return;
-    this.#pendingPermissionSwitch = null;
-    const cell = pending.requested;
-    this.#config.sandbox = cell.sandbox;
-    this.#config.network_access = cell.network_access;
-    if (cell.approval !== undefined) this.#config.approval = cell.approval;
-    const approval = this.#config.approval ?? "on-request";
-    const requested: PermissionConfiguration = {
-      sandbox: cell.sandbox,
-      network_access: cell.network_access,
-      approval,
-    };
-    const submission: PermissionSubmission = {
-      revision: pending.revision,
-      requested,
-      execution_id: turnToken,
-    };
-    this.#pendingAppliedObservation = { submission, approval };
-    this.#permissionControl = {
-      revision: pending.revision,
-      requested,
-      status: "applying",
-      constraints: this.#permissionConstraints(approval),
-      submitted: submission,
-      ...(this.#lastEffectivePermission === null
-        ? {}
-        : { last_effective: this.#lastEffectivePermission }),
-    };
-    this.#emitState(this.#machine.state);
-  }
-
-  /** Promotes an `applying` permission switch to `applied` once the engine's
-   *  `init` event has set this turn's session identity (M4). session_id is the
-   *  engine-observed conversation id; turn_id is OMITTED — Antigravity has no
-   *  per-turn identifier and manufacturing one from the session id or a wrapper
-   *  token is forbidden (issue #359 M1, protocol.md "engine-observed
-   *  identities"). execution_id is the wrapper's own correlation token. */
-  #confirmAppliedPermission(): void {
-    const pending = this.#pendingAppliedObservation;
-    if (pending === null || this.#sessionId === null) return;
-    this.#pendingAppliedObservation = null;
-    const { submission, approval } = pending;
-    const cell = submission.requested;
-    const observation: PermissionObservation = {
-      ...submission,
-      session_id: this.#sessionId,
-      permission: { sandbox: cell.sandbox, approval, enforcement: "advisory" },
-      network_access: effectiveNetworkAccess(cell.sandbox, cell.network_access),
-    };
-    this.#lastEffectivePermission = observation;
-    this.#permissionControl = {
-      revision: submission.revision,
-      requested: cell,
-      status: "applied",
-      constraints: this.#permissionConstraints(approval),
-      submitted: submission,
-      effective: observation,
-      last_effective: observation,
-    };
-    this.#options.onPermissionLifecycle?.({
-      version: "0",
-      kind: "permission_applied",
-      at: this.#now(),
-      details: observation,
-    });
-    this.#emitState(this.#machine.state);
-  }
-
-  /** Applies a server-originated permission switch at the NEXT execution
-   *  boundary (ADR-0057 F4c Stage B0, issue #359). The requested cell is
-   *  re-checked fail-closed against this session's advertised ceiling (the
-   *  wrapper's final gate); a violation is reported as `permission_failed`
-   *  with the current cell as `rolled_back_to` and the config is left
-   *  untouched. An accepted switch is staged and applied when the next turn
-   *  starts (`#applyPendingPermissionSwitch`), so a running gate is never
-   *  mutated mid-turn. */
+  /** Stages a switch for the next turn's start; its process starts with it. */
   async setPermission(selection: PermissionSelection): Promise<void> {
     const ceiling = this.#permissionCeiling();
-    if (ceiling === null) {
-      throw new Error(
-        "antigravity: permission switching is not advertised for this session",
-      );
-    }
+    if (ceiling === null) throw new Error("antigravity: permission switching is not advertised for this session");
     const current = this.#currentCell();
-    const requested = selection.requested;
     const target: PermissionConfiguration = {
-      sandbox: requested.sandbox,
-      network_access: requested.network_access,
-      // The server relays approval for antigravity; keep the current value if a
-      // legacy sandbox/network-only request omits it.
-      approval: requested.approval ?? current.approval,
+      sandbox: selection.requested.sandbox,
+      network_access: selection.requested.network_access,
+      approval: selection.requested.approval ?? current.approval,
     };
     const violation = ceilingExceeded(target, ceiling);
     if (violation !== null) {
       this.#pendingPermissionSwitch = null;
-      this.#permissionControl = {
-        revision: selection.revision,
-        requested: target,
-        status: "failed",
-        constraints: this.#permissionConstraints(current.approval),
-        reason: "exceeds_launch_ceiling",
-        rolled_back_to: current,
-        ...(this.#lastEffectivePermission === null
-          ? {}
-          : { last_effective: this.#lastEffectivePermission }),
-      };
-      this.#emitState(this.#machine.state);
-      this.#options.onPermissionLifecycle?.({
-        version: "0",
-        kind: "permission_failed",
-        at: this.#now(),
-        details: {
-          revision: selection.revision,
-          requested: target,
-          reason: "exceeds_launch_ceiling",
-          rolled_back_to: current,
-        },
-      });
-      this.#warn(`antigravity: set_permission rejected: ${violation}`);
+      this.#rejectOverCeiling(selection.revision, target, current, violation, "set_permission");
       return;
     }
     this.#pendingPermissionSwitch = { revision: selection.revision, requested: target };
@@ -1318,19 +527,14 @@ export class AntigravityHost implements EngineAdapter {
       revision: selection.revision,
       requested: target,
       status: "pending",
-      constraints: this.#permissionConstraints(current.approval),
-      ...(this.#lastEffectivePermission === null
-        ? {}
-        : { last_effective: this.#lastEffectivePermission }),
+      constraints: this.#constraints(current.approval),
+      ...(this.#lastEffectivePermission === null ? {} : { last_effective: this.#lastEffectivePermission }),
     };
     this.#emitState(this.#machine.state);
   }
 
   async setPermissionMode(_mode: PermissionMode): Promise<void> {
-    throw new Error(
-      "antigravity: permission-mode switching is unsupported; use set_permission " +
-        "for the sandbox / approval / network_access axes (ADR-0057 F4c)",
-    );
+    throw new Error("antigravity: permission-mode switching is unsupported; use set_permission");
   }
 
   setPendingPermission(pending: PendingPermissionExt | null): void {
@@ -1360,1195 +564,869 @@ export class AntigravityHost implements EngineAdapter {
     return this.#statusExt();
   }
 
-  async #drainTurns(): Promise<void> {
-    if (this.#turnActive || this.#closed || this.#watchdogFailStopped) return;
-    const head = this.#turnQueue[0];
-    const isRecoveryCandidate =
-      this.#gateBroken &&
-      !this.#gateSticky &&
-      head !== undefined &&
-      head === this.#recoveryCandidate &&
-      this.#recoveryPhase === "held";
-    if (this.#gateBroken && !isRecoveryCandidate) return;
-    const turn = this.#turnQueue.shift();
-    if (turn === undefined) return;
-    if (isRecoveryCandidate) {
-      this.#recoveryPhase = "probing";
-      if (!this.#beginRecoveryProbe()) {
-        this.#recoveryCandidate = null;
-        this.#recoveryPhase = null;
-        this.#notifySendRejected({
-          ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
-          ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
-          reason: "gate_broken",
-        });
-        return;
-      }
-    }
-    this.#turnActive = true;
-    const generation = this.#lifecycleGeneration;
-    // Every turn gets a token (Codex parity) so the watchdog bounds operator
-    // instructions too; inter-agent bookkeeping ignores a token it never
-    // issued.
-    const turnToken = turn.turnToken ?? randomUUID();
-    this.#currentTurnToken = turnToken;
-    // issue #371 M3 (momo round-2 review): `#runTurn` does not set
-    // `#currentAttemptedModel` for THIS turn until after gate registration
-    // (see the `attemptedModel` assignment below), so without this reset a
-    // synchronous re-entrant `send()` from a finishing turn's onTurnEnd
-    // would leave the PRIOR turn's attempted model in place; an interrupt
-    // landing in that pre-spawn window would then roll back the wrong model.
-    this.#currentAttemptedModel = null;
-    this.#turnStartReached = false;
-    let outcome: TurnOutcome = { kind: "stale" };
+  // --- input lifecycle ---------------------------------------------------
+
+  async #drain(): Promise<void> {
+    if (this.#draining) return;
+    this.#draining = true;
     try {
-      outcome = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? [], isRecoveryCandidate);
-    } catch (caught) {
-      const detail = caught instanceof Error ? caught.message : String(caught);
-      // issue #371 Design v2 M2 (kohaku design review): `attemptedModel:
-      // undefined` matches the pre-#371 `#terminalError(detail)` call this
-      // replaces -- an unconditional rollback, not a match-gated one.
-      outcome = !this.#isCurrent(generation)
-        ? { kind: "stale" }
-        : caught instanceof PermissionSyncTimeoutError
-          ? { kind: "permission_sync_timeout" }
-        : isRecoveryCandidate && !this.#turnStartReached
-          ? {
-              kind: "recovery_rejected",
-              detail,
-              probeResult:
-                detail.startsWith("antigravity_cli_") && !detail.startsWith("antigravity_cli_unavailable:")
-                  ? "child_launch_failed"
-                  : "failed",
-            }
-          : { kind: "error", detail, classify: { detail }, attemptedModel: undefined };
-      if (outcome.kind === "recovery_rejected") {
-        this.#restoreRecoveryFault();
-        this.#emitRecoveryOutcome(outcome.probeResult, detail);
+      for (;;) {
+        if (this.#closed || this.#failStopped || this.#gateFault !== null) return;
+        const input = this.#queue.shift();
+        if (input === undefined) return;
+        this.#running = this.#runInput(input);
+        await this.#running;
+        this.#running = null;
       }
     } finally {
-      // issue #377 Stage 2: `#running` is NOT reset here -- it now mirrors
-      // the live EPOCH's child (which can outlive this one turn), not a
-      // turn-scoped process. It is set once by `#spawnEpoch` and cleared
-      // only by `#attachEpochWatcher`'s close handler, once the epoch's
-      // child actually closes.
-      this.#turnActive = false;
-      if (isRecoveryCandidate && outcome.kind !== "recovery_rejected") {
-        this.#recoveryCandidate = null;
-        this.#recoveryPhase = null;
-        this.#recoveryFaultDuringDelivery = null;
-      }
-      // issue #371 Design v2: a `stale` outcome (generation mismatch, or
-      // closed/fail-stopped) becomes `interrupted` only when the operator's
-      // one-shot interrupt record targeted THIS turn and the host is still
-      // in normal admission (`close()`/fail-stop already produce `stale`
-      // too, but with no matching record -- their pre-#371 termination
-      // semantics are unchanged: no fabricated result, no interrupt
-      // lifecycle event). Any other outcome kind (a real error or result,
-      // including one `#runTurn` decided AFTER an interrupt fired, e.g.
-      // customization tampering) keeps its own kind -- an interrupt does
-      // not override a turn's real outcome, only its absence.
-      if (outcome.kind === "stale" && !this.#closed && this.#interruptRecord?.turnToken === turnToken) {
-        outcome = {
-          kind: "interrupted",
-          attemptedModel: this.#currentAttemptedModel,
-          exit: this.#lastChildExit,
-          requestedAt: this.#interruptRecord.at,
-        };
-      }
-      for (const [leaseId, owner] of this.#permissionWaitLeases) {
-        if (owner.turnToken === turnToken) this.#permissionWaitLeases.delete(leaseId);
-      }
-      if (this.#permissionWaitLeases.size === 0) this.#permissionWaitBaseState = null;
-      // issue #371: identity cleanup runs BEFORE every external callback
-      // this turn's settlement can reach (onState/onLog via
-      // `#terminalError`/`#publishTerminalResult`, onInterruptSettled,
-      // onTurnBoundary, onTurnEnd), and unconditionally (even under
-      // `#watchdogFailStopped`, so a later `interrupt()` cannot
-      // misattribute to a turn that already ended for a different
-      // reason). See the `TurnOutcome` comment for the invariant this
-      // maintains.
-      if (this.#currentTurnToken === turnToken) {
-        this.#currentTurnToken = null;
-        this.#currentAttemptedModel = null;
-      }
-      if (this.#activeTurnToken === turnToken) {
-        this.#activeTurnToken = null;
-        this.#activeTurnConversationIds = [];
-      }
-      if (this.#interruptRecord?.turnToken === turnToken) this.#interruptRecord = null;
-      if (outcome.kind === "recovery_rejected") {
-        this.#recoveryCandidate = null;
-        this.#recoveryPhase = null;
-        this.#notifySendRejected({
-          ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
-          ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
-          reason: "gate_broken",
-        });
-      } else if (outcome.kind === "skipped") {
-        if (this.#turnQueue.length === 0 && !this.#closed) {
-          this.#machine = initialMachineState("waiting_input");
-          this.#emitState("waiting_input");
-        }
-      } else if (!this.#watchdogFailStopped) {
-        let error: InterAgentErrorClassifyInput | undefined;
-        let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
-        if (outcome.kind === "permission_sync_timeout") {
-          this.#options.onLog?.(makeResult(this.#config, this.#now(), permissionSyncFailure()));
-          this.#apply({ kind: "result", subtype: "error_during_execution" });
-          error = { reason: "permission_sync_timeout" };
-        } else if (outcome.kind === "interrupted") {
-          this.#terminalError("interrupted", outcome.attemptedModel);
-          error = { reason: "interrupted" };
-          cancellation = { kind: "interrupt", reason: "interrupted" };
-          this.#options.onInterruptSettled?.({
-            turnToken,
-            exitCode: outcome.exit?.code ?? null,
-            signal: outcome.exit?.signal ?? null,
-            elapsedMs: outcome.requestedAt === undefined
-              ? 0
-              : Math.max(0, Date.parse(this.#now()) - Date.parse(outcome.requestedAt)),
-          });
-        } else if (outcome.kind === "error") {
-          this.#terminalError(outcome.detail, outcome.attemptedModel);
-          error = outcome.classify;
-        } else if (outcome.kind === "result") {
-          // issue #371 Design v2 revision 1a: two independent axes, exactly
-          // reproducing the pre-#371 `#runTurn` success-path branches.
-          const quota = agyEventToQuotaExhaustion(outcome.event);
-          const result = agyEventToResult(outcome.event);
-          const previousFamily = this.#currentUsageFamily();
-          if (result?.is_error === true) this.#rollbackPendingModel(outcome.attemptedModel);
-          else this.#promotePendingModel(outcome.attemptedModel);
-          const currentFamily = this.#currentUsageFamily();
-          const familyChanged = previousFamily !== currentFamily;
-          if (familyChanged) {
-            this.#rateLimitOverlay = null;
-            this.#pendingTerminal429Confirmation = null;
-            this.#clearUsageProbeFloorTimer();
-            this.#resetStaleTerminal429Count(currentFamily);
-            this.#usageSnapshot = null;
-            this.#usageProbeFailureFamily = currentFamily;
-            this.#usageProbeFailureCount = 0;
-            if (this.#usageProbeRun !== null && this.#usageProbeRun.family !== currentFamily) {
-              this.#usageProbeRequested = currentFamily !== null;
-              this.#stopUsageProbe("stale_family");
-            }
-          }
-          const successful = agyEventIsSuccessfulResult(outcome.event);
-          if (successful && !this.#gateBroken && this.#recoveryProbation) {
-            this.#recoveryProbation = false;
-          }
-          const hadOverlay = this.#rateLimitOverlay !== null;
-          const hadFailures = this.#usageProbeFailureCount > 0;
-          const terminal429 = agyEventHasQuotaExhaustionMarker(outcome.event);
-          const positiveResetDelay = terminal429 && quota !== null && quota.resetDelaySeconds > 0;
-          const attemptedFamily = modelToUsageFamily(outcome.attemptedModel ?? this.#config.model);
-          const eligibleStale429 =
-            terminal429 &&
-            currentFamily !== null &&
-            attemptedFamily === currentFamily;
-          const nowMs = Date.parse(this.#now());
-          const overlayCreatedAtMs = Number.isFinite(nowMs) ? nowMs : Date.now();
-          let terminalError: InterAgentErrorClassifyInput | undefined;
-          if (terminal429 && attemptedFamily !== currentFamily) {
-            terminalError = {
-              reason: "blocking_limit",
-              ...(quota === null ? {} : { rateLimitResetSeconds: quota.resetDelaySeconds }),
-            };
-          } else if (terminal429 && positiveResetDelay) {
-            this.#pendingTerminal429Confirmation = null;
-            this.#clearUsageProbeFloorTimer();
-            this.#rateLimitOverlay = {
-              value: {
-                status: "blocked",
-                utilization: 1,
-                resets_at: Math.floor(overlayCreatedAtMs / 1_000) + quota.resetDelaySeconds,
-              },
-              origin: "positive_reset_delay",
-              family: currentFamily,
-              createdAtMs: overlayCreatedAtMs,
-            };
-            terminalError = { reason: "blocking_limit", rateLimitResetSeconds: quota.resetDelaySeconds };
-          } else if (terminal429 && eligibleStale429 && this.#staleTerminal429Count >= 2) {
-            this.#pendingTerminal429Confirmation = null;
-            this.#clearUsageProbeFloorTimer();
-            this.#rateLimitOverlay = null;
-            terminalError = { reason: "api_error" };
-            this.#emitLog({ kind: "system", text: STALE_TERMINAL_429_THRESHOLD_DETAIL });
-          } else if (terminal429) {
-            this.#rateLimitOverlay = {
-              value: {
-                status: "blocked",
-                utilization: 1,
-                ...(quota?.resetDelaySeconds === 0
-                  ? { resets_at: Math.floor(overlayCreatedAtMs / 1_000) }
-                  : {}),
-              },
-              origin: eligibleStale429 ? "ambiguous_terminal_429" : "unconfirmed_terminal_429",
-              family: currentFamily,
-              createdAtMs: overlayCreatedAtMs,
-            };
-            if (eligibleStale429) {
-              this.#pendingTerminal429Confirmation = {
-                family: currentFamily,
-                overlayCreatedAtMs,
-              };
-            } else {
-              this.#pendingTerminal429Confirmation = null;
-              this.#clearUsageProbeFloorTimer();
-            }
-            terminalError = {
-              reason: "blocking_limit",
-              ...(quota === null ? {} : { rateLimitResetSeconds: quota.resetDelaySeconds }),
-            };
-          } else if (successful) {
-            this.#rateLimitOverlay = null;
-            this.#pendingTerminal429Confirmation = null;
-            this.#clearUsageProbeFloorTimer();
-            this.#resetStaleTerminal429Count(currentFamily);
-            this.#resetUsageProbeFailures(currentFamily);
-          }
-          this.#publishTerminalResult(outcome.event);
-          this.#maybeStartUsageProbe(
-            familyChanged || (successful && (hadOverlay || hadFailures || this.#usageSnapshot === null)),
-          );
-          if (terminalError !== undefined) {
-            error = terminalError;
-          } else if (result?.is_error === true) {
-            error = { detail: "antigravity turn failed" };
-          }
-        }
-        // outcome.kind === "stale" (close / fail-stop, no matching
-        // interrupt record) projects nothing, matching pre-#371 behaviour.
-        this.#options.onTurnBoundary?.({ turnToken });
-        this.#options.onTurnEnd?.({
-          turnToken,
-          conversationIds: turn.conversationIds ?? [],
-          ...(error === undefined ? {} : { error }),
-          ...(cancellation === undefined ? {} : { cancellation }),
-          // issue #396: agy itself produced a `result` event -- see the
-          // field's own doc comment for why this is not "succeeded".
-          terminal: outcome.kind === "result",
-        });
-      }
-      this.#servicePendingTerminal429Confirmation();
-      void this.#drainTurns();
+      this.#draining = false;
     }
   }
 
-  async #runTurn(
-    text: string,
-    generation: number,
-    turnToken: string,
-    conversationIds: readonly string[],
-    recoveryCandidate = false,
-  ): Promise<TurnOutcome> {
-    // issue #377 Stage 2 M7: the idle TTL clears at DEQUEUE -- before spec
-    // comparison or a possible respawn -- and is re-armed (in the `finally`
-    // below) only once this turn's own result/error has settled. That keeps
-    // the TTL from ever firing mid-spawn or mid-delivery-ack.
-    this.#clearIdleTtl();
-    // Review finding (issue #371 round 1): without this reset, a turn
-    // interrupted before its own child ever spawns would report a PRIOR
-    // turn's leftover exit code/signal in `onInterruptSettled`, misleading
-    // an operator reading the lifecycle journal.
-    this.#lastChildExit = null;
-    this.#activeTurnToolTimeout = null;
-    if (!this.#agyExecutable.ok) {
-      throw new Error(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
+  async #runInput(input: Input): Promise<void> {
+    const active: Active = {
+      token: input.turnToken ?? randomUUID(),
+      conversationIds: input.conversationIds ?? [],
+      stopped: new AbortController(),
+      stop: null,
+      interruptedAt: null,
+      generation: null,
+      toolHost: null,
+      gateServer: null,
+      verifier: null,
+      probe: null,
+      sessionId: undefined,
+      observedSessionId: undefined,
+      window: null,
+      delivery: "pending",
+      acked: false,
+      resolved: false,
+      settled: false,
+      settle: null,
+      preAckTimer: null,
+      abortDeadline: null,
+      termination: null,
+      gateFault: null,
+      toolTimeout: false,
+      unexpectedPermission: false,
+      processError: null,
+      submission: null,
+      evidence: false,
+      continuations: 0,
+      seenCalls: new Set(),
+      steps: new Map(),
+      text: input.text,
+      assistantText: "",
+      resultText: "",
+    };
+    this.#active = active;
+    let settlement: Settlement;
+    try {
+      settlement = (await this.#start(active)) === "skipped" ? { kind: "skipped" } : await this.#prompt(active);
+    } catch (error) {
+      settlement = this.#startFailure(active, error);
     }
-    const executable = this.#agyExecutable.path;
-    const entryCommand = this.#entryCommand();
-    this.#customization ??= CustomizationDir.create({
-      cwd: this.#options.cwd,
-      personaPrompt: this.#options.appendSystemPrompt,
-      ...entryCommand,
+    this.#finish(active, settlement);
+    this.#previousExit = this.#retire(active, settlement.kind === "start_failed" ? "start_failed" : active.stop ?? "retired");
+    await this.#previousExit;
+  }
+
+  /** Races a start step with a stop of the input. */
+  #until<T>(active: Active, promise: Promise<T>): Promise<T> {
+    if (active.stop !== null) {
+      void promise.catch(() => {});
+      return Promise.reject(new Stopped());
+    }
+    return new Promise<T>((resolve, reject) => {
+      const onStop = (): void => reject(new Stopped());
+      active.stopped.signal.addEventListener("abort", onStop, { once: true });
+      promise.then(
+        (value) => {
+          active.stopped.signal.removeEventListener("abort", onStop);
+          resolve(value);
+        },
+        (error: unknown) => {
+          active.stopped.signal.removeEventListener("abort", onStop);
+          reject(error);
+        },
+      );
     });
-    const customization = this.#customization;
-    try {
-      // issue #359 M1: block this turn's gate until the server's permission_sync
-      // for the current connection has been applied, so a durable control/next
-      // relayed on reconnect lands before the gate reads the cell. A no-op once
-      // the sync arrived, or when sync is unsupported.
-      await (this.#options.waitForPermissionSync?.() ?? Promise.resolve());
-      if (!this.#isCurrent(generation)) return { kind: "stale" };
-      // ADR-0057 F4c Stage B0 (issue #359): apply a staged permission switch
-      // now, at the execution boundary, so this turn's fresh gate below reads
-      // the new cell while the just-ended turn's gate was left untouched.
-      this.#applyPendingPermissionSwitch(turnToken);
-      const attemptedModel = this.#pendingModel;
-      this.#currentAttemptedModel = attemptedModel;
-      const spec: EpochSpec = {
-        conversationId: this.#sessionId,
-        model: attemptedModel ?? this.#config.model,
-        effort: this.#config.effort,
-        addDirs: [this.#options.cwd, customization.path],
-      };
-
-      const exited = this.#epoch;
-      if (exited !== null && childHasExited(exited.child)) {
-        await exited.deathPromise;
-        if (!this.#isCurrent(generation)) return { kind: "stale" };
-      }
-
-      // issue #377 Stage 2: a live epoch whose spec no longer matches this
-      // turn's requirements (model/effort rollback or switch, a different
-      // conversation) is ended first -- respawning below picks up the new
-      // spec. M2: a model rollback after an is_error result is absorbed by
-      // this same comparison (the next turn's spec reverts to the
-      // pre-switch model, which mismatches the still-live epoch). An epoch
-      // already ending for another reason (e.g. an idle `interrupt()` that
-      // raced this turn's dequeue) is also waited out and respawned here,
-      // even when its recorded spec still matches -- reusing a dying
-      // process is never correct.
-      if (this.#epoch !== null && (this.#epoch.endingReason !== null || !epochSpecsEqual(this.#epoch.spec, spec))) {
-        await this.#endEpoch(this.#epoch.endingReason ?? "spec_change");
-      }
-      if (!this.#isCurrent(generation)) return { kind: "stale" };
-
-      if (this.#epoch === null) {
-        const spawned = await this.#spawnEpoch(spec, generation, customization, executable);
-        if (!spawned.ok) return { kind: "stale" };
-      }
-      const epoch = this.#epoch!;
-      if (recoveryCandidate) {
-        const fault = this.#gateFault;
-        if (!this.#gateBroken || this.#gateSticky || fault === null) return { kind: "stale" };
-        this.#recoveryFaultDuringDelivery = fault;
-        this.#gateBroken = false;
-        this.#gateFault = null;
-        this.#recoveryProbation = true;
-        this.#recoveryCandidate = null;
-        this.#recoveryPhase = null;
-        this.#emitGateRecoveryLifecycle({
-          event: "gate_recovery",
-          faultClass: fault.faultClass,
-          toolName: fault.toolName,
-          tripCount: fault.tripCount,
-          probeResult: "passed",
-          detail: fault.detail,
-        });
-        this.#emitState(this.#machine.state);
-        this.#apply({ kind: "user_send" });
-      }
-      // A skipped input can leave an unused epoch until its ordinary idle TTL.
-      const prepared = this.#options.prepareInput?.(turnToken);
-      if (prepared === null) {
-        if (recoveryCandidate) this.#recoveryFaultDuringDelivery = null;
-        return { kind: "skipped" };
-      }
-      if (prepared !== undefined) {
-        text = prepared.text;
-        conversationIds = prepared.conversationIds;
-      }
-      this.#activeTurnToken = turnToken;
-      this.#activeTurnConversationIds = conversationIds;
-
-      // ADR-0057 F4c Stage B0 (issue #359) / issue #377 Stage 2: a live
-      // epoch's gate is swapped at the turn boundary via `setGate()` --
-      // never mutated mid-turn -- so a step ACTIVE before the swap still
-      // resolves against the same `GateServer`-owned ledger once it goes
-      // DONE after it (Stage 1 M3).
-      let nativePermissionLease: string | null = null;
-      const gate = new AntigravityGate({
-        config: this.#config,
-        cwd: this.#options.cwd,
-        customizationDir: customization.path,
-        ...entryCommand,
-        toolNames: () => epoch.toolHost.toolNames(),
-        broker: this.#options.permissionBroker,
-        onPermissionRequest: () => {
-          const token = this.#activeTurnToken;
-          nativePermissionLease = token === null ? null : this.beginPermissionWaitLease(token, "native");
-        },
-        onPermissionResolved: () => {
-          if (nativePermissionLease !== null) this.endPermissionWaitLease(nativePermissionLease);
-          nativePermissionLease = null;
-        },
-        ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
-      });
-      epoch.gateServer.setGate(gate);
-
-      const inFlight: InFlightTurn = {
-        epochSerial: epoch.serial,
-        turnToken,
-        gate,
-        assistantText: new Map(),
-        correlationFailure: null,
-        faultClass: null,
-        faultKey: null,
-        epochDeathError: null,
-        resolveResult: () => {},
-      };
-      const terminalResultPromise = new Promise<AgyStreamEvent | null>((resolve) => {
-        inFlight.resolveResult = resolve;
-      });
-      this.#inFlightTurn = inFlight;
-
-      // issue #377 Stage 1 M4 (kept for Stage 2): the delivery ack
-      // (onTurnStart) fires only once the write is confirmed -- not merely
-      // once `write()` returns, since a pipe write can succeed into the
-      // kernel buffer on a dying process -- so a race where the epoch dies
-      // before or during this write never reports a turn as started.
-      const delivered = await this.#deliverTurnInput(epoch, text);
-      if (delivered === "ok") {
-        this.#turnStartReached = true;
-        this.#recoveryFaultDuringDelivery = null;
-        this.#options.onTurnStart?.({ turnToken, conversationIds });
-      } else {
-        // issue #377 Stage 1 M1 (kept for Stage 2): a failed delivery does
-        // not guarantee the epoch has exited (an EPIPE write error need not
-        // kill the whole process), and no ack means no TurnWatchdog is
-        // running to bound the wait below -- arm one explicitly.
-        // `closeGraceMs`, not `abortGraceMs`: nothing here is worth waiting
-        // a full abort grace for, so this mirrors `close()`'s own bound.
-        this.#armOrShortenTermination(this.#closeGraceMs);
-      }
-
-      // issue #377 Stage 2: this turn's own completion signal is now its
-      // `result` event on the epoch's shared stream (routed by
-      // `#attachEpochStreamReader`), not the process exiting -- an epoch
-      // that stays alive across turns must not make every turn wait for a
-      // process death that need not happen. A dead epoch still resolves
-      // this (with `null`) via its close handler, so a mid-turn crash is
-      // never missed.
-      const terminalResult = await terminalResultPromise;
-      if (this.#inFlightTurn === inFlight) this.#inFlightTurn = null;
-      epoch.turns += 1;
-
-      // issue #371 Design v2 M1 (kohaku design review round 1, kept for
-      // Stage 2): closed/fail-stopped and generation-mismatch are `stale`
-      // (an operator interrupt is projected as `interrupted` only when
-      // nothing else outranks it); customization tampering outranks a
-      // stale generation, since a broken gate is a heavier fact than the
-      // interrupt. issue #377 Stage 1 M1: `delivered !== "ok"`
-      // (epoch_exit_before_turn) ranks below tampering and a stale
-      // generation for the same reason.
-      if (this.#closed || this.#watchdogFailStopped) return { kind: "stale" };
-      if (customization.verify() !== true) {
-        const detail = "antigravity_customization_tampered";
-        this.#tripGateBroken(
-          "customization_tampered",
-          "<none>",
-          detail,
-          this.#faultKey(epoch.serial, "customization_tampered"),
-        );
-        // issue #377 Stage 2: tamper is detected only after the process has
-        // had a chance to run this turn (mirroring Stage 1's post-hoc
-        // check), but an epoch persists across turns -- so unlike Stage 1
-        // (where the process was already dead by the time this fired) this
-        // must actively end the epoch, not just report the error.
-        await this.#endEpoch("tamper");
-        return { kind: "error", detail, classify: { detail }, attemptedModel };
-      } else if (!this.#isCurrent(generation)) {
-        return { kind: "stale" };
-      } else if (delivered !== "ok") {
-        const detail = "epoch_exit_before_turn";
-        if (recoveryCandidate) {
-          this.#restoreRecoveryFault();
-          this.#emitRecoveryOutcome("failed", detail);
-          return { kind: "recovery_rejected", detail, probeResult: "failed" };
-        }
-        const classify: InterAgentErrorClassifyInput =
-          delivered === "attempted"
-            ? { detail, reason: "receipt_unknown" }
-            : { detail };
-        return { kind: "error", detail, classify, attemptedModel };
-      } else if (inFlight.correlationFailure !== null) {
-        const detail = `antigravity_gate_unobserved_tool:${inFlight.correlationFailure}`;
-        return { kind: "error", detail, classify: { detail }, attemptedModel };
-      } else if (this.#activeTurnToolTimeout !== null) {
-        // Whatever agy printed after SIGTERM, the turn outcome is the
-        // deadline, not the CLI's own terminal record.
-        return { kind: "error", detail: "tool_timeout", classify: { reason: "timeout" }, attemptedModel };
-      } else if (inFlight.epochDeathError !== null) {
-        const error = inFlight.epochDeathError;
-        const detail = `antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(error.message)}`;
-        return { kind: "error", detail, classify: { detail }, attemptedModel };
-      } else if (terminalResult === null) {
-        const detail = "agy_exit_without_result";
-        return { kind: "error", detail, classify: { detail }, attemptedModel };
-      } else {
-        return { kind: "result", event: terminalResult, attemptedModel };
-      }
-    } finally {
-      this.#activeTurnToolTimeout = null;
-      if (this.#epoch !== null) this.#armIdleTtl();
-    }
   }
 
-  #failStopForWatchdog(attribution: "exact" | "unattributed"): boolean {
-    this.#watchdogFailStopped = true;
+  #startFailure(active: Active, error: unknown): Settlement {
+    if (error instanceof Stopped || active.stop !== null) return { kind: "stopped" };
+    if (error instanceof PermissionSyncTimeoutError) {
+      return { kind: "start_failed", detail: "permission_sync_timeout", permissionSyncTimeout: true };
+    }
+    if (error instanceof RequestError && isAuthRequired(error)) return { kind: "start_failed", detail: AUTH_REQUIRED };
+    return { kind: "start_failed", detail: error instanceof Error ? error.message : String(error) };
+  }
+
+  async #start(active: Active): Promise<"ready" | "skipped"> {
+    await this.#until(active, this.#previousExit);
+    await this.#until(active, this.#options.waitForPermissionSync?.() ?? Promise.resolve());
+    this.#capturePermission(active);
+    if (!this.#agyExecutable.ok) throw new StartFailure(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
+    const executable = this.#agyExecutable.path;
+    const entry = this.#entryCommand();
+    this.#customization ??= CustomizationDir.create(entry);
+    const customization = this.#customization;
+    customization.rewrite();
+    const toolHost = await this.#until(active, (this.#options.toolHostListen ?? ((descriptors, options) => ToolHost.listen(descriptors, options)))(
+      this.#options.toolDescriptors ?? [],
+      { turnSignal: () => active.window?.signal ?? null },
+    ));
+    active.toolHost = toolHost;
+    const verifier = new CallVerifier({
+      sessionId: () => active.sessionId,
+      onFault: (fault) => this.#verificationFault(active, fault),
+    });
+    active.verifier = verifier;
+    // Each ask holds one lease while the operator answers; asks may overlap.
+    const leases: (string | null)[] = [];
+    const policy = new AcpToolPolicy({
+      config: { ...this.#config },
+      cwd: this.#options.cwd,
+      customizationDir: customization.path,
+      kaoiroToolNames: () => new Set((this.#options.toolDescriptors ?? []).map((descriptor) => descriptor.name)),
+      broker: this.#options.permissionBroker,
+      onPermissionRequest: () => { leases.push(this.beginPermissionWaitLease(active.token, "native")); },
+      onPermissionResolved: () => {
+        const lease = leases.pop();
+        if (lease !== undefined && lease !== null) this.endPermissionWaitLease(lease);
+      },
+    });
+    active.gateServer = await this.#until(active, (this.#options.gateServerListen ?? HookGateServer.listen)({
+      verifier,
+      handlers: {
+        preToolUse: (request, signal) => this.#preToolUse(active, policy, request, signal),
+        stop: (request) => this.#answerStop(active, request),
+      },
+    }));
+    const listed = await this.#until(active, this.#hookList(active, executable, customization));
+    if (!listed.ok) throw new StartFailure(`antigravity_hooks_refused:${listed.reason}`);
+    const sandboxed = (this.#config.sandbox ?? "workspace-write") !== "danger-full-access";
+    const args = ["acp", "--add-dir", customization.path, ...(sandboxed ? ["--sandbox"] : []), "--dangerously-skip-permissions"];
+    const env: NodeJS.ProcessEnv = {
+      ...withAgentMarker(process.env),
+      ...nonInteractiveToolEnv(process.env).additions,
+      KAOIRO_GATE_SOCKET: active.gateServer.socketPath,
+      KAOIRO_GATE_NONCE: active.gateServer.nonce,
+      KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
+    };
+    delete env.CODEX_HOME;
+    let child: SpawnedAgy;
+    try {
+      child = (this.#options.spawn ?? this.#defaultSpawn)(executable, args, { cwd: this.#options.cwd, env });
+    } catch (error) {
+      throw new StartFailure(`antigravity_cli_spawn_failure: ${boundErrorDetail(error instanceof Error ? error.message : String(error))}`);
+    }
+    const generation = new Generation(++this.#serial, child, {
+      update: (notification) => this.#update(active, notification),
+      permissionRequest: () => this.#unexpectedPermission(active),
+      write: (result) => {
+        if (result.method === "session/prompt") this.#promptWritten(active, result.ok);
+      },
+      promptAttempted: () => {
+        if (!active.acked && !active.resolved) active.delivery = "attempted";
+      },
+      error: (error) => {
+        active.processError ??= `antigravity_cli_process_error: ${boundErrorDetail(error.message)}`;
+      },
+    });
+    active.generation = generation;
+    void generation.connection.closed.then(() => this.#connectionClosed(active), () => this.#connectionClosed(active));
+    const requested = this.#sessionId ?? undefined;
+    let attached;
+    try {
+      attached = await this.#until(active, generation.attach({
+        cwd: this.#options.cwd,
+        mcpServers: [toolHost.mcpServer()],
+        resumeSessionId: requested,
+        systemPromptAppend: this.#options.appendSystemPrompt,
+      }));
+    } catch (error) {
+      if (requested !== undefined && error instanceof RequestError && error.code === -32603) {
+        this.#options.recovery?.refuseLaunch();
+        throw new StartFailure("antigravity_resume_failed");
+      }
+      throw error;
+    }
+    if (attached.observedSessionId !== undefined && attached.observedSessionId !== attached.sessionId) {
+      throw new StartFailure("antigravity_resume_echoed_another_session");
+    }
+    active.sessionId = attached.sessionId;
+    active.observedSessionId = attached.observedSessionId;
+    if (this.#options.recovery?.accept(attached.sessionId, requested) === false) {
+      void this.close();
+      throw new Stopped();
+    }
+    if (this.#announcedSessionId !== attached.sessionId) {
+      this.#sessionId = attached.sessionId;
+      this.#announcedSessionId = attached.sessionId;
+      this.#options.onSessionId?.(attached.sessionId);
+    }
+    await this.#until(active, this.#applyModel(generation));
+    await this.#until(active, toolHost.listed(this.#options.mcpReadyTimeoutMs ?? DEFAULT_MCP_READY_TIMEOUT_MS)
+      .catch(() => { throw new StartFailure(MCP_NOT_CONNECTED); }));
+    const prepared = this.#options.prepareInput?.(active.token);
+    if (prepared === null) return "skipped";
+    if (prepared !== undefined) {
+      active.text = prepared.text;
+      active.conversationIds = prepared.conversationIds;
+    }
+    return "ready";
+  }
+
+  /** Opens the window, writes the one prompt and waits until it settles. */
+  #prompt(active: Active): Promise<Settlement> {
+    const generation = active.generation!;
+    active.window = new AbortController();
+    return new Promise<Settlement>((resolve) => {
+      active.settle = (settlement) => {
+        if (active.resolved) return;
+        active.resolved = true;
+        resolve(settlement);
+      };
+      active.preAckTimer = this.#setTimer(() => {
+        active.preAckTimer = null;
+        if (!active.acked && !active.resolved) this.#stopActive(active, "pre_ack");
+      }, this.#preAckBoundMs);
+      generation.session.prompt(active.text).then(
+        (response) => {
+          this.#confirmDelivery(active);
+          this.#evidence(active);
+          active.settle?.({ kind: "response", response });
+        },
+        (error: unknown) => {
+          // An error response is still P's response: delivery is confirmed.
+          if (error instanceof RequestError) this.#confirmDelivery(active);
+          active.settle?.(error instanceof RequestError ? { kind: "rpc_error", error } : { kind: "closed" });
+        },
+      );
+    });
+  }
+
+  /** A failed write was already recorded as attempted when it began. */
+  #promptWritten(active: Active, ok: boolean): void {
+    if (ok) this.#confirmDelivery(active);
+  }
+
+  /** The ACK (design L7): once per prompt, on the first confirmation. */
+  #confirmDelivery(active: Active): void {
+    if (active.acked || active.resolved || active.window === null) return;
+    active.acked = true;
+    active.delivery = "confirmed";
+    if (active.preAckTimer !== null) {
+      this.#clearTimer(active.preAckTimer);
+      active.preAckTimer = null;
+    }
+    this.#options.onTurnStart?.({ turnToken: active.token, conversationIds: active.conversationIds });
+  }
+
+  #connectionClosed(active: Active): void {
+    active.verifier?.stopLatched();
+    active.settle?.({ kind: "closed" });
+  }
+
+  // --- engine input --------------------------------------------------------
+
+  /** P's window: from the start of the prompt write until P settles. */
+  #inWindow(active: Active): boolean {
+    return active.window !== null && !active.resolved && this.#active === active;
+  }
+
+  #update(active: Active, notification: SessionNotification): void {
+    const kind = classifyUpdate(notification, active.sessionId);
+    const update = notification.update;
+    const inWindow = this.#inWindow(active);
+    if (kind === "other") {
+      this.#options.onOutOfTurnEvent?.({ eventKind: `other:${String(update.sessionUpdate)}` });
+      return;
+    }
+    let callId: string | undefined;
+    if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+      callId = update.toolCallId;
+      active.verifier?.toolUpdate(callId, toolName(update), update.rawInput, update.status);
+    }
+    if (kind === "control") {
+      if (inWindow) this.#options.onTurnProgress?.({ turnToken: active.token });
+      return;
+    }
+    const firstSeen = callId === undefined || !active.seenCalls.has(callId);
+    if (callId !== undefined) active.seenCalls.add(callId);
+    if (!inWindow) {
+      this.#options.onOutOfTurnEvent?.({ eventKind: update.sessionUpdate, ...(callId === undefined ? {} : { callId }) });
+      return;
+    }
+    this.#options.onTurnProgress?.({ turnToken: active.token });
+    if (firstSeen) {
+      this.#confirmDelivery(active);
+      this.#evidence(active);
+    }
+    const projection = activityProjection(notification);
+    if (projection.log !== undefined) this.#flushAssistant(active);
+    for (const event of projection.events) this.#apply(event);
+    if (projection.text !== undefined) active.assistantText += projection.text;
+    if (projection.log !== undefined) this.#emitLog(projection.log);
+    if (callId !== undefined) this.#toolStep(active, callId, update);
+  }
+
+  #toolStep(active: Active, callId: string, update: SessionNotification["update"]): void {
+    const status = (update as { status?: unknown }).status;
+    let step = active.steps.get(callId);
+    if (step === undefined) {
+      step = active.steps.size + 1;
+      active.steps.set(callId, step);
+      this.#options.onToolStart?.({ turnToken: active.token, stepIndex: step, toolName: toolName(update) ?? "unknown" });
+    }
+    if (status === "completed" || status === "failed") this.#options.onToolEnd?.({ turnToken: active.token, stepIndex: step });
+  }
+
+  async #preToolUse(
+    active: Active,
+    policy: AcpToolPolicy,
+    request: PreToolUseRequest,
+    signal: AbortSignal,
+  ): Promise<{ decision: "allow" | "deny"; reason?: string }> {
+    if (!this.#inWindow(active)) {
+      this.#options.onOutOfTurnEvent?.({ eventKind: "pre_tool_use", callId: request.callId });
+      return { decision: "deny", reason: "kaoiro: no turn is open for this tool call" };
+    }
+    if (active.stop !== null) return { decision: "deny", reason: "kaoiro: the turn is stopping" };
+    this.#options.onTurnProgress?.({ turnToken: active.token });
+    return policy.decide({ name: request.name, args: request.args }, AbortSignal.any([signal, active.window!.signal]));
+  }
+
+  #answerStop(active: Active, request: StopRequest): { decision: "continue"; reason: string } | { decision: "stop" } {
+    const answer = answerStop(request, {
+      sessionId: active.sessionId,
+      windowOpen: this.#inWindow(active),
+      stopLatched: active.stop !== null,
+      granted: active.continuations,
+    });
+    if (answer.decision === "continue") {
+      active.continuations += 1;
+      return { decision: "continue", reason: answer.reason };
+    }
+    return { decision: "stop" };
+  }
+
+  #unexpectedPermission(active: Active): void {
+    if (!this.#inWindow(active)) {
+      this.#options.onOutOfTurnEvent?.({ eventKind: "session/request_permission" });
+      return;
+    }
+    active.unexpectedPermission = true;
+    this.#stopActive(active, "permission");
+  }
+
+  #verificationFault(active: Active, fault: VerificationFault): void {
+    const name = fault.kind === "duplicate_hook" ? fault.name : fault.name ?? "unknown";
+    const detail = `${GATE_FAULT_REASON}:${name}`;
+    // After the outcome was decided, a fault only applies to later input (L6).
+    if (!active.settled) active.gateFault ??= detail;
+    this.#latchGateFault(GATE_FAULT_REASON, detail);
+    if (!active.resolved) this.#stopActive(active, "gate_fault");
+  }
+
+  /** D3: sticky at once; later input is rejected as gate_broken. */
+  #latchGateFault(reason: string, detail: string): void {
+    if (this.#gateFault !== null) return;
+    this.#gateFault = { reason, detail };
+    for (const input of this.#queue.splice(0)) this.#rejectInput(input, "gate_broken");
+    try {
+      this.#options.onGateFault?.({ reason, detail: boundErrorDetail(detail) });
+    } catch {
+      // A diagnostic callback cannot undo the latch.
+    }
+    this.#emitState(this.#machine.state);
+  }
+
+  // --- stopping ------------------------------------------------------------
+
+  /** The first action of a stop route (design L3). Returns whether a cancel
+   *  was sent. */
+  #stopActive(active: Active, route: StopRoute): boolean {
+    if (active.resolved || active.settled) return false;
+    const first = active.stop === null;
+    if (first) {
+      active.stop = route;
+      active.verifier?.stopLatched();
+      active.stopped.abort();
+    }
+    const generation = active.generation;
+    if (route === "fail_stop") {
+      // The watchdog's own grace already elapsed.
+      active.probe?.stop();
+      if (generation !== null) signalSubtree(generation.child, "SIGKILL", this.#signalTarget);
+      active.settle?.({ kind: "stopped" });
+      return false;
+    }
+    if (active.window === null) {
+      // Before the prompt is written: no cancel; end the child on the
+      // route's grace and settle now.
+      active.probe?.stop();
+      if (generation !== null) this.#terminate(active, route === "close" ? this.#closeGraceMs : this.#abortGraceMs);
+      return false;
+    }
+    if (route === "close" || route === "pre_ack") {
+      this.#terminate(active, this.#closeGraceMs);
+      active.settle?.({ kind: "stopped" });
+      return false;
+    }
+    if (!first) return false;
+    void generation?.session.cancel().catch(() => {});
+    if (route !== "watchdog") this.#armAbortDeadline(active, this.#abortGraceMs);
+    return true;
+  }
+
+  /** Armed once, by the first stop route that cancels (L3). */
+  #armAbortDeadline(active: Active, graceMs: number): void {
+    active.abortDeadline = {
+      atMs: this.#nowMs() + graceMs,
+      timer: this.#setTimer(() => {
+        if (!active.resolved && active.generation !== null) {
+          signalSubtree(active.generation.child, "SIGKILL", this.#signalTarget);
+        }
+      }, graceMs),
+    };
+  }
+
+  /** SIGTERM now, SIGKILL after the grace; a later call only shortens it. */
+  #terminate(active: Active, graceMs: number): void {
+    const generation = active.generation;
+    if (generation === null || generation.exit !== undefined) return;
+    if (active.termination !== null) {
+      active.termination.shortenGraceTo(graceMs);
+      return;
+    }
+    active.termination = terminateWithGrace(generation.child, {
+      graceMs,
+      signalTarget: this.#signalTarget,
+      setTimer: this.#setTimer,
+      clearTimer: this.#clearTimer,
+      nowMs: this.#nowMs,
+    });
+  }
+
+  #failStop(attribution: "exact" | "unattributed"): boolean {
+    this.#failStopped = true;
     this.#closed = true;
-    this.#clearUsageProbeFloorTimer();
-    this.#pendingTerminal429Confirmation = null;
-    this.#lifecycleGeneration += 1;
-    const queued = this.#turnQueue.splice(0);
-    this.#recoveryCandidate = null;
-    this.#recoveryPhase = null;
+    const active = this.#active;
     this.#options.permissionBroker.close();
     this.#options.questionBroker?.close();
-    this.#clearPendingAfterInterrupt();
-    this.#gateServer?.close();
-    this.#toolHost?.close();
-    this.#cancelGateProbe?.();
-    if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
-    this.#usageProbeRequested = false;
-    this.#stopUsageProbe("host_close");
-    // issue #379: no grace here either -- by the time TurnWatchdog calls
-    // this, its OWN abortGraceMs has already elapsed since
-    // requestInterruptForTurn's SIGTERM, so escalate straight to SIGKILL.
-    this.#markEpochEnding("watchdog");
-    if (this.#running !== null) signalSubtree(this.#running, "SIGKILL", this.#signalTarget);
+    this.#clearPendingAfterStop();
+    const queued = this.#queue.splice(0);
+    if (active !== null && !active.settled) this.#stopActive(active, "fail_stop");
     const error = {
       detail: attribution === "exact"
         ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
         : "turn watchdog token attribution unavailable; host admission stopped pending operator recovery",
     };
-    for (const turn of queued) {
-      if (turn.turnToken === undefined) {
-        this.#notifySendRejected({
-          ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
-          reason: "watchdog_fail_stopped",
-        });
+    for (const input of queued) {
+      if (input.turnToken === undefined) {
+        this.#rejectInput(input, "watchdog_fail_stopped");
         continue;
       }
       try {
         this.#options.onTurnEnd?.({
-          turnToken: turn.turnToken,
-          conversationIds: turn.conversationIds ?? [],
+          turnToken: input.turnToken,
+          conversationIds: input.conversationIds ?? [],
           error,
           cancellation: { kind: "watchdog_fail_stop", started: false },
-          // issue #396: these turns never even started -- agy produced
-          // nothing for them.
           terminal: false,
         });
       } catch (caught) {
         try {
-          this.#warn(`antigravity: watchdog queued-turn settlement failed: token=${turn.turnToken} detail=${boundErrorDetail(String(caught))}`);
+          this.#warn(`antigravity: watchdog queued-turn settlement failed: token=${input.turnToken} detail=${boundErrorDetail(String(caught))}`);
         } catch {
-          // Continue settling the other queued turns even if diagnostics fail.
+          // Continue settling the other queued input.
         }
       }
     }
     this.#options.onWatchdogFailStop?.({
-      ...(this.#activeTurnToken === null ? {} : { turnToken: this.#activeTurnToken }),
-      conversationIds: this.#activeTurnConversationIds,
+      ...(active === null ? {} : { turnToken: active.token }),
+      conversationIds: active?.conversationIds ?? [],
       attribution,
     });
     return true;
   }
 
-  #isCurrent(generation: number): boolean {
-    return !this.#closed && generation === this.#lifecycleGeneration;
-  }
+  // --- settlement ----------------------------------------------------------
 
-  #clearPendingAfterInterrupt(): void {
-    this.#clearPendingPermission();
-    if (this.#pendingQuestion !== null) this.setPendingQuestion(null);
-  }
-
-  #clearPendingPermission(): void {
-    if (this.#pendingPermission !== null) {
-      this.#pendingPermission = null;
-      this.#emitState(this.#machine.state);
+  /** Decides the input's one outcome (design L2) and publishes it. */
+  #finish(active: Active, settlement: Settlement): void {
+    active.resolved = true;
+    if (active.preAckTimer !== null) this.#clearTimer(active.preAckTimer);
+    // The checks due at settlement finish before the result is published.
+    active.verifier?.settle();
+    active.settled = true;
+    active.window?.abort();
+    this.#flushAssistant(active);
+    for (const [leaseId, owner] of this.#leases) {
+      if (owner.turnToken === active.token) this.#leases.delete(leaseId);
     }
+    const tampered = active.generation !== null && this.#customization !== null && this.#customization.verify() !== true;
+    if (tampered) this.#latchGateFault(TAMPER_REASON, TAMPER_REASON);
+    this.#permissionWithoutEvidence(active, settlement);
+    const outcome = this.#outcome(active, settlement, tampered);
+    if (this.#active === active) this.#active = null;
+    this.#publish(active, outcome);
   }
 
-  #ensureDeathPromise(epoch: EpochRuntime): Promise<void> {
-    epoch.deathPromise ??= new Promise<void>((resolve) => {
-      epoch.resolveDeath = resolve;
-    });
-    return epoch.deathPromise;
-  }
-
-  #destroyChildStdio(child: SpawnedAgy): void {
-    const streams: unknown[] = [child.stdin, child.stdout, child.stderr];
-    for (const stream of streams) {
-      if (typeof stream !== "object" || stream === null) continue;
-      const destroy = (stream as { destroy?: unknown }).destroy;
-      if (typeof destroy !== "function") continue;
-      destroy.call(stream);
+  #outcome(active: Active, settlement: Settlement, tampered: boolean): Outcome {
+    if (settlement.kind === "skipped") return { kind: "skipped" };
+    if (this.#closed) return { kind: "stale" };
+    if (tampered) return { kind: "error", detail: TAMPER_REASON, classify: { detail: TAMPER_REASON } };
+    if (active.interruptedAt !== null) return { kind: "interrupted" };
+    if (settlement.kind === "start_failed") {
+      if (settlement.permissionSyncTimeout === true) return { kind: "permission_sync_timeout" };
+      return { kind: "error", detail: settlement.detail, classify: { detail: settlement.detail } };
     }
-  }
-
-  #armCloseAfterExit(epoch: EpochRuntime): void {
-    // `#closeGraceMs` is already injectable, so this timer has no
-    // separate seam.
-    const timer = setTimeout(() => {
-      epoch.closeAfterExitTimer = null;
-      this.#destroyChildStdio(epoch.child);
-    }, this.#closeGraceMs);
-    timer.unref();
-    epoch.closeAfterExitTimer = timer;
-  }
-
-  /** issue #377 Stage 1 M4, adapted for Stage 2: writes the turn's prompt as
-   *  exactly one NDJSON line (`--input-format stream-json`'s accepted
-   *  shape, measured in docs/evidence/antigravity/print-mode-background-tasks.md).
-   *  Unlike Stage 1 this does NOT close stdin -- an epoch's stdin stays open
-   *  for every turn it serves. Resolves `"ok"` only once the write callback
-   *  has resolved without error AND the epoch has not already ended in the
-   *  meantime; resolves `"attempted"` when the write was started and then
-   *  failed, or `"not_attempted"` when it was not started. The caller
-   *  reports `epoch_exit_before_turn` and does not re-send
-   *  the line on its own -- the model may already have read it, and a
-   *  duplicate turn is worse than a visible failure. Checks `this.#epoch !==
-   *  epoch` (rather than each call installing its own `close` listener) so
-   *  an epoch serving many turns accumulates no listeners on its child. */
-  #deliverTurnInput(epoch: EpochRuntime, text: string): Promise<TurnDelivery> {
-    return new Promise((resolveDelivery) => {
-      let settled = false;
-      const settle = (result: TurnDelivery): void => {
-        if (settled) return;
-        settled = true;
-        if (epoch.pendingDeliverySettle === settle) {
-          epoch.pendingDeliverySettle = null;
-        }
-        resolveDelivery(result);
+    if (!active.acked) {
+      const attempted = active.delivery === "attempted";
+      return {
+        kind: "error",
+        detail: DELIVERY_UNCONFIRMED,
+        classify: attempted ? { detail: DELIVERY_UNCONFIRMED, reason: "receipt_unknown" } : { detail: DELIVERY_UNCONFIRMED },
       };
-      epoch.pendingDeliverySettle = settle;
-      if (epoch.stdinErrored || this.#epoch !== epoch) {
-        settle("not_attempted");
-        return;
-      }
-      const line = `${JSON.stringify({ event: "user", message: { role: "user", content: text } })}\n`;
-      epoch.child.stdin.write(line, (error) => {
-        if (error !== undefined && error !== null) {
-          settle("attempted");
-          return;
-        }
-        if (this.#epoch !== epoch) {
-          settle("attempted");
-          return;
-        }
-        settle("ok");
-      });
-    });
-  }
-
-  /** issue #377 Stage 2: attaches the ONE-TIME (per epoch) listeners that
-   *  detect the epoch's own death, whatever the cause. A stdin `error`
-   *  (e.g. EPIPE) is tracked persistently -- rather than the per-delivery
-   *  listener Stage 1 used -- so an epoch serving many turns accumulates no
-   *  listeners; `pendingDeliverySettle` lets it settle an in-flight
-   *  `#deliverTurnInput` immediately instead of waiting for `write()`'s own
-   *  callback, which may never fire on a truly broken pipe. */
-  #attachEpochWatcher(epoch: EpochRuntime): void {
-    epoch.child.stdin.on("error", () => {
-      epoch.stdinErrored = true;
-      epoch.pendingDeliverySettle?.("attempted");
-    });
-    // issue #379: cancel any pending SIGKILL escalation for THIS child as
-    // soon as it is known to have exited. `exit` fires before `close` (no
-    // stdio-drain wait), so it frees the escalation sooner; `close` below is
-    // a defensive second call (`cancel()` is idempotent) for the rare case
-    // `exit` was not observed.
-    epoch.child.once("exit", () => {
-      this.#ensureDeathPromise(epoch);
-      this.#activeTermination?.cancel();
-      this.#activeTermination = null;
-      this.#armCloseAfterExit(epoch);
-    });
-    epoch.child.once("close", (code, signal) => {
-      if (epoch.closeAfterExitTimer !== null) {
-        clearTimeout(epoch.closeAfterExitTimer);
-        epoch.closeAfterExitTimer = null;
-      }
-      this.#activeTermination?.cancel();
-      this.#activeTermination = null;
-      this.#lastChildExit = { code, signal };
-      epoch.pendingDeliverySettle?.("attempted");
-      if (this.#epoch !== epoch) return;
-      this.#epoch = null;
-      const epochFaultPrefix = `${epoch.serial}:`;
-      for (const faultKey of this.#seenGateFaultKeys) {
-        if (faultKey.startsWith(epochFaultPrefix)) this.#seenGateFaultKeys.delete(faultKey);
-      }
-      if (this.#running === epoch.child) this.#running = null;
-      if (this.#gateServer === epoch.gateServer) this.#gateServer = null;
-      if (this.#toolHost === epoch.toolHost) this.#toolHost = null;
-      this.#clearIdleTtlTimer(epoch);
-      epoch.gateServer.close();
-      epoch.toolHost.close();
-      const reason = epoch.endingReason;
-      if (reason === null) {
-        // A spontaneous, unrequested death. Idle (no turn owns the stream)
-        // is its own lifecycle event (N4 `idle_exit`); mid-turn is folded
-        // into that turn's own error below instead (agy_exit_without_result
-        // / epoch_exit_before_turn) -- no separate log for that case,
-        // matching Stage 1 fidelity.
-        if (this.#inFlightTurn === null) {
-          this.#options.onEpochEnded?.({ reason: "idle_exit", code, signal, turns: epoch.turns });
-        }
-      } else {
-        this.#options.onEpochEnded?.({ reason, code, signal, turns: epoch.turns });
-      }
-      // Always unblock an in-flight turn, whatever the reason -- its own
-      // outcome-precedence switch decides the turn's error detail from
-      // `terminalResult === null` (plus `epochDeathError`, if any).
-      this.#inFlightTurn?.resolveResult(null);
-      epoch.resolveDeath?.();
-    });
-    epoch.child.once("error", (error) => {
-      if (this.#inFlightTurn !== null) this.#inFlightTurn.epochDeathError = error;
-    });
-  }
-
-  /** issue #377 Stage 2: the epoch-level, continuous stream reader --
-   *  attached ONCE per epoch spawn (not per turn). Routes `result` events to
-   *  the in-flight turn's `resolveResult`; folds every other event into
-   *  that turn's state (mirroring Stage 1's per-turn `#handleEvent` + tool
-   *  ACTIVE/DONE correlation); logs anything arriving while no turn owns
-   *  the stream as `out_of_turn_event` instead of projecting it onto a
-   *  turn that never asked for it. */
-  #attachEpochStreamReader(epoch: EpochRuntime, executable: string): void {
-    readableLines(epoch.child.stdout, (line) => {
-      const inFlight = this.#inFlightTurn;
-      if (inFlight !== null) this.#options.onTurnProgress?.({ turnToken: inFlight.turnToken });
-      const event = parseAgyStreamLine(line);
-      if (event === null) {
-        this.#warn(`antigravity: ignored malformed stream line from ${basename(executable)}`);
-        return;
-      }
-      if (inFlight === null) {
-        this.#logOutOfTurnEvent(event);
-        return;
-      }
-      // ADR-0057 F4c Stage B0 (issue #359 M4) / issue #377 Stage 2 M1: a mid-
-      // epoch permission switch has no fresh `init` to confirm against (that
-      // only fires once, on the epoch's first turn) -- so the FIRST stream
-      // event of the turn after the swap confirms it instead, whatever its
-      // type -- including `result` itself, so this must run before the
-      // `result` branch's early return below, not after it.
-      // `#confirmAppliedPermission` is itself idempotent (no-ops once there
-      // is no pending observation), so calling it on every in-turn event,
-      // including `init` itself, is safe.
-      this.#confirmAppliedPermission();
-      if (event.event === "result") {
-        // issue #377 Stage 2 M4: clear synchronously, in the same pass.
-        // `readableLines` drains every line already buffered in one stdout
-        // chunk back to back with no microtask yield between them, so a
-        // stray event appended after this turn's own `result` in the SAME
-        // chunk must see `#inFlightTurn === null` right here -- waiting for
-        // `#runTurn`'s `await terminalResultPromise` continuation to clear
-        // it would let that stray event still be routed to `#handleEvent`
-        // with this turn's stale token instead of `#logOutOfTurnEvent`.
-        if (this.#inFlightTurn === inFlight) this.#inFlightTurn = null;
-        inFlight.resolveResult(event);
-        return;
-      }
-      this.#handleEvent(event, inFlight.gate, inFlight.assistantText);
-      if (event.event !== "step_update" || event.step_update.step_type !== "tool") return;
-      const stepIndex = event.step_update.step_index;
-      const topLevelName = event.step_update.tool_name;
-      const nestedName = event.step_update.tool_info?.name;
-      const state = event.step_update.state;
-      if (state !== "ACTIVE" && state !== "DONE" && state !== "ERROR") return;
-      const toolName = correlatedToolName(topLevelName, nestedName);
-      if (!Number.isSafeInteger(stepIndex) || !validToolName(toolName)) {
-        // An ACTIVE step the deadline cannot key on is as unprovable as a
-        // completion the gate cannot correlate: fail closed either way.
-        inFlight.correlationFailure = validToolName(topLevelName) ? topLevelName : validToolName(nestedName) ? nestedName : "unknown";
-        inFlight.faultClass = "stream_correlation_unprovable";
-        inFlight.faultKey = this.#faultKey(epoch.serial, inFlight.faultClass, stepIndex);
-        this.#warn(`antigravity: ${state === "ACTIVE" ? "started" : "completed"} tool correlation is unprovable: ${inFlight.correlationFailure}`);
-        this.#tripGateBroken(
-          inFlight.faultClass,
-          inFlight.correlationFailure,
-          `tool correlation is unprovable for ${state}`,
-          inFlight.faultKey,
-        );
-        return;
-      }
-      if (state === "ACTIVE") {
-        this.#options.onToolStart?.({ turnToken: inFlight.turnToken, stepIndex: stepIndex as number, toolName });
-        return;
-      }
-      this.#options.onToolEnd?.({ turnToken: inFlight.turnToken, stepIndex: stepIndex as number });
-      if (!epoch.gateServer.observeCompletedTool(stepIndex as number, toolName)) {
-        if (isMeasuredPreExecutionInvalidToolCall(event.step_update)) return;
-        inFlight.correlationFailure = toolName;
-        inFlight.faultClass = "tool_completion_unobserved";
-        inFlight.faultKey = this.#faultKey(epoch.serial, inFlight.faultClass, stepIndex);
-        const errorDetail = event.step_update.tool_info?.error?.message;
-        const boundedDetail = typeof errorDetail === "string" ? boundErrorDetail(errorDetail) : "<missing>";
-        this.#warn(`antigravity: unobserved tool completion: tool=${toolName} detail=${clipUtf16Head(boundedDetail, 320)}`);
-        this.#tripGateBroken(
-          inFlight.faultClass,
-          toolName,
-          boundedDetail,
-          inFlight.faultKey,
-        );
-      }
-    });
-  }
-
-  /** issue #377 Stage 2 M4: `out_of_turn_event {step_index, step_type, state}`
-   *  for a `step_update` -- a `result` arriving out of turn "is logged the
-   *  same way and discarded" (its own status only, no turn projection). */
-  #logOutOfTurnEvent(event: AgyStreamEvent): void {
-    if (event.event === "init") {
-      this.#options.onOutOfTurnEvent?.({ eventKind: "init" });
-    } else if (event.event === "step_update") {
-      const step = event.step_update;
-      this.#options.onOutOfTurnEvent?.({
-        eventKind: "step_update",
-        ...(step.step_index === undefined ? {} : { stepIndex: step.step_index }),
-        ...(step.step_type === undefined ? {} : { stepType: step.step_type }),
-        ...(step.state === undefined ? {} : { state: step.state }),
-      });
-    } else {
-      this.#options.onOutOfTurnEvent?.({
-        eventKind: "result",
-        ...(event.result.status === undefined ? {} : { status: event.result.status }),
-      });
     }
+    if (active.gateFault !== null) return { kind: "error", detail: active.gateFault, classify: { detail: active.gateFault } };
+    if (active.toolTimeout) return { kind: "error", detail: "tool_timeout", classify: { reason: "timeout" } };
+    if (active.unexpectedPermission) {
+      return { kind: "error", detail: UNEXPECTED_PERMISSION_REASON, classify: { detail: UNEXPECTED_PERMISSION_REASON } };
+    }
+    if (active.processError !== null) return { kind: "error", detail: active.processError, classify: { detail: active.processError } };
+    if (settlement.kind === "closed" || settlement.kind === "stopped") {
+      return { kind: "error", detail: "agy_exit_without_result", classify: { detail: "agy_exit_without_result" } };
+    }
+    if (settlement.kind === "rpc_error") {
+      const detail = isAuthRequired(settlement.error) ? AUTH_REQUIRED : `antigravity_api_error: ${boundErrorDetail(settlement.error.message)}`;
+      return { kind: "error", detail, classify: { detail } };
+    }
+    const stopReason = settlement.response.stopReason;
+    if (stopReason === "end_turn") return { kind: "result" };
+    return { kind: "error", detail: `antigravity_stop_reason:${stopReason}`, classify: { detail: `antigravity_stop_reason:${stopReason}` }, terminal: true };
   }
 
-  /** issue #377 Stage 2: spawns a fresh epoch for `spec`. Moves what Stage 1
-   *  did per turn (ToolHost/GateServer/gate-registration probe) to per-epoch
-   *  scope -- these now span every turn the epoch serves until it ends. */
-  async #spawnEpoch(
-    spec: EpochSpec,
-    generation: number,
-    customization: CustomizationDir,
-    executable: string,
-  ): Promise<{ ok: true } | { ok: false; stale: true }> {
-    const serial = this.#nextEpochSerial++;
-    customization.rewrite();
-    let toolHost: ToolHost | null = null;
-    let gateServer: GateServer | null = null;
-    let succeeded = false;
+  #publish(active: Active, outcome: Outcome): void {
+    const turnToken = active.token;
+    if (outcome.kind === "skipped") {
+      if (this.#queue.length === 0 && !this.#closed) {
+        this.#machine = initialMachineState("waiting_input");
+        this.#emitState("waiting_input");
+      }
+      return;
+    }
+    if (this.#failStopped) return;
+    let error: InterAgentErrorClassifyInput | undefined;
+    let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
+    let terminal = false;
+    if (outcome.kind === "interrupted") {
+      this.#terminalError("interrupted");
+      error = { reason: "interrupted" };
+      cancellation = { kind: "interrupt", reason: "interrupted" };
+      const exit = active.generation?.exit;
+      this.#options.onInterruptSettled?.({
+        turnToken,
+        exitCode: exit?.code ?? null,
+        signal: exit?.signal ?? null,
+        elapsedMs: active.interruptedAt === null ? 0 : Math.max(0, Date.parse(this.#now()) - Date.parse(active.interruptedAt)),
+      });
+    } else if (outcome.kind === "permission_sync_timeout") {
+      this.#options.onLog?.(makeResult(this.#config, this.#now(), permissionSyncFailure()));
+      this.#apply({ kind: "result", subtype: "error_during_execution" });
+      error = { reason: "permission_sync_timeout" };
+    } else if (outcome.kind === "error") {
+      this.#terminalError(outcome.detail);
+      error = outcome.classify;
+      terminal = outcome.terminal === true;
+    } else if (outcome.kind === "result") {
+      if (active.sessionId !== undefined) this.#options.recovery?.confirm(active.sessionId);
+      this.#apply({ kind: "result", subtype: "success" });
+      this.#options.onLog?.(makeResult(this.#config, this.#now(), { text: clipText(active.resultText).text }));
+      terminal = true;
+    }
+    this.#options.onTurnBoundary?.({ turnToken });
+    this.#options.onTurnEnd?.({
+      turnToken,
+      conversationIds: active.conversationIds,
+      ...(error === undefined ? {} : { error }),
+      ...(cancellation === undefined ? {} : { cancellation }),
+      terminal,
+    });
+  }
+
+  /** Ends the generation after its input settled (design 4.6), and resolves
+   *  once its process exited, so the next one starts only then (L4). */
+  async #retire(active: Active, reason: GenerationEndReason): Promise<void> {
+    active.toolHost?.close();
+    active.gateServer?.close();
+    active.probe?.stop();
+    const generation = active.generation;
+    if (generation === null) return;
+    // A stop that already ended the child keeps its own grace; otherwise
+    // retirement takes the shorter of a cancel's remaining time and the close
+    // grace (L3).
+    if (generation.exit === undefined && active.termination === null) {
+      const remaining = active.abortDeadline === null ? this.#closeGraceMs : Math.max(0, active.abortDeadline.atMs - this.#nowMs());
+      this.#terminate(active, Math.min(remaining, this.#closeGraceMs));
+    }
+    const exit = await generation.exited;
+    active.termination?.cancel();
+    if (active.abortDeadline !== null) this.#clearTimer(active.abortDeadline.timer);
     try {
-      toolHost = await (this.#options.toolHostListen ?? ToolHost.listen)(this.#options.toolDescriptors ?? []);
-      if (!this.#isCurrent(generation)) return { ok: false, stale: true };
-      // A placeholder policy object -- `GateServer.listen` needs SOME gate to
-      // register the socket against, but `#runTurn` unconditionally builds a
-      // fresh gate and calls `setGate()` with it for EVERY turn, including
-      // turn 1, before any child process can reach it over the socket. This
-      // one is therefore live only across the registration probe below.
-      const gate = new AntigravityGate({
-        config: this.#config,
-        cwd: this.#options.cwd,
-        customizationDir: customization.path,
-        ...this.#entryCommand(),
-        toolNames: () => toolHost!.toolNames(),
-        broker: this.#options.permissionBroker,
-        onPermissionRequest: () => {},
-        onPermissionResolved: () => {},
-        ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
-      });
-      gateServer = await (this.#options.gateServerListen ?? GateServer.listen)({
-        gate,
-        onSocketClose: () => {
-          this.#options.permissionBroker.close();
-          this.#clearPendingPermission();
-        },
-      });
-      if (!this.#isCurrent(generation)) return { ok: false, stale: true };
-      this.#toolHost = toolHost;
-      this.#gateServer = gateServer;
-      const registration = await this.#verifyGateRegistration(generation);
-      if (!registration.ok) {
-        // issue #371 Design v2 fidelity: a throw here (not a returned error)
-        // lets `#drainTurns`'s catch convert this into `stale` when the
-        // generation has ALSO moved (e.g. an `interrupt()` raced this same
-        // window via `cancelGateProbe`) -- exactly the "via the throw path"
-        // pin (vi) below relies on.
-        throw new Error(`antigravity_gate_not_registered:${registration.reason}`);
-      }
-      if (!this.#isCurrent(generation)) return { ok: false, stale: true };
-      const args = this.#epochArguments(spec);
-      let child: SpawnedAgy;
-      try {
-        const childEnv: NodeJS.ProcessEnv = {
-          ...withAgentMarker(process.env),
-          ...nonInteractiveToolEnv(process.env).additions,
-          KAOIRO_GATE_SOCKET: gateServer.socketPath,
-          KAOIRO_GATE_NONCE: gateServer.nonce,
-          KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
-          KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
-          KAOIRO_BRIDGE_NONCE: toolHost.nonce,
-        };
-        delete childEnv.CODEX_HOME;
-        child = (this.#options.spawn ?? this.#defaultSpawn)(executable, args, {
-          cwd: this.#options.cwd,
-          env: childEnv,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(message)}`);
-      }
-      readableLines(child.stderr, (line) => {
-        if (EPOCH_STDERR_WAITING_PATTERN.test(line)) {
-          this.#options.onEpochStderrLine?.({ kind: "waiting" });
-        } else if (EPOCH_STDERR_TERMINATING_PATTERN.test(line)) {
-          this.#options.onEpochStderrLine?.({ kind: "terminating" });
-        }
-      });
-      const epoch: EpochRuntime = {
-        serial,
-        child,
-        spec,
-        toolHost,
-        gateServer,
-        turns: 0,
-        idleTtlTimer: null,
-        endingReason: null,
-        deathPromise: null,
-        resolveDeath: null,
-        stdinErrored: false,
-        pendingDeliverySettle: null,
-        closeAfterExitTimer: null,
+      this.#options.onGenerationEnded?.({ serial: generation.serial, reason, code: exit.code, signal: exit.signal });
+    } catch {
+      // Diagnostics only.
+    }
+  }
+
+  // --- permission evidence (design L8) -------------------------------------
+
+  #capturePermission(active: Active): void {
+    const pending = this.#pendingPermissionSwitch;
+    if (pending === null) return;
+    const cell = pending.requested;
+    this.#config.sandbox = cell.sandbox;
+    this.#config.network_access = cell.network_access;
+    if (cell.approval !== undefined) this.#config.approval = cell.approval;
+    const approval = this.#config.approval ?? "on-request";
+    const requested: PermissionConfiguration = { sandbox: cell.sandbox, network_access: cell.network_access, approval };
+    const submission: PermissionSubmission = { revision: pending.revision, requested, execution_id: active.token };
+    active.submission = submission;
+    if (this.#permissionControl === null || this.#permissionControl.revision <= submission.revision) {
+      this.#permissionControl = {
+        revision: submission.revision,
+        requested,
+        status: "applying",
+        constraints: this.#constraints(approval),
+        submitted: submission,
+        ...(this.#lastEffectivePermission === null ? {} : { last_effective: this.#lastEffectivePermission }),
       };
-      this.#epoch = epoch;
-      this.#running = child;
-      this.#attachEpochWatcher(epoch);
-      this.#attachEpochStreamReader(epoch, executable);
-      succeeded = true;
-      return { ok: true };
-    } finally {
-      if (!succeeded) {
-        gateServer?.close();
-        toolHost?.close();
-        if (this.#gateServer === gateServer) this.#gateServer = null;
-        if (this.#toolHost === toolHost) this.#toolHost = null;
-      }
     }
+    this.#emitState(this.#machine.state);
   }
 
-  /** issue #377 Stage 2: records that the live epoch is ending for `reason`
-   *  (first cause wins -- a later call while one is already in flight never
-   *  overwrites the original attribution) and lazily creates the shared
-   *  `deathPromise` every caller can await, however many of them mark the
-   *  same epoch ending. Returns `null` when no epoch is live. Callers that
-   *  need immediate termination with NO grace (the watchdog's SIGKILL fail-
-   *  stop, which owns its own timing already) call this directly instead of
-   *  `#endEpoch`, so this method itself performs no signalling. */
-  #markEpochEnding(reason: EpochEndReason): EpochRuntime | null {
-    const epoch = this.#epoch;
-    if (epoch === null) return null;
-    if (epoch.endingReason === null) {
-      epoch.endingReason = reason;
-      this.#clearIdleTtlTimer(epoch);
+  /** The captured prompt's response or first activity arrived. */
+  #evidence(active: Active): void {
+    const submission = active.submission;
+    if (submission === null || active.evidence) return;
+    active.evidence = true;
+    const current = this.#permissionControl;
+    const same = current !== null && current.revision === submission.revision;
+    const approval = submission.requested.approval ?? "on-request";
+    if (active.observedSessionId === undefined) {
+      if (same) this.#setUnknown(submission, "no_observed_session");
+      return;
     }
-    this.#ensureDeathPromise(epoch);
-    return epoch;
-  }
-
-  /** issue #377 Stage 2: ends the live epoch for `reason` (SIGTERM, then a
-   *  grace-bounded SIGKILL escalation) and waits for its child to actually
-   *  close before resolving -- a no-op if no epoch is live. Safe to call
-   *  more than once on the same epoch (e.g. `interrupt()`'s own fire-and-
-   *  forget call racing a freshly dequeued turn's reuse check): every
-   *  caller shares the one `deathPromise` `#markEpochEnding` creates.
-   *  `#attachEpochWatcher`'s close handler reads `endingReason` (set here
-   *  BEFORE the signal goes out) to log the right `epoch_ended` reason. */
-  async #endEpoch(reason: EpochEndReason): Promise<void> {
-    const epoch = this.#markEpochEnding(reason);
-    if (epoch === null) return;
-    this.#armOrShortenTermination(reason === "close" ? this.#closeGraceMs : this.#abortGraceMs);
-    await epoch.deathPromise;
-  }
-
-  /** issue #377 Stage 2 M7: clears the CURRENT epoch's idle-TTL timer, if
-   *  armed. Called at turn dequeue, before spec comparison/spawn. */
-  #clearIdleTtl(): void {
-    if (this.#epoch !== null) this.#clearIdleTtlTimer(this.#epoch);
-  }
-
-  #clearIdleTtlTimer(epoch: EpochRuntime): void {
-    if (epoch.idleTtlTimer === null) return;
-    this.#clearEpochIdleTimer(epoch.idleTtlTimer);
-    epoch.idleTtlTimer = null;
-  }
-
-  /** issue #377 Stage 2 M7: (re-)arms the idle-TTL timer for the current
-   *  epoch. Called only once a turn's own result/error has settled (never
-   *  at dequeue), so the TTL can never fire mid-spawn or mid-delivery-ack. */
-  #armIdleTtl(): void {
-    const epoch = this.#epoch;
-    if (epoch === null) return;
-    this.#clearIdleTtlTimer(epoch);
-    epoch.idleTtlTimer = this.#setEpochIdleTimer(() => {
-      epoch.idleTtlTimer = null;
-      void this.#endEpoch("idle_ttl");
-    }, this.#epochIdleMs);
-  }
-
-  #handleEvent(event: AgyStreamEvent, gate: AntigravityGate, assistantText: Map<number, string>): void {
-    if (event.event === "init") {
-      gate.inspectToolInventory(Array.isArray(event.init.tools) ? event.init.tools : []);
-      const sessionId = agyEventToSessionId(event);
-      if (sessionId !== null) {
-        if (this.#options.recovery?.accept(sessionId, this.#epoch?.spec.conversationId ?? undefined) === false) { this.close(); return; }
-        if (this.#sessionId !== null && this.#sessionId !== sessionId) {
-          this.#resetStaleTerminal429Count(this.#currentUsageFamily());
-          this.#pendingTerminal429Confirmation = null;
-          this.#clearUsageProbeFloorTimer();
-        }
-        this.#sessionId = sessionId;
-        this.#options.onSessionId?.(sessionId);
-        // issue #377 Stage 2 M6: the epoch adopts its OWN conversation id
-        // from its own init -- this is the only writer of a LIVE epoch's
-        // recorded spec. Without it, a freshly spawned epoch's spec
-        // (conversationId: null) would permanently mismatch every later
-        // turn's freshly computed spec (which reads the now-confirmed
-        // #sessionId), forcing a spurious spec_change respawn on turn 2.
-        if (this.#epoch !== null && this.#epoch.spec.conversationId !== sessionId) {
-          this.#epoch.spec = { ...this.#epoch.spec, conversationId: sessionId };
-        }
-        // M4: now that the engine has confirmed this turn's session identity,
-        // promote any applied-but-unconfirmed permission switch to `applied`
-        // with engine-observed session_id / turn_id.
-        this.#confirmAppliedPermission();
-      }
+    const observation: PermissionObservation = {
+      ...submission,
+      session_id: active.observedSessionId,
+      permission: { sandbox: submission.requested.sandbox, approval, enforcement: "advisory" },
+      network_access: effectiveNetworkAccess(submission.requested.sandbox, submission.requested.network_access),
+    };
+    this.#lastEffectivePermission = observation;
+    if (this.#pendingPermissionSwitch?.revision === submission.revision) this.#pendingPermissionSwitch = null;
+    if (same) {
+      this.#permissionControl = {
+        revision: submission.revision,
+        requested: submission.requested,
+        status: "applied",
+        constraints: this.#constraints(approval),
+        submitted: submission,
+        effective: observation,
+        last_effective: observation,
+      };
+    } else if (current !== null) {
+      this.#permissionControl = { ...current, last_effective: observation } as PermissionControlExt;
     }
-    const step = event.event === "step_update" ? event.step_update : null;
-    if (step?.step_type === "agent_response" && typeof step.step_index === "number" && Number.isSafeInteger(step.step_index)) {
-      const stepIndex = step.step_index;
-      if (typeof step.text_delta === "string") {
-        assistantText.set(stepIndex, `${assistantText.get(stepIndex) ?? ""}${step.text_delta}`);
-      }
-      if (step.state === "DONE") {
-        const text = assistantText.get(stepIndex);
-        assistantText.delete(stepIndex);
-        if (text !== undefined && text !== "") this.#emitLog({ kind: "assistant", text });
-      }
-    }
-    for (const log of agyEventToLogs(event)) {
-      if (log.kind !== "assistant") this.#emitLog(log);
-    }
-    for (const adapterEvent of agyEventToEvents(event)) this.#apply(adapterEvent);
+    this.#options.onPermissionLifecycle?.({ version: "0", kind: "permission_applied", at: this.#now(), details: observation });
+    this.#emitState(this.#machine.state);
   }
 
-  #publishTerminalResult(event: AgyStreamEvent): void {
-    for (const adapterEvent of agyEventToEvents(event)) this.#apply(adapterEvent);
-    const result = agyEventToResult(event);
-    if (result === null) return;
-    if (!result.is_error && this.#sessionId !== null) {
-      this.#options.recovery?.confirm(this.#sessionId);
-      if (this.#options.recovery?.failure) return;
+  #permissionWithoutEvidence(active: Active, settlement: Settlement): void {
+    const submission = active.submission;
+    if (submission === null || active.evidence) return;
+    const current = this.#permissionControl;
+    if (current === null || current.revision !== submission.revision) return;
+    // Nothing reached agy: a failed start, or a prompt never written.
+    if (active.delivery === "pending") {
+      this.#permissionControl = {
+        revision: submission.revision,
+        requested: submission.requested,
+        status: "failed",
+        constraints: this.#constraints(submission.requested.approval ?? "on-request"),
+        submitted: submission,
+        reason: "restart_failed",
+        ...(this.#lastEffectivePermission === null ? {} : { last_effective: this.#lastEffectivePermission }),
+      };
+      this.#emitState(this.#machine.state);
+      return;
     }
-    // The result payload has no truncated flag; clip silently so the
-    // envelope stays under the server's size cap.
-    if (result.text !== undefined) result.text = clipText(result.text).text;
-    this.#options.onLog?.(makeResult(this.#config, this.#now(), result));
+    this.#setUnknown(submission, settlement.kind === "rpc_error" ? "rpc_error" : active.acked ? "connection_closed" : "delivery_unconfirmed");
   }
 
-  /** issue #377 Stage 1: the prompt travels over stdin as one NDJSON line
-   *  (`#deliverTurnInput`), not as an argv positional -- `agy --print`'s
-   *  `--input-format stream-json` mode waits for a promoted `run_command`
-   *  background task before emitting `result` (measured,
-   *  docs/evidence/antigravity/print-mode-background-tasks.md probe E),
-   *  whereas an argv-prompt run clamps `WaitMsBeforeAsync` at 10s and kills
-   *  the task 5s after the model's last text (issue #377). issue #377 Stage
-   *  2: built from an `EpochSpec` (spawn time only, once per epoch) rather
-   *  than per-turn parameters -- `spec.conversationId` is `null` for a
-   *  fresh epoch (the epoch adopts its own id from its own `init`, M6) and
-   *  otherwise the id being continued (an interrupt-then-respawn, or a
-   *  resumed session). */
-  #epochArguments(spec: EpochSpec): string[] {
-    const args = [
-      "--print", "",
-      "--input-format", "stream-json",
-      "--output-format", "stream-json",
-      // issue #377 Stage 2: `0` is the CLI's own documented "no timeout"
-      // value (`agy --help`: "0 waits until the turn completes (default
-      // 0s)"), measured live not to change promotion or error behaviour
-      // (docs/evidence/antigravity/print-mode-background-tasks.md). A
-      // background task outliving several turns is bounded by
-      // `TurnWatchdog`, not this flag; an unsolicited exit while idle
-      // becomes `epoch_ended{idle_exit}`.
-      "--print-timeout", "0",
-      "--disable-slash-commands",
-    ];
-    if (this.#options.dangerouslySkipPermissions ?? true) args.push("--dangerously-skip-permissions");
-    if (spec.conversationId !== null) args.push("--conversation", spec.conversationId);
-    if (spec.model !== undefined && spec.model !== "") args.push("--model", spec.model);
-    if (spec.effort !== undefined) args.push("--effort", spec.effort);
-    for (const dir of spec.addDirs) args.push("--add-dir", dir);
-    return args;
+  #setUnknown(submission: PermissionSubmission, reason: string): void {
+    this.#permissionControl = {
+      revision: submission.revision,
+      requested: submission.requested,
+      status: "unknown",
+      constraints: this.#constraints(submission.requested.approval ?? "on-request"),
+      submitted: submission,
+      reason,
+      ...(this.#lastEffectivePermission === null ? {} : { last_effective: this.#lastEffectivePermission }),
+    };
+    this.#emitState(this.#machine.state);
   }
 
-  async #verifyGateRegistration(generation: number): Promise<{ ok: true } | { ok: false; reason: string }> {
-    if (!this.#agyExecutable.ok) return { ok: false, reason: this.#agyExecutable.reason };
-    const executable = this.#agyExecutable.path;
-    const args = ["-p", "/hooks", "--add-dir", this.#options.cwd, "--add-dir", this.#customization!.path, "--output-format", "json"];
-    return new Promise((resolveProbe) => {
+  #permissionCeiling(): SwitchCeiling | null {
+    const { max_sandbox, max_approval, max_network_access } = this.#config;
+    if (max_sandbox === undefined || max_approval === undefined || max_network_access === undefined) return null;
+    return { sandbox: max_sandbox, approval: max_approval, network_access: max_network_access };
+  }
+
+  #currentCell(): Required<PermissionConfiguration> {
+    return {
+      sandbox: this.#config.sandbox ?? "workspace-write",
+      network_access: this.#config.network_access ?? false,
+      approval: this.#config.approval ?? "on-request",
+    };
+  }
+
+  #constraints(approval: PermissionAxesExt["approval"]): PermissionControlExt["constraints"] {
+    return { approval, enforcement: "advisory" };
+  }
+
+  #baselineControl(): PermissionControlExt {
+    const cell = this.#currentCell();
+    return { revision: 0, requested: cell, status: "pending", constraints: this.#constraints(cell.approval) };
+  }
+
+  #rejectOverCeiling(revision: number, cell: PermissionConfiguration, current: Required<PermissionConfiguration>, violation: string, source: string): void {
+    this.#permissionControl = {
+      revision,
+      requested: cell,
+      status: "failed",
+      constraints: this.#constraints(current.approval),
+      reason: "exceeds_launch_ceiling",
+      rolled_back_to: current,
+      ...(this.#lastEffectivePermission === null ? {} : { last_effective: this.#lastEffectivePermission }),
+    };
+    this.#emitState(this.#machine.state);
+    this.#options.onPermissionLifecycle?.({
+      version: "0",
+      kind: "permission_failed",
+      at: this.#now(),
+      details: { revision, requested: cell, reason: "exceeds_launch_ceiling", rolled_back_to: current },
+    });
+    this.#warn(`antigravity: ${source} rejected: ${violation}`);
+  }
+
+  // --- model (design 4.8) --------------------------------------------------
+
+  /** Applies the committed slug, then a pending switch as one switch with
+   *  rollback (design 4.8). Attach resets the pair, so this runs at every
+   *  start. */
+  async #applyModel(generation: Generation): Promise<void> {
+    const session = generation.session;
+    const defaults = reportedPair(session);
+    const committed = this.#config.model ?? "";
+    if (committed !== "") {
+      const result = await switchModel(session, splitSlug(committed, session), defaults);
+      if (result.kind !== "applied") throw new StartFailure(`antigravity_model_not_applied:${committed}`);
+    }
+    const pending = this.#pendingModel;
+    if (pending === null) return;
+    if (pending === committed) {
+      this.#commitModel(pending);
+      return;
+    }
+    const previous = reportedPair(session);
+    const target = pending === "" ? defaults : splitSlug(pending, session);
+    const result = await switchModel(session, target, previous);
+    if (result.kind === "applied") {
+      this.#commitModel(pending);
+      return;
+    }
+    if (result.kind === "failed") throw new StartFailure(result.detail);
+    this.#pendingModel = null;
+    this.#switchError = {
+      kind: "model",
+      requested: pending,
+      reason: result.reason,
+      ...(result.kind === "rolled_back" ? { rolled_back_to: committed } : {}),
+    };
+    this.#emitState(this.#machine.state);
+  }
+
+  #commitModel(value: string): void {
+    this.#config.model = value;
+    this.#config.model_source = "config";
+    this.#pendingModel = null;
+    this.#switchError = null;
+    this.#emitState(this.#machine.state);
+  }
+
+  // --- hook list (design 4.3 item 1) ---------------------------------------
+
+  #hookList(active: Active, executable: string, customization: CustomizationDir): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const args = ["-p", "/hooks", "--add-dir", this.#options.cwd, "--add-dir", customization.path, "--output-format", "json"];
+    return new Promise((resolve) => {
       let settled = false;
       let child: GateProbe | null = null;
-      let timeout: ReturnType<typeof setTimeout> | null = null;
       const settle = (value: { ok: true } | { ok: false; reason: string }): void => {
         if (settled) return;
         settled = true;
-        if (timeout !== null) clearTimeout(timeout);
-        if (this.#cancelGateProbe === cancel) this.#cancelGateProbe = null;
-        if (this.#gateProbe === child) this.#gateProbe = null;
-        resolveProbe(value);
+        this.#clearTimer(timer);
+        active.probe = null;
+        resolve(value);
       };
-      const cancel = (): void => {
+      const terminate = (): void => {
         if (child !== null) this.#signalTarget(child, "pid", "SIGTERM");
-        settle({ ok: false, reason: "timeout" });
       };
-      timeout = setTimeout(cancel, this.#probeTimeoutMs);
-      this.#cancelGateProbe = cancel;
-      if (this.#options.verifyGate !== undefined) {
-        void this.#options.verifyGate(args).then(
-          (registered) => settle(registered && this.#isCurrent(generation)
-            ? { ok: true }
-            : { ok: false, reason: "registration_mismatch" }),
-          () => settle({ ok: false, reason: "spawn_failure" }),
-        );
-        return;
-      }
-      let probeChild: GateProbe;
+      const timer = this.#setTimer(() => {
+        terminate();
+        settle({ ok: false, reason: "timeout" });
+      }, this.#probeTimeoutMs);
+      active.probe = { stop: () => { terminate(); settle({ ok: false, reason: "stopped" }); } };
       try {
-        probeChild = this.#options.probeSpawn?.(executable, args, { cwd: this.#options.cwd })
-          ?? spawn(executable, args, { cwd: this.#options.cwd, env: this.#safeChildEnv(), stdio: ["ignore", "pipe", "pipe"] });
+        child = this.#options.probeSpawn?.(executable, args, { cwd: this.#options.cwd })
+          ?? (spawn(executable, args, { cwd: this.#options.cwd, env: this.#safeChildEnv(), stdio: ["ignore", "pipe", "pipe"] }) as unknown as GateProbe);
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        settle({ ok: false, reason: `spawn_failure:${boundErrorDetail(detail)}` });
+        settle({ ok: false, reason: `spawn_failure:${boundErrorDetail(error instanceof Error ? error.message : String(error))}` });
         return;
       }
-      child = probeChild;
-      this.#gateProbe = probeChild;
       let output = "";
-      let stderr = "";
       let stdoutEnded = false;
       let closeCode: number | null | undefined;
-      const finishClose = (): void => {
+      const finish = (): void => {
         if (!stdoutEnded || closeCode === undefined) return;
         if (closeCode !== 0) {
-          settle({ ok: false, reason: `nonzero_exit${stderr === "" ? "" : `:${boundErrorDetail(stderr)}`}` });
+          settle({ ok: false, reason: "nonzero_exit" });
           return;
         }
-        try {
-          const registered = isGateRegistered(JSON.parse(output) as unknown, {
-            source: join(this.#customization!.path, ".agents", "hooks.json"),
-            command: antigravitySubcommandPrefix({ ...this.#entryCommand(), subcommand: "hook" }),
-            timeoutSeconds: HOOK_TIMEOUT_SECONDS,
-          });
-          settle(registered && this.#isCurrent(generation)
-            ? { ok: true }
-            : { ok: false, reason: "registration_mismatch" });
-        } catch {
+        let parsed: unknown;
+        try { parsed = JSON.parse(output); } catch {
           settle({ ok: false, reason: "invalid_json" });
+          return;
         }
+        settle(checkHookList(parsed, {
+          source: join(customization.path, ".agents", "hooks.json"),
+          command: antigravitySubcommandPrefix({ ...this.#entryCommand(), subcommand: "hook" }),
+        }));
       };
-      probeChild.stdout.setEncoding("utf8");
-      probeChild.stdout.on("data", (chunk: string) => { output += chunk; });
-      probeChild.stdout.once("end", () => { stdoutEnded = true; finishClose(); });
-      probeChild.stderr?.setEncoding("utf8");
-      probeChild.stderr?.on("data", (chunk: string) => { stderr += chunk; });
-      probeChild.once("error", (error) => {
-        settle({ ok: false, reason: `spawn_failure:${boundErrorDetail(error.message)}` });
-      });
-      probeChild.once("close", (code) => { closeCode = code; finishClose(); });
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { output += chunk; });
+      child.stdout.once("end", () => { stdoutEnded = true; finish(); });
+      child.stderr?.resume();
+      child.once("error", (error) => settle({ ok: false, reason: `spawn_failure:${boundErrorDetail(error.message)}` }));
+      child.once("close", (code) => { closeCode = code; finish(); });
     });
   }
+
+  // --- catalog -------------------------------------------------------------
 
   async #refreshCatalog(): Promise<void> {
     let catalog: EngineModelInfo[] | null;
@@ -2558,10 +1436,6 @@ export class AntigravityHost implements EngineAdapter {
       return;
     }
     if (catalog === null || this.#closed) return;
-    // issue #292 (phase-34 Stage B6): re-apply the merge on top of the
-    // freshly probed catalog so a live refresh does not drop an
-    // operator-declared extra model that the pinned snapshot merge above
-    // already exposed.
     this.#catalog = mergeExtraModels(catalog, this.#config.antigravity_extra_models);
     this.#emitState(this.#machine.state);
   }
@@ -2569,34 +1443,32 @@ export class AntigravityHost implements EngineAdapter {
   #defaultProbeModels(): Promise<EngineModelInfo[] | null> {
     if (!this.#agyExecutable.ok) return Promise.resolve(null);
     const executable = this.#agyExecutable.path;
-    return new Promise((resolveProbe) => {
+    return new Promise((resolve) => {
       let output = "";
       let child: GateProbe;
       try {
         child = this.#options.modelsProbeSpawn?.(executable, ["models"], { cwd: this.#options.cwd })
-          ?? spawn(executable, ["models"], {
-            cwd: this.#options.cwd,
-            env: this.#safeChildEnv(),
-            stdio: ["ignore", "pipe", "pipe"],
-          });
+          ?? (spawn(executable, ["models"], { cwd: this.#options.cwd, env: this.#safeChildEnv(), stdio: ["ignore", "pipe", "pipe"] }) as unknown as GateProbe);
       } catch {
-        resolveProbe(null);
+        resolve(null);
         return;
       }
-      const timeout = setTimeout(() => {
+      const timer = this.#setTimer(() => {
         this.#signalTarget(child, "pid", "SIGTERM");
-        resolveProbe(null);
+        resolve(null);
       }, this.#probeTimeoutMs);
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => { output += chunk; });
-      child.stderr?.on("data", () => {});
-      child.once("error", () => { clearTimeout(timeout); resolveProbe(null); });
-      child.once("exit", (code) => {
-        clearTimeout(timeout);
-        resolveProbe(code === 0 ? parseAgyModelsOutput(output) : null);
+      child.stderr?.resume();
+      child.once("error", () => { this.#clearTimer(timer); resolve(null); });
+      child.once("close", (code) => {
+        this.#clearTimer(timer);
+        resolve(code === 0 ? parseAgyModelsOutput(output) : null);
       });
     });
   }
+
+  // --- projection ----------------------------------------------------------
 
   #apply(event: Parameters<typeof stepState>[1]): void {
     const { next, emitted } = stepState(this.#machine, event);
@@ -2605,319 +1477,25 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #emitState(state: KaoiroState): void {
-    this.#options.onState(makeStateChange(
-      this.#config,
-      this.#gateBroken ? "error" : state,
-      this.#now(),
-      {},
-      this.#statusExt(true),
-    ));
+    this.#options.onState(makeStateChange(this.#config, this.#gateFault !== null ? "error" : state, this.#now(), {}, this.#statusExt(true)));
   }
 
   #emitLog(entry: LogEntry): void {
-    if (entry.kind === "tool_use" && entry.tool_use_id !== undefined) {
-      this.#toolNames.set(entry.tool_use_id, entry.tool_name);
-    }
-    this.#options.onLog?.(
-      makeLog(
-        this.#config,
-        this.#machine.state,
-        this.#now(),
-        logEntryToPayload(entry, this.#toolNames),
-      ),
-    );
+    if (entry.kind === "tool_use" && entry.tool_use_id !== undefined) this.#toolNames.set(entry.tool_use_id, entry.tool_name);
+    this.#options.onLog?.(makeLog(this.#config, this.#machine.state, this.#now(), logEntryToPayload(entry, this.#toolNames)));
   }
 
-  #terminalError(error: string, attemptedModel?: string | null): void {
-    this.#rollbackPendingModel(attemptedModel);
+  #flushAssistant(active: Active): void {
+    const text = active.assistantText;
+    active.assistantText = "";
+    if (text === "") return;
+    active.resultText += text;
+    this.#emitLog({ kind: "assistant", text });
+  }
+
+  #terminalError(error: string): void {
     this.#apply({ kind: "result", subtype: "error_during_execution" });
     this.#options.onLog?.(makeResult(this.#config, this.#now(), { is_error: true, error_subtype: "error_during_execution", error_detail: error }));
-  }
-
-  #promotePendingModel(attemptedModel: string | null): void {
-    if (attemptedModel === null || this.#pendingModel !== attemptedModel) return;
-    this.#config.model = attemptedModel;
-    this.#config.model_source = "config";
-    this.#pendingModel = null;
-    this.#switchError = null;
-  }
-
-  #rollbackPendingModel(attemptedModel?: string | null): void {
-    if (this.#pendingModel === null) return;
-    if (attemptedModel !== undefined && this.#pendingModel !== attemptedModel) return;
-    const requested = this.#pendingModel;
-    this.#pendingModel = null;
-    this.#switchError = {
-      kind: "model",
-      requested,
-      reason: "turn_failed",
-      ...(this.#config.model === undefined ? {} : { rolled_back_to: this.#config.model }),
-    };
-  }
-
-  #currentUsageFamily(): AgyUsageFamily | null {
-    return modelToUsageFamily(this.#config.model);
-  }
-
-  #resetUsageProbeFailures(family: AgyUsageFamily | null): void {
-    this.#usageProbeFailureFamily = family;
-    this.#usageProbeFailureCount = 0;
-  }
-
-  #resetStaleTerminal429Count(family: AgyUsageFamily | null): void {
-    this.#staleTerminal429Family = family;
-    this.#staleTerminal429Count = 0;
-  }
-
-  #clearUsageProbeFloorTimer(): void {
-    if (this.#usageProbeFloorTimer !== null) {
-      this.#clearFloorTimerFn(this.#usageProbeFloorTimer);
-    }
-    this.#usageProbeFloorTimer = null;
-    this.#usageProbeFloorTimerFamily = null;
-    this.#usageProbeFloorTimerDeadlineMs = null;
-  }
-
-  #schedulePendingConfirmationAfterFloor(family: AgyUsageFamily, deadlineMs: number, nowMs: number): void {
-    if (
-      this.#usageProbeFloorTimer !== null &&
-      this.#usageProbeFloorTimerFamily === family &&
-      this.#usageProbeFloorTimerDeadlineMs === deadlineMs
-    ) return;
-    this.#clearUsageProbeFloorTimer();
-    let timer: unknown;
-    timer = this.#setUsageProbeFloorTimer(() => {
-      if (this.#usageProbeFloorTimer !== timer) return;
-      this.#usageProbeFloorTimer = null;
-      this.#usageProbeFloorTimerFamily = null;
-      this.#usageProbeFloorTimerDeadlineMs = null;
-      this.#maybeStartUsageProbe(true);
-    }, Math.max(0, deadlineMs - nowMs));
-    this.#usageProbeFloorTimer = timer;
-    this.#usageProbeFloorTimerFamily = family;
-    this.#usageProbeFloorTimerDeadlineMs = deadlineMs;
-    if (typeof timer === "object" && timer !== null && "unref" in timer) {
-      const unref = (timer as { unref?: () => unknown }).unref;
-      if (typeof unref === "function") unref.call(timer);
-    }
-  }
-
-  #servicePendingTerminal429Confirmation(): void {
-    const pending = this.#pendingTerminal429Confirmation;
-    if (pending === null) return;
-    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped || !this.#agyExecutable.ok) {
-      this.#pendingTerminal429Confirmation = null;
-      this.#clearUsageProbeFloorTimer();
-      return;
-    }
-    if (this.#currentUsageFamily() !== pending.family) {
-      this.#pendingTerminal429Confirmation = null;
-      this.#clearUsageProbeFloorTimer();
-      return;
-    }
-    this.#maybeStartUsageProbe(true);
-  }
-
-  #recordUsageProbeFailure(
-    family: AgyUsageFamily,
-    startedAtMs: number,
-    reason: string,
-    warningKind: "failed" | "stopped" = "failed",
-    applyRetryFloor = true,
-  ): void {
-    if (this.#closed) return;
-    if (applyRetryFloor) this.#usageProbeLastFailureStartedAtMs = startedAtMs;
-    if (this.#currentUsageFamily() !== family) return;
-    if (this.#usageProbeFailureFamily !== family) this.#resetUsageProbeFailures(family);
-    this.#usageProbeFailureCount += 1;
-    this.#warn(`antigravity usage probe ${warningKind}: ${boundErrorDetail(reason)}`);
-  }
-
-  #stopUsageProbe(reason: "abort" | "host_close" | "stale_family"): void {
-    this.#usageProbeRun?.run.requestStop(reason);
-  }
-
-  #maybeStartUsageProbe(forceImmediate = false): void {
-    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped || !this.#agyExecutable.ok) return;
-    const family = this.#currentUsageFamily();
-    if (family === null) return;
-    const pendingConfirmation = this.#pendingTerminal429Confirmation;
-    if (pendingConfirmation !== null && pendingConfirmation.family !== family) {
-      this.#pendingTerminal429Confirmation = null;
-      this.#clearUsageProbeFloorTimer();
-    }
-    const isPendingConfirmation = this.#pendingTerminal429Confirmation !== null;
-    if (
-      this.#turnActive ||
-      this.#turnQueue.length > 0 ||
-      this.#inFlightTurn !== null ||
-      this.#currentTurnToken !== null
-    ) return;
-    if (this.#usageProbeRun !== null) return;
-    if (this.#usageProbeFailureFamily !== family) this.#resetUsageProbeFailures(family);
-    if (this.#usageProbeFailureCount >= 3) return;
-
-    const nowMs = Date.parse(this.#now());
-    if (!Number.isFinite(nowMs)) return;
-    if (
-      this.#usageProbeLastFailureStartedAtMs !== null &&
-      nowMs - this.#usageProbeLastFailureStartedAtMs < this.#usageProbeIntervalMs
-    ) {
-      if (isPendingConfirmation) {
-        this.#schedulePendingConfirmationAfterFloor(
-          family,
-          this.#usageProbeLastFailureStartedAtMs + this.#usageProbeIntervalMs,
-          nowMs,
-        );
-      }
-      return;
-    }
-    this.#clearUsageProbeFloorTimer();
-    if (this.#rateLimitOverlay?.origin === "positive_reset_delay") {
-      const resetMs = this.#rateLimitOverlay.value.resets_at === undefined
-        ? Number.POSITIVE_INFINITY
-        : this.#rateLimitOverlay.value.resets_at * 1_000;
-      if (nowMs < resetMs) return;
-      forceImmediate = true;
-    }
-
-    const hasCurrentSnapshot = this.#usageSnapshot?.family === family;
-    if (!hasCurrentSnapshot) forceImmediate = true;
-    if (this.#usageProbeRequested) forceImmediate = true;
-    if (
-      !isPendingConfirmation &&
-      !forceImmediate &&
-      this.#usageSnapshot !== null &&
-      nowMs - this.#usageSnapshot.capturedAtMs < this.#usageProbeIntervalMs
-    ) return;
-
-    const startedAtMs = nowMs;
-    let run: AgyUsageProbeRun;
-    try {
-      const probeOptions = {
-        cwd: this.#options.cwd,
-        env: this.#safeChildEnv(),
-        timeoutMs: this.#usageProbeTimeoutMs,
-        stopTimeoutMs: this.#usageProbeStopTimeoutMs,
-        signalTarget: this.#signalTarget,
-        ...(this.#options.usageProbeSpawn === undefined ? {} : { spawn: this.#options.usageProbeSpawn }),
-      };
-      run = startAgyUsageProbe(this.#agyExecutable.path, probeOptions);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      this.#recordUsageProbeFailure(family, startedAtMs, detail);
-      return;
-    }
-
-    const probe = { family, startedAtMs, run };
-    this.#usageProbeRun = probe;
-    this.#usageProbeRequested = false;
-    if (isPendingConfirmation) this.#pendingTerminal429Confirmation = null;
-    void run.completion.then((completion) => {
-      if (completion.kind === "stop_timed_out" && this.#usageProbeRun === probe) {
-        this.#warn("antigravity usage probe did not close within the stop bound");
-      }
-    });
-    void run.closed.then((result) => this.#onUsageProbeClosed(probe, result));
-  }
-
-  #onUsageProbeClosed(
-    probe: { family: AgyUsageFamily; startedAtMs: number; run: AgyUsageProbeRun },
-    result: UsageProbeClosedResult,
-  ): void {
-    if (this.#usageProbeRun === probe) this.#usageProbeRun = null;
-    if (this.#closed) return;
-
-    const currentFamily = this.#currentUsageFamily();
-    const sameFamily = currentFamily === probe.family;
-    const serviceNextProbe = (): void => {
-      if (this.#pendingTerminal429Confirmation !== null) {
-        this.#servicePendingTerminal429Confirmation();
-      } else if (this.#usageProbeRequested && this.#currentUsageFamily() !== null) {
-        this.#maybeStartUsageProbe(true);
-      }
-    };
-    if (result.stopReason === "stale_family") {
-      serviceNextProbe();
-      return;
-    }
-    if (result.stopReason === "host_close") return;
-    if (result.stopReason !== null) {
-      const interrupted = result.stopReason === "abort";
-      this.#recordUsageProbeFailure(
-        probe.family,
-        probe.startedAtMs,
-        interrupted ? result.stopReason : `stopped:${result.stopReason}`,
-        interrupted ? "stopped" : "failed",
-        !interrupted,
-      );
-      serviceNextProbe();
-      return;
-    }
-    if (result.spawnError !== null) {
-      this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, result.spawnError.message);
-      serviceNextProbe();
-      return;
-    }
-    if (result.code !== 0) {
-      this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, `exit_${result.code ?? result.signal ?? "unknown"}`);
-      serviceNextProbe();
-      return;
-    }
-
-    const limits = parseAgyUsageOutput(result.stdout, probe.family);
-    if (limits === null) {
-      this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, "unrecognized_or_empty_bucket_set");
-      serviceNextProbe();
-      return;
-    }
-    const capturedAtMs = Date.parse(this.#now());
-    if (!Number.isFinite(capturedAtMs)) {
-      this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, "invalid_capture_time");
-      serviceNextProbe();
-      return;
-    }
-    this.#usageProbeLastFailureStartedAtMs = null;
-    if (!sameFamily) {
-      serviceNextProbe();
-      return;
-    }
-    this.#usageSnapshot = { family: probe.family, capturedAtMs, limits };
-    this.#resetUsageProbeFailures(probe.family);
-    const complete = hasCompleteAgyUsageBuckets(limits, probe.family);
-    if (sameFamily && complete && hasEmptyUsageBucket(limits)) {
-      this.#resetStaleTerminal429Count(probe.family);
-    }
-    const overlay = this.#rateLimitOverlay;
-    const postOverlayAmbiguousProbe =
-      sameFamily &&
-      complete &&
-      overlay !== null &&
-      overlay.origin === "ambiguous_terminal_429" &&
-      overlay.family === probe.family &&
-      probe.startedAtMs >= overlay.createdAtMs;
-    if (postOverlayAmbiguousProbe && hasOnlyPositiveUsageBuckets(limits, probe.family)) {
-      if (this.#staleTerminal429Family !== probe.family) {
-        this.#resetStaleTerminal429Count(probe.family);
-      }
-      this.#staleTerminal429Count += 1;
-      this.#rateLimitOverlay = null;
-      this.#pendingTerminal429Confirmation = null;
-      this.#clearUsageProbeFloorTimer();
-      this.#emitLog({ kind: "system", text: STALE_TERMINAL_429_DETAIL });
-    }
-    this.#emitState(this.#machine.state);
-    serviceNextProbe();
-  }
-
-  #composedRateLimits(): Record<string, AgyUsageRateLimit> | null {
-    const family = this.#currentUsageFamily();
-    const limits: Record<string, AgyUsageRateLimit> = {};
-    if (family !== null && this.#usageSnapshot !== null) {
-      for (const [window, value] of this.#usageSnapshot.limits) limits[window] = { ...value };
-    }
-    if (this.#rateLimitOverlay !== null) limits.seven_day = { ...this.#rateLimitOverlay.value };
-    return Object.keys(limits).length === 0 ? null : limits;
   }
 
   #statusExt(consumeOneShot = false): Record<string, unknown> {
@@ -2928,14 +1506,38 @@ export class AntigravityHost implements EngineAdapter {
       if (consumeOneShot) this.#switchError = null;
     }
     if (this.#pendingPermission !== null) ext.pending_permission = this.#pendingPermission;
-    // ADR-0057 F4c Stage B0 (issue #359): echo the permission-switch control so
-    // the server advances pending -> applied / failed (record_observation).
     if (this.#permissionControl !== null) ext.permission_control = this.#permissionControl;
     if (this.#pendingQuestion !== null) ext.pending_question = this.#pendingQuestion;
-    const rateLimits = this.#composedRateLimits();
-    if (rateLimits !== null) ext.rate_limits = rateLimits;
     ext.cwd = this.#options.cwd;
     return ext;
+  }
+
+  #clearPendingAfterStop(): void {
+    if (this.#pendingPermission !== null) {
+      this.#pendingPermission = null;
+      this.#emitState(this.#machine.state);
+    }
+    if (this.#pendingQuestion !== null) this.setPendingQuestion(null);
+  }
+
+  #rejectInput(input: Input, reason: "closed" | "gate_broken" | "watchdog_fail_stopped"): void {
+    this.#notifySendRejected({
+      ...(input.turnToken === undefined ? {} : { turnToken: input.turnToken }),
+      ...(input.conversationIds === undefined || input.conversationIds.length === 0 ? {} : { conversationIds: input.conversationIds }),
+      reason,
+    });
+  }
+
+  #notifySendRejected(info: Parameters<NonNullable<AntigravityHostOptions["onSendRejected"]>>[0]): void {
+    try {
+      this.#options.onSendRejected?.(info);
+    } catch (error) {
+      try {
+        this.#warn(`antigravity: send rejection callback failed: token=${info.turnToken ?? "<tokenless>"} detail=${boundErrorDetail(String(error))}`);
+      } catch {
+        // A diagnostic callback cannot make a rejected input escape.
+      }
+    }
   }
 
   #warn(message: string): void {
@@ -2946,208 +1548,9 @@ export class AntigravityHost implements EngineAdapter {
     writeRedactedStderr(`${message}\n`);
   }
 
-  #notifySendRejected(info: Parameters<NonNullable<AntigravityHostOptions["onSendRejected"]>>[0]): void {
-    try {
-      this.#options.onSendRejected?.(info);
-    } catch (error) {
-      const token = info.turnToken ?? "<tokenless>";
-      try {
-        this.#warn(
-          `antigravity: send rejection callback failed: token=${token} detail=${boundErrorDetail(String(error))}`,
-        );
-      } catch {
-        // A diagnostic callback cannot make a rejected turn escape its boundary.
-      }
-    }
-  }
-
-  #emitGateRecoveryLifecycle(info: {
-    event: "gate_fault" | "gate_recovery";
-    faultClass: GateFaultClass;
-    toolName: string;
-    tripCount: number;
-    probeResult: GateProbeResult;
-    detail: string;
-  }): void {
-    try {
-      this.#options.onGateRecoveryLifecycle?.({
-        ...info,
-        toolName: info.toolName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 64) || "<unknown>",
-        detail: boundErrorDetail(info.detail),
-      });
-    } catch (error) {
-      try {
-        this.#warn(`antigravity: gate lifecycle callback failed: ${boundErrorDetail(String(error))}`);
-      } catch {
-        // A diagnostic callback cannot alter gate recovery.
-      }
-    }
-  }
-
-  #tripGateBroken(
-    faultClass: GateFaultClass,
-    toolName: string,
-    detail: string,
-    faultKey: string,
-  ): boolean {
-    if (this.#seenGateFaultKeys.has(faultKey)) return false;
-    this.#seenGateFaultKeys.add(faultKey);
-    const tripCount = ++this.#gateTripCount;
-    const boundedDetail = boundErrorDetail(detail);
-    const safeToolName = validToolName(toolName) ? clipUtf16Head(toolName, 64) : "<unknown>";
-
-    if (this.#gateBroken) {
-      if (faultClass === "customization_tampered") {
-        this.#gateSticky = true;
-        const candidate = this.#recoveryCandidate;
-        if (candidate !== null) {
-          const index = this.#turnQueue.indexOf(candidate);
-          if (index !== -1) this.#turnQueue.splice(index, 1);
-          this.#recoveryCandidate = null;
-          this.#recoveryPhase = null;
-          this.#notifySendRejected({
-            ...(candidate.turnToken === undefined ? {} : { turnToken: candidate.turnToken }),
-            ...(candidate.conversationIds === undefined || candidate.conversationIds.length === 0 ? {} : { conversationIds: candidate.conversationIds }),
-            reason: "gate_broken",
-          });
-        }
-      }
-      this.#emitGateRecoveryLifecycle({
-        event: "gate_fault",
-        faultClass,
-        toolName: safeToolName,
-        tripCount,
-        probeResult: this.#gateSticky ? "not_run_sticky" : "suppressed_latched",
-        detail: boundedDetail,
-      });
-      return false;
-    }
-
-    const sticky = faultClass === "customization_tampered" || this.#recoveryProbation;
-    this.#gateBroken = true;
-    this.#gateSticky = sticky;
-    this.#gateFault = { faultClass, toolName: safeToolName, detail: boundedDetail, faultKey, tripCount };
-    this.#emitGateRecoveryLifecycle({
-      event: "gate_fault",
-      faultClass,
-      toolName: safeToolName,
-      tripCount,
-      probeResult: sticky ? "not_run_sticky" : "started",
-      detail: boundedDetail,
-    });
-    this.#emitState(this.#machine.state);
-    this.#markEpochEnding(faultClass === "customization_tampered" ? "tamper" : "gate_broken");
-    this.#armOrShortenTermination(this.#abortGraceMs);
-
-    this.#rejectQueuedGateBrokenTurns();
-    return true;
-  }
-
-  #rejectQueuedGateBrokenTurns(): void {
-    const queued = this.#turnQueue.splice(0);
-    this.#rejectingGateBrokenQueue = true;
-    try {
-      for (const turn of queued) {
-        this.#notifySendRejected({
-          ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
-          ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
-          reason: "gate_broken",
-        });
-      }
-    } finally {
-      this.#rejectingGateBrokenQueue = false;
-    }
-  }
-
-  #faultKey(epochSerial: number, faultClass: GateFaultClass, stepIndex?: number): string {
-    return `${epochSerial}:${faultClass}:${Number.isSafeInteger(stepIndex) ? stepIndex : "none"}`;
-  }
-
-  #beginRecoveryProbe(): boolean {
-    const nowMsRaw = Date.parse(this.#now());
-    const nowMs = Number.isFinite(nowMsRaw) ? nowMsRaw : Date.now();
-    if (
-      this.#recoveryAttemptWindowStartMs === null ||
-      nowMs - this.#recoveryAttemptWindowStartMs >= 60_000
-    ) {
-      this.#recoveryAttemptWindowStartMs = nowMs;
-      this.#recoveryAttemptsInWindow = 0;
-    }
-    if (this.#recoveryAttemptsInWindow >= 5) {
-      this.#gateSticky = true;
-      const fault = this.#gateFault;
-      if (fault !== null) {
-        this.#emitGateRecoveryLifecycle({
-          event: "gate_recovery",
-          faultClass: fault.faultClass,
-          toolName: fault.toolName,
-          tripCount: fault.tripCount,
-          probeResult: "budget_exhausted",
-          detail: fault.detail,
-        });
-      }
-      return false;
-    }
-    this.#recoveryAttemptsInWindow += 1;
-    const fault = this.#gateFault;
-    if (fault !== null) {
-      this.#emitGateRecoveryLifecycle({
-        event: "gate_recovery",
-        faultClass: fault.faultClass,
-        toolName: fault.toolName,
-        tripCount: fault.tripCount,
-        probeResult: "started",
-        detail: fault.detail,
-      });
-    }
-    return true;
-  }
-
-  #emitRecoveryOutcome(probeResult: "failed" | "child_launch_failed", detail: string): void {
-    const fault = this.#gateFault ?? this.#recoveryFaultDuringDelivery;
-    if (fault === null) return;
-    this.#emitGateRecoveryLifecycle({
-      event: "gate_recovery",
-      faultClass: fault.faultClass,
-      toolName: fault.toolName,
-      tripCount: fault.tripCount,
-      probeResult,
-      detail,
-    });
-  }
-
-  #restoreRecoveryFault(): void {
-    const fault = this.#recoveryFaultDuringDelivery;
-    if (fault === null || this.#gateBroken) return;
-    this.#gateBroken = true;
-    this.#gateSticky = false;
-    this.#gateFault = fault;
-    this.#recoveryProbation = false;
-    this.#recoveryFaultDuringDelivery = null;
-    this.#emitState(this.#machine.state);
-    this.#markEpochEnding("gate_broken");
-    this.#armOrShortenTermination(this.#abortGraceMs);
-    this.#rejectQueuedGateBrokenTurns();
-  }
-
-  #spawnFailureReason(error: unknown): AgyExecutableFailureReason {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT" || code === "ENOTDIR") return "executable_missing";
-    if (code === "EACCES" || code === "EPERM") return "permission_denied";
-    return "spawn_failure";
-  }
-
   #entryCommand(): { nodePath: string; nodeArgs: readonly string[]; entryPath: string } {
-    if (
-      this.#options.nodePath !== undefined &&
-      this.#options.nodeArgs !== undefined &&
-      this.#options.entryPath !== undefined
-    ) {
-      return {
-        nodePath: this.#options.nodePath,
-        nodeArgs: this.#options.nodeArgs,
-        entryPath: this.#options.entryPath,
-      };
+    if (this.#options.nodePath !== undefined && this.#options.nodeArgs !== undefined && this.#options.entryPath !== undefined) {
+      return { nodePath: this.#options.nodePath, nodeArgs: this.#options.nodeArgs, entryPath: this.#options.entryPath };
     }
     const self = selfCommand();
     return {
@@ -3164,12 +1567,16 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #defaultSpawn(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): SpawnedAgy {
-    // issue #379: `detached: true` starts agy as its own process-group
-    // leader (POSIX `setsid`), so `signalSubtree`'s `process.kill(-pid,
-    // signal)` reaches every descendant it spawns (e.g. a `run_command`
-    // promoted background task, issue #377) instead of only the leader.
-    // No `unref()` -- the wrapper must keep observing this child for its
-    // full lifetime, not let it run detached from supervision.
+    // Its own process group, so a group signal reaches every command it runs.
     return spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"], detached: true }) as ChildProcessWithoutNullStreams;
   }
 }
+
+type Outcome =
+  | { kind: "skipped" }
+  | { kind: "stale" }
+  | { kind: "interrupted" }
+  | { kind: "permission_sync_timeout" }
+  | { kind: "error"; detail: string; classify: InterAgentErrorClassifyInput; terminal?: boolean }
+  | { kind: "result" };
+

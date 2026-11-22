@@ -5,14 +5,12 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // driven by a fake agy child process, so the actual `#drainTurns` finally
 // block (state_change -> onTurnBoundary -> onTurnEnd) and the real
 // SessionResetCoordinator decide the outcome -- not a hand-called callback.
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { Envelope, ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
 import type { DirectoryEntry } from "@kaoiro/protocol";
 import { runAntigravityCli } from "../src/cli.js";
-import { AntigravityHost, type AntigravityHostOptions, type SpawnedAgy } from "../src/host.js";
-import { createHarnessHost } from "./host_test_harness.js";
+import type { AntigravityHost, AntigravityHostOptions } from "../src/host.js";
+import { createTestHost, type FakeAgy } from "./acp_fake.js";
 
 const CONFIG: WrapperConfig = {
   agent_id: "host-1.antigravity-gate",
@@ -21,34 +19,9 @@ const CONFIG: WrapperConfig = {
   server_url: "ws://localhost:4000/wrapper",
 };
 
-class FakeAgy extends EventEmitter {
-  readonly stdout = new PassThrough();
-  readonly stderr = new PassThrough();
-  readonly stdin = new PassThrough();
-
-  // Unlike host.test.ts's FakeAgy (record-only kill, tests call finish()
-  // explicitly), this one terminates on kill() -- host.close()'s own
-  // #endEpoch("close") signals the child and this pin needs the turn to
-  // actually reach its `{kind: "stale"}` outcome without an extra manual
-  // step standing in for what close()'s real escalation already does.
-  kill(signal?: NodeJS.Signals): boolean {
-    this.stdout.end();
-    this.emit("exit", null, signal ?? "SIGTERM");
-    this.emit("close", null, signal ?? "SIGTERM");
-    return true;
-  }
-
-  finish(): void {
-    this.stdout.end();
-    this.emit("exit", 0, null);
-    this.emit("close", 0, null);
-  }
-}
-
 interface Rig {
   sent: Envelope[];
   acknowledged: number[];
-  inputs: string[];
   requests: { mode: string; reason?: string }[];
   requestSnapshots: { sentCount: number; state: string | undefined }[];
   turnEnds: Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0][];
@@ -64,22 +37,21 @@ interface Rig {
 async function makeRig(
   overrides: Partial<WrapperConfig> = {},
   prepareInput?: AntigravityHostOptions["prepareInput"],
-  verifyGate: () => Promise<boolean> = async () => true,
 ): Promise<Rig> {
   const sent: Envelope[] = [];
   const acknowledged: number[] = [];
-  const inputs: string[] = [];
   const requests: Rig["requests"] = [];
   const requestSnapshots: Rig["requestSnapshots"] = [];
   const turnEnds: Rig["turnEnds"] = [];
   const sendRejections: Rig["sendRejections"] = [];
-  const agyChildren: FakeAgy[] = [];
   const directoryAgents: DirectoryEntry[] = [];
+  let agyChildren: FakeAgy[] = [];
   let linkOptions!: Record<string, any>;
   let hostOptions!: Record<string, any>;
   let host!: AntigravityHost;
   const link = {
     close: () => {},
+    setSessionId: () => {},
     send: (envelope: Envelope) => sent.push(envelope),
     acknowledgeInterAgentDelivery: (sequence: number) => acknowledged.push(sequence),
     requestSessionReset: async (mode: string, reason?: string) => {
@@ -102,10 +74,8 @@ async function makeRig(
     },
     createHost: (cfg, options) => {
       hostOptions = options as unknown as Record<string, any>;
-      host = createHarnessHost(cfg, {
+      const test = createTestHost(cfg, {
         ...options,
-        verifyGate,
-        agyPath: "/test/agy",
         ...(prepareInput === undefined ? {} : { prepareInput }),
         onTurnEnd: (info) => {
           turnEnds.push(info);
@@ -115,13 +85,9 @@ async function makeRig(
           sendRejections.push(info);
           options.onSendRejected?.(info);
         },
-        spawn: () => {
-          const child = new FakeAgy();
-          child.stdin.on("data", (chunk: Buffer | string) => inputs.push(String(chunk)));
-          agyChildren.push(child);
-          return child as unknown as SpawnedAgy;
-        },
       } as AntigravityHostOptions);
+      agyChildren = test.agys;
+      host = test.host;
       return host;
     },
   });
@@ -129,7 +95,6 @@ async function makeRig(
   return {
     sent,
     acknowledged,
-    inputs,
     requests,
     requestSnapshots,
     turnEnds,
@@ -143,7 +108,9 @@ async function makeRig(
     get host() {
       return host;
     },
-    agyChildren,
+    get agyChildren() {
+      return agyChildren;
+    },
     directoryAgents,
     done,
   };
@@ -177,21 +144,36 @@ function peerEnvelope(deliverySeq: number): Envelope {
   } as unknown as Envelope;
 }
 
-async function markToolRunning(rig: Rig): Promise<void> {
-  rig.agyChildren[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool"}}\n');
+/** The prompt of process `index` is open, and its reset call passed the hook
+ *  and shows as a running tool, as a real kaoiro call does. */
+async function markChildToolRunning(rig: Rig, index: number): Promise<void> {
+  await vi.waitFor(() => expect(rig.agyChildren[index]?.promptOpen).toBe(true));
+  const agy = rig.agyChildren[index]!;
+  agy.toolCall(`reset-${index}`, "mcp_kaoiro_request_session_reset", { mode: "new" });
+  await expect(agy.preToolUse(`reset-${index}`, "mcp_kaoiro_request_session_reset", { mode: "new" })).resolves.toEqual({ decision: "allow" });
   await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running"));
 }
 
-async function markChildToolRunning(rig: Rig, childIndex: number): Promise<void> {
-  rig.agyChildren[childIndex]!.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool"}}\n');
-  await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running"));
+async function markToolRunning(rig: Rig): Promise<void> {
+  await markChildToolRunning(rig, 0);
+}
+
+/** Completes the reset call, then answers the prompt. */
+function end(rig: Rig, index: number, stopReason = "end_turn"): void {
+  rig.agyChildren[index]!.toolDone(`reset-${index}`, "mcp_kaoiro_request_session_reset", { mode: "new" });
+  rig.agyChildren[index]!.respond(stopReason);
+}
+
+/** A tool call that completes with no hook latches the gate fault. */
+function unhooked(rig: Rig, index: number): void {
+  rig.agyChildren[index]!.toolCall("loose", "run_command", { CommandLine: "ls" });
+  rig.agyChildren[index]!.toolDone("loose", "run_command", { CommandLine: "ls" });
 }
 
 describe("Antigravity session-reset real lifetime semantics (issue #396)", () => {
-  it("keeps the bridge approval at waiting_permission until the decision settles", async () => {
+  it("keeps the tool approval at waiting_permission until the decision settles", async () => {
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const call = resetDescriptor(rig).handler({ mode: "new" });
@@ -206,16 +188,14 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     await call;
     expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running");
 
-    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    rig.agyChildren[0]!.finish();
+    end(rig, 0);
     await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
     rig.host.close();
   });
 
-  it("list_agents descriptor serializes waiting_permission during a bridge approval", async () => {
+  it("list_agents descriptor serializes waiting_permission during a tool approval", async () => {
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-list-agents");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const call = resetDescriptor(rig).handler({ mode: "new" });
@@ -234,27 +214,23 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     const requestId = (request.payload as { request_id: string }).request_id;
     rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
     await call;
-    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    rig.agyChildren[0]!.finish();
+    end(rig, 0);
     await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
     rig.host.close();
   });
 
-  it("retires a bridge wait lease when its child dies before the approval settles", async () => {
+  it("retires a tool wait lease when its child dies before the approval settles", async () => {
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-dead-child-a");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const firstCall = resetDescriptor(rig).handler({ mode: "new" });
     await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "permission_request")).toHaveLength(1));
-    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"ERROR","response":"child ended"}}\n');
-    rig.agyChildren[0]!.finish();
+    rig.agyChildren[0]!.exit(1);
     await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
     expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).not.toBe("waiting_permission");
 
     await rig.host.send("next turn", undefined, ["cid-b"], "turn-dead-child-b");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(2));
     await markChildToolRunning(rig, 1);
     const secondCall = resetDescriptor(rig).handler({ mode: "new" });
     await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "permission_request")).toHaveLength(2));
@@ -270,16 +246,14 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     await secondCall;
     expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running");
 
-    rig.agyChildren[1]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    rig.agyChildren[1]!.finish();
+    end(rig, 1);
     await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(2));
     rig.host.close();
   });
 
-  it("returns to tool_running after a denied bridge approval without reserving a reset", async () => {
+  it("returns to tool_running after a denied tool approval without reserving a reset", async () => {
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-deny");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const call = resetDescriptor(rig).handler({ mode: "new" });
@@ -291,16 +265,14 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running");
     expect(rig.requests).toHaveLength(0);
 
-    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    rig.agyChildren[0]!.finish();
+    end(rig, 0);
     await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
     rig.host.close();
   });
 
-  it("returns to tool_running after a timed-out bridge approval", async () => {
+  it("returns to tool_running after a timed-out tool approval", async () => {
     const rig = await makeRig({ permission_timeout_ms: 10 });
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-timeout");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const result = await resetDescriptor(rig).handler({ mode: "new" });
@@ -308,8 +280,7 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running");
     expect(rig.requests).toHaveLength(0);
 
-    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    rig.agyChildren[0]!.finish();
+    end(rig, 0);
     await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
     rig.host.close();
   });
@@ -320,11 +291,11 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
   // dispatched session_reset_request -- the #395 bug on the opposite side.
   // Checked on both the result-success and result-with-is_error paths.
   it.each([
-    ["result", '{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n'],
-    ["is_error result", '{"event":"result","result":{"status":"ERROR","response":"boom"}}\n'],
+    ["result", "end_turn"],
+    ["is_error result", "max_tokens"],
   ] as const)(
     "delivers the turn's own state_change before the dispatched session_reset_request (%s)",
-    async (_label, stdoutLine) => {
+    async (_label, stopReason) => {
       const rig = await makeRig();
       await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
       await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
@@ -343,8 +314,7 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
       rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
       await call;
 
-      rig.agyChildren[0]!.stdout.write(stdoutLine);
-      rig.agyChildren[0]!.finish();
+      end(rig, 0, stopReason);
 
       await vi.waitFor(() => expect(rig.requests).toHaveLength(1));
       expect(rig.requests[0]).toMatchObject({ mode: "new", reason: "done here" });
@@ -361,7 +331,6 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
   it("a reservation dispatches at its owning turn's end and a subsequent skipped turn does not interfere", async () => {
     const rig = await makeRig({}, (token) => (token === "turn-b" ? null : undefined));
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const reset = resetDescriptor(rig);
@@ -380,8 +349,7 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     await rig.host.send("skip me", undefined, ["cid-b"], "turn-b");
 
     expect(rig.requests).toHaveLength(0);
-    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    rig.agyChildren[0]!.finish();
+    end(rig, 0);
 
     await vi.waitFor(() => expect(rig.requests).toHaveLength(1));
     expect(rig.requests[0]).toMatchObject({ mode: "clear" });
@@ -399,7 +367,6 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
   it("drops a pending reservation, without dispatching, when its turn ends via close()", async () => {
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const reset = resetDescriptor(rig);
@@ -440,7 +407,6 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
   it("a queued unstarted turn's settlement cancels (not freezes) a pending reservation on watchdog fail-stop", async () => {
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const reset = resetDescriptor(rig);
@@ -466,16 +432,9 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     expect(rig.requests).toHaveLength(0);
   });
 
-  it("a session-reset cancellation notice can be the HELD candidate; a peer batch during its probe gets one retryable notice", async () => {
-    let verification = 0;
-    let releaseProbe!: (passed: boolean) => void;
-    const rig = await makeRig({}, undefined, async () => {
-      verification += 1;
-      if (verification !== 2) return true;
-      return new Promise<boolean>((resolve) => { releaseProbe = resolve; });
-    });
+  it("after a gate fault, the dropped reservation's notice and a peer batch are rejected as gate_broken; no process starts", async () => {
+    const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-owner"], "turn-owner");
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
     await markToolRunning(rig);
 
     const call = resetDescriptor(rig).handler({ mode: "new" });
@@ -487,49 +446,40 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     });
     await call;
 
-    rig.agyChildren[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":72,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    unhooked(rig, 0);
     await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
-    await vi.waitFor(() => expect(verification).toBe(2));
     expect(rig.host.state).toBe("error");
+    await vi.waitFor(() => expect(rig.sendRejections.some((event) => event.reason === "gate_broken")).toBe(true));
+    expect(rig.requests).toHaveLength(0);
 
+    const before = rig.sendRejections.length;
     await rig.linkOptions.onInterAgentMessage(peerEnvelope(7));
-    await vi.waitFor(() => expect(rig.sendRejections.length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(rig.sendRejections.length).toBeGreaterThan(before));
     const notices = rig.sent.filter((envelope) => {
       const payload = envelope.payload as { to?: string; error?: { code?: string } };
       return envelope.type === "inter_agent_message" && payload.to === "peer-1" && payload.error?.code === "interrupted";
     });
     expect(notices).toHaveLength(1);
-    expect(notices[0]!.payload).toMatchObject({ error: { code: "interrupted" } });
     expect(rig.acknowledged).not.toContain(7);
-
-    releaseProbe(true);
-    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(2));
-    await vi.waitFor(() => expect(rig.inputs.length).toBeGreaterThan(0));
-    expect(rig.inputs.join("")).toContain("The session reset you reserved");
-    rig.agyChildren[1]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"notice handled"}}\n');
-    rig.agyChildren[1]!.finish();
-    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(2));
-    expect(rig.host.state).toBe("waiting_input");
+    expect(rig.agyChildren).toHaveLength(1);
     rig.host.close();
   });
 
-  it("logs a failed tokenless work-notice candidate once and does not replay it", async () => {
-    let verification = 0;
+  it("logs a rejected tokenless work notice once and does not replay it", async () => {
     const output: string[] = [];
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
       output.push(String(chunk));
       return true;
     });
-    const rig = await makeRig({}, undefined, async () => ++verification === 1);
+    const rig = await makeRig();
     try {
       await rig.host.send("trip", undefined, ["cid-trip"], "trip-token");
-      await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
-      rig.agyChildren[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":541,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+      await vi.waitFor(() => expect(rig.agyChildren[0]?.promptOpen).toBe(true));
+      unhooked(rig, 0);
       await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
       expect(rig.host.state).toBe("error");
 
       rig.linkOptions.onWorkNotice({ notice_id: "notice-541", title: "tokenless-541-marker" });
-      await vi.waitFor(() => expect(verification).toBe(2));
       await vi.waitFor(() => expect(rig.sendRejections.some((event) => event.turnToken === undefined && event.reason === "gate_broken")).toBe(true));
       const lifecycle = output.join("").split("\n")
         .filter((line) => line.startsWith("[kaoiro][antigravity-lifecycle] "))
@@ -539,7 +489,6 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
       expect(failedNotice[0]).toMatchObject({ shape: "no_op", reason: "gate_broken" });
       expect(failedNotice[0]).not.toHaveProperty("turn_token");
       expect(rig.agyChildren).toHaveLength(1);
-      expect(rig.inputs.join("")).not.toContain("tokenless-541-marker");
       expect(output.join("")).not.toContain("tokenless-541-marker");
     } finally {
       rig.host.close();

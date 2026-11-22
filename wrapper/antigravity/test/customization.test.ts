@@ -54,49 +54,103 @@ describe("sweepStaleCustomizationDirs", () => {
   });
 });
 
-describe("subcommand string generation and CustomizationDir", () => {
-  it("quotes entryPath and nodeArgs unconditionally and builds all four surfaces from one prefix", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { CustomizationDir } = await import("../src/customization.js");
-    const { antigravitySubcommandPrefix, shellSingleQuote } = await import("../src/subcommand.js");
+describe("CustomizationDir", () => {
+  const nodeArgs = ["--require", "/tmp/my 'dir'/preload.cjs"];
+  const entryPath = "/opt/kaoiro 'v2' app/dist/kaoiro.js";
 
+  it("writes exactly the managed PreToolUse and Stop hooks, quoting the command, and nothing else", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { CustomizationDir, HOOK_TIMEOUT_SECONDS, STOP_HOOK_TIMEOUT_SECONDS } = await import("../src/customization.js");
+    const { antigravitySubcommandPrefix, shellSingleQuote } = await import("../src/subcommand.js");
     expect(shellSingleQuote("/plain/kaoiro.js")).toBe("'/plain/kaoiro.js'");
     expect(shellSingleQuote("/path with space/it's/kaoiro.js")).toBe("'/path with space/it'\\''s/kaoiro.js'");
-
-    const root = mkdtempSync(join(tmpdir(), "agy-custom-subcommand-"));
-    const cwd = join(root, "workspace");
-    mkdirSync(cwd);
-    const entryPath = "/opt/kaoiro 'v2' app/dist/kaoiro.js";
-    const nodeArgs = ["--require", "/tmp/my 'dir'/preload.cjs"];
-    const dir = CustomizationDir.create({
-      cwd,
-      personaPrompt: "persona",
-      nodePath: "/usr/bin/node",
-      nodeArgs,
-      entryPath,
-    });
+    const dir = CustomizationDir.create({ nodePath: "/usr/bin/node", nodeArgs, entryPath });
     try {
       const hookCmd = antigravitySubcommandPrefix({ nodePath: "/usr/bin/node", nodeArgs, entryPath, subcommand: "hook" });
-      const bridgeCmd = antigravitySubcommandPrefix({ nodePath: "/usr/bin/node", nodeArgs, entryPath, subcommand: "bridge" });
       expect(hookCmd).toBe("/usr/bin/node '--require' '/tmp/my '\\''dir'\\''/preload.cjs' '/opt/kaoiro '\\''v2'\\'' app/dist/kaoiro.js' wrapper antigravity hook");
-      expect(bridgeCmd).toBe("/usr/bin/node '--require' '/tmp/my '\\''dir'\\''/preload.cjs' '/opt/kaoiro '\\''v2'\\'' app/dist/kaoiro.js' wrapper antigravity bridge");
-
-      const hooksJson = JSON.parse(readFileSync(join(dir.path, ".agents", "hooks.json"), "utf8")) as {
-        hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> };
-      };
-      expect(hooksJson.hooks.PreToolUse[0]!.hooks[0]!.command).toBe(hookCmd);
-
-      const agentsMd = readFileSync(join(dir.path, ".agents", "rules", "AGENTS.md"), "utf8");
-      expect(agentsMd).toContain(`  ${bridgeCmd} list`);
-      expect(agentsMd).toContain(`  ${bridgeCmd} call <tool_name> <base64url-json-object>`);
-      expect(agentsMd).toContain("with Cwd set to the working directory and WaitMsBeforeAsync at least 5000.");
-
-      const skillMd = readFileSync(join(dir.path, ".agents", "skills", "kaoiro", "SKILL.md"), "utf8");
-      expect(skillMd).toContain(`- ${bridgeCmd} list`);
-      expect(skillMd).toContain(`- ${bridgeCmd} call <tool_name> <base64url JSON object>`);
+      expect(JSON.parse(readFileSync(join(dir.path, ".agents", "hooks.json"), "utf8"))).toEqual({
+        hooks: {
+          PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: hookCmd, timeout: HOOK_TIMEOUT_SECONDS }] }],
+          Stop: [{ type: "command", command: hookCmd, timeout: STOP_HOOK_TIMEOUT_SECONDS }],
+        },
+      });
+      expect(STOP_HOOK_TIMEOUT_SECONDS).toBe(30);
+      expect(readdirSync(join(dir.path, ".agents"))).toEqual(["hooks.json"]);
     } finally {
       dir.close();
-      rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("verify() reports a changed hooks.json, and rewrite() restores it", async () => {
+    const { CustomizationDir } = await import("../src/customization.js");
+    const dir = CustomizationDir.create({ nodePath: "/usr/bin/node", entryPath: "/k.js" });
+    try {
+      expect(dir.verify()).toBe(true);
+      writeFileSync(join(dir.path, ".agents", "hooks.json"), "{}\n");
+      expect(dir.verify()).toBe(false);
+      dir.rewrite();
+      expect(dir.verify()).toBe(true);
+      rmSync(join(dir.path, ".agents", "hooks.json"));
+      expect(dir.verify()).toBe(false);
+    } finally {
+      dir.close();
+    }
+  });
+});
+
+describe("checkHookList (design 4.3 item 1, D18)", () => {
+  const source = "/c/.agents/hooks.json";
+  const command = "node kaoiro.js wrapper antigravity hook";
+  const managed = (actions?: unknown[], extra: Record<string, unknown> = {}) => ({
+    name: "hooks", enabled: true, source,
+    actions: actions ?? [
+      { event: "PreToolUse", matcher: "*", type: "command", command, timeout_seconds: 3600 },
+      { event: "Stop", type: "command", command, timeout_seconds: 30 },
+    ],
+    ...extra,
+  });
+  const list = (...groups: unknown[]) => ({ command: { name: "hooks", data: { hooks: groups } } });
+
+  it("accepts exactly the two managed registrations, with disabled or non-Stop groups elsewhere", async () => {
+    const { checkHookList } = await import("../src/customization.js");
+    expect(checkHookList(list(managed()), { source, command })).toEqual({ ok: true });
+    expect(checkHookList(list(
+      managed(),
+      { name: "off", enabled: false, source: "/w/.agents/hooks.json", actions: [{ event: "Stop", command: "x" }] },
+      { name: "pre", enabled: true, source: "/g/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: "y" }] },
+    ), { source, command })).toEqual({ ok: true });
+  });
+
+  it.each([
+    ["no managed group", list()],
+    ["two managed groups", list(managed(), managed())],
+    ["the managed group disabled", list(managed(undefined, { enabled: false }))],
+    ["Stop missing", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }]))],
+    ["PreToolUse missing", list(managed([{ event: "Stop", command, timeout_seconds: 30 }]))],
+    ["a third action", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "Stop", command, timeout_seconds: 30 }, { event: "Stop", command, timeout_seconds: 30 }]))],
+    ["two PreToolUse", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }]))],
+    ["another matcher", list(managed([{ event: "PreToolUse", matcher: "run_command", command, timeout_seconds: 3600 }, { event: "Stop", command, timeout_seconds: 30 }]))],
+    ["another PreToolUse command", list(managed([{ event: "PreToolUse", matcher: "*", command: "other", timeout_seconds: 3600 }, { event: "Stop", command, timeout_seconds: 30 }]))],
+    ["another PreToolUse timeout", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 60 }, { event: "Stop", command, timeout_seconds: 30 }]))],
+    ["another Stop command", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "Stop", command: "other", timeout_seconds: 30 }]))],
+    ["another Stop timeout", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "Stop", command, timeout_seconds: 60 }]))],
+    ["an action that is not an object", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, "Stop"]))],
+  ])("refuses %s", async (_label, value) => {
+    const { checkHookList } = await import("../src/customization.js");
+    expect(checkHookList(value, { source, command })).toEqual({ ok: false, reason: "registration_mismatch" });
+  });
+
+  it("refuses another enabled Stop anywhere and names its file", async () => {
+    const { checkHookList } = await import("../src/customization.js");
+    for (const enabled of [true, undefined]) {
+      expect(checkHookList(list(managed(), { name: "foreign", ...(enabled === undefined ? {} : { enabled }), source: "/w/.agents/hooks.json", actions: [{ event: "Stop", command: "x", timeout_seconds: 30 }] }), { source, command }))
+        .toEqual({ ok: false, reason: "foreign_stop_hook:/w/.agents/hooks.json" });
+    }
+  });
+
+  it("finds the groups wherever the list nests them", async () => {
+    const { checkHookList } = await import("../src/customization.js");
+    expect(checkHookList({ a: [{ b: list(managed()) }] }, { source, command })).toEqual({ ok: true });
+    expect(checkHookList(null, { source, command })).toEqual({ ok: false, reason: "registration_mismatch" });
   });
 });

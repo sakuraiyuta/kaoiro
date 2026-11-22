@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.8.0",
     "@kaoiro/agent-common": "workspace:*",
     "@kaoiro/wrapper-core": "workspace:*"
   },

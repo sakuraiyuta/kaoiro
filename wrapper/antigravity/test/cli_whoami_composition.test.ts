@@ -1,64 +1,29 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { EventEmitter } from "node:events";
-import { createConnection } from "node:net";
-import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
-import type { ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
-import { AntigravityHost, type AntigravityHostOptions, type SpawnedAgy } from "../src/host.js";
-import { createHarnessHost } from "./host_test_harness.js";
+import { describe, expect, it } from "vitest";
+import type { WrapperConfig } from "@kaoiro/agent-common";
+import type { AntigravityHost } from "../src/host.js";
 import { runAntigravityCli } from "../src/cli.js";
 import { loadWrapperBuildInfo } from "@kaoiro/wrapper-core";
 import { fileURLToPath } from "node:url";
-import { ToolHost } from "../src/toolhost.js";
 import { expectWhoamiDirectoryName, expectWhoamiDirectoryNameUnavailable } from "../../agent-common/test/whoami_contract.js";
+import { createTestHost, type FakeAgy, type TestHost } from "./acp_fake.js";
 
-class FakeAgy extends EventEmitter {
-  readonly stdout = new PassThrough();
-  readonly stderr = new PassThrough();
-  readonly stdin = new PassThrough();
-  killed: NodeJS.Signals | undefined;
-
-  kill(signal?: NodeJS.Signals): boolean {
-    this.killed = signal;
-    return true;
-  }
-
-  finish(): void {
-    this.stdout.end();
-    this.emit("exit", 0, null);
-    this.emit("close", 0, null);
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!predicate()) {
+    if (performance.now() > deadline) throw new Error("timed out");
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 
-async function callWhoami(toolHost: ToolHost): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const socket = createConnection(toolHost.socketPath);
-    let buffer = "";
-    socket.once("error", reject);
-    socket.on("connect", () => {
-      socket.write(`${JSON.stringify({ id: 1, nonce: toolHost.nonce, method: "call_tool", name: "whoami", input: {} })}\n`);
-    });
-    socket.on("data", (chunk: string | Buffer) => {
-      buffer += chunk.toString("utf8");
-      const newline = buffer.indexOf("\n");
-      if (newline === -1) return;
-      const response = JSON.parse(buffer.slice(0, newline)) as {
-        result?: { content?: { text?: string }[] };
-        error?: unknown;
-      };
-      socket.end();
-      if (response.error) {
-        reject(new Error(JSON.stringify(response.error)));
-        return;
-      }
-      const text = response.result?.content?.[0]?.text;
-      if (!text) {
-        reject(new Error("No text content in whoami response"));
-        return;
-      }
-      resolve(JSON.parse(text) as Record<string, unknown>);
-    });
-  });
+/** whoami over the MCP server the host gave this process at attach. */
+async function callWhoami(agy: FakeAgy): Promise<Record<string, unknown>> {
+  const request = agy.requests.find((q) => q.method === "session/new" || q.method === "session/resume")!;
+  const server = (request.params.mcpServers as { url: string; headers: { name: string; value: string }[] }[])[0]!;
+  const mcp = { url: server.url, headers: Object.fromEntries(server.headers.map((h) => [h.name, h.value])) };
+  const { body } = await agy.callTool("whoami", {}, { mcp });
+  const parsed = JSON.parse(body) as { result?: { content?: { text?: string }[] } };
+  return JSON.parse(parsed.result!.content![0]!.text!) as Record<string, unknown>;
 }
 
 describe("Antigravity CLI whoami composition (issue #418)", () => {
@@ -71,13 +36,11 @@ describe("Antigravity CLI whoami composition (issue #418)", () => {
     };
     const baked = loadWrapperBuildInfo(fileURLToPath(new URL("../dist/build-info.json", import.meta.url)));
     expect(baked.revision).not.toBe("unknown");
-    let hostOptions!: AntigravityHostOptions;
-    let actualHost!: AntigravityHost;
+    let test!: TestHost;
     let hostResolve!: () => void;
     const hostReady = new Promise<void>((resolve) => {
       hostResolve = resolve;
     });
-    const calls: { child: FakeAgy }[] = [];
     let displayName: string | undefined = "Original";
     const link = {
       requestSelfIdentity: async () => displayName === undefined ? null : { agent_id: config.agent_id, display_name: displayName },
@@ -96,55 +59,38 @@ describe("Antigravity CLI whoami composition (issue #418)", () => {
         return link as never;
       },
       createHost: (cfg, options) => {
-        hostOptions = options;
-        actualHost = createHarnessHost(cfg, {
-          ...options,
-          verifyGate: async () => true,
-          agyPath: "/test/agy",
-          spawn: () => {
-            const child = new FakeAgy();
-            calls.push({ child });
-            return child as unknown as SpawnedAgy;
-          },
-        });
+        test = createTestHost(cfg, options);
+        test.onSpawn = (agy) => agy.hold.add("session/new");
         hostResolve();
-        return actualHost;
+        return test.host as AntigravityHost;
       },
     });
 
     await hostReady;
-    const toolHost = await ToolHost.listen(hostOptions.toolDescriptors as ToolDescriptor[]);
-
     try {
-      // Negative control: before the first init event, session_id key is absent
-      const beforeInit = await callWhoami(toolHost);
-      expect(beforeInit).not.toHaveProperty("session_id");
-      expectWhoamiDirectoryName(beforeInit, "Original", config.persona, "antigravity/initial");
+      void test.host.send("hello");
+      await waitFor(() => test.agys[0]?.requests.some((q) => q.method === "session/new") === true);
+      const agy = test.agys[0]!;
+      // Negative control: before the session attached, session_id is absent.
+      const beforeAttach = await callWhoami(agy);
+      expect(beforeAttach).not.toHaveProperty("session_id");
+      expectWhoamiDirectoryName(beforeAttach, "Original", config.persona, "antigravity/initial");
       displayName = "Renamed";
-      expectWhoamiDirectoryName(await callWhoami(toolHost), "Renamed", config.persona, "antigravity/renamed");
+      expectWhoamiDirectoryName(await callWhoami(agy), "Renamed", config.persona, "antigravity/renamed");
       displayName = undefined;
-      expectWhoamiDirectoryNameUnavailable(await callWhoami(toolHost), "antigravity/unavailable");
+      expectWhoamiDirectoryNameUnavailable(await callWhoami(agy), "antigravity/unavailable");
       expect(config.display_name).toBe("Momo");
-      expect(beforeInit.build).toEqual({revision:baked.revision,dirty:baked.dirty,version:baked.version,channel:baked.channel,
+      expect(beforeAttach.build).toEqual({revision:baked.revision,dirty:baked.dirty,version:baked.version,channel:baked.channel,
         ...(baked.branch === undefined ? {} : {branch:baked.branch})});
 
-      // Deliver turn input and emit the first init event with conversation_id
-      const sendPromise = actualHost.send("hello");
-      await vi.waitFor(() => expect(calls.length).toBe(1));
-      const call = calls[0]!;
-      call.child.stdout.write('{"event":"init","conversation_id":"cid-issue-418","init":{"tools":[]}}\n');
-      call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      call.child.finish();
-      await sendPromise;
-
-      // Positive check: after init event, session_id matches the conversation id
-      const afterInit = await callWhoami(toolHost);
-      expect(afterInit).toMatchObject({
-        session_id: "cid-issue-418",
-      });
+      agy.release("session/new");
+      await waitFor(() => agy.promptOpen);
+      // After attach, session_id is the engine's session.
+      expect(await callWhoami(agy)).toMatchObject({ session_id: agy.sessionId });
+      agy.respond("end_turn");
     } finally {
-      toolHost.close();
-      actualHost.close();
+      await test.host.close();
+      for (const agy of test.agys) agy.exit(0);
       await cliPromise;
     }
   });

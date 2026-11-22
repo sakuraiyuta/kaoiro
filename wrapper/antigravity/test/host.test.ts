@@ -1,4326 +1,1178 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { antigravitySubcommandPrefix } from "../src/subcommand.js";
-import { selfCommand } from "@kaoiro/wrapper-core";
-import { RecoveryReporter, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
-import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
-import { createHash } from "node:crypto";
-import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { PermissionBroker, QuestionBroker, classifyInterAgentError, type Envelope, type InterAgentErrorClassifyInput, type WrapperConfig } from "@kaoiro/agent-common";
-import { parseAgyStreamLine } from "../src/adapter.js";
-import { AntigravityHost, initialStatusExt, isGateRegistered, type AntigravityHostOptions, type GateProbe, type SpawnedAgy } from "../src/host.js";
-import { createHarnessHost } from "./host_test_harness.js";
-import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "../src/gate.js";
-import { ToolHost } from "../src/toolhost.js";
-import type { PermissionSyncMessage } from "@kaoiro/protocol";
-
-class FakeAgy extends EventEmitter {
-  readonly stdout = new PassThrough();
-  readonly stderr = new PassThrough();
-  readonly stdin = new PassThrough();
-  killed: NodeJS.Signals | undefined;
-
-  kill(signal?: NodeJS.Signals): boolean {
-    this.killed = signal;
-    return true;
-  }
-
-  finish(): void {
-    this.stdout.end();
-    this.emit("exit", 0, null);
-    this.emit("close", 0, null);
-  }
-}
+import { afterEach, describe, expect, it } from "vitest";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { nonInteractiveToolEnv } from "../src/tool_child_env.js";
+import { createTestHost, fakeHookList, hookGroups, type FakeAgy, type TestHost } from "./acp_fake.js";
 
 function config(overrides: Partial<WrapperConfig> = {}): WrapperConfig {
   return {
     agent_id: "a1",
-    persona: { id: "momo", name: "もも", sprite_set: "momo" },
-    display_name: "もも",
+    persona: { id: "p", name: "P", sprite_set: "p" },
+    display_name: "P",
     server_url: "ws://localhost:4000",
     sandbox: "workspace-write",
+    approval: "on-request",
     network_access: false,
     ...overrides,
-  };
+  } as WrapperConfig;
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let index = 0; index < 100; index += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  throw new Error("timed out waiting for host");
-}
-
-async function waitForDefaultChild(
-  predicate: () => boolean,
-  diagnostic: () => Record<string, unknown>,
-): Promise<void> {
-  const deadline = performance.now() + 2_000;
+async function waitFor(predicate: () => boolean, diagnostic: () => unknown = () => "", timeoutMs = 5_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error(`timed out waiting for default child: ${JSON.stringify(diagnostic())}`);
+  throw new Error(`timed out: ${JSON.stringify(diagnostic())}`);
 }
 
-function hostHarness(options: {
-  recovery?: RecoveryReporter;
-  onSessionId?: AntigravityHostOptions["onSessionId"];
-  resumeSessionId?: string;
-  dangerouslySkipPermissions?: boolean;
-  verifyGate?: boolean | (() => Promise<boolean>);
-  config?: WrapperConfig;
-  now?: () => string;
-  onTurnEnd?: AntigravityHostOptions["onTurnEnd"];
-  onTurnStart?: AntigravityHostOptions["onTurnStart"];
-  onSendRejected?: AntigravityHostOptions["onSendRejected"];
-  onGateRecoveryLifecycle?: AntigravityHostOptions["onGateRecoveryLifecycle"];
-  warn?: AntigravityHostOptions["warn"];
-  prepareInput?: AntigravityHostOptions["prepareInput"];
-  onState?: AntigravityHostOptions["onState"];
-  onInterruptSettled?: AntigravityHostOptions["onInterruptSettled"];
-  onToolStart?: AntigravityHostOptions["onToolStart"];
-  onToolEnd?: AntigravityHostOptions["onToolEnd"];
-  permissionSyncSupported?: boolean;
-  waitForPermissionSync?: () => Promise<void>;
-  toolHostListen?: AntigravityHostOptions["toolHostListen"];
-  gateServerListen?: AntigravityHostOptions["gateServerListen"];
-  permissionBroker?: PermissionBroker;
-  spawn?: AntigravityHostOptions["spawn"];
-} = {}) {
-  const states: Envelope[] = [];
-  const logs: Envelope[] = [];
-  const permissionLifecycle: unknown[] = [];
-  const calls: { command: string; args: string[]; env: NodeJS.ProcessEnv; child: FakeAgy }[] = [];
-  const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-  const interruptRequests: Array<Parameters<NonNullable<AntigravityHostOptions["onInterruptRequested"]>>[0]> = [];
-  const interruptSettlements: Array<Parameters<NonNullable<AntigravityHostOptions["onInterruptSettled"]>>[0]> = [];
-  const sendRejections: Array<Parameters<NonNullable<AntigravityHostOptions["onSendRejected"]>>[0]> = [];
-  const outOfTurnEvents: Array<Parameters<NonNullable<AntigravityHostOptions["onOutOfTurnEvent"]>>[0]> = [];
-  const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
-  const gateRecoveryLifecycle: Array<Parameters<NonNullable<AntigravityHostOptions["onGateRecoveryLifecycle"]>>[0]> = [];
-  const warnings: string[] = [];
-  const cfg = options.config ?? config();
-  const broker = options.permissionBroker ?? new PermissionBroker({ config: cfg, send: () => {} });
-  const host = createHarnessHost(cfg, {
-    ...(options.recovery === undefined ? {} : { recovery: options.recovery }),
-    ...(options.onSessionId === undefined ? {} : { onSessionId: options.onSessionId }),
-    cwd: process.cwd(),
-    appendSystemPrompt: "persona",
-    permissionBroker: broker,
-    onState: (envelope) => {
-      states.push(envelope);
-      options.onState?.(envelope);
-    },
-    onLog: (envelope) => logs.push(envelope),
-    onPermissionLifecycle: (event) => permissionLifecycle.push(event),
-    verifyGate: async () => typeof options.verifyGate === "function" ? options.verifyGate() : options.verifyGate ?? true,
-    ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
-    ...(options.dangerouslySkipPermissions === undefined ? {} : { dangerouslySkipPermissions: options.dangerouslySkipPermissions }),
-    agyPath: "/test/agy",
-    ...(options.now === undefined ? {} : { now: options.now }),
-    onTurnEnd: (info) => {
-      turnEnds.push(info);
-      options.onTurnEnd?.(info);
-    },
-    ...(options.onTurnStart === undefined ? {} : { onTurnStart: options.onTurnStart }),
-    ...(options.prepareInput === undefined ? {} : { prepareInput: options.prepareInput }),
-    ...(options.onToolStart === undefined ? {} : { onToolStart: options.onToolStart }),
-    ...(options.onToolEnd === undefined ? {} : { onToolEnd: options.onToolEnd }),
-    ...(options.permissionSyncSupported === undefined ? {} : { permissionSyncSupported: options.permissionSyncSupported }),
-    ...(options.waitForPermissionSync === undefined ? {} : { waitForPermissionSync: options.waitForPermissionSync }),
-    ...(options.toolHostListen === undefined ? {} : { toolHostListen: options.toolHostListen }),
-    ...(options.gateServerListen === undefined ? {} : { gateServerListen: options.gateServerListen }),
-    onInterruptRequested: (info) => interruptRequests.push(info),
-    onInterruptSettled: (info) => {
-      interruptSettlements.push(info);
-      options.onInterruptSettled?.(info);
-    },
-    onSendRejected: (info) => {
-      sendRejections.push(info);
-      options.onSendRejected?.(info);
-    },
-    onGateRecoveryLifecycle: (info) => {
-      gateRecoveryLifecycle.push(info);
-      options.onGateRecoveryLifecycle?.(info);
-    },
-    onOutOfTurnEvent: (info) => outOfTurnEvents.push(info),
-    onEpochEnded: (info) => epochEnded.push(info),
-    warn: (message) => {
-      warnings.push(message);
-      options.warn?.(message);
-    },
-    spawn: options.spawn ?? ((command, args, spawnOptions) => {
-      const child = new FakeAgy();
-      calls.push({ command, args, env: spawnOptions.env, child });
-      return child as unknown as SpawnedAgy;
-    }),
-  });
-  return { host, states, logs, calls, permissionLifecycle, turnEnds, interruptRequests, interruptSettlements, sendRejections, outOfTurnEvents, epochEnded, gateRecoveryLifecycle, warnings };
+interface Recorded {
+  test: TestHost;
+  states: Envelope[];
+  logs: Envelope[];
+  acks: string[];
+  ends: { turnToken: string; error?: { reason?: string; detail?: string }; cancellation?: unknown; terminal: boolean }[];
+  rejected: { turnToken?: string; reason: string }[];
+  outOfTurn: { eventKind: string; callId?: string }[];
+  progress: string[];
+  faults: { reason: string; detail: string }[];
+  results(): Record<string, any>[];
 }
 
-describe("AntigravityHost", () => {
-  it.each([undefined, "", "1", "legacy"])("marks the CLI child and omits CODEX_HOME with parent marker %s", async marker => {
-    vi.stubEnv("CODEX_HOME", "/tmp/fuji464-hostile");
-    vi.stubEnv("KAOIRO_AGENT", marker);
-    try {
-      const { host, calls } = hostHarness();
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      expect(calls[0]?.env.CODEX_HOME).toBeUndefined();
-      expect(calls[0]?.env.KAOIRO_AGENT).toBe("1");
-      expect(process.env.KAOIRO_AGENT).toBe(marker);
-      calls[0]?.child.finish();
-      host.close();
-    } finally { vi.unstubAllEnvs(); }
+const hosts: TestHost[] = [];
+
+afterEach(async () => {
+  for (const test of hosts.splice(0)) {
+    for (const agy of test.agys) agy.exit(0);
+    await test.host.close();
+  }
+});
+
+function setup(overrides: Partial<WrapperConfig> = {}, options: Record<string, unknown> = {}): Recorded {
+  const recorded = {
+    states: [] as Envelope[],
+    logs: [] as Envelope[],
+    acks: [] as string[],
+    ends: [] as Recorded["ends"],
+    rejected: [] as Recorded["rejected"],
+    outOfTurn: [] as Recorded["outOfTurn"],
+    progress: [] as string[],
+    faults: [] as Recorded["faults"],
+  } as Recorded;
+  recorded.test = createTestHost(config(overrides), {
+    onState: (envelope) => recorded.states.push(envelope),
+    onLog: (envelope) => recorded.logs.push(envelope),
+    onTurnStart: ({ turnToken }) => recorded.acks.push(turnToken),
+    onTurnEnd: (info) => recorded.ends.push(info as never),
+    onSendRejected: (info) => recorded.rejected.push(info),
+    onOutOfTurnEvent: (info) => recorded.outOfTurn.push(info),
+    onTurnProgress: ({ turnToken }) => recorded.progress.push(turnToken),
+    onGateFault: (info) => recorded.faults.push(info),
+    abortGraceMs: 200,
+    closeGraceMs: 50,
+    preAckBoundMs: 2_000,
+    ...options,
   });
-  it.each([
-    ["bridge", "native"],
-    ["native", "bridge"],
-  ] as const)("coalesces overlapping permission waits in %s then %s order", async (first, second) => {
-    const { host, calls, states } = hostHarness();
-    await host.send("hello", undefined, ["cid"], "turn-lease");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => states.at(-1)?.state === "tool_running");
-
-    const firstLease = host.beginPermissionWaitLease("turn-lease", first);
-    expect(firstLease).not.toBeNull();
-    const afterFirst = states.filter((envelope) => envelope.state === "waiting_permission").length;
-    const secondLease = host.beginPermissionWaitLease("turn-lease", second);
-    expect(secondLease).not.toBeNull();
-    expect(states.filter((envelope) => envelope.state === "waiting_permission")).toHaveLength(afterFirst);
-
-    host.endPermissionWaitLease(firstLease!);
-    expect(states.at(-1)?.state).toBe("waiting_permission");
-    host.endPermissionWaitLease(secondLease!);
-    expect(states.at(-1)?.state).toBe("tool_running");
-
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => states.at(-1)?.state === "waiting_input");
-    host.close();
-  });
-
-  it("a failed gate smoke probe rejects its candidate, then a later passing probe recovers to waiting_input", async () => {
-    let verification = 0;
-    const { host, logs, calls, sendRejections, gateRecoveryLifecycle } = hostHarness({
-      verifyGate: async () => ++verification !== 2,
-    });
-    await host.send("trip");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(host.state).toBe("error");
-
-    await host.send("failed candidate", undefined, ["cid-failed"], "failed-candidate");
-    await waitFor(() => sendRejections.some((item) => item.turnToken === "failed-candidate"));
-    expect(sendRejections.find((item) => item.turnToken === "failed-candidate")).toMatchObject({ reason: "gate_broken", conversationIds: ["cid-failed"] });
-    expect(host.state).toBe("error");
-    expect(calls).toHaveLength(1);
-
-    await host.send("successful candidate", undefined, ["cid-good"], "good-candidate");
-    await waitFor(() => calls.length === 2);
-    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
-    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 2);
-    expect(host.state).toBe("waiting_input");
-    expect(gateRecoveryLifecycle.map((event) => event.probeResult)).toContain("failed");
-    expect(gateRecoveryLifecycle.map((event) => event.probeResult)).toContain("passed");
-    calls[1]!.child.finish();
-    host.close();
-  });
-
-  it("re-latching after a failed recovery delivery rejects inputs accepted during the cleared window", async () => {
-    class EpipeAgy extends EventEmitter {
-      readonly stdout = new PassThrough();
-      readonly stderr = new PassThrough();
-      readonly stdin = {
-        write: (_chunk: string, callback: (error?: Error | null) => void): boolean => {
-          queueMicrotask(() => callback(new Error("EPIPE")));
-          return true;
-        },
-        end: (): void => {},
-        on: (): void => {},
-        once: (): void => {},
-      } as unknown as NodeJS.WritableStream;
-      killed: NodeJS.Signals | undefined;
-
-      kill(signal?: NodeJS.Signals): boolean {
-        this.killed = signal;
-        setTimeout(() => this.finish(signal), 0);
-        return true;
-      }
-
-      finish(signal?: NodeJS.Signals): void {
-        this.stdout.end();
-        this.stderr.end();
-        this.emit("exit", signal === undefined ? 0 : null, signal ?? null);
-        this.emit("close", signal === undefined ? 0 : null, signal ?? null);
-      }
-    }
-
-    const spawned: Array<FakeAgy | EpipeAgy> = [];
-    const rejected: Array<{ turnToken?: string; conversationIds?: readonly string[]; reason: string }> = [];
-    const turnEnds: string[] = [];
-    const recoveryEvents: Array<{ event: string; probeResult: string; detail: string }> = [];
-    let hostRef: AntigravityHost | undefined;
-    let acceptedDuringWindow = false;
-    let sentReentrant = false;
-    const cfg = config();
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(),
-      appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {},
-      onLog: () => {},
-      onTurnStart: ({ turnToken }) => { turnEnds.push(`start:${turnToken}`); },
-      onTurnEnd: ({ turnToken }) => { turnEnds.push(`end:${turnToken}`); },
-      onSendRejected: (info) => {
-        rejected.push(info);
-        if (info.turnToken === "queued-bad") throw new Error("fixture rejection callback failure");
-        if (info.turnToken === "queued-good" && !sentReentrant) {
-          sentReentrant = true;
-          void hostRef!.send("reentrant during queue rejection", undefined, ["cid-reentrant"], "reentrant-token");
-        }
-      },
-      onGateRecoveryLifecycle: (event) => {
-        recoveryEvents.push(event);
-        if (event.event === "gate_recovery" && event.probeResult === "passed" && !acceptedDuringWindow) {
-          acceptedDuringWindow = true;
-          void hostRef!.send("accepted during recovery delivery", undefined, ["cid-queued-bad"], "queued-bad");
-          void hostRef!.send("second input accepted during recovery delivery", undefined, ["cid-queued-good"], "queued-good");
-        }
-      },
-      verifyGate: async () => true,
-      agyPath: "/test/agy",
-      closeGraceMs: 5,
-      spawn: () => {
-        const child = spawned.length === 1 ? new EpipeAgy() : new FakeAgy();
-        spawned.push(child);
-        return child as unknown as SpawnedAgy;
-      },
-    });
-    hostRef = host;
-
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => spawned.length === 1);
-    spawned[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => (spawned[0] as FakeAgy).killed === "SIGTERM");
-    (spawned[0] as FakeAgy).finish();
-    await waitFor(() => turnEnds.includes("end:trip-token"));
-
-    await host.send("recovery candidate", undefined, ["cid-candidate"], "candidate-token");
-    await waitFor(() => rejected.some((item) => item.turnToken === "candidate-token"));
-    expect(rejected).toContainEqual({ turnToken: "queued-bad", conversationIds: ["cid-queued-bad"], reason: "gate_broken" });
-    expect(rejected).toContainEqual({ turnToken: "queued-good", conversationIds: ["cid-queued-good"], reason: "gate_broken" });
-    expect(rejected).toContainEqual({ turnToken: "reentrant-token", conversationIds: ["cid-reentrant"], reason: "gate_broken" });
-    expect(rejected.filter((item) => item.turnToken === "queued-good")).toHaveLength(1);
-    expect(host.state).toBe("error");
-    expect(turnEnds.filter((entry) => entry === "start:queued-bad" || entry === "start:queued-good" || entry === "start:reentrant-token")).toEqual([]);
-    expect(recoveryEvents).toContainEqual(expect.objectContaining({ event: "gate_recovery", probeResult: "failed", detail: "epoch_exit_before_turn" }));
-
-    await host.send("later input must make progress", undefined, ["cid-later"], "later-token");
-    await waitFor(() => spawned.length === 3);
-    expect(turnEnds).toContain("start:later-token");
-    spawned[2]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
-    await waitFor(() => turnEnds.includes("end:later-token"));
-    expect(host.state).toBe("waiting_input");
-    spawned[2]!.finish();
-    host.close();
-  }, 10_000);
-
-  it("rejects a recovery candidate whose replacement epoch dies before its write is acknowledged", async () => {
-    class NoAckAgy extends EventEmitter {
-      readonly stdout = new PassThrough();
-      readonly stderr = new PassThrough();
-      writeCalls = 0;
-      readonly stdin = {
-        write: (_chunk: string, _callback: (error?: Error | null) => void): boolean => {
-          this.writeCalls += 1;
-          return true;
-        },
-        end: (): void => {},
-        on: (): void => {},
-        once: (): void => {},
-      } as unknown as NodeJS.WritableStream;
-
-      kill(): boolean { return true; }
-
-      finish(): void {
-        this.stdout.end();
-        this.stderr.end();
-        this.emit("exit", 1, null);
-        this.emit("close", 1, null);
-      }
-    }
-
-    const spawned: Array<FakeAgy | NoAckAgy> = [];
-    const starts: string[] = [];
-    const rejected: Array<{ turnToken?: string; reason: string }> = [];
-    const recoveryEvents: Array<{ event: string; probeResult: string; detail: string }> = [];
-    const cfg = config();
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(),
-      appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {},
-      onLog: () => {},
-      onTurnStart: ({ turnToken }) => starts.push(turnToken),
-      onTurnEnd: () => {},
-      onSendRejected: (event) => rejected.push(event),
-      onGateRecoveryLifecycle: (event) => recoveryEvents.push(event),
-      verifyGate: async () => true,
-      agyPath: "/test/agy",
-      spawn: () => {
-        const child = spawned.length === 0 ? new FakeAgy() : new NoAckAgy();
-        spawned.push(child);
-        return child as unknown as SpawnedAgy;
-      },
-    });
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => spawned.length === 1);
-    spawned[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => (spawned[0] as FakeAgy).killed === "SIGTERM");
-    (spawned[0] as FakeAgy).finish();
-
-    await host.send("candidate", undefined, ["cid-candidate"], "candidate-token");
-    await waitFor(() => spawned.length === 2 && (spawned[1] as NoAckAgy).writeCalls === 1);
-    (spawned[1] as NoAckAgy).finish();
-    await waitFor(() => rejected.some((event) => event.turnToken === "candidate-token"));
-    expect(rejected.find((event) => event.turnToken === "candidate-token")).toMatchObject({ reason: "gate_broken" });
-    expect(recoveryEvents).toContainEqual(expect.objectContaining({ event: "gate_recovery", probeResult: "failed", detail: "epoch_exit_before_turn" }));
-    expect(starts).not.toContain("candidate-token");
-    expect(host.state).toBe("error");
-    await host.close();
-  });
-
-  it("deduplicates the same fault key and records a distinct fault after recovery", async () => {
-    const starts: string[] = [];
-    const { host, calls, gateRecoveryLifecycle } = hostHarness({ onTurnStart: ({ turnToken }) => starts.push(turnToken) });
-    const duplicate = '{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n';
-    await host.send("trip once");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write(duplicate);
-    calls[0]!.child.stdout.write(duplicate);
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_fault")).toHaveLength(1);
-    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_fault")[0]).toMatchObject({ tripCount: 1 });
-    calls[0]!.child.finish();
-
-    await host.send("recover");
-    await waitFor(() => calls.length === 2);
-    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
-    await waitFor(() => gateRecoveryLifecycle.some((event) => event.event === "gate_recovery" && event.probeResult === "passed"));
-    await waitFor(() => host.state === "waiting_input");
-
-    await host.send("distinct fault after recovery", undefined, [], "distinct-token");
-    await waitFor(() => starts.includes("distinct-token"));
-    calls[1]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":9,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[1]!.child.killed === "SIGTERM");
-    const faults = gateRecoveryLifecycle.filter((event) => event.event === "gate_fault");
-    expect(faults).toHaveLength(2);
-    expect(faults.map((event) => event.tripCount)).toEqual([1, 2]);
-    calls[1]!.child.finish();
-    await host.close();
-  });
-
-  it("accepts a re-entrant recovery candidate from the tripping turn's end callback", async () => {
-    const events: string[] = [];
-    let hostRef: AntigravityHost | undefined;
-    let candidateQueued = false;
-    const { host, calls, gateRecoveryLifecycle } = hostHarness({
-      onTurnStart: ({ turnToken }) => events.push(`start:${turnToken}`),
-      onTurnEnd: ({ turnToken }) => {
-        events.push(`end:${turnToken}`);
-        if (turnToken === "trip-token" && !candidateQueued) {
-          candidateQueued = true;
-          void hostRef!.send("from turn-end callback", undefined, ["cid-candidate"], "candidate-token");
-        }
-      },
-    });
-    hostRef = host;
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => calls.length === 2);
-    expect(events.indexOf("end:trip-token")).toBeLessThan(events.indexOf("start:candidate-token"));
-    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
-    await waitFor(() => events.includes("end:candidate-token"));
-    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_recovery" && event.probeResult === "passed")).toHaveLength(1);
-    expect(host.state).toBe("waiting_input");
-    calls[1]!.child.finish();
-    await host.close();
-  });
-
-  it("classifies replacement-child launch failure and rejects the recovery candidate", async () => {
-    const spawned: FakeAgy[] = [];
-    const starts: string[] = [];
-    const ends: string[] = [];
-    const rejected: Array<{ turnToken?: string; reason: string }> = [];
-    const recoveryEvents: Array<{ event: string; probeResult: string }> = [];
-    const cfg = config();
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(),
-      appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {},
-      onLog: () => {},
-      onTurnStart: ({ turnToken }) => starts.push(turnToken),
-      onTurnEnd: ({ turnToken }) => ends.push(turnToken),
-      onSendRejected: (event) => rejected.push(event),
-      onGateRecoveryLifecycle: (event) => recoveryEvents.push(event),
-      verifyGate: async () => true,
-      agyPath: "/test/agy",
-      spawn: () => {
-        if (spawned.length === 1) throw Object.assign(new Error("replacement child missing"), { code: "ENOENT" });
-        const child = new FakeAgy();
-        spawned.push(child);
-        return child as unknown as SpawnedAgy;
-      },
-    });
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => spawned.length === 1);
-    spawned[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => spawned[0]!.killed === "SIGTERM");
-    spawned[0]!.finish();
-    await waitFor(() => ends.includes("trip-token"));
-
-    await host.send("replacement must be rejected", undefined, ["cid-candidate"], "candidate-token");
-    await waitFor(() => rejected.some((event) => event.turnToken === "candidate-token"));
-    expect(rejected.find((event) => event.turnToken === "candidate-token")).toMatchObject({ reason: "gate_broken" });
-    expect(recoveryEvents).toContainEqual(expect.objectContaining({ event: "gate_recovery", probeResult: "child_launch_failed" }));
-    expect(spawned).toHaveLength(1);
-    expect(starts).not.toContain("candidate-token");
-    expect(host.state).toBe("error");
-    await host.close();
-  });
-
-  it.each([
-    ["epoch death", "antigravity_cli_spawn_failure: recovery child died"],
-    ["missing result", "agy_exit_without_result"],
-  ])("keeps post-ack %s on the ordinary turn-error path", async (failure, expectedDetail) => {
-    const starts: string[] = [];
-    const { host, calls, turnEnds, sendRejections, gateRecoveryLifecycle } = hostHarness({
-      onTurnStart: ({ turnToken }) => starts.push(turnToken),
-    });
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => turnEnds.some((event) => event.turnToken === "trip-token"));
-
-    await host.send("recovery candidate", undefined, ["cid-candidate"], "candidate-token");
-    await waitFor(() => calls.length === 2 && starts.includes("candidate-token"));
-    if (failure === "epoch death") calls[1]!.child.emit("error", new Error("recovery child died"));
-    calls[1]!.child.finish();
-    await waitFor(() => turnEnds.some((event) => event.turnToken === "candidate-token"));
-    expect(turnEnds.find((event) => event.turnToken === "candidate-token")?.error).toEqual({ detail: expectedDetail });
-    expect(sendRejections.some((event) => event.turnToken === "candidate-token")).toBe(false);
-    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_recovery" && event.probeResult === "failed")).toHaveLength(0);
-
-    await host.send("later turn", undefined, ["cid-later"], "later-token");
-    await waitFor(() => calls.length === 3 && starts.includes("later-token"));
-    calls[2]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"later turn ran"}}\n');
-    calls[2]!.child.finish();
-    await waitFor(() => turnEnds.some((event) => event.turnToken === "later-token"));
-    expect(host.state).toBe("waiting_input");
-    await host.close();
-  });
-
-  it("keeps a thrown post-ack onTurnStart callback on the ordinary turn-error path", async () => {
-    const starts: string[] = [];
-    const { host, calls, turnEnds, sendRejections, gateRecoveryLifecycle } = hostHarness({
-      onTurnStart: ({ turnToken }) => {
-        starts.push(turnToken);
-        if (turnToken === "candidate-token") throw new Error("onTurnStart boom");
-      },
-    });
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => turnEnds.some((event) => event.turnToken === "trip-token"));
-
-    await host.send("recovery candidate", undefined, ["cid-candidate"], "candidate-token");
-    await waitFor(() => starts.includes("candidate-token") && turnEnds.some((event) => event.turnToken === "candidate-token"));
-    expect(turnEnds.find((event) => event.turnToken === "candidate-token")?.error).toEqual({ detail: "onTurnStart boom" });
-    expect(sendRejections.some((event) => event.turnToken === "candidate-token")).toBe(false);
-    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_recovery" && event.probeResult === "failed")).toHaveLength(0);
-    calls[1]!.child.finish();
-    await host.close();
-  });
-
-  it("settles a PROBING recovery candidate once when close cancels its smoke test", async () => {
-    let verification = 0;
-    const { host, calls, turnEnds } = hostHarness({
-      verifyGate: async () => {
-        verification += 1;
-        if (verification === 1) return true;
-        return new Promise<boolean>(() => {});
-      },
-    });
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => turnEnds.some((event) => event.turnToken === "trip-token"));
-
-    await host.send("candidate", undefined, ["cid-candidate"], "candidate-token");
-    await waitFor(() => verification === 2);
-    await host.close();
-    await waitFor(() => turnEnds.some((event) => event.turnToken === "candidate-token"));
-    expect(turnEnds.filter((event) => event.turnToken === "candidate-token")).toHaveLength(1);
-    expect(calls).toHaveLength(1);
-  });
-
-  it("keeps a PROBING candidate from spawning after watchdog fail-stop", async () => {
-    let verification = 0;
-    const { host, calls, turnEnds, sendRejections } = hostHarness({
-      verifyGate: async () => {
-        verification += 1;
-        if (verification === 1) return true;
-        return new Promise<boolean>(() => {});
-      },
-    });
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => turnEnds.some((event) => event.turnToken === "trip-token"));
-
-    await host.send("candidate", undefined, ["cid-candidate"], "candidate-token");
-    await waitFor(() => verification === 2);
-    expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
-    await host.send("after fail-stop", undefined, ["cid-after"], "after-token");
-    expect(sendRejections.find((event) => event.turnToken === "after-token")).toMatchObject({ reason: "watchdog_fail_stopped" });
-    expect(calls).toHaveLength(1);
-    expect(turnEnds.filter((event) => event.turnToken === "candidate-token")).toHaveLength(0);
-  });
-
-  it("gate probation survives an is_error result and an epoch restart, making the next fault sticky", async () => {
-    let verification = 0;
-    const { host, logs, calls, gateRecoveryLifecycle } = hostHarness({
-      verifyGate: async () => { verification += 1; return true; },
-    });
-    await host.send("trip");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-
-    await host.send("recovery candidate");
-    await waitFor(() => calls.length === 2);
-    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","response":"not clean"}}\n');
-    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 2);
-    expect(host.state).toBe("waiting_input");
-    calls[1]!.child.finish();
-    await waitFor(() => host.state === "waiting_input");
-
-    await host.send("next epoch");
-    await waitFor(() => calls.length === 3);
-    calls[2]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":9,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[2]!.child.killed === "SIGTERM");
-    calls[2]!.child.finish();
-    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 3);
-    expect(gateRecoveryLifecycle.at(-1)).toMatchObject({
-      event: "gate_fault",
-      faultClass: "tool_completion_unobserved",
-      probeResult: "not_run_sticky",
-      tripCount: 2,
-    });
-    expect(verification).toBe(3);
-    await host.send("sticky rejects");
-    expect(host.state).toBe("error");
-    expect(calls).toHaveLength(3);
-    host.close();
-  });
-
-  it("a latched gate fault remains publicly visible across an unrelated state publication", async () => {
-    const { host, calls, states } = hostHarness();
-    await host.send("trip");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => host.state === "error");
-
-    host.renameDisplayName("renamed while latched", 1);
-    expect(host.state).toBe("error");
-    expect(states.at(-1)?.state).toBe("error");
-    host.close();
-  });
-
-  it("one clean success clears gate probation for a later epoch", async () => {
-    let verification = 0;
-    const { host, logs, calls, gateRecoveryLifecycle } = hostHarness({
-      verifyGate: async () => { verification += 1; return true; },
-    });
-    await host.send("trip");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-
-    await host.send("recovery candidate");
-    await waitFor(() => calls.length === 2);
-    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"clean"}}\n');
-    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 2);
-    expect(host.state).toBe("waiting_input");
-    calls[1]!.child.finish();
-    await waitFor(() => host.state === "waiting_input");
-
-    await host.send("next epoch");
-    await waitFor(() => calls.length === 3);
-    calls[2]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":9,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[2]!.child.killed === "SIGTERM");
-    calls[2]!.child.finish();
-    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 3);
-    expect(gateRecoveryLifecycle.at(-1)).toMatchObject({ event: "gate_fault", probeResult: "started", tripCount: 2 });
-
-    await host.send("recovery remains available");
-    await waitFor(() => calls.length === 4);
-    calls[3]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"again"}}\n');
-    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 4);
-    expect(verification).toBe(4);
-    calls[3]!.child.finish();
-    host.close();
-  });
-
-  it("an interrupt during recovery probing stays stale/interrupted instead of recovery_rejected", async () => {
-    let verification = 0;
-    let releaseProbe!: (passed: boolean) => void;
-    const { host, calls, logs, turnEnds, sendRejections } = hostHarness({
-      verifyGate: async () => {
-        verification += 1;
-        if (verification !== 2) return true;
-        return new Promise<boolean>((resolve) => { releaseProbe = resolve; });
-      },
-    });
-    await host.send("trip");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-
-    await host.send("interruptible candidate", undefined, ["cid-probe"], "probe-candidate");
-    await waitFor(() => verification === 2);
-    await host.interrupt();
-    await waitFor(() => turnEnds.some((end) => end.turnToken === "probe-candidate"));
-    expect(turnEnds.find((end) => end.turnToken === "probe-candidate")?.error).toEqual({ reason: "interrupted" });
-    expect(sendRejections.some((item) => item.turnToken === "probe-candidate")).toBe(false);
-    releaseProbe(true);
-    expect(calls).toHaveLength(1);
-    host.close();
-  });
-
-  it("recovery attempt budget resets at exactly 60,000 ms", async () => {
-    let nowMs = Date.parse("2026-10-09T00:00:00.000Z");
-    let verification = 0;
-    const { host, logs, calls, sendRejections, gateRecoveryLifecycle } = hostHarness({
-      now: () => new Date(nowMs).toISOString(),
-      verifyGate: async () => { verification += 1; return verification === 1 || verification >= 7; },
-    });
-    await host.send("trip");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-
-    for (let attempt = 1; attempt <= 5; attempt += 1) {
-      await host.send(`failed probe ${attempt}`, undefined, [], `failed-${attempt}`);
-      await waitFor(() => sendRejections.some((item) => item.turnToken === `failed-${attempt}`));
-      expect(gateRecoveryLifecycle.at(-1)?.probeResult).toBe("failed");
-    }
-    expect(verification).toBe(6);
-
-    nowMs += 60_000;
-    await host.send("boundary probe", undefined, [], "boundary-candidate");
-    await waitFor(() => calls.length === 2);
-    expect(verification).toBe(7);
-    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"boundary passed"}}\n');
-    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 2);
-    expect(host.state).toBe("waiting_input");
-    calls[1]!.child.finish();
-    host.close();
-  });
-
-  it("blocks a sixth recovery probe inside the same 60-second window", async () => {
-    let verification = 0;
-    const { host, logs, calls, sendRejections, gateRecoveryLifecycle } = hostHarness({
-      verifyGate: async () => { verification += 1; return verification === 1; },
-    });
-    await host.send("trip");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-
-    for (let attempt = 1; attempt <= 6; attempt += 1) {
-      await host.send(`probe ${attempt}`, undefined, [], `budget-${attempt}`);
-      await waitFor(() => sendRejections.some((item) => item.turnToken === `budget-${attempt}`));
-    }
-    expect(verification).toBe(6);
-    expect(gateRecoveryLifecycle.at(-1)).toMatchObject({ event: "gate_recovery", probeResult: "budget_exhausted" });
-    expect(host.state).toBe("error");
-    expect(calls).toHaveLength(1);
-    host.close();
-  });
-
-  it("close settles a HELD candidate once without letting it start", async () => {
-    const { host, calls, sendRejections } = hostHarness();
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":4,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    await host.send("held candidate", undefined, ["cid-held"], "held-token");
-    expect(calls).toHaveLength(1);
-
-    const closing = host.close();
-    expect(sendRejections.filter((item) => item.turnToken === "held-token")).toEqual([
-      { turnToken: "held-token", conversationIds: ["cid-held"], reason: "closed" },
-    ]);
-    calls[0]!.child.finish();
-    await closing;
-    expect(calls).toHaveLength(1);
-  });
-
-  it("watchdog fail-stop removes a tokenless HELD candidate and reports its rejection", async () => {
-    const { host, calls, sendRejections, turnEnds } = hostHarness();
-    await host.send("trip");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    await host.send("held reset notice");
-    expect(calls).toHaveLength(1);
-
-    expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
-    expect(sendRejections).toContainEqual({ reason: "watchdog_fail_stopped" });
-    expect(turnEnds).toHaveLength(0);
-    calls[0]!.child.finish();
-    await host.close();
-    expect(calls).toHaveLength(1);
-  });
-
-  it("a throwing queued-turn rejection callback does not strand the later entry", async () => {
-    const { host, calls, sendRejections } = hostHarness({
-      onSendRejected: (info) => {
-        if (info.turnToken === "queued-bad") throw new Error("isolated callback failure");
-      },
-    });
-    await host.send("trip", undefined, ["cid-trip"], "trip-token");
-    await waitFor(() => calls.length === 1);
-    await host.send("queued bad", undefined, ["cid-bad"], "queued-bad");
-    await host.send("queued good", undefined, ["cid-good"], "queued-good");
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":6,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    expect(sendRejections).toEqual([
-      { turnToken: "queued-bad", conversationIds: ["cid-bad"], reason: "gate_broken" },
-      { turnToken: "queued-good", conversationIds: ["cid-good"], reason: "gate_broken" },
-    ]);
-    calls[0]!.child.finish();
-    await waitFor(() => host.state === "error");
-    host.close();
-  });
-
-  it("a stale lease release removes only its owner while another wait remains", async () => {
-    const { host, calls, states } = hostHarness();
-    await host.send("hello", undefined, ["cid"], "turn-lease");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => states.at(-1)?.state === "tool_running");
-    const staleLease = host.beginPermissionWaitLease("turn-lease", "native")!;
-    const currentLease = host.beginPermissionWaitLease("turn-lease", "bridge")!;
-    host.endPermissionWaitLease(staleLease);
-    expect(states.at(-1)?.state).toBe("waiting_permission");
-    host.endPermissionWaitLease(currentLease);
-    expect(states.at(-1)?.state).toBe("tool_running");
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => states.at(-1)?.state === "waiting_input");
-    host.close();
-  });
-
-  it("a duplicate lease release is a no-op while another owner still waits", async () => {
-    const { host, calls, states } = hostHarness();
-    await host.send("hello", undefined, ["cid"], "duplicate-release");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => states.at(-1)?.state === "tool_running");
-
-    const released = host.beginPermissionWaitLease("duplicate-release", "native")!;
-    const remaining = host.beginPermissionWaitLease("duplicate-release", "bridge")!;
-    expect(host.endPermissionWaitLease(released)).toBe(true);
-    expect(states.at(-1)?.state).toBe("waiting_permission");
-    expect(host.endPermissionWaitLease(released)).toBe(false);
-    expect(states.at(-1)?.state).toBe("waiting_permission");
-    expect(host.endPermissionWaitLease(remaining)).toBe(true);
-    expect(states.at(-1)?.state).toBe("tool_running");
-
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => states.at(-1)?.state === "waiting_input");
-    host.close();
-  });
-
-  it("a closed pending hook socket releases its native permission wait", async () => {
-    const cfg = config({ approval: "on-request" });
-    const requests: Envelope[] = [];
-    let testHost: AntigravityHost | undefined;
-    let activeGate: AntigravityGate | null = null;
-    let closePendingSocket: (() => void) | undefined;
-    const broker = new PermissionBroker({
-      config: cfg,
-      send: (envelope) => requests.push(envelope),
-      onPendingChange: (pending) => testHost?.setPendingPermission(pending),
-    });
-    const { host, calls, states } = hostHarness({
-      config: cfg,
-      permissionBroker: broker,
-      gateServerListen: async (options) => {
-        activeGate = options.gate;
-        closePendingSocket = options.onSocketClose;
-        return {
-          socketPath: "/tmp/pending-hook-socket.sock",
-          nonce: "pending-hook",
-          setGate: (gate: AntigravityGate) => { activeGate = gate; },
-          observeCompletedTool: () => true,
-          close: () => {},
-        } as unknown as GateServer;
-      },
-    });
-    testHost = host;
-    await host.send("hello", undefined, ["cid"], "socket-close");
-    await waitFor(() => calls.length === 1 && activeGate !== null);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => states.at(-1)?.state === "tool_running");
-
-    const decision = activeGate!.decide({ name: "run_command", args: { CommandLine: "pwd", Cwd: process.cwd() } });
-    await waitFor(() => requests.length === 1);
-    expect(states.at(-1)?.state).toBe("waiting_permission");
-    closePendingSocket!();
-    await expect(decision).resolves.toMatchObject({ decision: "deny" });
-    expect(states.at(-1)?.state).toBe("tool_running");
-
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => states.at(-1)?.state === "waiting_input");
-    host.close();
-  });
-
-  it("native hook approval still emits one entry and one exit despite broker pending metadata", async () => {
-    const cfg = config({ approval: "on-request" });
-    const permissionRequests: Envelope[] = [];
-    let testHost: AntigravityHost | undefined;
-    const broker = new PermissionBroker({
-      config: cfg,
-      send: (envelope) => permissionRequests.push(envelope),
-      onPendingChange: (pending) => testHost?.setPendingPermission(pending),
-    });
-    let activeGate: AntigravityGate | null = null;
-    const { host, calls, states } = hostHarness({
-      config: cfg,
-      permissionBroker: broker,
-      gateServerListen: async ({ gate }) => {
-        activeGate = gate;
-        return {
-          socketPath: "/tmp/permission-wait-test.sock",
-          nonce: "test-nonce",
-          setGate: (next: AntigravityGate) => { activeGate = next; },
-          observeCompletedTool: () => true,
-          close: () => {},
-        } as unknown as GateServer;
-      },
-    });
-    testHost = host;
-    await host.send("hello", undefined, ["cid"], "native-turn");
-    await waitFor(() => calls.length === 1 && activeGate !== null);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => states.at(-1)?.state === "tool_running");
-
-    const decision = activeGate!.decide({ name: "run_command", args: { CommandLine: "pwd", Cwd: process.cwd() } });
-    await waitFor(() => permissionRequests.length === 1);
-    const requestId = (permissionRequests[0]!.payload as { request_id: string }).request_id;
-    const transitions = states.map((envelope) => envelope.state).filter((state, index, all) => index === 0 || state !== all[index - 1]);
-    expect(transitions.filter((state) => state === "waiting_permission")).toHaveLength(1);
-    broker.resolve({ request_id: requestId, allow: true });
-    await expect(decision).resolves.toEqual({ decision: "allow" });
-    expect(states.filter((envelope) => envelope.state === "tool_running")).toHaveLength(2);
-
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => states.at(-1)?.state === "waiting_input");
-    host.close();
-  });
-
-  it("a normal turn end stays terminal when its wait owner settles late", async () => {
-    const { host, calls, states, turnEnds } = hostHarness();
-    await host.send("hello", undefined, ["cid"], "turn-end");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => states.at(-1)?.state === "tool_running");
-    const lease = host.beginPermissionWaitLease("turn-end", "bridge")!;
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => turnEnds.length === 1);
-    const terminalIndex = states.findIndex((envelope) => envelope.state === "waiting_input");
-    host.endPermissionWaitLease(lease);
-    expect(states.at(-1)?.state).toBe("waiting_input");
-    expect(states.slice(terminalIndex + 1).some((envelope) => envelope.state === "tool_running")).toBe(false);
-    host.close();
-  });
-
-  it("interrupt retires its lease before terminal settlement and delayed release cannot resurrect state", async () => {
-    const { host, calls, states, turnEnds } = hostHarness();
-    await host.send("first", undefined, ["cid-1"], "old-turn");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => states.at(-1)?.state === "tool_running");
-    const oldLease = host.beginPermissionWaitLease("old-turn", "native")!;
-    await host.interrupt();
-    expect(host.beginPermissionWaitLease("old-turn", "bridge")).toBeNull();
-    calls[0]!.child.finish();
-    await waitFor(() => turnEnds.length === 1);
-
-    await host.send("second", undefined, ["cid-2"], "new-turn");
-    await waitFor(() => calls.length === 2);
-    calls[1]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => states.at(-1)?.state === "tool_running");
-    const currentLease = host.beginPermissionWaitLease("new-turn", "bridge")!;
-    host.endPermissionWaitLease(oldLease);
-    expect(states.at(-1)?.state).toBe("waiting_permission");
-    host.endPermissionWaitLease(currentLease);
-    expect(states.at(-1)?.state).toBe("tool_running");
-    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[1]!.child.finish();
-    await waitFor(() => turnEnds.length === 2);
-    host.close();
-  });
-
-  it("skips a sole queued input before stdin write and emits ready", async () => {
-    const starts: string[] = [];
-    const { host, calls, states, turnEnds } = hostHarness({
-      prepareInput: () => null,
-      onTurnStart: ({ turnToken }) => starts.push(turnToken),
-    });
-    await host.send("stale", undefined, ["cid"], "stale-token");
-    await waitFor(() => states.at(-1)?.state === "waiting_input");
-    expect(calls).toHaveLength(1);
-    expect(starts).toEqual([]);
-    expect(turnEnds).toEqual([]);
-    expect(host.activeInterAgentTurnToken()).toBeNull();
-    host.close();
-  });
-
-  it("skips an obsolete input without emitting ready before the next queued turn", async () => {
-    let releaseAdmission!: () => void;
-    const admission = new Promise<void>((resolve) => { releaseAdmission = resolve; });
-    const starts: string[] = [];
-    const { host, calls, states } = hostHarness({
-      waitForPermissionSync: () => admission,
-      prepareInput: (token) => token === "stale-token"
-        ? null : { text: "prepared", conversationIds: ["survivor"] },
-      onTurnStart: ({ turnToken, conversationIds }) => {
-        starts.push(turnToken);
-        expect(conversationIds).toEqual(["survivor"]);
-        expect(states.map((envelope) => envelope.state)).not.toContain("waiting_input");
-      },
-    });
-    await host.send("stale", undefined, ["cid"], "stale-token");
-    await host.send("old", undefined, ["old"], "next-token");
-    releaseAdmission();
-    await waitFor(() => starts.length === 1);
-    expect(starts).toEqual(["next-token"]);
-    expect(calls).toHaveLength(1);
-    expect(host.activeInterAgentTurnToken()).toBe("next-token");
-    host.close();
-  });
-
-  it("starts an inter-agent turn only after the agy child is spawned and preserves its token through completion", async () => {
-    const cfg = config();
-    const calls: FakeAgy[] = [];
-    const starts: string[] = [];
-    const ends: Array<{ token: string; conversationIds: readonly string[] }> = [];
-    let host!: AntigravityHost;
-    host = createHarnessHost(cfg, {
-      cwd: process.cwd(),
-      appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {},
-      verifyGate: async () => true,
-      agyPath: "/test/agy",
-      spawn: () => {
-        const child = new FakeAgy();
-        calls.push(child);
-        return child as unknown as SpawnedAgy;
-      },
-      onTurnStart: ({ turnToken, conversationIds }) => {
-        expect(calls).toHaveLength(1);
-        expect(host.activeInterAgentTurnToken()).toBe(turnToken);
-        expect(conversationIds).toEqual(["cid-1"]);
-        starts.push(turnToken);
-      },
-      onTurnEnd: ({ turnToken, conversationIds }) => ends.push({ token: turnToken, conversationIds }),
-    });
-
-    await host.send("inbound", undefined, ["cid-1"], "turn-1");
-    await waitFor(() => starts.length === 1);
-    calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.finish();
-    await waitFor(() => ends.length === 1);
-
-    expect(starts).toEqual(["turn-1"]);
-    expect(ends).toEqual([{ token: "turn-1", conversationIds: ["cid-1"] }]);
-    expect(host.activeInterAgentTurnToken()).toBeNull();
-    host.close();
-  });
-
-  it("set_permission rejects when no ceiling is advertised (legacy runner, no max_*)", async () => {
-    const { host } = hostHarness();
-    await expect(
-      host.setPermission({
-        revision: 1,
-        requested: { sandbox: "workspace-write", network_access: true, approval: "local" },
-      }),
-    ).rejects.toThrow("not advertised");
-    host.close();
-  });
-
-  it("stages an in-ceiling switch, applies config at the boundary, and confirms applied only at engine init (issue #359, M4)", async () => {
-    const cfg = config({
-      approval: "on-request",
-      max_sandbox: "workspace-write",
-      max_approval: "local",
-      max_network_access: false,
-    });
-    // Fresh spawn (no resumeSessionId): #sessionId starts null, so a fabricated
-    // token would show up as the observation session_id if M4 regressed.
-    const { host, states, permissionLifecycle, calls } = hostHarness({ config: cfg });
-    await host.setPermission({
-      revision: 2,
-      requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
-    });
-    // Pending control echoed; the running gate's cell is untouched, so
-    // ext.permission still shows the pre-switch approval.
-    const pending = states.at(-1)?.ext?.permission_control as unknown as Record<string, unknown>;
-    expect(pending.status).toBe("pending");
-    expect((pending.requested as Record<string, unknown>).approval).toBe("local");
-    expect((states.at(-1)?.ext?.permission as Record<string, unknown>).approval).toBe(
-      "on-request",
-    );
-    expect(permissionLifecycle).toHaveLength(0);
-
-    void host.send("hello");
-    // Config applies at the boundary -> control is `applying`, but no applied
-    // observation is fabricated before the engine confirms the session id.
-    await waitFor(() => {
-      const c = states.at(-1)?.ext?.permission_control as unknown as
-        | Record<string, unknown>
-        | undefined;
-      return c?.status === "applying";
-    });
-    expect(permissionLifecycle).toHaveLength(0);
-    await waitFor(() => calls.length === 1);
-
-    // The engine's init event confirms the session identity; only now does the
-    // switch promote to `applied` with an engine-observed session_id.
-    calls[0]!.child.stdout.write(
-      '{"event":"init","conversation_id":"engine-sess-42","init":{"tools":[]}}\n',
-    );
-    await waitFor(() => permissionLifecycle.length === 1);
-    const applied = permissionLifecycle[0] as Record<string, any>;
-    expect(applied.kind).toBe("permission_applied");
-    expect(applied.details.permission.approval).toBe("local");
-    expect(applied.details.permission.enforcement).toBe("advisory");
-    expect(applied.details.session_id).toBe("engine-sess-42");
-    // turn_id is OMITTED — antigravity has no engine per-turn identity and
-    // manufacturing one from the session id or a wrapper token is forbidden
-    // (issue #359 M1, protocol.md "engine-observed identities").
-    expect(applied.details).not.toHaveProperty("turn_id");
-    // execution_id is the wrapper's own per-exec correlation id, distinct from
-    // the engine session identity (protocol.md).
-    expect(applied.details.execution_id).not.toBe("engine-sess-42");
-    const appliedControl = states.at(-1)?.ext?.permission_control as unknown as Record<string, unknown>;
-    expect(appliedControl.status).toBe("applied");
-    host.close();
-  });
-
-  it("set_permission rejects an over-ceiling switch fail-closed with rolled_back_to (issue #359)", async () => {
-    const cfg = config({
-      approval: "on-request",
-      max_sandbox: "workspace-write",
-      max_approval: "local",
-      max_network_access: false,
-    });
-    const { host, states, permissionLifecycle } = hostHarness({ config: cfg });
-    await host.setPermission({
-      revision: 3,
-      requested: { sandbox: "workspace-write", network_access: false, approval: "never" },
-    });
-    expect(permissionLifecycle).toHaveLength(1);
-    const failed = permissionLifecycle[0] as Record<string, any>;
-    expect(failed.kind).toBe("permission_failed");
-    expect(failed.details.reason).toBe("exceeds_launch_ceiling");
-    expect(failed.details.rolled_back_to.approval).toBe("on-request");
-    const control = states.at(-1)?.ext?.permission_control as unknown as Record<string, unknown>;
-    expect(control.status).toBe("failed");
-    expect((control.rolled_back_to as Record<string, unknown>).approval).toBe("on-request");
-    // The effective cell is unchanged (no config mutation on a rejected switch).
-    expect((states.at(-1)?.ext?.permission as Record<string, unknown>).approval).toBe(
-      "on-request",
-    );
-    host.close();
-  });
-
-  it("advertises supports_session_reset unconditionally with both modes (issue #381)", () => {
-    const ext = initialStatusExt(config());
-    const caps = ext.session_capabilities as Record<string, unknown>;
-    expect(caps.supports_session_reset).toBe(true);
-    expect(caps.session_reset_modes).toEqual(["new", "clear"]);
-  });
-
-  it("advertises permission_switch_axes and supports_permission_switch when max_* is present and permission_sync is negotiated (issue #359 M1)", () => {
-    const ext = initialStatusExt(
-      config({
-        max_sandbox: "workspace-write",
-        max_approval: "local",
-        max_network_access: false,
-      }),
-      undefined,
-      true,
-    );
-    const caps = ext.session_capabilities as Record<string, unknown>;
-    expect(caps.supports_permission_switch).toBe(true);
-    expect(caps.permission_switch_axes).toEqual({
-      sandbox: { max: "workspace-write" },
-      network_access: { max: false },
-      approval: { max: "local" },
-    });
-  });
-
-  it("gates the selector on negotiation: max_* present but permission_sync NOT negotiated advertises nothing (issue #359 M1)", () => {
-    const ext = initialStatusExt(
-      config({
-        max_sandbox: "workspace-write",
-        max_approval: "local",
-        max_network_access: false,
-      }),
-      undefined,
-      false,
-    );
-    const caps = ext.session_capabilities as Record<string, unknown>;
-    expect(caps).not.toHaveProperty("permission_switch_axes");
-    expect(caps).not.toHaveProperty("supports_permission_switch");
-  });
-
-  it("omits permission_switch_axes when the runner relayed no ceiling (legacy)", () => {
-    const ext = initialStatusExt(config(), undefined, true);
-    const caps = ext.session_capabilities as Record<string, unknown>;
-    expect(caps).not.toHaveProperty("permission_switch_axes");
-    expect(caps).not.toHaveProperty("supports_permission_switch");
-  });
-
-  it("seeds a revision-0 baseline control when permission_sync is negotiated so the server can allocate revisions (issue #359 M1)", () => {
-    const cfg = config({
-      approval: "on-request",
-      max_sandbox: "workspace-write",
-      max_approval: "local",
-      max_network_access: false,
-    });
-    const { host } = hostHarness({ config: cfg, permissionSyncSupported: true });
-    const ext = host.statusExtSnapshot();
-    expect((ext.session_capabilities as Record<string, unknown>).supports_permission_switch).toBe(
-      true,
-    );
-    const ctrl = ext.permission_control as Record<string, unknown>;
-    expect(ctrl.revision).toBe(0);
-    expect(ctrl.status).toBe("pending");
-    expect(ctrl.requested).toEqual({
-      sandbox: "workspace-write",
-      network_access: false,
-      approval: "on-request",
-    });
-    // A baseline carries no submitted / effective evidence yet.
-    expect(ctrl).not.toHaveProperty("submitted");
-    expect(ctrl).not.toHaveProperty("effective");
-    host.close();
-  });
-
-  it("advertises nothing and seeds no baseline when permission_sync was not negotiated (issue #359 M1)", () => {
-    const cfg = config({
-      max_sandbox: "workspace-write",
-      max_approval: "local",
-      max_network_access: false,
-    });
-    const { host } = hostHarness({ config: cfg, permissionSyncSupported: false });
-    const ext = host.statusExtSnapshot();
-    expect(ext).not.toHaveProperty("permission_control");
-    expect(ext.session_capabilities as Record<string, unknown>).not.toHaveProperty(
-      "supports_permission_switch",
-    );
-    host.close();
-  });
-
-  it("applyPermissionSync re-applies the durable next to config and adopts the control on reconnect (issue #359 M1)", () => {
-    // Permissive ceiling so the durable next (a previously accepted switch) passes
-    // the wrapper's final gate.
-    const cfg = config({
-      approval: "on-request",
-      max_sandbox: "danger-full-access",
-      max_approval: "never",
-      max_network_access: true,
-    });
-    const { host } = hostHarness({ config: cfg, permissionSyncSupported: true });
-    const nextCell = {
-      sandbox: "danger-full-access" as const,
-      network_access: true,
-      approval: "never" as const,
-    };
-    const submission = { revision: 2, requested: nextCell, execution_id: "exec-2" };
-    // A durable effective observation with turn_id OMITTED (antigravity).
-    const effective = {
-      ...submission,
-      session_id: "sess-old",
-      permission: { sandbox: "danger-full-access" as const, approval: "never" as const, enforcement: "advisory" as const },
-      network_access: true,
-    };
-    const message: PermissionSyncMessage = {
-      version: "0",
-      control: {
-        revision: 2,
-        requested: nextCell,
-        status: "applied",
-        constraints: { approval: "never", enforcement: "advisory" },
-        submitted: submission,
-        effective,
-        last_effective: effective,
-      },
-      next: { revision: 2, requested: nextCell },
-    };
-    host.applyPermissionSync(message);
-    const ext = host.statusExtSnapshot();
-    // The next-turn gate reads the re-applied cell.
-    expect((ext.permission as Record<string, unknown>).sandbox).toBe("danger-full-access");
-    expect((ext.permission as Record<string, unknown>).approval).toBe("never");
-    const ctrl = ext.permission_control as Record<string, unknown>;
-    expect(ctrl.revision).toBe(2);
-    expect(ctrl.status).toBe("applied");
-    host.close();
-  });
-
-  it("applyPermissionSync refuses an over-ceiling next fail-closed: failed + rolled_back_to, no config change (issue #359 M7)", () => {
-    // Restrictive ceiling: a relayed next above it must NOT mutate config — the
-    // wrapper is the final gate and the server can never widen past launch. It
-    // reports failed with the SAME semantics as a live set_permission.
-    const cfg = config({
-      approval: "on-request",
-      max_sandbox: "workspace-write",
-      max_approval: "local",
-      max_network_access: false,
-    });
-    const { host, permissionLifecycle } = hostHarness({ config: cfg, permissionSyncSupported: true });
-    const overCell = {
-      sandbox: "danger-full-access" as const,
-      network_access: true,
-      approval: "never" as const,
-    };
-    const message: PermissionSyncMessage = {
-      version: "0",
-      control: {
-        revision: 5,
-        requested: overCell,
-        status: "pending",
-        constraints: { approval: "local", enforcement: "advisory" },
-      },
-      next: { revision: 5, requested: overCell },
-    };
-    host.applyPermissionSync(message);
-    const ext = host.statusExtSnapshot();
-    // Config unchanged: the launch cell still governs the next gate.
-    expect((ext.permission as Record<string, unknown>).sandbox).toBe("workspace-write");
-    expect((ext.permission as Record<string, unknown>).approval).toBe("on-request");
-    // Reported failed against the current cell, not left as a pending over-cell.
-    const ctrl = ext.permission_control as Record<string, unknown>;
-    expect(ctrl.status).toBe("failed");
-    expect(ctrl.reason).toBe("exceeds_launch_ceiling");
-    expect((ctrl.rolled_back_to as Record<string, unknown>).sandbox).toBe("workspace-write");
-    expect((ctrl.rolled_back_to as Record<string, unknown>).approval).toBe("on-request");
-    const failed = permissionLifecycle.at(-1) as Record<string, any>;
-    expect(failed.kind).toBe("permission_failed");
-    expect(failed.details.reason).toBe("exceeds_launch_ceiling");
-    expect(failed.details.rolled_back_to.sandbox).toBe("workspace-write");
-    host.close();
-  });
-
-  it("applyPermissionSync does not adopt an over-ceiling control's forged applied evidence (issue #359 M7)", () => {
-    // A malicious/buggy server could relay an over-ceiling control claiming
-    // status:applied with a forged effective. The ceiling check runs BEFORE any
-    // adoption, so neither the effective nor last_effective is taken up.
-    const cfg = config({
-      approval: "on-request",
-      max_sandbox: "workspace-write",
-      max_approval: "local",
-      max_network_access: false,
-    });
-    const { host, permissionLifecycle } = hostHarness({ config: cfg, permissionSyncSupported: true });
-    const overCell = {
-      sandbox: "danger-full-access" as const,
-      network_access: true,
-      approval: "never" as const,
-    };
-    const submission = { revision: 5, requested: overCell, execution_id: "e5" };
-    const forgedEffective = {
-      ...submission,
-      session_id: "s5",
-      permission: { sandbox: "danger-full-access" as const, approval: "never" as const, enforcement: "advisory" as const },
-      network_access: true,
-    };
-    const message: PermissionSyncMessage = {
-      version: "0",
-      control: {
-        revision: 5,
-        requested: overCell,
-        status: "applied",
-        constraints: { approval: "never", enforcement: "advisory" },
-        submitted: submission,
-        effective: forgedEffective,
-        last_effective: forgedEffective,
-      },
-      next: { revision: 5, requested: overCell },
-    };
-    host.applyPermissionSync(message);
-    const ext = host.statusExtSnapshot();
-    // Config stays at launch; the forged applied control is reported failed and
-    // its evidence is not adopted.
-    expect((ext.permission as Record<string, unknown>).sandbox).toBe("workspace-write");
-    const ctrl = ext.permission_control as Record<string, unknown>;
-    expect(ctrl.status).toBe("failed");
-    expect(ctrl).not.toHaveProperty("effective");
-    expect(ctrl).not.toHaveProperty("last_effective");
-    const failed = permissionLifecycle.at(-1) as Record<string, any>;
-    expect(failed.kind).toBe("permission_failed");
-    host.close();
-  });
-
-  it("blocks a turn's gate until the permission_sync barrier resolves (issue #359 M1)", async () => {
-    const cfg = config({
-      max_sandbox: "workspace-write",
-      max_approval: "local",
-      max_network_access: false,
-    });
-    let releaseBarrier!: () => void;
-    const barrier = new Promise<void>((resolve) => {
-      releaseBarrier = resolve;
-    });
-    const { host, calls } = hostHarness({
-      config: cfg,
-      permissionSyncSupported: true,
-      waitForPermissionSync: () => barrier,
-    });
-    void host.send("hello");
-    // While the barrier is pending, the gate is not built and no child is spawned.
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(calls.length).toBe(0);
-    releaseBarrier();
-    await waitFor(() => calls.length === 1);
-    host.close();
-  });
-
-  it("on-failure approvalはspawn前に拒否する", () => {
-    const cfg: AntigravityLaunchConfig = { ...config(), approval: "on-failure" };
-    const broker = new PermissionBroker({ config: cfg, send: () => {} });
-    expect(() => createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: broker,
-      onState: () => {},
-    })).toThrow("antigravity approval=on-failure is unsupported");
-  });
-
-  it("permission enforcementをadvisoryとしてstatus extにstampする", () => {
-    expect(initialStatusExt({
-      ...config(), model: "gemini-3.6-flash-low", model_source: "env", effort: "high", effort_source: "config",
-    } as AntigravityLaunchConfig)).toMatchObject({
-      model: "gemini-3.6-flash-low",
-      model_source: "env",
-      effort: "high",
-      effort_source: "config",
-      permission: { enforcement: "advisory" },
-    });
-  });
-
-  it("effective snapshotにapprovalを含める (ADR-0057 F4c, resume drift検出に必要)", () => {
-    const cfg: AntigravityLaunchConfig = { ...config(), approval: "never" };
-    expect(initialStatusExt(cfg)).toMatchObject({
-      effective: { approval: "never" },
-    });
-  });
-
-  it("approval省略時はeffective snapshotでon-requestにfallbackする", () => {
-    expect(initialStatusExt(config() as AntigravityLaunchConfig)).toMatchObject({
-      effective: { approval: "on-request" },
-    });
-  });
-
-  // issue #292 (phase-34 Stage B6): antigravity_extra_models (relayed from
-  // runner.config.json's antigravity.extra_models) merges into the pinned
-  // snapshot before ext.models is stamped, mirroring the codex adapter's
-  // codex_extra_models (wrapper/codex/src/host.ts).
-  it("appends a new antigravity_extra_models model to ext.models (issue #292)", () => {
-    const cfg = {
-      ...config(),
-      antigravity_extra_models: [
-        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
-      ],
-    } as AntigravityLaunchConfig;
-    const initial = initialStatusExt(cfg);
-    expect(
-      (initial.models as { value: string }[]).map((m) => m.value),
-    ).toContain("gemini-4-nova");
-  });
-
-  it("antigravity_extra_models overrides an existing snapshot value (issue #292)", () => {
-    const cfg = {
-      ...config(),
-      antigravity_extra_models: [
-        { value: "gemini-3.6-flash-high", display_name: "overridden" },
-      ],
-    } as AntigravityLaunchConfig;
-    const initial = initialStatusExt(cfg);
-    const flash = (
-      initial.models as { value: string; display_name: string }[]
-    ).find((m) => m.value === "gemini-3.6-flash-high");
-    expect(flash?.display_name).toBe("overridden");
-  });
-
-  it("the constructor's own catalog reflects antigravity_extra_models before any live probe resolves (issue #292)", () => {
-    const cfg = {
-      ...config(),
-      antigravity_extra_models: [
-        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
-      ],
-    };
-    const { host } = hostHarness({ config: cfg });
-    // Synchronous, before any await: #refreshCatalog's probe cannot have
-    // resolved yet, so this observes the constructor's OWN merge line
-    // (this.#catalog = mergeExtraModels(...)), not a live-probed catalog.
-    const snapshot = host.statusExtSnapshot();
-    expect(
-      (snapshot.models as { value: string }[]).map((m) => m.value),
-    ).toContain("gemini-4-nova");
-    host.close();
-  });
-
-  it("F4b smoke probeは実機形hooks.json内の期待action一件だけを受け入れる", () => {
-    const source = "/tmp/kaoiro-agy-x/.agents/hooks.json";
-    const command = antigravitySubcommandPrefix({ nodePath: "/usr/bin/node", entryPath: "/pkg/dist/kaoiro.js", subcommand: "hook" });
-    const fixture = JSON.parse(readFileSync(new URL("./fixtures/hooks.json", import.meta.url), "utf8")
-      .replace("__HOOKS_JSON__", source).replace("__HOOK_COMMAND__", command)) as unknown;
-    const expected = { source, command, timeoutSeconds: 3600 };
-    expect(isGateRegistered(fixture, expected)).toBe(true);
-    expect(isGateRegistered({ hooks: [] }, expected)).toBe(false);
-    expect(isGateRegistered({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }, expected)).toBe(false);
-  });
-
-  it("verifier control-flowは明示したtest executableでprobeをspawnする", async () => {
-    const calls: { command: string; args: string[]; child: FakeAgy }[] = [];
-    const cfg = config();
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {},
-      probeSpawn: (_command, args) => {
-        const child = new FakeAgy();
-        const source = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
-        const command = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
-        queueMicrotask(() => {
-          child.stdout.end(JSON.stringify({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
-          child.emit("exit", 0, null);
-          child.emit("close", 0, null);
-        });
-        return child as unknown as GateProbe;
-      },
-      agyPath: "/test/agy",
-      spawn: (command, args) => { const child = new FakeAgy(); calls.push({ command, args, child }); return child as unknown as SpawnedAgy; },
-    });
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.finish();
-    host.close();
-  });
-
-  it("waits for exit, remaining stdout, and close before accepting hook registration", async () => {
-    const cfg = config();
-    const probe = new FakeAgy();
-    const calls: FakeAgy[] = [];
-    let hookSource = "";
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, agyPath: "/test/agy",
-      probeModels: async () => null,
-      probeSpawn: (_command, args) => {
-        hookSource = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
-        return probe as unknown as GateProbe;
-      },
-      spawn: () => {
-        const child = new FakeAgy();
-        calls.push(child);
-        return child as unknown as SpawnedAgy;
-      },
-    });
-    await host.send("hello");
-    await waitFor(() => hookSource !== "");
-    probe.emit("exit", 0, null);
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(calls).toHaveLength(0);
-    const command = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
-    probe.stdout.end(JSON.stringify({ hooks: [{ source: hookSource, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(calls).toHaveLength(0);
-    probe.emit("close", 0, null);
-    await waitFor(() => calls.length === 1);
-    calls[0]!.finish();
-    host.close();
-  });
-
-  it("uses one configured executable for models, hook verification, and the turn child", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-host-"));
-    const executable = join(root, "agy with spaces");
-    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    chmodSync(executable, 0o755);
-    const cfg = config({ antigravity_cli_path: executable, antigravity_probe_timeout_ms: 45_000 });
-    const commands: string[] = [];
-    try {
-      const host = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {},
-        modelsProbeSpawn: (command) => {
-          commands.push(command);
-          const child = new FakeAgy();
-          queueMicrotask(() => {
-            child.stdout.end("gemini-3.6-flash-high\tGemini 3.6 Flash High\n");
-            child.emit("exit", 0, null);
-          });
-          return child as unknown as GateProbe;
-        },
-        probeSpawn: (command, args) => {
-          commands.push(command);
-          const child = new FakeAgy();
-          const source = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
-          const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
-          queueMicrotask(() => {
-            child.stdout.end(JSON.stringify({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command: hook, timeout_seconds: 3600 }] }] }));
-            child.emit("close", 0, null);
-          });
-          return child as unknown as GateProbe;
-        },
-        spawn: (command) => {
-          commands.push(command);
-          const child = new FakeAgy();
-          queueMicrotask(() => child.finish());
-          return child as unknown as SpawnedAgy;
-        },
-      });
-      await waitFor(() => commands.length >= 1);
-      await host.send("hello");
-      await waitFor(() => commands.length === 3);
-      expect(commands).toEqual([executable, executable, executable]);
-      host.close();
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("uses the configured executable through default child processes for models, hooks, and a turn", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-default-host-"));
-    const executable = join(root, "agy fixture with spaces.mjs");
-    const capture = join(root, "child-env.jsonl");
-    const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
-    writeFileSync(executable, `#!${process.execPath}
-import { appendFileSync } from "node:fs";
-const args = process.argv.slice(2);
-appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ args, home: process.env.CODEX_HOME ?? null }) + "\\n");
-if (args[0] === "models") {
-  process.stdout.write("fixture-model\\tFixture Model\\n");
-} else if (args[0] === "-p" && args[1] === "/hooks") {
-  const customization = args[args.lastIndexOf("--add-dir") + 1];
-  process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
-} else if (args[0] === "--print") {
-  // issue #377 Stage 1/2: the real prompt arrives as one NDJSON line on
-  // stdin (--input-format stream-json), not as an argv positional; echo
-  // its content back so this pin proves the real default-spawn path
-  // (real OS process, detached process group, real pipes) delivers it.
-  // issue #377 Stage 2: stdin is never closed (an epoch's process outlives
-  // its first turn), so respond on the first complete line instead of
-  // waiting for "end".
-  let input = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    input += chunk;
-    const newline = input.indexOf("\\n");
-    if (newline === -1) return;
-    const line = JSON.parse(input.slice(0, newline));
-    process.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: line.message.content } }) + "\\n");
-  });
-} else {
-  process.exitCode = 2;
+  recorded.results = () => recorded.logs.filter((e) => e.type === "result").map((e) => e.payload as Record<string, any>);
+  hosts.push(recorded.test);
+  return recorded;
 }
-`);
-    chmodSync(executable, 0o755);
-    vi.stubEnv("CODEX_HOME", join(root, "hostile-state"));
-    const cfg = config({ antigravity_cli_path: executable });
-    const logs: Envelope[] = [];
-    const host = new AntigravityHost(cfg, {
-      cwd: root,
-      appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {},
-      onLog: (envelope) => logs.push(envelope),
-    });
-    try {
-      await waitForDefaultChild(() => (
-        (host.statusExtSnapshot().models as { value: string }[])
-          .some((model) => model.value === "fixture-model")
-      ), () => ({ status: host.statusExtSnapshot(), logs }));
-      await host.send("hello");
-      await waitForDefaultChild(
-        () => logs.some((envelope) => envelope.type === "result"),
-        () => ({ status: host.statusExtSnapshot(), logs }),
-      );
-      expect(logs.at(-1)?.payload).toMatchObject({ text: "hello" });
-      const children = readFileSync(capture, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; home: string | null });
-      expect(children.map(child => child.args[0]).sort()).toEqual(["--print", "-p", "models"]);
-      expect(children.every(child => child.home === null)).toBe(true);
-    } finally {
-      host.close();
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
+
+/** Waits for the prompt of the latest process and returns that process. */
+async function prompted(r: Recorded, count = r.test.agys.length || 1): Promise<FakeAgy> {
+  await waitFor(() => r.test.agys.length >= count && r.test.agys[count - 1]!.promptOpen, () => r.test.agys.map((a) => a.requests.map((q) => q.method)));
+  return r.test.agys[count - 1]!;
+}
+
+describe("AntigravityHost over ACP: start", () => {
+  it("launches agy acp with the customization directory, the sandbox and no permission prompts", async () => {
+    const r = setup();
+    await r.test.host.send("hi", undefined, undefined, "t1");
+    const agy = await prompted(r);
+    expect(agy.args[0]).toBe("acp");
+    expect(agy.args).toContain("--dangerously-skip-permissions");
+    expect(agy.sandboxed).toBe(true);
+    const custom = agy.args[agy.args.indexOf("--add-dir") + 1]!;
+    expect(r.test.hookLists[0]).toEqual(["-p", "/hooks", "--add-dir", process.cwd(), "--add-dir", custom, "--output-format", "json"]);
+    expect(agy.count("initialize")).toBe(1);
+    const created = agy.requests.find((q) => q.method === "session/new")!;
+    expect(created.params._meta).toEqual({ antigravity: { systemPrompt: { append: "persona" } } });
+    expect(agy.env.KAOIRO_GATE_SOCKET).toBeTruthy();
+    expect(agy.env.CODEX_HOME).toBeUndefined();
+    for (const [key, value] of Object.entries(nonInteractiveToolEnv(process.env).additions)) expect(agy.env[key]).toBe(value);
+  });
+
+  it("drops --sandbox only for danger-full-access", async () => {
+    for (const [sandbox, expected] of [["read-only", true], ["workspace-write", true], ["danger-full-access", false]] as const) {
+      const r = setup({ sandbox });
+      await r.test.host.send("hi");
+      expect((await prompted(r)).sandboxed).toBe(expected);
     }
   });
 
-  it("does not spawn a turn when the configured executable is unavailable", async () => {
-    const cfg = config({ antigravity_cli_path: "/definitely/not/agy" });
-    const logs: Envelope[] = [];
-    let turnSpawns = 0;
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, onLog: (envelope) => logs.push(envelope),
-      spawn: () => {
-        turnSpawns += 1;
-        return new FakeAgy() as unknown as SpawnedAgy;
-      },
-    });
-    await host.send("hello");
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(turnSpawns).toBe(0);
-    expect(logs.at(-1)?.payload).toMatchObject({ error_detail: "antigravity_cli_unavailable:executable_missing" });
-    host.close();
+  it("runs one prompt per process and resumes the session on the next process (L4, P10)", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const first = await prompted(r, 1);
+    first.message("reply one");
+    first.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    const second = await prompted(r, 2);
+    expect(first.exitCode !== null || first.signalCode !== null).toBe(true);
+    expect(second.count("session/new")).toBe(0);
+    expect(second.requests.find((q) => q.method === "session/resume")?.params.sessionId).toBe("session-1");
+    second.respond("end_turn");
+    await waitFor(() => r.ends.length === 2);
+    expect(r.results().map((result) => result.text)).toEqual(["reply one", ""]);
+    expect(r.ends.map((end) => end.terminal)).toEqual([true, true]);
   });
 
-  it("F2のspawn引数、stdin NDJSON経由のprompt、init session idとresultを結ぶ", async () => {
-    const { host, states, logs, calls } = hostHarness();
-    const sessionIds: string[] = [];
-    const onSessionHost = createHarnessHost(config(), {
-      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: config(), send: () => {} }),
-      onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope), onSessionId: (id) => sessionIds.push(id),
-      verifyGate: async () => true,
-      agyPath: "/test/agy",
-      spawn: (command, args, spawnOptions) => { const child = new FakeAgy(); calls.push({ command, args, env: spawnOptions.env, child }); return child as unknown as SpawnedAgy; },
-    });
-    await onSessionHost.send("hello");
-    await waitFor(() => calls.length === 1);
-    const call = calls[0]!;
-    expect(call.command).toBe("/test/agy");
-    // issue #377 Stage 1: the prompt travels over stdin, not argv.
-    expect(call.args).toEqual(expect.arrayContaining([
-      "--print", "", "--input-format", "stream-json", "--output-format", "stream-json",
-      "--print-timeout", "0", "--disable-slash-commands", "--dangerously-skip-permissions",
-    ]));
-    expect(call.args).not.toContain("hello");
-    const addDirIndexes = call.args.flatMap((arg, index) => arg === "--add-dir" ? [index] : []);
-    expect(addDirIndexes).toHaveLength(2);
-    expect(addDirIndexes.map((index) => call.args[index + 1])).toEqual([process.cwd(), expect.stringMatching(/kaoiro-agy-/)]);
-    let writtenToStdin = "";
-    call.child.stdin.on("data", (chunk: Buffer) => { writtenToStdin += chunk.toString("utf8"); });
-    // Wait for the actual buffered content, not just `writableEnded`: once
-    // the write callback resolves and `.end()` runs, delivering the
-    // buffered chunk to a newly-attached `data` listener is itself
-    // deferred (Node schedules the flowing-mode transition), so polling
-    // `writableEnded` alone can observe it true before the chunk arrives.
-    await waitFor(() => writtenToStdin.includes("\n"));
-    // issue #377 Stage 2: stdin stays open across turns -- an epoch's
-    // process outlives its first turn, so `#deliverTurnInput` no longer
-    // calls `.end()` (Stage 1 did).
-    expect(call.child.stdin.writableEnded).toBe(false);
-    const stdinLines = writtenToStdin.split("\n").filter((line) => line !== "");
-    expect(stdinLines).toHaveLength(1);
-    expect(JSON.parse(stdinLines[0]!)).toEqual({ event: "user", message: { role: "user", content: "hello" } });
-    call.child.stdout.write('{"event":"init","conversation_id":"cid-1","init":{"tools":[]}}\n');
-    call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    call.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(sessionIds).toEqual(["cid-1"]);
-    expect(states.map((envelope) => envelope.state)).toContain("done");
-    onSessionHost.close();
-    host.close();
-  });
-
-  it("coalesces three assistant text deltas into one log entry on DONE", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"one "}}\n');
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"two "}}\n');
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"three"}}\n');
-    expect(logs.filter((envelope) => envelope.type === "log" && envelope.payload.kind === "assistant")).toEqual([
-      expect.objectContaining({ payload: { kind: "assistant", text: "one two three" } }),
-    ]);
-    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one two three"}}\n');
-    child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.filter((envelope) => envelope.type === "log" && envelope.payload.kind === "assistant")).toHaveLength(1);
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ text: "one two three" });
-    host.close();
-  });
-
-  it("resumeではconversationを渡し、flagを設定で止められる", async () => {
-    const { host, calls } = hostHarness({ resumeSessionId: "resume-1", dangerouslySkipPermissions: false });
-    await host.send("next");
-    await waitFor(() => calls.length === 1);
-    expect(calls[0]!.args).toEqual(expect.arrayContaining(["--conversation", "resume-1"]));
-    expect(calls[0]!.args).not.toContain("--dangerously-skip-permissions");
-    calls[0]!.child.finish();
-    host.close();
-  });
-
-  it("result無しexitはagy_exit_without_resultとしてerrorにする", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    // Wait past the stdin-delivery ack (issue #377 Stage 1 M4) before
-    // closing, so this pins a clean exit with no result -- not the
-    // separate epoch_exit_before_turn race pinned below. issue #377 Stage
-    // 2: stdin is never ended, so wait for the actual write instead.
-    let delivered = false;
-    calls[0]!.child.stdin.once("data", () => { delivered = true; });
-    await waitFor(() => delivered);
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ is_error: true, error_detail: "agy_exit_without_result" });
-    host.close();
-  });
-
-  it("maps quota exhaustion to a peer error and seven_day snapshot until success", async () => {
-    const turnErrors: Array<InterAgentErrorClassifyInput | undefined> = [];
-    const now = "2026-09-17T00:00:00.000Z";
-    const { host, states, calls } = hostHarness({
-      now: () => now,
-      onTurnEnd: ({ error }) => turnErrors.push(error),
-    });
-    await host.send("quota", undefined, ["cid"], "turn-quota");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write(`${JSON.stringify({
-      event: "result",
-      result: {
-        status: "ERROR",
-        error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 148h49m28s.",
-      },
-    })}\n`);
-    calls[0]!.child.finish();
-    await waitFor(() => turnErrors.length === 1);
-    const expected = {
-      seven_day: {
-        status: "blocked",
-        utilization: 1,
-        resets_at: Math.floor(Date.parse(now) / 1_000) + 535_768,
-      },
-    };
-    expect(turnErrors).toEqual([{
-      reason: "blocking_limit",
-      rateLimitResetSeconds: 535_768,
-    }]);
-    expect(classifyInterAgentError(turnErrors[0]!)).toEqual({
-      code: "rate_limit",
-      message: "the peer hit a rate limit; Resets in 148h49m28s",
-      reset_delay_seconds: 535_768,
-    });
-    expect(states.at(-1)?.ext?.rate_limits).toEqual(expected);
-    expect(host.statusSnapshot().rate_limits).toEqual(expected);
-
-    await host.send("recovered", undefined, ["cid"], "turn-success");
-    await waitFor(() => calls.length === 2);
-    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n');
-    calls[1]!.child.finish();
-    await waitFor(() => turnErrors.length === 2);
-    expect(turnErrors[1]).toBeUndefined();
-    expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
-    expect(states.at(-1)?.ext).not.toHaveProperty("rate_limits");
-    host.close();
-  });
-
-  it("keeps an unrecognized terminal error on the api_error fallback", async () => {
-    const turnErrors: Array<InterAgentErrorClassifyInput | undefined> = [];
-    const { host, calls } = hostHarness({
-      onTurnEnd: ({ error }) => turnErrors.push(error),
-    });
-    await host.send("failure", undefined, ["cid"], "turn-failure");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","error":"HTTP 500 backend unavailable"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => turnErrors.length === 1);
-    expect(turnErrors).toEqual([{ detail: "antigravity turn failed" }]);
-    expect(classifyInterAgentError(turnErrors[0]!)).toEqual({
-      code: "api_error",
-      message: "the peer reported an unspecified error",
-    });
-    expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
-    host.close();
-  });
-
-  it("statusSnapshot includes session_id after init event and omits it before init (issue #418)", async () => {
-    const { host, calls } = hostHarness();
-    expect(host.statusSnapshot()).not.toHaveProperty("session_id");
-
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const call = calls[0]!;
-    call.child.stdout.write('{"event":"init","conversation_id":"cid-unit-418","init":{"tools":[]}}\n');
-    call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    call.child.finish();
-
-    await waitFor(() => host.statusSnapshot().session_id === "cid-unit-418");
-    expect(host.statusSnapshot().session_id).toBe("cid-unit-418");
-    host.close();
-  });
-
-  it("statusSnapshot includes session_id from resumeSessionId option (issue #418)", () => {
-    const resumedHost = createHarnessHost(config(), {
-      cwd: process.cwd(),
-      appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: config(), send: () => {} }),
-      onState: () => {},
-      onLog: () => {},
-      resumeSessionId: "resumed-session-123",
-      verifyGate: async () => true,
-    });
-    expect(resumedHost.statusSnapshot()).toMatchObject({
-      session_id: "resumed-session-123",
-    });
-    resumedHost.close();
-  });
-
-  it("omits session_id from statusExtSnapshot and state_change ext even after init and on resume (issue #418)", async () => {
-    // 1. Fresh host: after init event, statusSnapshot has session_id, but statusExtSnapshot and state_change ext do not
-    const { host, states, calls } = hostHarness();
-    expect(host.statusExtSnapshot()).not.toHaveProperty("session_id");
-
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const call = calls[0]!;
-    call.child.stdout.write('{"event":"init","conversation_id":"cid-state-ext","init":{"tools":[]}}\n');
-    call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    call.child.finish();
-
-    await waitFor(() => host.statusSnapshot().session_id === "cid-state-ext");
-    expect(host.statusSnapshot().session_id).toBe("cid-state-ext");
-    expect(host.statusExtSnapshot()).not.toHaveProperty("session_id");
-    expect(states.length).toBeGreaterThan(0);
-    for (const state of states) {
-      expect(state.ext).not.toHaveProperty("session_id");
-    }
-    host.close();
-
-    // 2. Resumed host: statusSnapshot has resumeSessionId, but statusExtSnapshot and state_change ext do not
-    const resumed = hostHarness({ resumeSessionId: "resumed-state-ext-123" });
-    expect(resumed.host.statusSnapshot().session_id).toBe("resumed-state-ext-123");
-    expect(resumed.host.statusExtSnapshot()).not.toHaveProperty("session_id");
-
-    await resumed.host.send("second");
-    await waitFor(() => resumed.calls.length === 1);
-    resumed.calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    resumed.calls[0]!.child.finish();
-
-    await waitFor(() => resumed.states.length > 0);
-    for (const state of resumed.states) {
-      expect(state.ext).not.toHaveProperty("session_id");
-    }
-    resumed.host.close();
-  });
-
-  it("F4bの未観測tool完了はchildをSIGTERMしてsessionをerrorにする", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["run_command"]}}\n');
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"error":{"message":"denied"}}}}\n');
-    await waitFor(() => child.killed === "SIGTERM");
-    child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
-    host.close();
-  });
-
-  it("F4bはtool_info.nameをidentityに使い、未観測DONEをfail-closedにする", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["run_command"]}}\n');
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_info":{"name":"run_command","output":"done"}}}\n');
-    await waitFor(() => child.killed === "SIGTERM");
-    child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
-    host.close();
-  });
-
-  it("F4bはunsafe step_indexを相関不能としてkillする", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":1.5,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => child.killed === "SIGTERM");
-    child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
-    host.close();
-  });
-
-  it("F4bはtop-levelとtool_infoのname矛盾を相関不能としてkillする", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    // In-turn (before this turn's own result), matching the sibling F4b
-    // tests above -- issue #377 Stage 2 M4(c) routes the SAME mismatch
-    // arriving AFTER a result as an out-of-turn log instead, covered by the
-    // dedicated out-of-turn tests below.
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"future_vendor_tool","tool_info":{"name":"run_command","output":"done"}}}\n');
-    await waitFor(() => child.killed === "SIGTERM");
-    child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:future_vendor_tool" });
-    host.close();
-  });
-
-  // issue #377 Stage 2: a turn's own completion is now its `result` event on
-  // the epoch's shared stream, not the process draining to exit (Stage 1's
-  // model, which these two tests originally pinned) -- an epoch persists
-  // across turns, so waiting for process exit would defeat the whole point
-  // of reuse. A stray stream event arriving AFTER a turn's own `result` is
-  // therefore out-of-turn (logged, not retroactively correlated); a
-  // gate-correlation failure detected WHILE a turn is still in flight (the
-  // scenario that actually matters -- issue #377's background-task
-  // promotion is exactly a completion arriving late) is unaffected: it is
-  // still detected the moment it arrives, still outranks any later kill
-  // failure, and still ends the epoch.
-  it("a stray tool completion after a turn's own result is logged as out-of-turn, not retroactively correlated", async () => {
-    const toolStarts: string[] = [];
-    const { host, logs, calls, outOfTurnEvents, states } = hostHarness({
-      onToolStart: (info) => toolStarts.push(info.turnToken),
-    });
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ text: "done" });
-    const statesBefore = states.length;
-    // A tool DONE that was never observed as ACTIVE would be a
-    // gate-correlation failure IN TURN -- here it arrives once the turn has
-    // already settled, so no turn owns the stream to correlate it against.
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => outOfTurnEvents.length === 1);
-    expect(outOfTurnEvents[0]).toEqual({ eventKind: "step_update", stepIndex: 2, stepType: "tool", state: "DONE" });
-    // No state change and no onToolStart -- the event changes nothing.
-    expect(states.length).toBe(statesBefore);
-    expect(toolStarts).toEqual([]);
-    expect(child.killed).toBeUndefined();
-    // The epoch stays alive -- the next turn reuses the same process.
-    await host.send("again");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(calls).toHaveLength(1);
-    host.close();
-  });
-
-  it("a stray event appended in the SAME stdout chunk as a turn's own result is still out-of-turn, not projected onto the ended turn", async () => {
-    // issue #377 Stage 2 review finding: `readableLines` drains every line
-    // already buffered in one `data` chunk synchronously, back to back, with
-    // no microtask yield between them -- so a single write carrying this
-    // turn's `result` immediately followed by a stray tool-completion line
-    // must not let the stray line see the just-ended turn as still in
-    // flight. The prior test above proves the SEPARATE-write case (a real
-    // gap lets `#runTurn`'s microtask clear `#inFlightTurn` first); this one
-    // proves the same-chunk case, where that microtask cannot have run yet.
-    const toolStarts: string[] = [];
-    const { host, logs, calls, outOfTurnEvents, states } = hostHarness({
-      onToolStart: (info) => toolStarts.push(info.turnToken),
-    });
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write(
-      '{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n' +
-        '{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n',
-    );
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ text: "done" });
-    await waitFor(() => outOfTurnEvents.length === 1);
-    expect(outOfTurnEvents[0]).toEqual({ eventKind: "step_update", stepIndex: 2, stepType: "tool", state: "ACTIVE" });
-    // The turn's own result and the stray ACTIVE arrive in ONE synchronous
-    // chunk flush, so there is no intermediate checkpoint to snapshot a
-    // "before" state count against -- assert directly that the leaked event
-    // never drove the machine into tool_running instead.
-    expect(states.some((envelope) => (envelope as { state?: string }).state === "tool_running")).toBe(false);
-    expect(toolStarts).toEqual([]);
-    // A DONE half-cycle would previously have set #gateBroken -- confirm the
-    // epoch is still healthy and a following turn is not rejected.
-    expect(child.killed).toBeUndefined();
-    await host.send("again");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(calls).toHaveLength(1);
-    host.close();
-  });
-
-  it("a result arriving out of turn (epoch idle, no turn in flight) is logged as out_of_turn_event, not projected onto anything", async () => {
-    // issue #377 Stage 2 review finding (M-B): the step_update out-of-turn
-    // pins above never exercise the sibling `result` case in
-    // `#logOutOfTurnEvent` -- a stray/duplicate `result` arriving while the
-    // epoch is idle (no turn owns the stream) must be logged the same way,
-    // never mistaken for a turn nobody is waiting on.
-    const { host, logs, calls, outOfTurnEvents, states } = hostHarness();
-    await host.send("first");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    const statesBefore = states.length;
-    const logsBefore = logs.length;
-    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"stray"}}\n');
-    await waitFor(() => outOfTurnEvents.length === 1);
-    expect(outOfTurnEvents[0]).toEqual({ eventKind: "result", status: "SUCCESS" });
-    expect(states.length).toBe(statesBefore);
-    expect(logs.length).toBe(logsBefore);
-    expect(child.killed).toBeUndefined();
-    // The epoch stays alive -- the next turn reuses the same process.
-    await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(calls).toHaveLength(1);
-    host.close();
-  });
-
-  it("a kill failure after an in-turn gate-correlation violation still reports the gate error, not the kill error", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    // An unobserved tool completion, still in-turn (before this turn's own
-    // result) -- triggers the correlation-failure kill.
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => child.killed === "SIGTERM");
-    // The kill itself errors (e.g. ESRCH) -- must not surface as the turn's
-    // own error ahead of the gate-correlation detail.
-    child.emit("error", new Error("kill failed"));
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
-    child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
-    host.close();
-  });
-
-  it.each([
-    {
-      evidence: "Action row: fixture-r1-hiiro.md SHA-256 35dcbdff1b7c475c40e0079d43fe02658d67e082d0046462c79787185ba05300, raw event line 40 (lines 54-55 explain shape); view_file; no hook-silence evidence",
-      fixtureUrl: new URL("./fixtures/gate-invalid-action.jsonl", import.meta.url),
-      fixtureSha256: "55f63f8b2968752b4100669655b5781b67ad2dec2fae319022d44735db6ffee4",
-      event: readFileSync(new URL("./fixtures/gate-invalid-action.jsonl", import.meta.url), "utf8").trim(),
-      toolName: "view_file",
-      stepIndex: 3,
-      message: "invalid arguments:\\n- additional properties 'Action' not allowed".replaceAll("\\n", "\n"),
-    },
-    {
-      evidence: "toolSummary row: fixture-r3-momo.md SHA-256 a27f7eabfe0608cd92e7858528efcfed2903fe9e897eb8db633e7c82b70a1c28, lines 14, 18, 20; hook silence only from logging-stub observation lines 24-28, not production GateServer",
-      fixtureUrl: new URL("./fixtures/gate-invalid-tool-summary.jsonl", import.meta.url),
-      fixtureSha256: "f39149a1b1ea810f847254672345a33abe47529c8e256cbacca2f576547f7368",
-      event: readFileSync(new URL("./fixtures/gate-invalid-tool-summary.jsonl", import.meta.url), "utf8").trim(),
-      toolName: "run_command",
-      stepIndex: 2,
-      message: "invalid arguments:\\n- missing property 'toolSummary'".replaceAll("\\n", "\n"),
-    },
-  ])("$evidence", async ({ fixtureUrl, fixtureSha256, event, toolName, stepIndex, message }) => {
-    const { host, logs, calls, warnings } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    const fixtureEvent = parseAgyStreamLine(event);
-    expect(fixtureEvent?.event).toBe("step_update");
-    if (fixtureEvent?.event !== "step_update") throw new Error("invalid classifier fixture");
-    expect(fixtureEvent.step_update).toMatchObject({
-      step_index: stepIndex,
-      state: "ERROR",
-      step_type: "tool",
-      tool_name: toolName,
-      tool_info: { error: { type: "TOOL_ERROR", message } },
-    });
-    expect(createHash("sha256").update(readFileSync(fixtureUrl)).digest("hex")).toBe(fixtureSha256);
-    child.stdout.write(`${event}\n`);
-    child.stdout.write('{"event":"result","result":{"status":"ERROR","response":"invalid arguments"}}\n');
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(host.state).toBe("waiting_input");
-    expect(child.killed).toBeUndefined();
-    expect(warnings.some((warning) => warning.includes("unobserved tool completion"))).toBe(false);
-    host.close();
-  });
-
-  it("accepts the synthetic two-line composition of the measured validation grammar only", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write(`${JSON.stringify({
-      event: "step_update",
-      step_update: {
-        step_index: 418,
-        state: "ERROR",
-        step_type: "tool",
-        tool_name: "view_file",
-        tool_info: { error: {
-          type: "TOOL_ERROR",
-          message: "invalid arguments:\\n- missing property 'toolSummary'\\n- additional properties 'Action' not allowed".replaceAll("\\n", "\n"),
-        } },
-      },
-    })}\n`);
-    child.stdout.write('{"event":"result","result":{"status":"ERROR","response":"invalid arguments"}}\n');
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(host.state).toBe("waiting_input");
-    expect(child.killed).toBeUndefined();
-    host.close();
-  });
-
-  it.each([
-    { label: "wrong error type", state: "ERROR", type: "OTHER", message: "invalid arguments:\\n- missing property 'toolSummary'" },
-    { label: "DONE state", state: "DONE", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'" },
-    { label: "empty property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property ''" },
-    { label: "empty additional property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- additional properties '' not allowed" },
-    { label: "property name over 128 characters", state: "ERROR", type: "TOOL_ERROR", message: `invalid arguments:\\n- missing property '${"x".repeat(129)}'` },
-    { label: "additional property name over 128 characters", state: "ERROR", type: "TOOL_ERROR", message: `invalid arguments:\\n- additional properties '${"x".repeat(129)}' not allowed` },
-    { label: "prefix before grammar", state: "ERROR", type: "TOOL_ERROR", message: "prefix\\ninvalid arguments:\\n- missing property 'toolSummary'" },
-    { label: "quote inside property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'tool'quote'" },
-    { label: "quote inside additional property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- additional properties 'tool'quote' not allowed" },
-    { label: "unmeasured validation wording", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments: missing property 'toolSummary'" },
-    { label: "unmeasured permission-declaration form", state: "ERROR", type: "TOOL_ERROR", message: "declaring permissions failed: invalid tool call error (invalid_args)" },
-    { label: "anchored suffix violation", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'\\nextra" },
-    { label: "redacts and bounds warning detail", state: "ERROR", type: "TOOL_ERROR", message: `invalid arguments:\\n- missing property 'Authorization: Bearer momo541-secret'; ${"x".repeat(20 * 1024)}tail-marker-momo541` },
-  ])("fails closed when the unobserved error is $label", async ({ state, type, message, label }) => {
-    const { host, logs, calls, warnings, gateRecoveryLifecycle } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.stdout.write(`${JSON.stringify({
-      event: "step_update",
-      step_update: {
-        step_index: 8,
-        state,
-        step_type: "tool",
-        tool_name: "run_command",
-        tool_info: { error: { type, message: message.replaceAll("\\n", "\n") } },
-      },
-    })}\n`);
-    await waitFor(() => child.killed === "SIGTERM");
-    expect(warnings.some((message) => message.includes("unobserved tool completion: tool=run_command"))).toBe(true);
-    expect(warnings.at(-1)?.length).toBeLessThanOrEqual(512);
-    if (label === "redacts and bounds warning detail") {
-      expect(warnings.at(-1)).not.toContain("momo541-secret");
-      expect(warnings.at(-1)).not.toContain("tail-marker-momo541");
-    }
-    child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
-    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_fault")).toHaveLength(1);
-    host.close();
-  });
-
-  it("turn後にcustomizationが改ざんされるとsessionをerrorにする", async () => {
-    const { host, logs, calls, sendRejections, gateRecoveryLifecycle } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const customizationDir = calls[0]!.args.at(-1)!;
-    writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect([...logs].reverse().find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_customization_tampered" });
-    expect(host.state).toBe("error");
-    await host.send("tampering stays sticky", undefined, ["cid-tamper"], "tamper-follow-up");
-    expect(calls).toHaveLength(1);
-    expect(sendRejections).toContainEqual({ turnToken: "tamper-follow-up", conversationIds: ["cid-tamper"], reason: "gate_broken" });
-    expect(gateRecoveryLifecycle.at(-1)).toMatchObject({ event: "gate_fault", faultClass: "customization_tampered", probeResult: "not_run_sticky" });
-    host.close();
-  });
-
-  it("interrupt後でもturn後customization改ざんをfail-stopにする", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const customizationDir = calls[0]!.args.at(-1)!;
-    writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
-    await host.interrupt();
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_customization_tampered" });
-    await host.send("must not spawn");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(calls).toHaveLength(1);
-    host.close();
-  });
-
-  it("issue #377 Stage 2: a turn's result publishes on its own result event, not on process exit", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ text: "done" });
-    // The epoch's process is still alive -- Stage 2 does not kill it
-    // between turns (unlike Stage 1, which spawned fresh every turn).
-    expect(calls[0]!.child.killed).toBeUndefined();
-    host.close();
-  });
-
-  it("setModelは次turn成功までeffective pairを変えず、account defaultをpromoteする", async () => {
-    const cfg: AntigravityLaunchConfig = { ...config({ model: "gemini-3.6-flash-low", model_source: "config" }), approval: "on-request" };
-    const { host, states, calls } = hostHarness({ config: cfg });
-    await host.setModel("");
-    expect(host.statusSnapshot()).toMatchObject({ effective: { model: "gemini-3.6-flash-low", model_source: "config" }, pending_model: "" });
-    await host.send("switch");
-    await waitFor(() => calls.length === 1);
-    expect(calls[0]!.args).not.toContain("--model");
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => states.some((envelope) => envelope.state === "done"));
-    expect(states.at(-1)).toMatchObject({ ext: { effective: { model: "", model_source: "config" } } });
-    host.close();
-  });
-
-  it("setModelの失敗はlast-known-goodへrollbackしswitch_errorを一度stampする", async () => {
-    const cfg: AntigravityLaunchConfig = { ...config({ model: "gemini-3.6-flash-low", model_source: "config" }), approval: "on-request" };
-    const { host, states, calls } = hostHarness({ config: cfg });
-    await host.setModel("missing-model");
-    await host.send("switch");
-    await waitFor(() => calls.length === 1);
-    expect(calls[0]!.args).toEqual(expect.arrayContaining(["--model", "missing-model"]));
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","error":"unknown model"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => states.some((envelope) => envelope.state === "error"));
-    expect(states.find((envelope) => (envelope.ext?.switch_error as { requested?: string } | undefined)?.requested === "missing-model")).toMatchObject({ ext: {
-      effective: { model: "gemini-3.6-flash-low", model_source: "config" },
-      switch_error: { kind: "model", requested: "missing-model", reason: "turn_failed", rolled_back_to: "gemini-3.6-flash-low" },
-    } });
-    host.close();
-  });
-
-  it("models probe control-flowの成功時はsnapshotではなく実測catalogをstampする", async () => {
-    const states: Envelope[] = [];
-    const cfg = config();
-    const calls: string[][] = [];
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: (envelope) => states.push(envelope),
-      agyPath: "/test/agy",
-      modelsProbeSpawn: (_command, args) => {
-        calls.push(args);
-        const child = new FakeAgy();
-        queueMicrotask(() => {
-          child.stdout.end(readFileSync(new URL("./fixtures/agy-models.stdout", import.meta.url), "utf8"));
-          child.emit("exit", 0, null);
-        });
-        return child;
-      },
-    });
-    await waitFor(() => states.some((envelope) => (envelope.ext?.models as { value: string }[] | undefined)?.some((model) => model.value === "gemini-3.8-flash-high") === true));
-    expect(calls).toEqual([["models"]]);
-    host.close();
-  });
-
-  it("a live models probe re-applies antigravity_extra_models, not only the pinned snapshot (issue #292)", async () => {
-    const states: Envelope[] = [];
-    const cfg = {
-      ...config(),
-      antigravity_extra_models: [
-        // Overrides a value the live probe itself returns.
-        { value: "claude-sonnet-5-5-high", display_name: "overridden" },
-        // A value absent from both the snapshot and the live probe result.
-        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
-      ],
-    };
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: (envelope) => states.push(envelope),
-      agyPath: "/test/agy",
-      modelsProbeSpawn: () => {
-        const child = new FakeAgy();
-        queueMicrotask(() => {
-          child.stdout.end(readFileSync(new URL("./fixtures/agy-models.stdout", import.meta.url), "utf8"));
-          child.emit("exit", 0, null);
-        });
-        return child;
-      },
-    });
-    await waitFor(() => states.some((envelope) => (envelope.ext?.models as { value: string }[] | undefined)?.some((model) => model.value === "gemini-4-nova") === true));
-    const models = states.at(-1)!.ext!.models as { value: string; display_name: string }[];
-    expect(models.map((m) => m.value)).toContain("gemini-4-nova");
-    expect(models.find((m) => m.value === "claude-sonnet-5-5-high")?.display_name).toBe("overridden");
-    host.close();
-  });
-
-  it("QuestionBrokerのpendingはwaiting_questionを駆動しinterruptでcancelする", async () => {
-    const states: Envelope[] = [];
-    const cfg = config();
-    let host: AntigravityHost | undefined;
-    const questionBroker = new QuestionBroker({ config: cfg, send: () => {}, onPendingChange: (pending) => host?.setPendingQuestion(pending) });
-    host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }), questionBroker,
-      onState: (envelope) => states.push(envelope),
-    });
-    const answer = questionBroker.decide([{ question: "continue?", header: "continue", multiSelect: false, options: [{ label: "yes", description: "yes" }, { label: "no", description: "no" }] }]);
-    expect(states.at(-1)?.state).toBe("waiting_question");
-    await host.interrupt();
-    await expect(answer).resolves.toEqual({ cancelled: true });
-    expect(states.at(-1)?.state).toBe("tool_running");
-    host.close();
-  });
-
-  it("interrupt中にgate smokeが完了してもturn childをspawnしない", async () => {
-    let resolveProbe!: (value: boolean) => void;
-    const probe = new Promise<boolean>((resolve) => { resolveProbe = resolve; });
-    const { host, calls } = hostHarness({ verifyGate: () => probe });
-    await host.send("hello");
-    await host.interrupt();
-    resolveProbe(true);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(calls).toHaveLength(0);
-    host.close();
-  });
-
-  it("gate smokeは期限切れでfail-closedになりturn childをspawnしない", async () => {
-    const logs: Envelope[] = [];
-    const calls: FakeAgy[] = [];
-    const cfg = config();
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, onLog: (envelope) => logs.push(envelope),
-      agyPath: "/test/agy", verifyGate: async () => new Promise<boolean>(() => {}), gateProbeTimeoutMs: 5,
-      spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
-    });
-    await host.send("hello");
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_not_registered:timeout" });
-    expect(calls).toHaveLength(0);
-    host.close();
-  });
-
-  it.each([
-    ["nonzero exit", (child: FakeAgy) => {
-      child.stderr.end("permission denied");
-      child.stdout.end("{}");
-      child.emit("close", 1, null);
-    }, "antigravity_gate_not_registered:nonzero_exit:permission denied"],
-    ["invalid JSON", (child: FakeAgy) => {
-      child.stdout.end("{");
-      child.emit("close", 0, null);
-    }, "antigravity_gate_not_registered:invalid_json"],
-    ["registration mismatch", (child: FakeAgy) => {
-      child.stdout.end(JSON.stringify({ hooks: [] }));
-      child.emit("close", 0, null);
-    }, "antigravity_gate_not_registered:registration_mismatch"],
-    ["probe error", (child: FakeAgy) => child.emit("error", new Error("EACCES")), "antigravity_gate_not_registered:spawn_failure:EACCES"],
-  ] as const)("gate probe %s is classified and fail-closed", async (_name, finishProbe, errorDetail) => {
-    const cfg = config();
-    const logs: Envelope[] = [];
-    let turnSpawns = 0;
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, onLog: (envelope) => logs.push(envelope),
-      agyPath: "/test/agy", probeModels: async () => null,
-      probeSpawn: () => {
-        const child = new FakeAgy();
-        queueMicrotask(() => finishProbe(child));
-        return child as unknown as GateProbe;
-      },
-      spawn: () => {
-        turnSpawns += 1;
-        return new FakeAgy() as unknown as SpawnedAgy;
-      },
-    });
-    await host.send("hello");
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(turnSpawns).toBe(0);
-    expect(logs.at(-1)?.payload).toMatchObject({ error_detail: errorDetail });
-    host.close();
-  });
-
-  it("settles a timeout, probe error, and close race once without spawning a turn", async () => {
-    const cfg = config();
-    const logs: Envelope[] = [];
-    const probe = new FakeAgy();
-    let turnSpawns = 0;
-    const host = createHarnessHost(cfg, {
-      cwd: process.cwd(), appendSystemPrompt: "persona",
-      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-      onState: () => {}, onLog: (envelope) => logs.push(envelope),
-      agyPath: "/test/agy", probeModels: async () => null, gateProbeTimeoutMs: 5,
-      probeSpawn: () => probe as unknown as GateProbe,
-      spawn: () => {
-        turnSpawns += 1;
-        return new FakeAgy() as unknown as SpawnedAgy;
-      },
-    });
-    await host.send("hello");
-    await waitFor(() => probe.killed === "SIGTERM");
-    probe.emit("error", new Error("late EACCES"));
-    probe.stdout.end("{}");
-    probe.emit("close", 0, null);
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.filter((envelope) => envelope.type === "result")).toHaveLength(1);
-    expect(logs.at(-1)?.payload).toMatchObject({ error_detail: "antigravity_gate_not_registered:timeout" });
-    expect(turnSpawns).toBe(0);
-    host.close();
-  });
-
-  it("pure spawn errorはerror、stdout end、close後にagy_child_errorへ収束する", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.emit("error", Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
-    const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
-    child.stdout.end();
-    await stdoutEnded;
-    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
-    child.emit("close", 0, null);
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_cli_executable_missing: ENOENT" });
-    expect(logs.filter((envelope) => envelope.type === "result")).toHaveLength(1);
-    host.close();
-  });
-
-  // issue #300 round 3, finding M-B: this host had no per-engine choke
-  // point at all -- both error_detail producers (#terminalError below,
-  // and the ERROR-status stream result routed through
-  // #publishTerminalResult) called makeResult directly with no masking
-  // or clipping. The fix moved into makeResult itself
-  // (@kaoiro/agent-common's state.ts, unit-tested there directly) since
-  // that is the one function every engine's result envelope funnels
-  // through unconditionally; these tests confirm antigravity's own two
-  // real call sites actually reach it with the right text, end to end.
-  it("#publishTerminalResult経由のerror_detailはmaskingされる (issue #300 round 3, finding M-B)", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","error":"api_key=abcdef123456"}}\n');
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
-      is_error: true,
-      error_detail: "api_key=********3456",
-    });
-    host.close();
-  });
-
-  it("#terminalError経由のerror_detailはmaskingされる (issue #300 round 3, finding M-B)", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const child = calls[0]!.child;
-    child.emit("error", new Error("Authorization: Bearer abcdef123456"));
-    const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
-    child.stdout.end();
-    await stdoutEnded;
-    child.emit("close", 0, null);
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
-      error_detail: "antigravity_cli_spawn_failure: Authorization: ***************3456",
-    });
-    host.close();
-  });
-
-  it("#publishTerminalResult経由のerror_detailは16KiBにclipされる (issue #300 round 3, finding M-B)", async () => {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    const oversized = "x".repeat(16_384 + 100);
-    calls[0]!.child.stdout.write(`${JSON.stringify({ event: "result", result: { status: "ERROR", error: oversized } })}\n`);
-    calls[0]!.child.finish();
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    const detail = logs.find((envelope) => envelope.type === "result")?.payload.error_detail as string;
-    expect(Buffer.byteLength(detail, "utf8")).toBe(16_384);
-    host.close();
-  });
-
-  describe("issue #371 interrupt settlement", () => {
-    it("settles to waiting_input, once, when interrupted while ToolHost.listen is pending (no spawn)", async () => {
-      let resolveListen!: (value: ToolHost) => void;
-      const pending = new Promise<ToolHost>((resolve) => { resolveListen = resolve; });
-      const { host, states, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
-        toolHostListen: () => pending,
-      });
-      await host.send("hello");
-      await host.interrupt();
-      const real = await ToolHost.listen([]);
-      resolveListen(real);
-      await waitFor(() => turnEnds.length === 1);
-      expect(calls).toHaveLength(0);
-      expect(states.at(-1)?.state).toBe("waiting_input");
-      expect(turnEnds).toHaveLength(1);
-      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
-      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptRequests).toHaveLength(1);
-      expect(interruptSettlements).toHaveLength(1);
-      real.close();
-      host.close();
-    });
-
-    it("does not leak a prior turn's exit code/signal into onInterruptSettled when this turn's child never spawned (review finding)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      let gate = false;
-      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => (gate ? pending : Promise.resolve()),
-      });
-      // Turn 1 runs a real child to completion with a real exit code.
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[0]!.child.finish();
-      await waitFor(() => turnEnds.length === 1);
-      // Turn 2 is interrupted before its own child ever spawns.
-      gate = true;
-      await host.send("world", undefined, [], "turn-2");
-      await host.interrupt();
-      resolveSync();
-      await waitFor(() => turnEnds.length === 2);
-      expect(calls).toHaveLength(1);
-      expect(interruptSettlements).toHaveLength(1);
-      expect(interruptSettlements[0]).toMatchObject({ turnToken: "turn-2", exitCode: null, signal: null });
-      host.close();
-    });
-
-    it("settles to waiting_input, once, when interrupted while waitForPermissionSync is pending (no spawn)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      const { host, states, calls, turnEnds, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => pending,
-      });
-      await host.send("hello");
-      await host.interrupt();
-      resolveSync();
-      await waitFor(() => turnEnds.length === 1);
-      expect(calls).toHaveLength(0);
-      expect(states.at(-1)?.state).toBe("waiting_input");
-      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
-      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptSettlements).toHaveLength(1);
-      host.close();
-    });
-
-    it("settles to waiting_input, once, when interrupted while GateServer.listen is pending (no spawn)", async () => {
-      let resolveListen!: (value: GateServer) => void;
-      const pending = new Promise<GateServer>((resolve) => { resolveListen = resolve; });
-      const { host, states, calls, turnEnds, interruptSettlements } = hostHarness({
-        gateServerListen: () => pending,
-      });
-      await host.send("hello");
-      await host.interrupt();
-      const real = await GateServer.listen({ gate: new AntigravityGate({
-        config: config(),
-        cwd: process.cwd(),
-        customizationDir: process.cwd(),
-        nodePath: process.execPath,
-        entryPath: "/test/kaoiro.js",
-        toolNames: () => new Set(),
-        broker: new PermissionBroker({ config: config(), send: () => {} }),
-      }) });
-      resolveListen(real);
-      await waitFor(() => turnEnds.length === 1);
-      expect(calls).toHaveLength(0);
-      expect(states.at(-1)?.state).toBe("waiting_input");
-      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
-      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptSettlements).toHaveLength(1);
-      real.close();
-      host.close();
-    });
-
-    it("settles to waiting_input, once, when interrupted while gate registration verification is pending (no spawn)", async () => {
-      let resolveProbe!: (value: boolean) => void;
-      const probe = new Promise<boolean>((resolve) => { resolveProbe = resolve; });
-      const { host, states, calls, turnEnds, interruptSettlements } = hostHarness({ verifyGate: () => probe });
-      await host.send("hello");
-      await host.interrupt();
-      resolveProbe(true);
-      await waitFor(() => turnEnds.length === 1);
-      expect(calls).toHaveLength(0);
-      expect(states.at(-1)?.state).toBe("waiting_input");
-      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
-      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptSettlements).toHaveLength(1);
-      host.close();
-    });
-
-    it("settles to waiting_input, once, when interrupted mid-tool-execution, and the next queued turn runs", async () => {
-      const { host, states, calls, turnEnds, interruptSettlements } = hostHarness();
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
-      await waitFor(() => states.at(-1)?.state === "tool_running");
-      void host.send("queued while interrupting", undefined, [], "turn-2");
-      await host.interrupt();
-      calls[0]!.child.stdout.end();
-      calls[0]!.child.emit("close", null, "SIGTERM");
-      await waitFor(() => turnEnds.length === 1);
-      expect(states.find((s) => s.state === "waiting_input")).toBeDefined();
-      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
-      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptSettlements).toHaveLength(1);
-      expect(interruptSettlements[0]).toMatchObject({ signal: "SIGTERM" });
-      // The queued turn (issue #358) runs under the new generation.
-      await waitFor(() => calls.length === 2);
-      host.close();
-    });
-
-    it("an idle interrupt records nothing, and the next send starts a turn normally", async () => {
-      const { host, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness();
-      await host.interrupt();
-      expect(interruptRequests).toHaveLength(0);
-      expect(interruptSettlements).toHaveLength(0);
-      expect(turnEnds).toHaveLength(0);
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[0]!.child.finish();
-      await waitFor(() => turnEnds.length === 1);
-      expect(turnEnds[0]!.error).toBeUndefined();
-      expect(turnEnds[0]!.cancellation).toBeUndefined();
-      host.close();
-    });
-
-    it("close() racing a pending waitForPermissionSync keeps pre-#371 termination semantics: no synthetic result, no interrupt lifecycle, no queue resume (design addendum)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      const { host, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => pending,
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      void host.send("queued before close", undefined, [], "turn-2");
-      host.close();
-      resolveSync();
-      await waitFor(() => turnEnds.length === 1);
-      expect(calls).toHaveLength(0);
-      expect(turnEnds[0]!.error).toBeUndefined();
-      expect(turnEnds[0]!.cancellation).toBeUndefined();
-      expect(interruptRequests).toHaveLength(0);
-      expect(interruptSettlements).toHaveLength(0);
-      // The host is closed: #drainTurns's own top-of-function guard
-      // withholds the queued turn regardless of this invariant.
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(calls).toHaveLength(0);
-    });
-
-    it("a watchdog fail-stop racing a pending gate registration verification keeps pre-#371 termination semantics (design addendum)", async () => {
-      let resolveProbe!: (value: boolean) => void;
-      const probe = new Promise<boolean>((resolve) => { resolveProbe = resolve; });
-      const { host, calls, turnEnds, interruptSettlements } = hostHarness({ verifyGate: () => probe });
-      await host.send("hello");
-      host.failStopForWatchdogAttributionUnknown();
-      resolveProbe(true);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      // `#watchdogFailStopped` suppresses `#drainTurns`'s onTurnEnd entirely
-      // for the active turn (the existing, unmodified guard at the top of
-      // this block) — `onWatchdogFailStop` is that path's own notification.
-      expect(calls).toHaveLength(0);
-      expect(turnEnds).toHaveLength(0);
-      expect(interruptSettlements).toHaveLength(0);
-    });
-
-    it("operator interrupt settles exactly once and the next queued turn runs under the new generation (design addendum pin)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => pending,
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      void host.send("queued while interrupting", undefined, [], "turn-2");
-      await host.interrupt();
-      resolveSync();
-      await waitFor(() => turnEnds.length === 1);
-      expect(interruptSettlements).toHaveLength(1);
-      expect(turnEnds).toHaveLength(1);
-      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      await waitFor(() => calls.length === 1);
-      host.close();
-    });
-
-    it("close() after interrupt() but before the turn settles suppresses the synthetic result too (normal-admission gate)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => pending,
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await host.interrupt();
-      host.close();
-      resolveSync();
-      await waitFor(() => turnEnds.length === 1);
-      expect(calls).toHaveLength(0);
-      // interrupt()'s record matched this turn, but close() moved the host
-      // out of normal admission before settlement -- the synthetic
-      // "interrupted" result must not fire even though the record matched.
-      expect(turnEnds[0]!.error).toBeUndefined();
-      expect(turnEnds[0]!.cancellation).toBeUndefined();
-      expect(interruptSettlements).toHaveLength(0);
-    });
-
-    it("a watchdog fail-stop after interrupt() but before the turn settles also suppresses the synthetic result (kuroe review, turn 10)", async () => {
-      // `normalAdmission` checks only `!this.#closed`, not
-      // `!this.#watchdogFailStopped`, because the WHOLE settlement
-      // invariant already sits inside `if (!this.#watchdogFailStopped)`
-      // (unchanged pre-#371 code) -- once fail-stop sets that flag, this
-      // entire block is skipped regardless of what interrupt() recorded
-      // first, synchronously and with no `await` in between, so there is
-      // no window where a fail-stop could land mid-invariant. This test
-      // pins that guarantee directly rather than leaving it as reasoning
-      // about the surrounding `if`.
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => pending,
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await host.interrupt();
-      host.failStopForWatchdogAttributionUnknown();
-      resolveSync();
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      // `#watchdogFailStopped` suppresses `#drainTurns`'s onTurnEnd
-      // entirely for the active turn -- `onWatchdogFailStop` is that
-      // path's own notification, not exercised here.
-      expect(calls).toHaveLength(0);
-      expect(turnEnds).toHaveLength(0);
-      expect(interruptSettlements).toHaveLength(0);
-    });
-
-    it("a settlement for an unrelated reason after interrupt is not misreported as interrupted (regression guard)", async () => {
-      // Same scenario as "interrupt後でもturn後customization改ざんをfail-stopにする"
-      // above, extended to assert the new fields this issue adds.
-      const { host, logs, calls, turnEnds, interruptSettlements } = hostHarness();
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      const customizationDir = calls[0]!.args.at(-1)!;
-      writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
-      await host.interrupt();
-      calls[0]!.child.finish();
-      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-      await waitFor(() => turnEnds.length === 1);
-      expect(turnEnds[0]!.error).toEqual({ detail: "antigravity_customization_tampered" });
-      expect(turnEnds[0]!.cancellation).toBeUndefined();
-      expect(interruptSettlements).toHaveLength(0);
-      host.close();
-    });
-
-    it("send() on a closed host reports onSendRejected without starting a turn", async () => {
-      const { host, calls, sendRejections } = hostHarness();
-      host.close();
-      await host.send("hello", undefined, [], "turn-1");
-      expect(calls).toHaveLength(0);
-      expect(sendRejections).toEqual([{ turnToken: "turn-1", reason: "closed" }]);
-    });
-
-    it("send() on a watchdog-fail-stopped host reports onSendRejected without starting a turn", async () => {
-      const { host, calls, sendRejections } = hostHarness();
-      host.failStopForWatchdogAttributionUnknown();
-      await host.send("hello");
-      expect(calls).toHaveLength(0);
-      expect(sendRejections).toEqual([{ reason: "watchdog_fail_stopped" }]);
-      host.close();
-    });
-
-    it("send() on a gate-broken host reports onSendRejected without starting a turn", async () => {
-      const { host, logs, calls, sendRejections } = hostHarness();
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      const customizationDir = calls[0]!.args.at(-1)!;
-      writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
-      calls[0]!.child.finish();
-      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-      await host.send("must not start", undefined, [], "turn-2");
-      expect(calls).toHaveLength(1);
-      expect(sendRejections).toEqual([{ turnToken: "turn-2", reason: "gate_broken" }]);
-      host.close();
-    });
-
-    it("keeps gate-broken rejection ahead of unsupported attachments", async () => {
-      const { host, calls, logs, sendRejections } = hostHarness();
-      await host.send("trip");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-      calls[0]!.child.finish();
-      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-
-      await host.send("attached input", ["attachment-1"], ["cid-attached"], "attached-token");
-      expect(calls).toHaveLength(1);
-      expect(sendRejections).toContainEqual({ turnToken: "attached-token", conversationIds: ["cid-attached"], reason: "gate_broken" });
-      host.close();
-    });
-
-    it("send() with attachments reports onSendRejected without starting a turn (momo round-1 M2)", async () => {
-      const { host, calls, sendRejections } = hostHarness();
-      await host.send("hello", ["attachment-1"], [], "turn-1");
-      expect(calls).toHaveLength(0);
-      expect(sendRejections).toEqual([{ turnToken: "turn-1", reason: "attachments_unsupported" }]);
-      host.close();
-    });
-
-    it("a send() re-entered synchronously from onTurnEnd does not lose the next turn's interrupt marker (momo round-1 M1)", async () => {
-      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
-        onTurnEnd: (info) => {
-          if (info.turnToken === "turn-1") void host.send("second", undefined, [], "turn-2");
-        },
-      });
-      await host.send("first", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[0]!.child.finish();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      await waitFor(() => calls.length === 2);
-      await host.interrupt();
-      calls[1]!.child.finish();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-2"));
-      const turn2End = turnEnds.find((end) => end.turnToken === "turn-2")!;
-      expect(turn2End.error).toEqual({ reason: "interrupted" });
-      expect(turn2End.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptSettlements).toHaveLength(1);
-      expect(host.state).toBe("waiting_input");
-      host.close();
-    });
-
-    it("a send() re-entered synchronously from onTurnEnd does not leak the prior turn's attempted model into a pre-spawn interrupt rollback (momo round-2 M3)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      let gate = false;
-      const { host, calls, turnEnds } = hostHarness({
-        waitForPermissionSync: () => (gate ? pending : Promise.resolve()),
-        onTurnEnd: (info) => {
-          if (info.turnToken === "turn-1") {
-            gate = true;
-            void host.setModel("model-a");
-            void host.send("second", undefined, [], "turn-2");
-          }
-        },
-      });
-      await host.setModel("model-a");
-      await host.send("first", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[0]!.child.finish();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      // turn-2 is now blocked pre-spawn on waitForPermissionSync, with
-      // pending_model "model-a" staged by the re-entrant setModel() above.
-      await host.interrupt();
-      resolveSync();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-2"));
-      expect(calls).toHaveLength(1);
-      expect(host.statusSnapshot()).toMatchObject({ pending_model: "model-a" });
-      host.close();
-    });
-
-    it("interrupt() called from inside a successful turn's own onTurnEnd is an idle interrupt, not attributed to the turn that just finished (momo round-3 M4, kuroe design ruling B)", async () => {
-      const { host, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
-        onTurnEnd: (info) => {
-          if (info.turnToken === "turn-1") void host.interrupt();
-        },
-      });
-      await host.send("first", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[0]!.child.finish();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(interruptRequests).toEqual([]);
-      expect(interruptSettlements).toEqual([]);
-      expect(host.state).toBe("waiting_input");
-      // No stale #interruptRecord leaked into the next turn: it runs to a
-      // genuinely normal completion, not an interrupted one.
-      await host.send("second", undefined, [], "turn-2");
-      await waitFor(() => calls.length === 2);
-      calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[1]!.child.finish();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-2"));
-      const turn2End = turnEnds.find((end) => end.turnToken === "turn-2")!;
-      expect(turn2End.error).toBeUndefined();
-      expect(turn2End.cancellation).toBeUndefined();
-      expect(interruptRequests).toEqual([]);
-      expect(interruptSettlements).toEqual([]);
-      host.close();
-    });
-
-    it("interrupt() called after a watchdog fail-stop does not misattribute to the turn that was running (M4 fail-stop-safe cleanup, ao)", async () => {
-      // The M4 cleanup (above) must run even when `!this.#watchdogFailStopped`
-      // is false, so this turn's `#currentTurnToken` cannot survive the
-      // fail-stop and be picked up by a LATER `interrupt()` call -- e.g. an
-      // operator request that arrives after the fail-stop notification.
-      const { host, calls, interruptRequests, interruptSettlements } = hostHarness();
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      host.failStopForWatchdogAttributionUnknown();
-      // `failStopForWatchdogAttributionUnknown` only SIGTERMs the child; the
-      // turn's finally does not run (and so cannot clear `#currentTurnToken`)
-      // until the child actually reports its exit.
-      calls[0]!.child.finish();
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await host.interrupt();
-      expect(interruptRequests).toEqual([]);
-      expect(interruptSettlements).toEqual([]);
-    });
-
-    it("interrupt() called from inside the synthetic terminal's onState(error) does not re-attribute to the turn it just settled (momo round-4 M5, kuroe class-closing order)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      const { host, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => pending,
-        onState: (envelope) => {
-          if (envelope.state === "error") void host.interrupt();
-        },
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await host.interrupt();
-      resolveSync();
-      await waitFor(() => turnEnds.length === 1);
-      // Exactly the ONE interrupt() call from the test body itself, not a
-      // second one re-entered from inside `#terminalError`'s onState.
-      expect(interruptRequests).toHaveLength(1);
-      expect(interruptSettlements).toHaveLength(1);
-      expect(host.state).toBe("waiting_input");
-      host.close();
-    });
-
-    it("interrupt() called from inside onInterruptSettled does not re-attribute to the turn it just settled (momo round-4 M5, kuroe class-closing order)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      const { host, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => pending,
-        onInterruptSettled: () => { void host.interrupt(); },
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await host.interrupt();
-      resolveSync();
-      await waitFor(() => turnEnds.length === 1);
-      expect(interruptRequests).toHaveLength(1);
-      expect(interruptSettlements).toHaveLength(1);
-      expect(host.state).toBe("waiting_input");
-      host.close();
-    });
-  });
-
-  describe("issue #371 Design v2 (outcome union, single projection)", () => {
-    it("pin (i): a queued turn interrupted pre-spawn settles as interrupted, and the next queued turn runs (kohaku probe)", async () => {
-      // kohaku's actual defect (state.ts:142-153): `user_send` only moves
-      // the machine to "sending" when it is called while AT REST; a send
-      // while turn-1 is still mid-turn is silently queued with NO state
-      // change. So turn-2/turn-3 must be sent WHILE turn-1 is still
-      // running (before its result), not after -- sending them post-turn-1
-      // would give turn-2 its own "sending" transition and never reproduce
-      // the at-rest-proxy false positive this pin targets.
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      let gate = false;
-      const { host, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
-        waitForPermissionSync: () => (gate ? pending : Promise.resolve()),
-      });
-      await host.send("first", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      gate = true;
-      await host.send("second", undefined, [], "turn-2");
-      await host.send("third", undefined, [], "turn-3");
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[0]!.child.finish();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      await host.interrupt();
-      gate = false;
-      resolveSync();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-2"));
-      const turn2End = turnEnds.find((end) => end.turnToken === "turn-2")!;
-      expect(turn2End.error).toEqual({ reason: "interrupted" });
-      expect(turn2End.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptSettlements).toHaveLength(1);
-      expect(interruptRequests).toHaveLength(1);
-      await waitFor(() => calls.length === 2);
-      // turn-2 (pre-spawn interrupted) never spawned a child; this is
-      // turn-3's -- confirmed via the stdin NDJSON line (issue #377 Stage
-      // 1: the prompt is no longer an argv positional).
-      let turn3Stdin = "";
-      calls[1]!.child.stdin.on("data", (chunk: Buffer) => { turn3Stdin += chunk.toString("utf8"); });
-      // Wait for the buffered content itself, not `writableEnded` (see the
-      // F2 test above for why the two are not interchangeable here).
-      await waitFor(() => turn3Stdin.includes("\n"));
-      expect(JSON.parse(turn3Stdin.trim())).toEqual({ event: "user", message: { role: "user", content: "third" } });
-      calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[1]!.child.finish();
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-3"));
-      expect(host.state).toBe("waiting_input");
-      host.close();
-    });
-
-    it("pin (ii): interrupt() inside onState(error) after agy_exit_without_result creates no record (momo M6 probe)", async () => {
-      const { host, calls, interruptRequests } = hostHarness({
-        onState: (envelope) => {
-          if (envelope.state === "error") void host.interrupt();
-        },
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.finish();
-      await waitFor(() => host.state === "waiting_input");
-      expect(interruptRequests).toEqual([]);
-      host.close();
-    });
-
-    it("pin (iii): interrupt() called once from inside the success-path onState creates no record", async () => {
-      // Investigated on 7cea3f87 (scratch probe, removed): a successful
-      // result fires onState 3 times -- "sending" (from send()'s own
-      // user_send, before the turn is even dequeued -- interrupt() here is
-      // a genuine idle interrupt, not the class this pin targets), then
-      // "done" and "waiting_input" (both from #publishTerminalResult's
-      // projection of the result, while identity was still live pre-Design
-      // v2). "first onState after the result" means the first of THOSE,
-      // i.e. "done" -- calling interrupt() from "sending" measures nothing.
-      let fired = false;
-      const { host, calls, interruptRequests } = hostHarness({
-        onState: (envelope) => {
-          if (!fired && envelope.state === "done") {
-            fired = true;
-            void host.interrupt();
-          }
-        },
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[0]!.child.finish();
-      await waitFor(() => host.state === "waiting_input");
-      expect(interruptRequests).toEqual([]);
-      host.close();
-    });
-
-    it("pin (vi): an interrupt in the gate-verification window settles exactly once as interrupted via the throw path (cancelGateProbe settles the probe as timeout first; the fixture's later rejection is a no-op)", async () => {
-      let rejectProbe!: (reason: unknown) => void;
-      const probe = new Promise<boolean>((_resolve, reject) => { rejectProbe = reject; });
-      const { host, states, turnEnds, interruptSettlements } = hostHarness({ verifyGate: () => probe });
-      await host.send("hello", undefined, [], "turn-1");
-      // Let `#verifyGateRegistration` actually register its `.then()` on
-      // `probe` before rejecting it, or the rejection can race ahead of the
-      // handler and surface as an unhandled rejection instead of being
-      // observed by `#runTurn`.
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await host.interrupt();
-      rejectProbe(new Error("boom"));
-      await waitFor(() => turnEnds.length === 1);
-      expect(interruptSettlements).toHaveLength(1);
-      expect(turnEnds).toHaveLength(1);
-      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
-      expect(states.filter((envelope) => envelope.state === "error")).toHaveLength(1);
-      host.close();
-    });
-
-    it("pin (vii): interrupt() inside onState(error) after a current-generation throw creates no record (no double projection)", async () => {
-      const { host, states, logs, interruptRequests } = hostHarness({
-        verifyGate: async () => { throw new Error("boom"); },
-        onState: (envelope) => {
-          if (envelope.state === "error") void host.interrupt();
-        },
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => host.state === "waiting_input");
-      expect(interruptRequests).toEqual([]);
-      expect(states.filter((envelope) => envelope.state === "error")).toHaveLength(1);
-      expect(logs.filter((envelope) => envelope.type === "result")).toHaveLength(1);
-      host.close();
-    });
-
-    it("pin (viii): interrupt() before a CANCELED result settles as interrupted, not a successful done", async () => {
-      const { host, calls, states, turnEnds, interruptSettlements } = hostHarness();
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      await host.interrupt();
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"CANCELED"}}\n');
-      calls[0]!.child.finish();
-      await waitFor(() => turnEnds.length === 1);
-      expect(states.some((envelope) => envelope.state === "done")).toBe(false);
-      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
-      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptSettlements).toHaveLength(1);
-      host.close();
-    });
-
-    it("pin (ix): a pre-spawn throw rolls back a pending model unconditionally (M2 catch contract)", async () => {
-      const cfg: AntigravityLaunchConfig = { ...config({ model: "gemini-3.6-flash-low", model_source: "config" }), approval: "on-request" };
-      const { host, states } = hostHarness({
-        config: cfg,
-        verifyGate: async () => { throw new Error("boom"); },
-      });
-      await host.setModel("model-b");
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => states.some((envelope) => (envelope.ext?.switch_error as { reason?: string } | undefined)?.reason === "turn_failed"));
-      expect(states.filter((envelope) => (envelope.ext?.switch_error as { reason?: string } | undefined)?.reason === "turn_failed")).toHaveLength(1);
-      expect(host.statusSnapshot()).not.toHaveProperty("pending_model");
-      host.close();
-    });
-
-    it("pin (x): two interrupt() calls on the same turn produce exactly one lifecycle pair (N3)", async () => {
-      let resolveSync!: () => void;
-      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
-      const { host, interruptRequests, interruptSettlements, turnEnds } = hostHarness({
-        waitForPermissionSync: () => pending,
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await host.interrupt();
-      await host.interrupt();
-      resolveSync();
-      await waitFor(() => turnEnds.length === 1);
-      expect(interruptRequests).toHaveLength(1);
-      expect(interruptSettlements).toHaveLength(1);
-      host.close();
-    });
-
-    it("pin (xi): a quota-exhausted result also rolls back a pending model (revision 1a, two independent axes)", async () => {
-      const { host, calls, states } = hostHarness();
-      await host.setModel("model-b");
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write(`${JSON.stringify({
-        event: "result",
-        result: { status: "ERROR", error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 148h49m28s." },
-      })}\n`);
-      calls[0]!.child.finish();
-      await waitFor(() => states.some((envelope) => (envelope.ext?.switch_error as { reason?: string } | undefined)?.reason === "turn_failed"));
-      expect(host.statusSnapshot()).not.toHaveProperty("pending_model");
-      expect(host.statusSnapshot().rate_limits).toMatchObject({ seven_day: { status: "blocked" } });
-      host.close();
-    });
-  });
-
-  describe("tool prompts and deadlines (issue #350)", () => {
-    afterEach(() => {
-      vi.unstubAllEnvs();
-    });
-
-    it("spawns agy with git/ssh prompts disabled", async () => {
-      vi.stubEnv("GIT_SSH_COMMAND", "");
-      const { host, calls } = hostHarness();
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      expect(calls[0]!.env).toMatchObject({
-        GIT_TERMINAL_PROMPT: "0",
-        SSH_ASKPASS_REQUIRE: "never",
-        GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
-      });
-      host.close();
-    });
-
-    it("keeps an operator GIT_SSH_COMMAND while still disabling the other prompts", async () => {
-      vi.stubEnv("GIT_SSH_COMMAND", "/opt/wrap-ssh --audit");
-      const { host, calls } = hostHarness();
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      expect(calls[0]!.env).toMatchObject({
-        GIT_TERMINAL_PROMPT: "0",
-        SSH_ASKPASS_REQUIRE: "never",
-        GIT_SSH_COMMAND: "/opt/wrap-ssh --audit",
-      });
-      host.close();
-    });
-
-    it("reports tool ACTIVE and DONE by step index to the watchdog callbacks", async () => {
-      const starts: unknown[] = [];
-      const ends: unknown[] = [];
-      const { host, calls, logs } = hostHarness({
-        onToolStart: (info) => starts.push(info),
-        onToolEnd: (info) => ends.push(info),
-      });
-      await host.send("hello", undefined, ["cid-1"], "turn-1");
-      await waitFor(() => calls.length === 1);
-      const child = calls[0]!.child;
-      child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["call_mcp_tool"]}}\n');
-      child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{}}}}\n');
-      child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{}}}}\n');
-      child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","output":"ok"}}}\n');
-      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      child.finish();
-      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-      expect(starts).toEqual([
-        { turnToken: "turn-1", stepIndex: 2, toolName: "call_mcp_tool" },
-        { turnToken: "turn-1", stepIndex: 2, toolName: "call_mcp_tool" },
-      ]);
-      expect(ends).toEqual([{ turnToken: "turn-1", stepIndex: 2 }]);
-      expect(child.killed).toBeUndefined();
-      host.close();
-    });
-
-    it("overrides the CLI terminal result with tool_timeout after a watchdog tool deadline", async () => {
-      const ends: Array<{ error?: InterAgentErrorClassifyInput }> = [];
-      const cfg = config();
-      const states: Envelope[] = [];
-      const logs: Envelope[] = [];
-      const calls: FakeAgy[] = [];
-      const host = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope),
-        verifyGate: async () => true, agyPath: "/test/agy",
-        onTurnEnd: (info) => ends.push(info),
-        spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
-      });
-      await host.send("hello", undefined, ["cid-1"], "turn-1");
-      await waitFor(() => calls.length === 1);
-      const child = calls[0]!;
-      child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["run_command"]}}\n');
-      child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"git fetch origin"}}}}\n');
-      expect(host.requestInterruptForTurn("turn-1", {
-        kind: "tool_timeout", stepIndex: 2, toolName: "run_command", elapsedMs: 600_004, toolTimeoutMs: 600_000,
-      })).toBe(true);
-      expect(child.killed).toBe("SIGTERM");
-      // Whatever agy prints on the way out is not the turn outcome.
-      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"still running"}}\n');
-      child.finish();
-      await waitFor(() => ends.length === 1);
-      expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
-        is_error: true, error_subtype: "error_during_execution", error_detail: "tool_timeout",
-      });
-      expect(states.map((envelope) => envelope.state).slice(-2)).toEqual(["error", "waiting_input"]);
-      expect(ends[0]!.error).toEqual({ reason: "timeout" });
-      expect(classifyInterAgentError(ends[0]!.error!)).toMatchObject({ code: "timeout" });
-      // The next turn starts clean: no leftover cause.
-      await host.send("again", undefined, ["cid-2"], "turn-2");
-      await waitFor(() => calls.length === 2);
-      calls[1]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"fine"}}\n');
-      calls[1]!.finish();
-      await waitFor(() => ends.length === 2);
-      expect(ends[1]!.error).toBeUndefined();
-      host.close();
-    });
-
-    it.each([
-      ["tool_name and tool_info.name disagree", '{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"view_file"}}', "run_command"],
-      ["step_index is unsafe", '{"step_index":"x","state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command"}}', "run_command"],
-      ["no name at all", '{"step_index":2,"state":"ACTIVE","step_type":"tool"}', "unknown"],
-    ])("fails closed on an ACTIVE tool the deadline cannot key on (%s)", async (_label, step, failure) => {
-      const starts: unknown[] = [];
-      const { host, logs, calls } = hostHarness({ onToolStart: (info) => starts.push(info) });
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      const child = calls[0]!.child;
-      child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["run_command"]}}\n');
-      child.stdout.write(`{"event":"step_update","step_update":${step}}\n`);
-      await waitFor(() => child.killed === "SIGTERM");
-      child.finish();
-      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-      expect(starts).toEqual([]);
-      expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
-        is_error: true, error_detail: `antigravity_gate_unobserved_tool:${failure}`,
-      });
-      host.close();
-    });
-
-    it("synthesizes a turn token for an operator instruction so the watchdog can bound it", async () => {
-      const starts: Array<{ turnToken: string; conversationIds: readonly string[] }> = [];
-      const toolStarts: string[] = [];
-      const ends: string[] = [];
-      const cfg = config();
-      const calls: FakeAgy[] = [];
-      let host!: AntigravityHost;
-      host = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {}, verifyGate: async () => true, agyPath: "/test/agy",
-        onTurnStart: (info) => {
-          starts.push(info);
-          expect(host.activeInterAgentTurnToken()).toBe(info.turnToken);
-        },
-        onToolStart: ({ turnToken }) => toolStarts.push(turnToken),
-        onTurnEnd: ({ turnToken }) => ends.push(turnToken),
-        spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
-      });
-      await host.send("hello");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command"}}}\n');
-      calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      calls[0]!.finish();
-      await waitFor(() => ends.length === 1);
-      expect(starts).toEqual([{ turnToken: expect.stringMatching(/^[0-9a-f-]{36}$/), conversationIds: [] }]);
-      expect(toolStarts).toEqual([starts[0]!.turnToken]);
-      expect(ends).toEqual([starts[0]!.turnToken]);
-      expect(host.activeInterAgentTurnToken()).toBeNull();
-      host.close();
-    });
-
-    it("ignores a tool timeout request for a token that is not the active turn", async () => {
-      const { host, calls } = hostHarness();
-      await host.send("hello", undefined, ["cid-1"], "turn-1");
-      await waitFor(() => calls.length === 1);
-      expect(host.requestInterruptForTurn("turn-other", {
-        kind: "tool_timeout", stepIndex: 1, toolName: "run_command", elapsedMs: 1, toolTimeoutMs: 1,
-      })).toBe(false);
-      expect(calls[0]!.child.killed).toBeUndefined();
-      host.close();
-    });
-  });
-
-  describe("issue #377 Stage 1 M4 (ack point / epoch_exit_before_turn race)", () => {
-    /** A `SpawnedAgy` fake whose `stdin.write` never behaves like a plain
-     *  `PassThrough` -- it lets each test control exactly when (and
-     *  whether) the write callback resolves, and whether `close` fires
-     *  first, to pin the M4 race without relying on real OS timing. */
-    class RacyStdinAgy extends EventEmitter {
-      readonly stdout = new PassThrough();
-      readonly stderr = new PassThrough();
-      writeCalls: string[] = [];
-      emitStdinErrorOnListen = false;
-      readonly stdin = {
-        write: (chunk: string, callback: (error?: Error | null) => void): boolean => {
-          this.writeCalls.push(chunk);
-          this.onWrite(callback);
-          return true;
-        },
-        end: (): void => { this.stdinEnded = true; },
-        on: (event: string, listener: () => void): void => {
-          if (this.emitStdinErrorOnListen && event === "error") listener();
-        },
-        once: (): void => {},
-      } as unknown as NodeJS.WritableStream;
-      stdinEnded = false;
-      onWrite: (callback: (error?: Error | null) => void) => void = (callback) => callback(null);
-      killed: NodeJS.Signals | undefined;
-      // issue #377 Stage 1 M1 (kohaku round 1): a real ChildProcess only
-      // sets these once the OS has actually reaped the process, never
-      // synchronously from the call that requested the kill -- `isAlive()`
-      // in subtree_termination.ts reads them to decide whether to signal
-      // again, so a fixture that set them eagerly would hide the real
-      // async-only semantics `#waitForChild` and `signalSubtree` rely on.
-      exitCode: number | null = null;
-      signalCode: NodeJS.Signals | null = null;
-
-      /** Ends stdout and emits exit + close, matching how a real
-       *  ChildProcess reports its own termination -- deferred via
-       *  `setTimeout` (a macrotask) so listeners attached synchronously
-       *  right after this call returns (as `#waitForChild` always is)
-       *  still observe it; a `queueMicrotask` here could fire before
-       *  those listeners exist and be silently missed. */
-      terminate(exitCode: number | null, signalCode: NodeJS.Signals | null): void {
-        setTimeout(() => {
-          this.exitCode = exitCode;
-          this.signalCode = signalCode;
-          this.stdout.end();
-          this.emit("exit", exitCode, signalCode);
-          this.emit("close", exitCode, signalCode);
-        }, 0);
-      }
-
-      kill(signal?: NodeJS.Signals): boolean {
-        this.killed = signal;
-        this.terminate(null, signal ?? null);
-        return true;
-      }
-    }
-
-    it("a write-callback rejection settles the turn as epoch_exit_before_turn with no ack and no retry", async () => {
-      const starts: string[] = [];
-      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-      const logs: Envelope[] = [];
-      const rawCalls: RacyStdinAgy[] = [];
-      const cfg = config();
-      const failingHost = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {}, onLog: (envelope) => logs.push(envelope),
-        verifyGate: async () => true,
-        agyPath: "/test/agy",
-        onTurnStart: ({ turnToken }) => starts.push(turnToken),
-        onTurnEnd: (info) => turnEnds.push(info),
-        spawn: () => {
-          const child = new RacyStdinAgy();
-          child.onWrite = (callback) => queueMicrotask(() => callback(new Error("EPIPE")));
-          rawCalls.push(child);
-          return child as unknown as SpawnedAgy;
-        },
-      });
-      await failingHost.send("hello", undefined, [], "turn-1");
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      expect(starts).toEqual([]);
-      const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
-      expect(end.error).toEqual({
-        detail: "epoch_exit_before_turn",
-        reason: "receipt_unknown",
-      });
-      expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
-        is_error: true, error_detail: "epoch_exit_before_turn",
-      });
-      // No second spawn and no second write -- the host does not retry a
-      // delivery it cannot confirm the CLI never saw.
-      expect(rawCalls).toHaveLength(1);
-      expect(rawCalls[0]!.writeCalls).toHaveLength(1);
-      failingHost.close();
-    });
-
-    it("close arriving before the write ack also settles as epoch_exit_before_turn with no ack", async () => {
-      const starts: string[] = [];
-      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-      const rawCalls: RacyStdinAgy[] = [];
-      const cfg = config();
-      const racyHost = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {}, onLog: () => {},
-        verifyGate: async () => true,
-        agyPath: "/test/agy",
-        onTurnStart: ({ turnToken }) => starts.push(turnToken),
-        onTurnEnd: (info) => turnEnds.push(info),
-        spawn: () => {
-          const child = new RacyStdinAgy();
-          // `close` fires first; the write callback (no error) resolves
-          // only afterward, in a later microtask -- the exact race M4
-          // targets: a pipe write can still succeed into the kernel
-          // buffer on a process that has already exited. The immediate
-          // emit is what #deliverTurnInput's already-attached listener
-          // observes (setting closedBeforeAck); terminate()'s deferred
-          // exit/close is what #waitForChild (attached only once this
-          // turn's delivery-failure branch runs) actually resolves on.
-          child.onWrite = (callback) => {
-            queueMicrotask(() => {
-              child.emit("close", 1, null);
-              child.terminate(1, null);
-              queueMicrotask(() => callback(null));
-            });
-          };
-          rawCalls.push(child);
-          return child as unknown as SpawnedAgy;
-        },
-      });
-      await racyHost.send("hello", undefined, [], "turn-1");
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      expect(starts).toEqual([]);
-      const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
-      expect(end.error).toEqual({
-        detail: "epoch_exit_before_turn",
-        reason: "receipt_unknown",
-      });
-      expect(rawCalls).toHaveLength(1);
-      expect(rawCalls[0]!.writeCalls).toHaveLength(1);
-      racyHost.close();
-    });
-
-    it("an interrupt() racing the in-flight delivery settles as interrupted, not epoch_exit_before_turn", async () => {
-      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-      const interruptSettlements: unknown[] = [];
-      let pendingWriteCallback: ((error?: Error | null) => void) | null = null;
-      const cfg = config();
-      const racyHost = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {}, onLog: () => {},
-        verifyGate: async () => true,
-        agyPath: "/test/agy",
-        onTurnEnd: (info) => turnEnds.push(info),
-        onInterruptSettled: (info) => interruptSettlements.push(info),
-        spawn: () => {
-          const child = new RacyStdinAgy();
-          // The write callback never resolves on its own -- the test
-          // drives it manually, after `interrupt()`, to land exactly in
-          // the narrow window M4 and the outcome precedence both target.
-          child.onWrite = (callback) => { pendingWriteCallback = callback; };
-          child.kill = (signal): boolean => {
-            child.killed = signal;
-            // The kill actually terminates the process -- close fires
-            // before the deferred write callback ever resolves.
-            child.terminate(null, signal ?? null);
-            return true;
-          };
-          return child as unknown as SpawnedAgy;
-        },
-      });
-      await racyHost.send("hello", undefined, [], "turn-1");
-      await waitFor(() => pendingWriteCallback !== null);
-      await racyHost.interrupt();
-      // The pipe write itself still succeeded into the kernel buffer even
-      // though the process was already killed by the interrupt above.
-      pendingWriteCallback!(null);
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
-      // An operator interrupt racing the delivery write outranks the new
-      // epoch_exit_before_turn detail (see the precedence comment in
-      // #runTurn): closed/stale-generation is checked before delivery.
-      expect(end.error).toEqual({ reason: "interrupted" });
-      expect(end.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
-      expect(interruptSettlements).toHaveLength(1);
-      racyHost.close();
-    });
-
-    it("a delivery race does not leak #activeTermination onto the next turn's interrupt (kohaku round 1 M1)", async () => {
-      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-      const rawCalls: RacyStdinAgy[] = [];
-      let turn1WriteCallback: ((error?: Error | null) => void) | null = null;
-      const cfg = config();
-      const h = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {}, onLog: () => {},
-        verifyGate: async () => true,
-        agyPath: "/test/agy",
-        onTurnEnd: (info) => turnEnds.push(info),
-        spawn: () => {
-          const child = new RacyStdinAgy();
-          if (rawCalls.length === 0) {
-            // Turn 1: the write callback never resolves on its own; the
-            // test drives it manually, after interrupt(), to leave the
-            // turn's own #activeTermination handle armed (targeting an
-            // already-dead child) at the moment the turn settles.
-            child.onWrite = (callback) => { turn1WriteCallback = callback; };
-            child.kill = (signal): boolean => {
-              child.killed = signal;
-              child.terminate(null, signal ?? null);
-              return true;
-            };
-          }
-          rawCalls.push(child);
-          return child as unknown as SpawnedAgy;
-        },
-      });
-      await h.send("first", undefined, [], "turn-1");
-      await waitFor(() => turn1WriteCallback !== null);
-      await h.interrupt();
-      turn1WriteCallback!(null);
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-
-      await h.send("second", undefined, [], "turn-2");
-      await waitFor(() => rawCalls.length === 2);
-      await h.interrupt();
-      // Turn 2's own child must receive a fresh SIGTERM -- a leaked
-      // #activeTermination handle from turn 1 would make this a no-op
-      // shortenGraceTo() on the wrong (already-dead) target instead.
-      expect(rawCalls[1]!.killed).toBe("SIGTERM");
-      h.close();
-    });
-
-    it("a failed delivery waits for the child to actually close before settling the turn (kohaku round 1 M1)", async () => {
-      const toolStarts: string[] = [];
-      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-      let rawChild!: RacyStdinAgy;
-      let writeCallback: ((error?: Error | null) => void) | null = null;
-      const cfg = config();
-      const h = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: () => {}, onLog: () => {},
-        verifyGate: async () => true,
-        agyPath: "/test/agy",
-        onTurnEnd: (info) => turnEnds.push(info),
-        onToolStart: (info) => toolStarts.push(info.turnToken),
-        spawn: () => {
-          const child = new RacyStdinAgy();
-          child.onWrite = (callback) => { writeCallback = callback; };
-          // The delivery-failure branch arms its own SIGTERM (M1) as soon
-          // as the write rejects, which would otherwise race this test's
-          // own, later close -- override kill() to only record the call,
-          // so this test keeps exact manual control of when the child
-          // actually closes.
-          child.kill = (signal): boolean => { child.killed = signal; return true; };
-          rawChild = child;
-          return child as unknown as SpawnedAgy;
-        },
-      });
-      await h.send("hello", undefined, [], "turn-1");
-      await waitFor(() => writeCallback !== null);
-      writeCallback!(new Error("EPIPE"));
-      // The write failed, but the child has not exited yet -- a stray
-      // tool step-update in this window still belongs to turn-1 and must
-      // fire normally, and the turn must NOT have settled prematurely.
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(turnEnds).toEqual([]);
-      rawChild.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command"}}}\n');
-      await waitFor(() => toolStarts.length === 1);
-      expect(toolStarts).toEqual(["turn-1"]);
-      expect(turnEnds).toEqual([]);
-      // Only once the child actually closes does the turn settle.
-      rawChild.terminate(null, null);
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
-      expect(end.error).toEqual({
-        detail: "epoch_exit_before_turn",
-        reason: "receipt_unknown",
-      });
-      h.close();
-    });
-
-    it("a step_update arriving after a turn has already settled fires neither onToolStart nor an onState change", async () => {
-      const toolStarts: string[] = [];
-      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-      const states: string[] = [];
-      let rawChild!: RacyStdinAgy;
-      const cfg = config();
-      const h = createHarnessHost(cfg, {
-        cwd: process.cwd(), appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-        onState: (envelope) => states.push(envelope.state), onLog: () => {},
-        verifyGate: async () => true,
-        agyPath: "/test/agy",
-        onTurnEnd: (info) => turnEnds.push(info),
-        onToolStart: (info) => toolStarts.push(info.turnToken),
-        spawn: () => {
-          const child = new RacyStdinAgy();
-          child.onWrite = (callback) => queueMicrotask(() => callback(new Error("EPIPE")));
-          rawChild = child;
-          return child as unknown as SpawnedAgy;
-        },
-      });
-      await h.send("hello", undefined, [], "turn-1");
-      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
-      const statesBefore = states.length;
-      // issue #377 Stage 2: the turn already settled as epoch_exit_before_turn
-      // (no #inFlightTurn owns the stream anymore) -- a stray step_update now
-      // is out-of-turn and must not be projected onto anything.
-      rawChild.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command"}}}\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(toolStarts).toEqual([]);
-      expect(states.length).toBe(statesBefore);
-      h.close();
-    });
-
-    type TurnEnd = Parameters<
-      NonNullable<AntigravityHostOptions["onTurnEnd"]>
-    >[0];
-
-    function hostFor(
-      closeGraceMs: number,
-      spawnChild: () => RacyStdinAgy,
-    ): {
-      host: AntigravityHost;
-      starts: string[];
-      ends: TurnEnd[];
-      calls: RacyStdinAgy[];
-    } {
-      const starts: string[] = [];
-      const ends: TurnEnd[] = [];
-      const calls: RacyStdinAgy[] = [];
-      const cfg = config();
-      const host = createHarnessHost(cfg, {
-        cwd: process.cwd(),
-        appendSystemPrompt: "persona",
-        permissionBroker: new PermissionBroker({
-          config: cfg,
-          send: () => {},
-        }),
-        onState: () => {},
-        onLog: () => {},
-        verifyGate: async () => true,
-        agyPath: "/test/agy",
-        closeGraceMs,
-        onTurnStart: ({ turnToken }) => starts.push(turnToken),
-        onTurnEnd: (info) => ends.push(info),
-        spawn: () => {
-          const child = spawnChild();
-          calls.push(child);
-          return child as unknown as SpawnedAgy;
-        },
-      });
-      return { host, starts, ends, calls };
-    }
-
-    it("reports receipt_unknown one grace after a failed write's exit",
-      async () => {
-        let destroys = 0;
-        const graceMs = 60;
-        const { host, starts, ends, calls } = hostFor(graceMs, () => {
-          const child = new RacyStdinAgy();
-          child.onWrite = (callback) => {
-            queueMicrotask(() => callback(new Error("EPIPE")));
-          };
-          child.kill = () => {
-            setTimeout(() => {
-              child.exitCode = 1;
-              child.emit("exit", 1, null);
-            }, 0);
-            return true;
-          };
-          const destroy = child.stdout.destroy.bind(child.stdout);
-          child.stdout.destroy = (error?: Error) => {
-            destroys += 1;
-            child.emit("close", 1, null);
-            return destroy(error);
-          };
-          return child;
-        });
-        const pending = host.send("hello", undefined, [], "turn-1");
-        try {
-          await waitFor(() => calls.length === 1
-            && calls[0]!.writeCalls.length === 1
-            && calls[0]!.exitCode === 1);
-          await new Promise((resolve) => setTimeout(resolve, 20));
-          expect(destroys).toBe(0);
-          await waitFor(() => destroys === 1);
-          await pending;
-          expect(starts).toEqual([]);
-          expect(calls).toHaveLength(1);
-          expect(calls[0]!.writeCalls).toHaveLength(1);
-          expect(ends[0]!.error).toEqual({
-            detail: "epoch_exit_before_turn",
-            reason: "receipt_unknown",
-          });
-        } finally {
-          await host.close();
-        }
-      });
-
-    it("a stdin error before write is not receipt_unknown", async () => {
-      const { host, starts, ends, calls } = hostFor(30, () => {
-        const child = new RacyStdinAgy();
-        child.emitStdinErrorOnListen = true;
-        queueMicrotask(() => child.terminate(1, null));
-        return child;
-      });
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => ends.some((end) => end.turnToken === "turn-1"));
-      expect(starts).toEqual([]);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.writeCalls).toHaveLength(0);
-      expect(ends[0]!.error).toEqual({ detail: "epoch_exit_before_turn" });
-      await host.close();
-    });
-  });
-
-  describe("issue #377 Stage 2 (epoch lifetime)", () => {
-    it("two sends against an idle epoch spawn once and deliver two lines, the second only after the first turn's result", async () => {
-      const { host, calls } = hostHarness();
-      const writes: string[] = [];
-      await host.send("first");
-      await waitFor(() => calls.length === 1);
-      const child = calls[0]!.child;
-      child.stdin.on("data", (chunk: Buffer) => writes.push(chunk.toString("utf8")));
-      await waitFor(() => writes.length === 1);
-      expect(JSON.parse(writes[0]!.trim())).toEqual({ event: "user", message: { role: "user", content: "first" } });
-      // Negative control: queuing the second turn now must not write its
-      // line before the first turn's own result, and must not spawn a
-      // second process.
-      void host.send("second");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(calls).toHaveLength(1);
-      expect(writes).toHaveLength(1);
-      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await waitFor(() => writes.length === 2);
-      expect(calls).toHaveLength(1);
-      expect(JSON.parse(writes[1]!.trim())).toEqual({ event: "user", message: { role: "user", content: "second" } });
-      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
-      host.close();
-    });
-
-    it("M6: the epoch adopts its own conversation id from its own init, so turn 2 does not spuriously respawn", async () => {
-      // A fresh epoch spawns with conversationId: null; only once its OWN
-      // init confirms the engine session id must the recorded spec pick it
-      // up too -- otherwise turn 2's freshly computed spec (which reads the
-      // now-confirmed #sessionId) would permanently mismatch the epoch's
-      // still-null recorded spec, forcing a respawn on every turn 2.
-      const { host, calls } = hostHarness();
-      await host.send("first");
-      await waitFor(() => calls.length === 1);
-      expect(calls[0]!.args).not.toContain("--conversation");
-      calls[0]!.child.stdout.write('{"event":"init","conversation_id":"cid-m6","init":{"tools":[]}}\n');
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      let writtenToStdin = "";
-      calls[0]!.child.stdin.on("data", (chunk: Buffer) => { writtenToStdin += chunk.toString("utf8"); });
-      await host.send("second");
-      await waitFor(() => writtenToStdin.includes("second"));
-      // No respawn -- same process, same epoch.
-      expect(calls).toHaveLength(1);
-      host.close();
-    });
-
-    it("tamper discovered by turn 2 (after turn 1 succeeded) ends the epoch and gate-breaks the host", async () => {
-      // issue #377 Stage 2 review finding (M-B): the existing tamper pins
-      // all corrupt the customization dir DURING the very first turn -- none
-      // of them exercise the epoch-spanning-turns case, where turn 1
-      // completes cleanly and only turn 2 (reusing the SAME live epoch)
-      // discovers the tamper. That is the scenario `#endEpoch("tamper")`
-      // actually exists for: Stage 1 never needed to actively end anything
-      // (the process was already dead by the time this fired).
-      const { host, logs, calls, epochEnded, sendRejections } = hostHarness();
-      await host.send("first", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      const child = calls[0]!.child;
-      const customizationDir = calls[0]!.args.at(-1)!;
-      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-      expect(logs.find((envelope) => envelope.type === "result")?.payload).not.toHaveProperty("error_detail");
-      // Tamper AFTER turn 1 already settled cleanly -- the epoch is idle but
-      // still alive.
-      writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
-      await host.send("second", undefined, [], "turn-2");
-      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
-      await waitFor(() => child.killed === "SIGTERM");
-      // No respawn was attempted to serve turn 2 -- the SAME epoch reused
-      // for it is what discovers the tamper.
-      expect(calls).toHaveLength(1);
-      child.finish();
-      await waitFor(() => epochEnded.length === 1);
-      expect(epochEnded[0]).toMatchObject({ reason: "tamper" });
-      await waitFor(() => logs.filter((envelope) => envelope.type === "result").length === 2);
-      expect(logs.filter((envelope) => envelope.type === "result")[1]?.payload).toMatchObject({ error_detail: "antigravity_customization_tampered" });
-      await host.send("third", undefined, [], "turn-3");
-      expect(sendRejections).toEqual([{ turnToken: "turn-3", reason: "gate_broken" }]);
-      expect(calls).toHaveLength(1);
-      host.close();
-    });
-
-    it("interrupt ends the epoch; the next send respawns with --conversation for the same session", async () => {
-      const { host, calls, turnEnds } = hostHarness();
-      await host.send("first");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"init","conversation_id":"cid-respawn","init":{"tools":[]}}\n');
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await waitFor(() => turnEnds.length === 1);
-      // Idle now (turn 1 settled) -- interrupt() must still end the live
-      // epoch, unlike Stage 1 where idle meant no process existed at all.
-      await host.interrupt();
-      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-      calls[0]!.child.finish();
-      await host.send("second");
-      await waitFor(() => calls.length === 2);
-      expect(calls[1]!.args).toEqual(expect.arrayContaining(["--conversation", "cid-respawn"]));
-      host.close();
-    });
-
-    it("a send queued while the interrupted epoch is still dying waits it out and respawns, even though its spec still matches", async () => {
-      const { host, calls, turnEnds } = hostHarness();
-      await host.send("first");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await waitFor(() => turnEnds.length === 1);
-      // Interrupt the idle epoch, but do NOT simulate its death yet -- the
-      // second send is queued while `#epoch` is still the SAME (dying)
-      // object, with a matching spec. Reusing it here would deliver a line
-      // to a process that is already being killed.
-      await host.interrupt();
-      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-      await host.send("second");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(calls).toHaveLength(1);
-      calls[0]!.child.finish();
-      await waitFor(() => calls.length === 2);
-      let writtenToStdin = "";
-      calls[1]!.child.stdin.on("data", (chunk: Buffer) => { writtenToStdin += chunk.toString("utf8"); });
-      await waitFor(() => writtenToStdin.includes("second"));
-      host.close();
-    });
-
-    it("a rolled-back model switch respawns on the next turn; the turn after that (same spec) does not (negative control)", async () => {
-      const cfg = config({ model: "model-a", model_source: "config" });
-      const { host, calls } = hostHarness({ config: cfg });
-      await host.setModel("model-b");
-      await host.send("first");
-      await waitFor(() => calls.length === 1);
-      expect(calls[0]!.args).toEqual(expect.arrayContaining(["--model", "model-b"]));
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","error":"bad model"}}\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      // The rollback (is_error) does not itself end the epoch -- only the
-      // NEXT turn's dequeue notices the spec no longer matches.
-      expect(calls).toHaveLength(1);
-      await host.send("second");
-      // The spec mismatch ends the OLD epoch first (SIGTERM); the fixture
-      // must actually "die" for that grace-bounded end to resolve before
-      // the new epoch spawns.
-      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-      calls[0]!.child.finish();
-      await waitFor(() => calls.length === 2);
-      expect(calls[1]!.args).toEqual(expect.arrayContaining(["--model", "model-a"]));
-      // Attach before turn 2's own delivery so buffered vs. live delivery
-      // order cannot make an exact write count racy; match on content
-      // instead.
-      let writtenToStdin = "";
-      calls[1]!.child.stdin.on("data", (chunk: Buffer) => { writtenToStdin += chunk.toString("utf8"); });
-      calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-      // Negative control: a third turn under the identical (now-restored)
-      // spec reuses the same epoch -- no second respawn.
-      await host.send("third");
-      await waitFor(() => writtenToStdin.includes("third"));
-      expect(calls).toHaveLength(2);
-      host.close();
-    });
-
-    it("an effort change respawns on the next turn", async () => {
-      const cfg = config({ effort: "low" });
-      const { host, calls } = hostHarness({ config: cfg });
-      await host.send("first");
-      await waitFor(() => calls.length === 1);
-      expect(calls[0]!.args).toEqual(expect.arrayContaining(["--effort", "low"]));
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      // The host has no live effort-switch API yet (Stage A); mutate the
-      // shared config object directly, matching how the wrapper itself
-      // would apply a resolved config change between turns.
-      (cfg as { effort?: string }).effort = "high";
-      await host.send("second");
-      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-      calls[0]!.child.finish();
-      await waitFor(() => calls.length === 2);
-      expect(calls[1]!.args).toEqual(expect.arrayContaining(["--effort", "high"]));
-      host.close();
-    });
-
-    it("an unsolicited idle exit logs epoch_ended{idle_exit}; the next send respawns", async () => {
-      const { host, calls, epochEnded } = hostHarness();
-      await host.send("first");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(calls).toHaveLength(1);
-      // Idle now -- the process exits on its own (print-timeout / crash /
-      // quota), unrequested.
-      calls[0]!.child.finish();
-      await waitFor(() => epochEnded.length === 1);
-      expect(epochEnded[0]).toMatchObject({ reason: "idle_exit", code: 0, turns: 1 });
-      await host.send("second");
-      await waitFor(() => calls.length === 2);
-      host.close();
-    });
-
-    it("a permission switch applied between turn 1 and turn 2 uses setGate on the live epoch, with no respawn", async () => {
-      const cfg: AntigravityLaunchConfig = {
-        ...config({ approval: "on-request", max_sandbox: "workspace-write", max_approval: "local", max_network_access: false }),
-      };
-      const { host, calls, permissionLifecycle } = hostHarness({ config: cfg });
-      await host.send("first", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"init","conversation_id":"cid-switch","init":{"tools":[]}}\n');
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await host.setPermission({
-        revision: 2,
-        requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
-      });
-      await host.send("second", undefined, [], "turn-2");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      // Negative control: no stream event for turn-2 has arrived yet, so
-      // the switch is still `applying`, not `applied`.
-      expect(permissionLifecycle).toHaveLength(0);
-      expect(calls).toHaveLength(1);
-      calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"hi"}}\n');
-      await waitFor(() => permissionLifecycle.length === 1);
-      const applied = permissionLifecycle[0] as Record<string, any>;
-      expect(applied.kind).toBe("permission_applied");
-      expect(applied.details.permission.approval).toBe("local");
-      expect(applied.details.session_id).toBe("cid-switch");
-      expect(applied.details).not.toHaveProperty("turn_id");
-      expect(applied.details.execution_id).toBe("turn-2");
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
-      expect(calls).toHaveLength(1);
-      host.close();
-    });
-
-    it("a permission switch applied confirms even when the turn's own first (and only) stream event is result", async () => {
-      // issue #377 Stage 2 review finding: M1's confirmation must be
-      // type-agnostic -- it must fire on the FIRST stream event of the turn
-      // after a mid-epoch swap "whatever its type", including a bare
-      // `result` with no preceding step_update. The sibling test above only
-      // ever exercises a `step_update` as that first event.
-      const cfg: AntigravityLaunchConfig = {
-        ...config({ approval: "on-request", max_sandbox: "workspace-write", max_approval: "local", max_network_access: false }),
-      };
-      const { host, calls, permissionLifecycle } = hostHarness({ config: cfg });
-      await host.send("first", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      calls[0]!.child.stdout.write('{"event":"init","conversation_id":"cid-switch-2","init":{"tools":[]}}\n');
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await host.setPermission({
-        revision: 2,
-        requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
-      });
-      await host.send("second", undefined, [], "turn-2");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(permissionLifecycle).toHaveLength(0);
-      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
-      await waitFor(() => permissionLifecycle.length === 1);
-      const applied = permissionLifecycle[0] as Record<string, any>;
-      expect(applied.kind).toBe("permission_applied");
-      expect(applied.details.execution_id).toBe("turn-2");
-      expect(calls).toHaveLength(1);
-      host.close();
-    });
-
-    it("a watchdog tool-timeout SIGTERM ends the epoch with reason watchdog", async () => {
-      const { host, calls, epochEnded } = hostHarness();
-      await host.send("hello", undefined, [], "turn-1");
-      await waitFor(() => calls.length === 1);
-      expect(host.requestInterruptForTurn("turn-1", {
-        kind: "tool_timeout", stepIndex: 1, toolName: "run_command", elapsedMs: 999_999, toolTimeoutMs: 1,
-      })).toBe(true);
-      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-      calls[0]!.child.finish();
-      await waitFor(() => epochEnded.length === 1);
-      expect(epochEnded[0]).toMatchObject({ reason: "watchdog" });
-      host.close();
-    });
-
-    describe("M7 (idle TTL)", () => {
-      /** Mirrors turn_watchdog.test.ts's FakeTimers -- a controllable
-       *  setTimeout/clearTimeout pair so the idle-TTL pins do not depend on
-       *  real wall-clock waits. */
-      class FakeTimers {
-        now = 0;
-        #next = 0;
-        #timers = new Map<number, { at: number; callback: () => void }>();
-        set = (callback: () => void, delayMs: number): number => {
-          const id = ++this.#next;
-          this.#timers.set(id, { at: this.now + delayMs, callback });
-          return id;
-        };
-        clear = (timer: unknown): void => {
-          this.#timers.delete(timer as number);
-        };
-        advance(ms: number): void {
-          const target = this.now + ms;
-          while (true) {
-            const due = [...this.#timers.entries()]
-              .filter(([, timer]) => timer.at <= target)
-              .sort((left, right) => left[1].at - right[1].at)[0];
-            if (due === undefined) break;
-            this.#timers.delete(due[0]);
-            this.now = due[1].at;
-            due[1].callback();
-          }
-          this.now = target;
-        }
-      }
-
-      it("ends an idle epoch with idle_ttl once the TTL elapses after a turn settles", async () => {
-        const timers = new FakeTimers();
-        const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
-        const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-        const calls: FakeAgy[] = [];
-        const cfg = config();
-        const host = createHarnessHost(cfg, {
-          cwd: process.cwd(), appendSystemPrompt: "persona",
-          permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-          onState: () => {}, onLog: () => {},
-          verifyGate: async () => true,
-          agyPath: "/test/agy",
-          epochIdleMs: 1_000,
-          epochIdleSetTimer: timers.set,
-          epochIdleClearTimer: timers.clear,
-          onEpochEnded: (info) => epochEnded.push(info),
-          onTurnEnd: (info) => turnEnds.push(info),
-          spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
-        });
-        await host.send("hello");
-        await waitFor(() => calls.length === 1);
-        calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-        await waitFor(() => turnEnds.length === 1);
-        // Re-armed only after the result -- just short of the TTL, nothing
-        // fires yet.
-        timers.advance(999);
-        expect(epochEnded).toEqual([]);
-        timers.advance(1);
-        await waitFor(() => calls[0]!.killed === "SIGTERM");
-        calls[0]!.finish();
-        await waitFor(() => epochEnded.length === 1);
-        expect(epochEnded[0]).toMatchObject({ reason: "idle_ttl", turns: 1 });
-        host.close();
-      });
-
-      it("negative control: a turn's own dequeue clears the TTL before its ack, so it cannot fire before that turn completes", async () => {
-        const timers = new FakeTimers();
-        const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
-        const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
-        const calls: FakeAgy[] = [];
-        const cfg = config();
-        const host = createHarnessHost(cfg, {
-          cwd: process.cwd(), appendSystemPrompt: "persona",
-          permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
-          onState: () => {}, onLog: () => {},
-          verifyGate: async () => true,
-          agyPath: "/test/agy",
-          epochIdleMs: 1_000,
-          epochIdleSetTimer: timers.set,
-          epochIdleClearTimer: timers.clear,
-          onEpochEnded: (info) => epochEnded.push(info),
-          onTurnEnd: (info) => turnEnds.push(info),
-          spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
-        });
-        await host.send("first");
-        await waitFor(() => calls.length === 1);
-        calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
-        await waitFor(() => turnEnds.length === 1);
-        // The TTL is now armed (idle after turn 1). Dequeuing turn 2 clears
-        // it immediately, before turn 2's own ack -- advancing the clock
-        // well past the TTL here must not touch the in-flight turn.
-        await host.send("second");
-        timers.advance(10_000);
-        expect(epochEnded).toEqual([]);
-        expect(calls[0]!.killed).toBeUndefined();
-        calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
-        await waitFor(() => turnEnds.length === 2);
-        expect(calls).toHaveLength(1);
-        host.close();
-      });
-    });
+  it("spawns the next process only after the previous one exited (L4)", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const first = await prompted(r, 1);
+    first.survivesTerm = true;
+    await r.test.host.send("two", undefined, undefined, "t2");
+    first.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(r.test.agys).toHaveLength(1);
+    await waitFor(() => r.test.signals.some((s) => s.pid === first.pid && s.signal === "SIGKILL"));
+    await prompted(r, 2);
   });
 });
 
-describe("AntigravityHost result text size cap", () => {
-  const MAX_BYTES = 16_384;
+describe("AntigravityHost over ACP: one prompt at a time (L1)", () => {
+  it("writes the next prompt only after the previous one settled", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const first = await prompted(r, 1);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(r.test.agys.reduce((n, agy) => n + agy.count("session/prompt"), 0)).toBe(1);
+    first.respond("end_turn");
+    const second = await prompted(r, 2);
+    expect(second.count("session/prompt")).toBe(1);
+  });
+});
 
-  async function resultText(response: string): Promise<{ text: string; wireBytes: number }> {
-    const { host, logs, calls } = hostHarness();
-    await host.send("hello");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write(
-      `${JSON.stringify({ event: "result", result: { status: "SUCCESS", response } })}\n`,
-    );
-    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    const envelope = logs.find((e) => e.type === "result")!;
-    host.close();
+describe("AntigravityHost over ACP: settlement and terminal states (L2)", () => {
+  it("close settles the active input as stale and every queued input as closed; no process starts afterwards", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await prompted(r, 1);
+    await r.test.host.send("two", undefined, ["c2"], "t2");
+    await r.test.host.close();
+    expect(r.rejected).toEqual([{ turnToken: "t2", conversationIds: ["c2"], reason: "closed" }]);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", terminal: false });
+    expect(r.ends[0]!.error).toBeUndefined();
+    expect(r.results()).toEqual([]);
+    await r.test.host.send("three", undefined, undefined, "t3");
+    expect(r.rejected.at(-1)).toMatchObject({ turnToken: "t3", reason: "closed" });
+    expect(r.test.agys).toHaveLength(1);
+  });
+
+  it("watchdog fail-stop kills the process group, settles queued input once and stops admission", async () => {
+    const fails: unknown[] = [];
+    const r = setup({}, { onWatchdogFailStop: (info: unknown) => fails.push(info) });
+    await r.test.host.send("one", undefined, ["c1"], "t1");
+    const agy = await prompted(r, 1);
+    await r.test.host.send("two", undefined, ["c2"], "t2");
+    expect(r.test.host.failStopTurnForWatchdog("t1")).toBe(true);
+    expect(r.test.signals).toContainEqual({ pid: agy.pid, destination: "process_group", signal: "SIGKILL" });
+    expect(r.ends).toEqual([expect.objectContaining({ turnToken: "t2", cancellation: { kind: "watchdog_fail_stop", started: false }, terminal: false })]);
+    expect(fails).toEqual([{ turnToken: "t1", conversationIds: ["c1"], attribution: "exact" }]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(r.ends).toHaveLength(1);
+    await r.test.host.send("three", undefined, undefined, "t3");
+    expect(r.rejected.at(-1)).toMatchObject({ turnToken: "t3", reason: "watchdog_fail_stopped" });
+  });
+
+  it("an interrupt keeps queued input; the next input runs on a new process", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const first = await prompted(r, 1);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    await r.test.host.interrupt();
+    await waitFor(() => first.count("session/cancel") === 1);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", error: { reason: "interrupted" }, cancellation: { kind: "interrupt", reason: "interrupted" } });
+    const second = await prompted(r, 2);
+    second.respond("end_turn");
+    await waitFor(() => r.ends.length === 2);
+    expect(r.ends[1]).toMatchObject({ turnToken: "t2", terminal: true });
+  });
+
+  it("an interrupt during a held hook list writes no prompt and no ACK, settles once, and the queue continues", async () => {
+    const r = setup();
+    r.test.holdHookList = true;
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.hookLists.length === 1);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    r.test.holdHookList = false;
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", error: { reason: "interrupted" } });
+    expect(r.acks).not.toContain("t1");
+    const agy = await prompted(r, 1);
+    expect(agy.count("session/prompt")).toBe(1);
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 2);
+    expect(r.ends.map((end) => end.turnToken)).toEqual(["t1", "t2"]);
+  });
+
+  it("an interrupt during a held attach sends no cancel, ends the child on the abort grace and settles once", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.hold.add("session/new"); agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.requests.some((q) => q.method === "session/new") === true);
+    const agy = r.test.agys[0]!;
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", error: { reason: "interrupted" } });
+    expect(r.acks).toEqual([]);
+    expect(agy.count("session/prompt")).toBe(0);
+    expect(agy.count("session/cancel")).toBe(0);
+    expect(r.test.signals.filter((s) => s.pid === agy.pid).map((s) => s.signal)).toEqual(["SIGTERM"]);
+    await waitFor(() => r.test.signals.some((s) => s.pid === agy.pid && s.signal === "SIGKILL"));
+  });
+});
+
+describe("AntigravityHost over ACP: the window (L5)", () => {
+  it("inside the window projects activity; after settlement it records kind and call ID only, and the closed gate fails hooks closed", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.survivesTerm = true;
+    agy.toolCall("c1", "read_file", { Path: "a.txt" });
+    await expect(agy.preToolUse("c1", "read_file", { Path: "a.txt" })).resolves.toEqual({ decision: "allow" });
+    agy.toolDone("c1", "read_file", { Path: "a.txt" });
+    agy.message("done");
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    const projected = r.logs.filter((e) => e.type === "log").map((e) => (e.payload as { kind: string }).kind);
+    expect(projected).toEqual(expect.arrayContaining(["tool_use", "tool_result", "assistant"]));
+    const logsBefore = r.logs.length;
+    agy.toolCall("c9", "run_command", { CommandLine: "ls" });
+    await waitFor(() => r.outOfTurn.length === 1);
+    expect(r.outOfTurn).toEqual([{ eventKind: "tool_call", callId: "c9" }]);
+    await expect(agy.preToolUse("c9", "run_command", { CommandLine: "ls" })).rejects.toThrow();
+    await expect(agy.stop(false)).rejects.toThrow();
+    expect(r.logs.length).toBe(logsBefore);
+  });
+
+  it("before the prompt is written, a hook is denied with a reason and a Stop is answered stop, before any cell (L5, review r13)", async () => {
+    const decide: unknown[] = [];
+    const r = setup({ sandbox: "danger-full-access", approval: "never" }, {
+      permissionBroker: { decide: async (...args: unknown[]) => { decide.push(args); return { allow: true }; }, close: () => {} },
+    });
+    r.test.onSpawn = (agy) => agy.hold.add("session/new");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.requests.some((q) => q.method === "session/new") === true);
+    const agy = r.test.agys[0]!;
+    await expect(agy.preToolUse("s1", "run_command", { CommandLine: "ls" }, "session-sub")).resolves.toEqual({
+      decision: "deny", reason: "kaoiro: no turn is open for this tool call",
+    });
+    await expect(agy.preToolUse("c1", "read_file", { Path: "a" })).resolves.toMatchObject({ decision: "deny" });
+    await expect(agy.stop(false)).resolves.toEqual({ decision: "stop" });
+    expect(r.outOfTurn).toEqual([{ eventKind: "pre_tool_use", callId: "s1" }, { eventKind: "pre_tool_use", callId: "c1" }]);
+    expect(decide).toEqual([]);
+    agy.release("session/new");
+    await prompted(r, 1);
+  });
+
+  it("records another session's updates without projecting them", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "elsewhere" } }, "session-other");
+    await waitFor(() => r.outOfTurn.length === 1);
+    expect(r.outOfTurn[0]).toEqual({ eventKind: "other:agent_message_chunk" });
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.results()[0]?.text).toBe("");
+  });
+
+  it("answers an unexpected permission request cancelled, cancels the prompt and fails the turn with its own reason (D17)", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.message("working");
+    agy.requestPermission();
+    await waitFor(() => r.ends.length === 1);
+    expect(agy.count("session/cancel")).toBe(1);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_unexpected_permission_request" });
+  });
+});
+
+describe("AntigravityHost over ACP: verification (L6, 4.3)", () => {
+  it("a completed call with an allowed hook is fine; a late matching completed before exit is fine too", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.survivesTerm = true;
+    agy.toolCall("c1", "read_file", { Path: "a" });
+    await agy.preToolUse("c1", "read_file", { Path: "a" });
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    agy.toolDone("c1", "read_file", { Path: "a" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(r.faults).toEqual([]);
+    expect(r.ends[0]!.error).toBeUndefined();
+  });
+
+  it("a late completed with no hook record latches the fault for later input and keeps the published outcome", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.survivesTerm = true;
+    agy.toolCall("c1", "run_command", { CommandLine: "sleep 9" });
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    agy.toolDone("c1", "run_command", { CommandLine: "sleep 9" });
+    await waitFor(() => r.faults.length === 1);
+    expect(r.faults[0]).toEqual({ reason: "antigravity_gate_unobserved_tool", detail: "antigravity_gate_unobserved_tool:run_command" });
+    expect(r.ends).toHaveLength(1);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    expect(r.rejected.at(-1)).toMatchObject({ turnToken: "t2", reason: "gate_broken" });
+    expect(r.test.host.state).toBe("error");
+  });
+
+  it("a fault in the turn fails it with the gate reason; later input is rejected as gate_broken (review r11)", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    agy.toolCall("c1", "run_command", { CommandLine: "ls" });
+    agy.toolDone("c1", "run_command", { CommandLine: "ls" });
+    await waitFor(() => r.ends.length === 1);
+    expect(agy.count("session/cancel")).toBe(1);
+    expect(r.ends[0]!.error!.detail).toMatch(/^antigravity_gate_unobserved_tool:/);
+    expect(r.rejected).toEqual([{ turnToken: "t2", reason: "gate_broken" }]);
+    await r.test.host.send("three", undefined, undefined, "t3");
+    expect(r.rejected.at(-1)).toEqual({ turnToken: "t3", reason: "gate_broken" });
+    expect(r.test.agys).toHaveLength(1);
+  });
+
+  it("an open call at settlement with no hook is a fault and takes the gate row of the outcome", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.toolCall("c1", "run_command", { CommandLine: "ls" });
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error!.detail).toBe("antigravity_gate_unobserved_tool:run_command");
+  });
+
+  it("decides a subagent's hook by the same cell, records it, and needs no ACP call for it (V7)", async () => {
+    const r = setup({ sandbox: "workspace-write", network_access: false });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await expect(agy.preToolUse("s1", "read_file", { Path: "a" }, "session-sub")).resolves.toEqual({ decision: "allow" });
+    await expect(agy.preToolUse("s2", "run_command", { CommandLine: "ls" }, "session-sub")).resolves.toMatchObject({ decision: "deny" });
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.faults).toEqual([]);
+    expect(r.ends[0]!.error).toBeUndefined();
+  });
+
+  it("negative controls: a duplicate hook key, and a parent call whose only hook has another conversation ID", async () => {
+    for (const variant of ["duplicate", "foreign-only"] as const) {
+      const r = setup();
+      await r.test.host.send("one", undefined, undefined, "t1");
+      const agy = await prompted(r, 1);
+      if (variant === "duplicate") {
+        await agy.preToolUse("s1", "read_file", { Path: "a" }, "session-sub");
+        await expect(agy.preToolUse("s1", "read_file", { Path: "a" }, "session-sub")).resolves.toEqual({ decision: "deny", reason: "kaoiro: duplicate tool call" });
+      } else {
+        agy.toolCall("c1", "read_file", { Path: "a" });
+        await agy.preToolUse("c1", "read_file", { Path: "a" }, "session-sub");
+        agy.toolDone("c1", "read_file", { Path: "a" });
+      }
+      await waitFor(() => r.ends.length === 1);
+      expect(r.ends[0]!.error!.detail).toMatch(/^antigravity_gate_unobserved_tool:/);
+    }
+  });
+
+});
+
+describe("AntigravityHost over ACP: the Stop answer (L10)", () => {
+  it("continues while the turn's own loop reports background work, up to ten times", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    for (let i = 0; i < 10; i += 1) await expect(agy.stop(false)).resolves.toMatchObject({ decision: "continue" });
+    await expect(agy.stop(false)).resolves.toEqual({ decision: "stop" });
+  });
+
+  it("answers stop for idle work, another reason, a subagent (not counted), and after a stop latched", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await expect(agy.stop(true)).resolves.toEqual({ decision: "stop" });
+    await expect(agy.stop(false, agy.sessionId, "MAX_TURNS")).resolves.toEqual({ decision: "stop" });
+    for (let i = 0; i < 12; i += 1) await expect(agy.stop(false, "session-sub")).resolves.toEqual({ decision: "stop" });
+    for (let i = 0; i < 10; i += 1) await expect(agy.stop(false)).resolves.toMatchObject({ decision: "continue" });
+    await expect(agy.stop(false)).resolves.toEqual({ decision: "stop" });
+    const r2 = setup();
+    await r2.test.host.send("one", undefined, undefined, "t1");
+    const agy2 = await prompted(r2, 1);
+    agy2.hold.add("session/cancel");
+    await r2.test.host.interrupt();
+    await expect(agy2.stop(false)).resolves.toEqual({ decision: "stop" });
+  });
+
+  it("refuses the start when the hook list shows another enabled Stop, naming its file (D18)", async () => {
+    const r = setup();
+    r.test.extraHookGroups.push({ name: "other", enabled: true, source: "/elsewhere/.agents/hooks.json", actions: [{ event: "Stop", type: "command", command: "x", timeout_seconds: 30 }] });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error!.detail).toBe("antigravity_hooks_refused:foreign_stop_hook:/elsewhere/.agents/hooks.json");
+    expect(r.test.agys).toHaveLength(0);
+    r.test.extraHookGroups.length = 0;
+    r.test.extraHookGroups.push({ name: "off", enabled: false, source: "/elsewhere/.agents/hooks.json", actions: [{ event: "Stop", type: "command", command: "x", timeout_seconds: 30 }] });
+    await r.test.host.send("two", undefined, undefined, "t2");
+    await prompted(r, 1);
+  });
+});
+
+describe("AntigravityHost over ACP: delivery ACK (L7)", () => {
+  it("ACKs once when the response arrives before a held write callback, and a later write failure does not withdraw it", async () => {
+    for (const outcome of ["ok", "failed"] as const) {
+      const r = setup();
+      r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+      await r.test.host.send("one", undefined, undefined, "t1");
+      const agy = await prompted(r, 1);
+      expect(r.acks).toEqual([]);
+      agy.respond("end_turn");
+      await waitFor(() => r.ends.length === 1);
+      expect(r.acks).toEqual(["t1"]);
+      agy.releasePromptWrite(outcome === "failed" ? new Error("EPIPE") : undefined);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(r.acks).toEqual(["t1"]);
+      expect(r.ends[0]!.error).toBeUndefined();
+    }
+  });
+
+  it("ACKs on first-seen activity while the write callback is held", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.message("hi");
+    await waitFor(() => r.acks.length === 1);
+    agy.update({ sessionUpdate: "usage_update", used: 1, size: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(r.acks).toEqual(["t1"]);
+  });
+
+  it("a control update is not a confirmation; a callback that never returns hits the pre-ACK bound", async () => {
+    const r = setup({}, { preAckBoundMs: 60 });
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.update({ sessionUpdate: "session_info_update", title: "x" });
+    await waitFor(() => r.ends.length === 1);
+    expect(r.acks).toEqual([]);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_delivery_unconfirmed", reason: "receipt_unknown" });
+    expect(r.test.signals.some((s) => s.pid === agy.pid && s.signal === "SIGTERM")).toBe(true);
+  });
+
+  it("a failed write before any confirmation settles as unacknowledged and ambiguous; it is not resent", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.releasePromptWrite(new Error("EPIPE"));
+    await waitFor(() => r.ends.length === 1);
+    expect(r.acks).toEqual([]);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_delivery_unconfirmed", reason: "receipt_unknown" });
+    expect(agy.count("session/prompt")).toBe(1);
+  });
+
+  it("close with the callback pending settles once without an ACK; a late callback changes nothing", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await r.test.host.close();
+    await waitFor(() => r.ends.length === 1);
+    agy.releasePromptWrite();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(r.acks).toEqual([]);
+    expect(r.ends).toHaveLength(1);
+  });
+});
+
+function switching(overrides: Partial<WrapperConfig> = {}) {
+  const lifecycle: Record<string, any>[] = [];
+  const r = setup({ max_sandbox: "danger-full-access", max_approval: "never", max_network_access: true, ...overrides } as Partial<WrapperConfig>, {
+    permissionSyncSupported: true,
+    onPermissionLifecycle: (event: Record<string, any>) => lifecycle.push(event),
+  });
+  const control = () => (r.states.at(-1)!.ext as Record<string, any>).permission_control as Record<string, any>;
+  return { r, lifecycle, control };
+}
+
+describe("AntigravityHost over ACP: permission evidence (L8)", () => {
+  it("publishes applying with the submission at the start and applied on the response with the observed session", async () => {
+    const { r, lifecycle, control } = switching();
+    await r.test.host.setPermission({ revision: 3, requested: { sandbox: "danger-full-access", network_access: true, approval: "never" } });
+    expect(control()).toMatchObject({ revision: 3, status: "pending" });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    expect(agy.sandboxed).toBe(false);
+    expect(control()).toMatchObject({ revision: 3, status: "applying", submitted: { revision: 3, execution_id: "t1" } });
+    agy.update({ sessionUpdate: "config_option_update", configOptions: [] });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(control().status).toBe("applying");
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(control()).toMatchObject({ status: "applied", effective: { session_id: "session-1", execution_id: "t1" } });
+    expect(lifecycle.map((event) => event.kind)).toEqual(["permission_applied"]);
+  });
+
+  it("a resume that echoes the ID gives applied; one that does not gives unknown and keeps the submission", async () => {
+    for (const echo of [true, false]) {
+      const { r, control } = switching();
+      await r.test.host.send("one", undefined, undefined, "t1");
+      const first = await prompted(r, 1);
+      first.respond("end_turn");
+      await waitFor(() => r.ends.length === 1);
+      r.test.onSpawn = (agy) => { agy.echoResume = echo; };
+      await r.test.host.setPermission({ revision: 4, requested: { sandbox: "read-only", network_access: false, approval: "on-request" } });
+      await r.test.host.send("two", undefined, undefined, "t2");
+      const second = await prompted(r, 2);
+      second.message("x");
+      await waitFor(() => control().status !== "applying");
+      expect(control()).toMatchObject(echo
+        ? { status: "applied", effective: { session_id: "session-1" } }
+        : { status: "unknown", reason: "no_observed_session", submitted: { revision: 4, execution_id: "t2" } });
+    }
+  });
+
+  it("a failed start gives failed without rolled_back_to; the next turn captures the selection again", async () => {
+    const { r, control } = switching();
+    await r.test.host.setPermission({ revision: 5, requested: { sandbox: "read-only", network_access: false, approval: "on-request" } });
+    r.test.extraHookGroups.push({ name: "x", enabled: true, source: "/x/hooks.json", actions: [{ event: "Stop", command: "x" }] });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.ends.length === 1);
+    expect(control()).toMatchObject({ status: "failed", reason: "restart_failed", submitted: { revision: 5 } });
+    expect(control().rolled_back_to).toBeUndefined();
+    r.test.extraHookGroups.length = 0;
+    await r.test.host.send("two", undefined, undefined, "t2");
+    await prompted(r, 1);
+    expect(control()).toMatchObject({ status: "applying", submitted: { revision: 5, execution_id: "t2" } });
+  });
+
+  it("an ambiguous write, a JSON-RPC error or a closed connection gives unknown with the reason", async () => {
+    for (const how of ["write", "rpc", "closed"] as const) {
+      const { r, control } = switching();
+      await r.test.host.setPermission({ revision: 6, requested: { sandbox: "read-only", network_access: false, approval: "on-request" } });
+      if (how === "write") r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+      await r.test.host.send("one", undefined, undefined, "t1");
+      const agy = await prompted(r, 1);
+      if (how === "write") agy.releasePromptWrite(new Error("EPIPE"));
+      if (how === "rpc") agy.fail(-32603, "Internal error");
+      if (how === "closed") agy.exit(1);
+      await waitFor(() => r.ends.length === 1);
+      expect(control()).toMatchObject({ status: "unknown", submitted: { revision: 6 }, reason: { write: "delivery_unconfirmed", rpc: "rpc_error", closed: "connection_closed" }[how] });
+    }
+  });
+
+  it("a newer selection while applying stays pending and is captured by the next turn", async () => {
+    const { r, control } = switching();
+    await r.test.host.setPermission({ revision: 7, requested: { sandbox: "read-only", network_access: false, approval: "on-request" } });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await r.test.host.setPermission({ revision: 8, requested: { sandbox: "danger-full-access", network_access: true, approval: "never" } });
+    expect(control()).toMatchObject({ revision: 8, status: "pending" });
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(control()).toMatchObject({ revision: 8, status: "pending", last_effective: { revision: 7 } });
+    await r.test.host.send("two", undefined, undefined, "t2");
+    const second = await prompted(r, 2);
+    expect(second.sandboxed).toBe(false);
+    expect(control()).toMatchObject({ revision: 8, status: "applying" });
+  });
+});
+
+/** A clock a test advances by hand; only the host's own timers use it. */
+class ManualClock {
+  now = 0;
+  #timers = new Map<number, { at: number; callback: () => void }>();
+  #next = 1;
+  set = (callback: () => void, delayMs: number): unknown => {
+    const id = this.#next++;
+    this.#timers.set(id, { at: this.now + delayMs, callback });
+    return id;
+  };
+  clear = (timer: unknown): void => { this.#timers.delete(timer as number); };
+  nowMs = (): number => this.now;
+  async advance(ms: number): Promise<void> {
+    const until = this.now + ms;
+    for (;;) {
+      const due = [...this.#timers.entries()].filter(([, t]) => t.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+      if (due === undefined) break;
+      this.#timers.delete(due[0]);
+      this.now = due[1].at;
+      due[1].callback();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    this.now = until;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function clocked(overrides: Partial<WrapperConfig> = {}) {
+  const clock = new ManualClock();
+  const r = setup(overrides, { setTimer: clock.set, clearTimer: clock.clear, nowMs: clock.nowMs, abortGraceMs: 60_000, closeGraceMs: 2_000, preAckBoundMs: 1_800_000 });
+  const killed = (agy: FakeAgy) => r.test.signals.filter((s) => s.pid === agy.pid).map((s) => s.signal);
+  return { r, clock, killed };
+}
+
+describe("AntigravityHost over ACP: stop deadlines (L3)", () => {
+  it("an interrupt cancels and arms the abort grace; with no response the group is killed at the deadline", async () => {
+    const { r, clock, killed } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.survivesTerm = true;
+    await r.test.host.interrupt();
+    await clock.advance(30_000);
+    agy.message("still going");
+    await clock.advance(29_990);
+    expect(killed(agy)).toEqual([]);
+    await clock.advance(10);
+    expect(killed(agy)).toEqual(["SIGKILL"]);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ reason: "interrupted" });
+  });
+
+  it("a cancelled response 20 ms before the deadline keeps the outcome; the child gets at most those 20 ms", async () => {
+    const { r, clock, killed } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.survivesTerm = true;
+    await r.test.host.interrupt();
+    await clock.advance(59_980);
+    agy.respond("cancelled");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ reason: "interrupted" });
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(19);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(1);
+    expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("ordinary retirement sends SIGTERM, then SIGKILL after the close grace", async () => {
+    const { r, clock, killed } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.survivesTerm = true;
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(2_000);
+    expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("close during a pending abort grace shortens it to the close grace and never lengthens it", async () => {
+    const { r, clock, killed } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.survivesTerm = true;
+    await r.test.host.interrupt();
+    await clock.advance(1_000);
+    void r.test.host.close();
+    await waitFor(() => r.ends.length === 1);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(2_000);
+    expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("the watchdog interrupt cancels and arms no grace of its own", async () => {
+    const { r, clock, killed } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.message("x");
+    await waitFor(() => r.acks.length === 1);
+    expect(r.test.host.requestInterruptForTurn("t1", { kind: "inactivity", idleMs: 1 })).toBe(true);
+    await waitFor(() => agy.requests.some((q) => q.method === "session/cancel"));
+    await clock.advance(600_000);
+    expect(killed(agy)).toEqual([]);
+    expect(r.ends).toHaveLength(0);
+    expect(r.test.host.failStopTurnForWatchdog("t1")).toBe(true);
+    expect(killed(agy)).toEqual(["SIGKILL"]);
+  });
+
+  it("before the prompt is written, an interrupt ends the child on the abort grace and close on the close grace, without a cancel", async () => {
+    for (const route of ["interrupt", "close"] as const) {
+      const { r, clock, killed } = clocked();
+      r.test.onSpawn = (agy) => { agy.hold.add("session/new"); agy.survivesTerm = true; };
+      await r.test.host.send("one", undefined, undefined, "t1");
+      await waitFor(() => r.test.agys[0]?.requests.some((q) => q.method === "session/new") === true);
+      const agy = r.test.agys[0]!;
+      if (route === "interrupt") await r.test.host.interrupt();
+      else void r.test.host.close();
+      await waitFor(() => r.ends.length === 1);
+      expect(agy.count("session/cancel")).toBe(0);
+      const grace = route === "interrupt" ? 60_000 : 2_000;
+      await clock.advance(grace - 1);
+      expect(killed(agy)).toEqual(["SIGTERM"]);
+      await clock.advance(1);
+      expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
+    }
+  });
+
+  it("a gate fault cancels and arms the abort grace; the pre-ACK bound ends the child on the close grace", async () => {
+    const { r, clock, killed } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.survivesTerm = true;
+    agy.toolCall("c1", "run_command", { CommandLine: "ls" });
+    agy.toolDone("c1", "run_command", { CommandLine: "ls" });
+    await waitFor(() => agy.requests.some((q) => q.method === "session/cancel"));
+    await clock.advance(59_999);
+    expect(killed(agy)).toEqual([]);
+    await clock.advance(1);
+    expect(killed(agy)).toEqual(["SIGKILL"]);
+
+    const second = clocked();
+    second.r.test.onSpawn = (a) => { a.holdPromptWrite = true; a.survivesTerm = true; };
+    await second.r.test.host.send("one", undefined, undefined, "t1");
+    const held = await prompted(second.r, 1);
+    await second.clock.advance(1_800_000);
+    await waitFor(() => second.r.ends.length === 1);
+    expect(second.killed(held)).toEqual(["SIGTERM"]);
+    await second.clock.advance(2_000);
+    expect(second.killed(held)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+});
+
+describe("AntigravityHost over ACP: kaoiro tools (L9, D13)", () => {
+  function signalTool(seen: { aborted: boolean; closedLater: boolean }[]) {
     return {
-      text: (envelope.payload as { text: string }).text,
-      wireBytes: Buffer.byteLength(JSON.stringify(envelope), "utf8"),
+      name: "probe_signal",
+      description: "records its signal",
+      inputSchema: { type: "object", properties: {} },
+      handler: async (_input: Record<string, unknown>, context: { signal?: AbortSignal }) => {
+        const record = { aborted: context.signal?.aborted ?? false, closedLater: false };
+        seen.push(record);
+        if (!record.aborted) {
+          await new Promise<void>((resolve) => {
+            context.signal?.addEventListener("abort", () => { record.closedLater = true; resolve(); }, { once: true });
+            setTimeout(resolve, 200);
+          });
+        }
+        return { content: [{ type: "text", text: "ok" }] };
+      },
     };
   }
 
-  it("passes a reply of exactly the cap through unchanged", async () => {
-    const reply = "a".repeat(MAX_BYTES);
-    expect((await resultText(reply)).text).toBe(reply);
+  it("a handler gets the open window's signal, which aborts when the window closes", async () => {
+    const seen: { aborted: boolean; closedLater: boolean }[] = [];
+    const r = setup({}, { toolDescriptors: [signalTool(seen)] });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    const call = agy.callTool("probe_signal", {}).catch(() => undefined);
+    await waitFor(() => seen.length === 1);
+    agy.respond("end_turn");
+    await call;
+    expect(seen).toEqual([{ aborted: false, closedLater: true }]);
   });
 
-  it("clips a reply one byte over the cap", async () => {
-    const { text } = await resultText("a".repeat(MAX_BYTES + 1));
-    expect(Buffer.byteLength(text, "utf8")).toBe(MAX_BYTES);
+  it("a call before the window opens gets an already aborted signal", async () => {
+    const seen: { aborted: boolean; closedLater: boolean }[] = [];
+    const r = setup({ model: "gemini-4-neon" }, { toolDescriptors: [signalTool(seen)] });
+    r.test.onSpawn = (agy) => agy.hold.add("session/set_config_option");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.mcp !== undefined && r.test.agys[0]!.requests.some((q) => q.method === "session/set_config_option"));
+    await r.test.agys[0]!.callTool("probe_signal", {});
+    expect(seen).toEqual([{ aborted: true, closedLater: false }]);
   });
 
-  it("clips at a character boundary when a multi-byte character straddles the cap", async () => {
-    // 5462 three-byte characters = 16386 bytes; the cap falls inside the last one.
-    const { text } = await resultText("あ".repeat(5462));
-    expect(text).toBe("あ".repeat(5461));
-    expect(text).not.toContain("�");
+  it("refuses the previous process's bearer after retirement; a bad bearer changes nothing in a healthy turn", async () => {
+    const seen: { aborted: boolean; closedLater: boolean }[] = [];
+    const r = setup({}, { toolDescriptors: [signalTool(seen)] });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const first = await prompted(r, 1);
+    const old = first.mcp!;
+    first.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    await expect(first.callTool("probe_signal", {}, { mcp: old })).rejects.toThrow();
+    await r.test.host.send("two", undefined, undefined, "t2");
+    const second = await prompted(r, 2);
+    const bad = await second.callTool("probe_signal", {}, { headers: { Authorization: "Bearer nope" } });
+    expect(bad.status).toBe(401);
+    await expect(second.callTool("probe_signal", {}, { mcp: old })).rejects.toThrow();
+    second.respond("end_turn");
+    await waitFor(() => r.ends.length === 2);
+    expect(r.ends[1]!.error).toBeUndefined();
+    expect(seen).toEqual([]);
   });
 
-  it("keeps the result envelope under the server's 65536-byte limit for a very long reply", async () => {
-    const { wireBytes } = await resultText("b".repeat(200_000));
-    expect(wireBytes).toBeLessThan(65_536);
+  it("fails the start when agy does not list the kaoiro tools in time", async () => {
+    const r = setup({}, { mcpReadyTimeoutMs: 50 });
+    r.test.onSpawn = (agy) => { agy.listOnAttach = false; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "kaoiro MCP server did not connect" });
+    expect(r.test.agys[0]!.count("session/prompt")).toBe(0);
+  });
+
+  it("closes a held question when agy cuts its call, and at the latest when the turn settles (D13)", async () => {
+    const { QuestionBroker, askUserQuestionDescriptor } = await import("@kaoiro/agent-common");
+    for (const end of ["cut", "settle"] as const) {
+      const pendings: unknown[] = [];
+      const broker = new QuestionBroker({ config: config(), send: () => {}, onPendingChange: (pending: unknown) => pendings.push(pending) });
+      const r = setup({}, { toolDescriptors: [askUserQuestionDescriptor((questions, signal) => broker.decide(questions, signal))] });
+      await r.test.host.send("one", undefined, undefined, "t1");
+      const agy = await prompted(r, 1);
+      const cut = new AbortController();
+      const call = agy.callTool("ask_user_question", { questions: [{ question: "Go?", header: "Go", options: [{ label: "Yes", description: "y" }, { label: "No", description: "n" }], multiSelect: false }] }, { signal: cut.signal }).catch(() => undefined);
+      await waitFor(() => pendings.length === 1 && pendings[0] !== null, () => pendings);
+      if (end === "cut") cut.abort();
+      else agy.respond("end_turn");
+      await waitFor(() => pendings.at(-1) === null, () => pendings);
+      await call;
+    }
   });
 });
 
-it("settles permission sync expiry without spawning or rolling back an unattempted model",async()=>{
-  const {host,states,logs,calls,turnEnds}=hostHarness({waitForPermissionSync:()=>Promise.reject(new PermissionSyncTimeoutError())});
-  try{await host.setModel("missing-model");await host.send("never dispatched");await waitFor(()=>turnEnds.length===1);
-    expect(calls).toHaveLength(0);expect(host.statusSnapshot()).toMatchObject({pending_model:"missing-model"});
-    expect(logs.filter(e=>e.type==="result")).toEqual([expect.objectContaining({payload:expect.objectContaining({is_error:true,error_detail:expect.stringContaining("No execution was started")})})]);
-    expect(states.slice(-2).map(e=>e.state)).toEqual(["error","waiting_input"]);expect(turnEnds[0]).toMatchObject({error:{reason:"permission_sync_timeout"},terminal:false});
-  }finally{host.close();}
-});
-
-it.each([false, true])("rejects native attach substitution before publication (candidate=%s)", async candidate => {
-  const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-recovery-")); const path = join(root, "checkpoint");
-  const failures: number[] = []; const cfg = config({ recovery_checkpoint_path: path,
-    ...(candidate ? { recovery_resume_kind: "candidate" } : {}) });
-  const recovery = new RecoveryReporter(cfg, "requested", failure => failures.push(failure.exitCode));
-  const ids: string[] = [];
-  const { host, calls, logs } = hostHarness({ config: cfg, resumeSessionId: "requested", recovery, onSessionId: id => ids.push(id) });
-  try {
-    await host.send("first turn"); await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write(JSON.stringify({ event: "init", conversation_id: "silent-fresh", init: { tools: [] } }) + "\n");
-    await waitFor(() => failures.length === 1);
-    await waitFor(() => calls[0]!.child.killed !== undefined);
-    calls[0]!.child.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "after rejected init" } }) + "\n");
-    expect(ids).toEqual([]);
-    expect(readRecoveryCheckpoint(path)).toMatchObject({ ok: true, record: { state: candidate ? "unbound" : "blocked" } });
-    expect(logs.some(e => e.type === "result" && !e.payload.is_error)).toBe(false);
-  } finally { host.close(); for (const call of calls) call.child.finish(); rmSync(root, { recursive: true, force: true }); }
-});
-
-it("records Antigravity first-turn candidate at init and confirms terminal", async () => {
-  const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-recovery-")); const path = join(root, "checkpoint");
-  const cfg = config({ recovery_checkpoint_path: path }); const recovery = new RecoveryReporter(cfg, undefined, () => {});
-  const { host, calls } = hostHarness({ config: cfg, recovery });
-  try {
-    await host.send("first turn"); await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write(JSON.stringify({ event: "init", conversation_id: "fresh", init: { tools: [] } }) + "\n");
-    await waitFor(() => { const r = readRecoveryCheckpoint(path); return r.ok && r.record.state === "unbound" && r.record.candidate_id === "fresh"; });
-    calls[0]!.child.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "done" } }) + "\n");
-    await waitFor(() => { const r = readRecoveryCheckpoint(path); return r.ok && r.record.state === "live"; });
-  } finally { host.close(); for (const call of calls) call.child.finish(); rmSync(root, { recursive: true, force: true }); }
-});
-
-it.each([false,true])("preserves Antigravity completion for blocked recovery but stops write failure (fatal=%s)",async fatal=>{
- const root=mkdtempSync(join(tmpdir(),"kaoiro-agy-confirm-")),path=join(root,"checkpoint"),cfg=config({recovery_checkpoint_path:path});
- const recovery=new RecoveryReporter(cfg,undefined,()=>{});const {host,calls,logs}=hostHarness({config:cfg,recovery});
- try {await host.send("first");await waitFor(()=>calls.length===1);
- calls[0]!.child.stdout.write(JSON.stringify({event:"init",conversation_id:"fresh",init:{tools:[]}})+"\n");
- await waitFor(()=>{const r=readRecoveryCheckpoint(path);return r.ok&&r.record.state==="unbound"&&r.record.candidate_id==="fresh";});
- if(fatal)mkdirSync(path+".tmp");else recovery.block("watchdog");
- calls[0]!.child.stdout.write(JSON.stringify({event:"result",result:{status:"SUCCESS",response:"done"}})+"\n");
- await waitFor(()=>fatal?recovery.failure?.exitCode===79:logs.some(e=>e.type==="result"));await new Promise<void>(resolve=>setImmediate(resolve));
- expect(logs.filter(e=>e.type==="result"&&!e.payload.is_error)).toHaveLength(fatal?0:1);
- expect(readRecoveryCheckpoint(path)).toMatchObject({ok:true,record:{state:fatal?"unbound":"blocked"}});
- } finally {const closing=host.close();for(const c of calls)c.child.finish();await closing;rmSync(root,{recursive:true,force:true});}
-});
-
-it.each(["ERROR", "CANCELED"])("keeps a fresh Antigravity candidate unbound after %s", async status => {
-  const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-terminal-"));
-  const path = join(root, "checkpoint");
-  const cfg = config({ recovery_checkpoint_path: path });
-  const recovery = new RecoveryReporter(cfg, undefined, () => {});
-  const { host, calls, turnEnds } = hostHarness({ config: cfg, recovery });
-  try {
-    await host.send("first turn");
-    await waitFor(() => calls.length === 1);
-    calls[0]!.child.stdout.write(JSON.stringify({ event: "init", conversation_id: "fresh", init: { tools: [] } }) + "\n");
-    const candidate = { ok: true, record: { version: 1, state: "unbound", candidate_id: "fresh" } };
-    await waitFor(() => {
-      const snapshot = readRecoveryCheckpoint(path);
-      return snapshot.ok && snapshot.record.state === "unbound" && snapshot.record.candidate_id === "fresh";
-    });
-    expect(readRecoveryCheckpoint(path)).toEqual(candidate);
-    if (status === "CANCELED") await host.interrupt();
-    calls[0]!.child.stdout.write(JSON.stringify({ event: "result", result: { status, error: "fixture failure" } }) + "\n");
-    calls[0]!.child.finish();
-    await waitFor(() => turnEnds.length === 1);
-    expect(turnEnds[0]!.error).toBeDefined();
-    expect(readRecoveryCheckpoint(path)).toEqual(candidate);
-    expect(recovery.failure).toBeUndefined();
-  } finally {
-    const closing = host.close();
-    for (const call of calls) call.child.finish();
-    await closing;
-    rmSync(root, { recursive: true, force: true });
+describe("AntigravityHost over ACP: model and level (4.8)", () => {
+  function modelSetup(model: string | undefined, pending?: string) {
+    const r = setup(model === undefined ? {} : { model });
+    const ext = () => r.states.at(-1)!.ext as Record<string, any>;
+    if (pending !== undefined) void r.test.host.setModel(pending);
+    return { r, ext };
   }
+
+  it("applies a listed slug, and a <model>-<level> slug as two verified steps", async () => {
+    const { r } = modelSetup(undefined, "gemini-4-neon-high");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    expect(agy.requests.filter((q) => q.method === "session/set_config_option").map((q) => [q.params.configId, q.params.value]))
+      .toEqual([["model", "gemini-4-neon"], ["thought_level", "high"]]);
+    expect((r.states.at(-1)!.ext as Record<string, any>).model).toBe("gemini-4-neon-high");
+  });
+
+  it("sends nothing for the account default", async () => {
+    const { r } = modelSetup(undefined, "");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    expect(agy.count("session/set_config_option")).toBe(0);
+  });
+
+  it("re-applies the committed slug at every start, also after resume", async () => {
+    const { r } = modelSetup("gemini-4-neon");
+    for (const n of [1, 2]) {
+      await r.test.host.send(`turn ${n}`, undefined, undefined, `t${n}`);
+      const agy = await prompted(r, n);
+      expect(agy.requests.filter((q) => q.method === "session/set_config_option").map((q) => q.params.value)).toEqual(["gemini-4-neon"]);
+      agy.respond("end_turn");
+      await waitFor(() => r.ends.length === n);
+    }
+  });
+
+  it("an extra value the option list lacks is sent as a model value; a refused first step applies nothing (control_rejected)", async () => {
+    const { r, ext } = modelSetup(undefined, "gemini-4-argon");
+    r.test.onSpawn = (agy) => { agy.models.push("gemini-4-argon"); };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    expect(agy.config.get("model")).toBe("gemini-4-argon");
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    await r.test.host.setModel("not-a-model");
+    await r.test.host.send("two", undefined, undefined, "t2");
+    const second = await prompted(r, 2);
+    expect(second.config.get("model")).toBe("gemini-4-argon");
+    const states = r.states.map((s) => (s.ext as Record<string, any>).switch_error).filter(Boolean);
+    expect(states.at(-1)).toEqual({ kind: "model", requested: "not-a-model", reason: "control_rejected" });
+    expect(ext().model).toBe("gemini-4-argon");
+  });
+
+  it("a level that is not offered rolls back to the previous pair and reports it", async () => {
+    const { r } = modelSetup("gemini-4-neon", "gemini-4-carbon-ultra");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    expect(agy.config.get("model")).toBe("gemini-4-neon");
+    const errors = r.states.map((s) => (s.ext as Record<string, any>).switch_error).filter(Boolean);
+    expect(errors.at(-1)).toEqual({ kind: "model", requested: "gemini-4-carbon-ultra", reason: "level not offered", rolled_back_to: "gemini-4-neon" });
+  });
+
+  it("fails the start when the committed slug can no longer be applied", async () => {
+    const { r } = modelSetup("gone-model");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_model_not_applied:gone-model" });
+  });
+});
+
+describe("AntigravityHost over ACP: start failures", () => {
+  it("a resume refused with -32603 fails the start visibly and tells the recovery checkpoint", async () => {
+    const refused: string[] = [];
+    const r = setup({}, {
+      resumeSessionId: "stored",
+      recovery: { accept: () => true, confirm: () => true, observe: () => true, refuseLaunch: () => refused.push("refused"), failure: undefined },
+    });
+    r.test.onSpawn = (agy) => { agy.rejectResume = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_resume_failed" });
+    expect(refused).toEqual(["refused"]);
+  });
+
+  it("classifies the captured Authentication required error, and only that exact form", async () => {
+    for (const [message, detail] of [["Authentication required", "antigravity_auth_required"], ["Authentication required.", undefined]] as const) {
+      const r = setup();
+      await r.test.host.send("one", undefined, undefined, "t1");
+      const agy = await prompted(r, 1);
+      agy.fail(-32000, message);
+      await waitFor(() => r.ends.length === 1);
+      expect(r.ends[0]!.error!.detail).toBe(detail ?? "antigravity_api_error: Authentication required.");
+    }
+  });
+
+  it("a prepareInput that returns null skips the input without a prompt", async () => {
+    const r = setup({}, { prepareInput: () => null });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.exitCode !== null || r.test.agys[0]?.signalCode !== null);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(r.test.agys[0]!.count("session/prompt")).toBe(0);
+    expect(r.ends).toEqual([]);
+  });
+});
+
+function tamper(agy: FakeAgy): void {
+  const custom = agy.args[agy.args.indexOf("--add-dir") + 1]!;
+  writeFileSync(join(custom, ".agents", "hooks.json"), "{}\n");
+}
+
+describe("AntigravityHost over ACP: outcome precedence (L2 rows)", () => {
+  it("(1) over (2): close outranks tampering; no result is fabricated", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    tamper(agy);
+    await r.test.host.close();
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toBeUndefined();
+    expect(r.results()).toEqual([]);
+  });
+
+  it("(2) over (3): tampering outranks an interrupt", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    tamper(agy);
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_customization_tampered" });
+    expect(r.faults.map((fault) => fault.reason)).toEqual(["antigravity_customization_tampered"]);
+  });
+
+  it("(3) over (4): an interrupt before the ACK settles as interrupted", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; agy.hold.add("session/cancel"); };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await r.test.host.interrupt();
+    agy.release("session/cancel");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.acks).toEqual([]);
+    expect(r.ends[0]!.error).toEqual({ reason: "interrupted" });
+  });
+
+  it("(4) over (5): an unconfirmed delivery outranks a gate fault", async () => {
+    const r = setup({}, { preAckBoundMs: 80 });
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; agy.hold.add("session/cancel"); };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await agy.preToolUse("s1", "read_file", { Path: "a" }, "session-sub");
+    await agy.preToolUse("s1", "read_file", { Path: "a" }, "session-sub");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_delivery_unconfirmed", reason: "receipt_unknown" });
+    expect(r.faults).toHaveLength(1);
+  });
+
+  it("(5) over (6): a gate fault outranks the tool deadline", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.message("x");
+    await waitFor(() => r.acks.length === 1);
+    r.test.host.requestInterruptForTurn("t1", { kind: "tool_timeout", stepIndex: 1, toolName: "run_command", elapsedMs: 1, toolTimeoutMs: 1 });
+    agy.toolCall("c1", "run_command", { CommandLine: "ls" });
+    agy.toolDone("c1", "run_command", { CommandLine: "ls" });
+    await waitFor(() => r.faults.length === 1);
+    agy.release("session/cancel");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error!.detail).toBe("antigravity_gate_unobserved_tool:run_command");
+  });
+
+  it("(6) over (7): the tool deadline outranks an unexpected permission request", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.message("x");
+    await waitFor(() => r.acks.length === 1);
+    r.test.host.requestInterruptForTurn("t1", { kind: "tool_timeout", stepIndex: 1, toolName: "run_command", elapsedMs: 1, toolTimeoutMs: 1 });
+    agy.requestPermission();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    agy.release("session/cancel");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ reason: "timeout" });
+  });
+
+  it("(7) over (8): an unexpected permission request outranks a closed connection", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.message("x");
+    agy.requestPermission();
+    await waitFor(() => agy.requests.some((q) => q.method === "session/cancel") || agy.hold.has("session/cancel"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    agy.exit(1);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_unexpected_permission_request" });
+  });
+
+  it("(8): a closed connection without a response; (9): the response decides; another stop reason is an error", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    (await prompted(r, 1)).exit(1);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "agy_exit_without_result" });
+    await r.test.host.send("two", undefined, undefined, "t2");
+    (await prompted(r, 2)).respond("max_tokens");
+    await waitFor(() => r.ends.length === 2);
+    expect(r.ends[1]).toMatchObject({ error: { detail: "antigravity_stop_reason:max_tokens" }, terminal: true });
+  });
+
+  it("an interrupt after the outcome was decided changes nothing", async () => {
+    const settled: unknown[] = [];
+    const r = setup({}, { onInterruptSettled: (info: unknown) => settled.push(info) });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.survivesTerm = true;
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    await r.test.host.interrupt();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(r.ends).toHaveLength(1);
+    expect(r.ends[0]!.error).toBeUndefined();
+    expect(settled).toEqual([]);
+  });
+});
+
+describe("AntigravityHost over ACP: failures that are not terminal (L2)", () => {
+  it("a failed start, a closed connection and an expired pre-ACK bound fail only their input; the queue continues", async () => {
+    for (const failure of ["start", "closed", "pre_ack"] as const) {
+      const r = setup({}, { preAckBoundMs: 60, mcpReadyTimeoutMs: 50 });
+      if (failure === "start") r.test.onSpawn = (agy) => { agy.listOnAttach = r.test.agys.length !== 1; };
+      if (failure === "pre_ack") r.test.onSpawn = (agy) => { agy.holdPromptWrite = r.test.agys.length === 1; };
+      await r.test.host.send("one", undefined, undefined, "t1");
+      await r.test.host.send("two", undefined, undefined, "t2");
+      if (failure === "closed") (await prompted(r, 1)).exit(1);
+      await waitFor(() => r.ends.length === 1);
+      expect(r.ends[0]!.error).toBeDefined();
+      const next = await prompted(r, 2);
+      next.respond("end_turn");
+      await waitFor(() => r.ends.length === 2);
+      expect(r.ends[1]).toMatchObject({ turnToken: "t2", terminal: true });
+      expect(r.ends[1]!.error).toBeUndefined();
+    }
+  });
+
+  it("close during the start settles the active input and every queued input as closed", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => agy.hold.add("session/new");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.requests.some((q) => q.method === "session/new") === true);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    void r.test.host.close();
+    await waitFor(() => r.ends.length === 1);
+    expect(r.rejected).toEqual([{ turnToken: "t2", reason: "closed" }]);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", terminal: false });
+    expect(r.test.agys[0]!.count("session/prompt")).toBe(0);
+  });
+});
+
+describe("AntigravityHost over ACP: termination ownership", () => {
+  it("an earlier process's deadline never signals the next process (pin 6)", async () => {
+    const r = setup({}, { abortGraceMs: 80 });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const first = await prompted(r, 1);
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    const second = await prompted(r, 2);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(r.test.signals.filter((s) => s.pid === second.pid)).toEqual([]);
+    expect(first.exitCode !== null || first.signalCode !== null).toBe(true);
+  });
+
+  it("the hook list and model probes are not started detached (they stay out of the group kill)", async () => {
+    const probeOptions: unknown[] = [];
+    const r = setup({}, {
+      probeSpawn: (_command: string, args: string[], options: unknown) => {
+        probeOptions.push(options);
+        return fakeHookList(hookGroups(args));
+      },
+    });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await prompted(r, 1);
+    expect(probeOptions).toHaveLength(1);
+    for (const options of probeOptions) expect(options).not.toHaveProperty("detached");
+  });
+});
+
+describe("AntigravityHost over ACP: single confirmations and late input", () => {
+  it("ACKs on the write callback alone, before any activity or response (L7)", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await prompted(r, 1);
+    await waitFor(() => r.acks.length === 1);
+    expect(r.acks).toEqual(["t1"]);
+    expect(r.ends).toEqual([]);
+  });
+
+  it("denies a hook that arrives after a stop latched, while the prompt is still open", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    await r.test.host.interrupt();
+    await expect(agy.preToolUse("c1", "read_file", { Path: "a" })).resolves.toEqual({ decision: "deny", reason: "kaoiro: the turn is stopping" });
+  });
+
+  it("records a permission request outside the window without cancelling anything", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => agy.hold.add("session/new");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.requests.some((q) => q.method === "session/new") === true);
+    const agy = r.test.agys[0]!;
+    agy.requestPermission();
+    await waitFor(() => r.outOfTurn.length === 1);
+    expect(r.outOfTurn).toEqual([{ eventKind: "session/request_permission" }]);
+    agy.release("session/new");
+    const opened = await prompted(r, 1);
+    opened.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toBeUndefined();
+    expect(opened.count("session/cancel")).toBe(0);
+  });
 });

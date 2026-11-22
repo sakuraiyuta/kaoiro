@@ -41,7 +41,6 @@ import { AntigravityInterAgentTurnCoordinator } from "./inter_agent_turn_coordin
 import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigravitySources } from "./source_resolution.js";
 import { probeSshAgentIdentities } from "./ssh_agent_probe.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
-import { resolveEpochIdleMs } from "./epoch.js";
 import { resolveTurnWatchdogSettings, TurnWatchdog } from "./turn_watchdog.js";
 import { antigravityTranscriptPath } from "./transcript_path.js";
 import type { TurnWatchdogWarning } from "./turn_watchdog.js";
@@ -117,10 +116,6 @@ export async function runAntigravityCli(
     config,
   );
   const turnWatchdogSettings = resolvedWatchdog.settings;
-  const resolvedEpochIdle = resolveEpochIdleMs(
-    process.env,
-    config.antigravity_epoch_idle_ms,
-  );
   writeRedactedStderr(
     formatTurnWatchdogLine(
       "antigravity",
@@ -135,11 +130,9 @@ export async function runAntigravityCli(
             source: resolvedWatchdog.sources.toolTimeoutMs,
           },
         ],
-        ["epoch_idle_ms", resolvedEpochIdle],
       ],
     ),
   );
-  const epochIdleMs = resolvedEpochIdle.value;
   if (nonInteractiveToolEnv(process.env).preservedGitSshCommand) {
     writeRedactedStderr("[kaoiro] antigravity respects the operator's GIT_SSH_COMMAND; ssh BatchMode is not injected\n");
   }
@@ -490,9 +483,9 @@ export async function runAntigravityCli(
   ) {
     permissionSyncSupported = await link.waitForPermissionSyncNegotiation();
   }
-  // The bridge call blocks while the operator answers, so the turn watchdog
-  // must treat the wait as a lease rather than inactivity.
-  const decideBridgeToolPermission = async (
+  // A kaoiro tool call blocks while the operator answers, so the turn
+  // watchdog must treat the wait as a lease rather than inactivity.
+  const decideToolPermission = async (
     toolName: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
@@ -501,7 +494,7 @@ export async function runAntigravityCli(
     const turnToken = permissionHost?.activeInterAgentTurnToken();
     const lease = permissionHost === undefined || turnToken === null || turnToken === undefined
       ? null
-      : permissionHost.beginPermissionWaitLease(turnToken, "bridge");
+      : permissionHost.beginPermissionWaitLease(turnToken, "mcp");
     try {
       return await permissionBroker.decide(toolName, input, signal);
     } finally {
@@ -602,17 +595,8 @@ export async function runAntigravityCli(
         interAgentTurns.dispatchNextForPeer(settled.peer);
       }
     },
-    onGateRecoveryLifecycle: (event) => {
-      writeAntigravityLifecycle({
-        event: event.event,
-        details: {
-          fault_class: event.faultClass,
-          tool_name: event.toolName,
-          trip_count: event.tripCount,
-          probe_result: event.probeResult,
-          detail: event.detail,
-        },
-      });
+    onGateFault: ({ reason, detail }) => {
+      writeAntigravityLifecycle({ event: "gate_fault", details: { reason, detail } });
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       recovery.block("watchdog");
@@ -684,16 +668,15 @@ export async function runAntigravityCli(
     },
     toolDescriptors: [
       ...interAgent.descriptors(),
-      askUserQuestionDescriptor((questions) => questionBroker.decide(questions)),
+      askUserQuestionDescriptor((questions, signal) => questionBroker.decide(questions, signal)),
       // issue #396 (ADR-0043 Neutral amendment): Antigravity has no
       // canUseTool-style hook, so the wrapper asks the operator on the
       // tool's own behalf via the same PermissionBroker the dashboard's
       // other approval dialogs use (Codex parity, issue #347).
       // `offerCompact: false` -- this engine has no compaction path, so the
       // description must not point at a tool it cannot see. Blocks the
-      // bridge the same way `ask_user_question` does above, so the
-      // operator must answer within the turn watchdog's absolute tool
-      // deadline (`KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS`, default 10 min).
+      // kaoiro tool call the same way `ask_user_question` does above, and
+      // `agy` cuts a held call after 180 s, which closes the approval.
       operatorApprovalGated(
         requestSessionResetDescriptor({
           reserve: (mode, reason) =>
@@ -705,10 +688,10 @@ export async function runAntigravityCli(
           offerCompact: false,
         }),
         {
-          decide: decideBridgeToolPermission,
+          decide: decideToolPermission,
           // Matches Codex: the approval dialog shows the SDK-side FQN
           // (`mcp__kaoiro__request_session_reset`), which differs from the
-          // bridge's own tool name (`request_session_reset`,
+          // tool host's own tool name (`request_session_reset`,
           // descriptor.name) -- intentional, so the operator sees the same
           // dialog shape regardless of engine.
           toolName: REQUEST_SESSION_RESET_TOOL_FQN,
@@ -724,7 +707,7 @@ export async function runAntigravityCli(
             : Promise.reject(new Error("server link unavailable")),
         }),
         {
-          decide: decideBridgeToolPermission,
+          decide: decideToolPermission,
           toolName: REQUEST_PEER_SESSION_RESET_TOOL_FQN,
           validate: validateRequestPeerSessionResetInput,
         },
@@ -750,32 +733,24 @@ export async function runAntigravityCli(
     // gate-correlation-failure kill (the Host arms its own timer for those,
     // since TurnWatchdog does not orchestrate them).
     abortGraceMs: turnWatchdogSettings.abortGraceMs,
-    // issue #377 Stage 2: idle-epoch lifetime bound (`KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS`).
-    epochIdleMs,
-    onEpochEnded: ({ reason, code, signal, turns }) => {
+    // An unconfirmed delivery is bounded like an idle turn (design L7).
+    preAckBoundMs: turnWatchdogSettings.inactivityMs,
+    onGenerationEnded: ({ serial, reason, code, signal }) => {
       writeAntigravityLifecycle({
-        event: "epoch_ended",
+        event: "generation_ended",
         details: {
+          serial,
           reason,
-          turns,
           ...(code === null ? {} : { code }),
           ...(signal === null ? {} : { signal }),
         },
       });
     },
-    onOutOfTurnEvent: (info) => {
-      const details: Record<string, number | string | boolean> = { event_kind: info.eventKind };
-      if (info.eventKind === "step_update") {
-        if (info.stepIndex !== undefined) details.step_index = info.stepIndex;
-        if (info.stepType !== undefined) details.step_type = info.stepType;
-        if (info.state !== undefined) details.state = info.state;
-      } else if (info.eventKind === "result" && info.status !== undefined) {
-        details.status = info.status;
-      }
-      writeAntigravityLifecycle({ event: "out_of_turn_event", details });
-    },
-    onEpochStderrLine: ({ kind }) => {
-      writeAntigravityLifecycle({ event: "epoch_stderr", details: { kind } });
+    onOutOfTurnEvent: ({ eventKind, callId }) => {
+      writeAntigravityLifecycle({
+        event: "out_of_turn_event",
+        details: { event_kind: eventKind, ...(callId === undefined ? {} : { call_id: callId }) },
+      });
     },
   }, (turnToken) => {
     writeAntigravityLifecycle({ event: "turn_start", turnToken });
@@ -787,7 +762,6 @@ export async function runAntigravityCli(
       ["turn_watchdog_abort_grace_ms", turnWatchdog.settings.abortGraceMs],
       ["tool_timeout_ms", turnWatchdog.settings.toolTimeoutMs],
       ["host_abort_grace_ms", host.abortGraceMs],
-      ["epoch_idle_ms", host.epochIdleMs],
       ["permission_broker_timeout_ms", permissionBroker.timeoutMs],
     ]),
   );
@@ -811,8 +785,6 @@ export async function runAntigravityCli(
       host.statusExtSnapshot(),
     ),
   );
-  // Must follow the initial state: the probe result re-publishes state.
-  if (prompt === undefined) host.probeRateLimits?.();
   process.on("SIGINT", () => {
     void host?.interrupt().finally(() => host?.close());
   });

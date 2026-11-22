@@ -200,9 +200,9 @@ export class TurnWatchdog {
     const watched = this.#watched;
     if (watched === null || watched.turnToken !== turnToken || watched.phase === "failed") return;
     watched.lastProgressAtMs = this.#nowMs();
-    // A tool deadline is absolute: output after its SIGTERM keeps the abort
-    // grace running instead of reopening monitoring.
-    if (watched.phase === "interrupting" && watched.interruptCause?.kind === "tool_timeout") return;
+    // The cancel is final: output after it keeps the abort grace running
+    // instead of reopening monitoring.
+    if (watched.phase === "interrupting") return;
     watched.phase = "monitoring";
     watched.interruptCause = null;
     this.#armMonitoring(watched);

@@ -1,11 +1,10 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { antigravitySubcommandPrefix } from "../src/subcommand.js";
-import { selfCommand } from "@kaoiro/wrapper-core";
 import { describe, expect, it, vi } from "vitest";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { writeFakeAgy } from "./fake_agy_executable.js";
 import { runAntigravityCli } from "../src/cli.js";
 
 const config: WrapperConfig = {
@@ -373,23 +372,8 @@ describe("Antigravity CLI delivery composition", () => {
 
   it("runs an inbound delivery through the production default CLI and host to an agy child", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-inbound-default-"));
-    const executable = join(root, "agy-fixture.mjs");
+    const executable = writeFakeAgy(root);
     const configPath = join(root, "wrapper.config.json");
-    const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
-    writeFileSync(executable, `#!${process.execPath}
-const args = process.argv.slice(2);
-if (args[0] === "models") {
-  process.stdout.write("fixture-model\\tFixture Model\\n");
-} else if (args[0] === "-p" && args[1] === "/hooks") {
-  const customization = args[args.lastIndexOf("--add-dir") + 1];
-  process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
-} else if (args[0] === "--print") {
-  process.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "inbound child turn" } }) + "\\n");
-} else {
-  process.exitCode = 2;
-}
-`);
-    chmodSync(executable, 0o755);
     writeFileSync(configPath, JSON.stringify({
       ...config,
       antigravity_cli_path: executable,

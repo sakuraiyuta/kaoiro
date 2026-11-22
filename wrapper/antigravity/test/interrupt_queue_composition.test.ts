@@ -1,12 +1,11 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { antigravitySubcommandPrefix } from "../src/subcommand.js";
-import { selfCommand } from "@kaoiro/wrapper-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runAntigravityCli } from "../src/cli.js";
+import { writeFakeAgy } from "./fake_agy_executable.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -49,51 +48,11 @@ async function waitFor(predicate: () => boolean, diagnostic: () => unknown, time
   throw new Error(`timed out after ${timeoutMs}ms: ${JSON.stringify(diagnostic())}`);
 }
 
-// A turn whose prompt carries KUROE358_BLOCK stays ACTIVE until SIGTERM; any
-// other prompt completes at once. Each `--print` is its own agy process, so a
-// per-invocation prompt check is enough.
+// A prompt carrying BLOCK stays open until it is cancelled; UNHOOKED trips
+// the gate after a delay; ECHO answers at once (fixtures/fake-agy-acp.mjs).
 function writeFixture(root: string): { executable: string; configPath: string } {
-  const executable = join(root, "agy-fixture.mjs");
+  const executable = writeFakeAgy(root, { env: { FAKE_AGY_PROMPT_LOG: join(root, "prompts.jsonl") } });
   const configPath = join(root, "wrapper.config.json");
-  const hook = (() => { const s = selfCommand(); return antigravitySubcommandPrefix({ nodePath: s[0]!, nodeArgs: s.slice(1, -1), entryPath: s.at(-1)!, subcommand: "hook" }); })();
-  writeFileSync(executable, `#!${process.execPath}
-const args = process.argv.slice(2);
-const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-if (args[0] === "models") {
-  process.stdout.write("fixture-model\\tFixture Model\\n");
-} else if (args[0] === "-p" && args[1] === "/hooks") {
-  const customization = args[args.lastIndexOf("--add-dir") + 1];
-  process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
-} else if (args[0] === "--print") {
-  // The prompt arrives as one NDJSON line on the live epoch's stdin, not as
-  // an argv positional; stdin stays open between turns.
-  let input = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    input += chunk;
-    const boundary = input.indexOf("\\n");
-    if (boundary < 0) return;
-    const prompt = JSON.parse(input.slice(0, boundary)).message.content;
-    line({ event: "init", conversation_id: "cid", init: { tools: ["run_command"] } });
-    if (prompt.includes("KUROE358_BLOCK")) {
-      process.on("SIGTERM", () => process.exit(0));
-      setInterval(() => {}, 1000);
-    } else if (prompt.includes("KUROE541_TRIP")) {
-      process.on("SIGTERM", () => process.exit(0));
-      setTimeout(() => line({ event: "step_update", step_update: { step_index: 513, state: "DONE", step_type: "tool", tool_name: "run_command" } }), 500);
-      setInterval(() => {}, 1000);
-    } else if (prompt.includes("KUROE541_FAIL")) {
-      process.exit(0);
-    } else {
-      line({ event: "result", result: { conversation_id: "cid", status: "SUCCESS", response: "second turn ran" } });
-      process.exit(0);
-    }
-  });
-} else {
-  process.exitCode = 2;
-}
-`);
-  chmodSync(executable, 0o755);
   writeFileSync(configPath, JSON.stringify({ ...config, antigravity_cli_path: executable, antigravity_probe_timeout_ms: 45_000 }));
   return { executable, configPath };
 }
@@ -135,10 +94,10 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
         (options.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(envelope);
       // peer1's turn goes active and blocks; its turn_start acks seq 1.
       await waitFor(() => options?.onInterAgentMessage !== undefined, () => ({}), 4_000);
-      await deliver(inbound("peer1", 1, "KUROE358_BLOCK"));
+      await deliver(inbound("peer1", 1, "BLOCK"));
       await waitFor(() => acknowledgements.includes(1), () => ({ acknowledgements }), 8_000);
       // peer2's turn is enqueued behind the active turn, in the host queue.
-      await deliver(inbound("peer2", 2, "KUROE358_FAST"));
+      await deliver(inbound("peer2", 2, "ECHO second turn ran"));
       // An ordinary interrupt aborts the active turn; the queued one must survive.
       (options.onInterrupt as () => void)();
       // The preserved turn drains under the new generation and acks seq 2.
@@ -157,7 +116,7 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
     }
   }, 20_000);
 
-  it("retires a queued peer batch once on a gate trip, then dispatches that peer's next batch", async () => {
+  it("retires a queued peer batch once on a gate trip; the fault is sticky, so a later batch is retired without starting agy (D3)", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-541-"));
     const lifecycleOutput: string[] = [];
     const readLifecycle = () => lifecycleOutput.join("").split("\n")
@@ -172,13 +131,12 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
     const acknowledgements: number[] = [];
     const sent: Envelope[] = [];
     const retiredSequences: number[] = [];
-    const deliveryEvents: string[] = [];
     let options!: Record<string, any>;
-    let host: { close(): void } | undefined;
+    let host: { close(): void; state: string } | undefined;
     const run = runAntigravityCli({
       parseCliArgs: () => ({ configPath }),
       probeSshAgentIdentities: async () => "unknown",
-      onHostCreated: (created) => { host = created; },
+      onHostCreated: (created) => { host = created as never; },
       createServerLink: (_url, _agentId, createdOptions) => {
         options = createdOptions as unknown as Record<string, any>;
         queueMicrotask(() => {
@@ -188,38 +146,9 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
         return {
           close: () => {},
           setSessionId: () => {},
-          acknowledgeInterAgentDelivery: (sequence: number) => {
-            acknowledgements.push(sequence);
-            deliveryEvents.push(`ack:${sequence}`);
-          },
+          acknowledgeInterAgentDelivery: (sequence: number) => { acknowledgements.push(sequence); },
           retireInterAgentDeliveries: (envelopes: readonly Envelope[]) => {
-            const sequences = envelopes.map((envelope) => (envelope as Envelope & { delivery_seq?: number }).delivery_seq ?? 0);
-            retiredSequences.push(...sequences);
-            deliveryEvents.push(`retire:${sequences.join(",")}`);
-            options.onInterAgentDeliveryStatus({ acked_seq: 1, skipped_ranges: [[2, 2]] });
-            for (const envelope of envelopes) {
-              const payload = envelope.payload as { conversation_id: string; turn_number: number };
-              sent.push({
-                version: "0",
-                agent_id: "server",
-                persona: { id: "server", name: "server", sprite_set: "server" },
-                display_name: "server",
-                ts: "2026-10-09T00:00:00Z",
-                type: "inter_agent_message",
-                state: "thinking",
-                payload: {
-                  to: envelope.agent_id,
-                  conversation_id: payload.conversation_id,
-                  turn_number: payload.turn_number + 1,
-                  kind: "inform",
-                  body: "peer error (interrupted)",
-                  meta: { done: false, propose_next: "" },
-                  owner: { kind: "user", id: "operator" },
-                  error: { code: "interrupted", peer: "peer2", message: "interrupted" },
-                },
-                ext: {},
-              } as unknown as Envelope);
-            }
+            retiredSequences.push(...envelopes.map((envelope) => (envelope as Envelope & { delivery_seq?: number }).delivery_seq ?? 0));
             return true;
           },
           send: (envelope: Envelope) => { sent.push(envelope); },
@@ -231,77 +160,23 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
       const deliver = (envelope: Envelope) =>
         (options.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(envelope);
       await waitFor(() => options?.onInterAgentMessage !== undefined, () => ({}), 4_000);
-      await deliver(inbound("peer1", 1, "KUROE541_TRIP"));
+      await deliver(inbound("peer1", 1, "UNHOOKED run_command 800"));
       await waitFor(() => acknowledgements.includes(1), () => ({ acknowledgements }), 8_000);
-      await deliver(inbound("peer2", 2, "first queued", 1, "c-peer2-first"));
-      await deliver(inbound("peer2", 3, "second queued", 1, "c-peer2-next"));
-
-      await waitFor(
-        () => acknowledgements.includes(3),
-        () => ({ acknowledgements, sent: sent.map((item) => item.type) }),
-        12_000,
-      );
-      const peer2Notices = sent.filter((envelope) => {
-        const payload = envelope.payload as { to?: string; error?: { code?: string }; conversation_id?: string; turn_number?: number };
-        return envelope.type === "inter_agent_message" &&
-          payload.error?.code === "interrupted" &&
-          payload.to === "peer2";
-      });
-      expect(peer2Notices).toHaveLength(1);
-      expect((peer2Notices[0]!.payload as { turn_number: number }).turn_number).toBe(2);
-      expect(acknowledgements).toEqual([1, 2, 3]);
-      expect(retiredSequences).toEqual([2]);
-      expect(deliveryEvents.indexOf("retire:2")).toBeLessThan(deliveryEvents.indexOf("ack:2"));
-      await waitFor(
-        () => sent.some((envelope) => envelope.type === "result" && JSON.stringify(envelope.payload).includes("second turn ran")),
-        () => ({ acknowledgements, sent: sent.map((envelope) => envelope.type) }),
-        12_000,
-      );
-      expect(sent.some((envelope) => envelope.type === "result" && JSON.stringify(envelope.payload).includes("second turn ran"))).toBe(true);
-
-      // This one-shot fixture exits after its result. The failure turn
-      // needs a fresh epoch, rather than a write to its closing stdin.
-      // The same exit-before-close window in production is issue #602.
-      await waitFor(
-        () => readLifecycle().some((event) => event.event === "epoch_ended" &&
-          event.reason === "idle_exit" && event.turns === 1),
-        () => ({ acknowledgements, lifecycle: readLifecycle() }),
-        12_000,
-      );
-      await deliver(inbound("peer2", 4, "KUROE541_FAIL", 3, "c-peer2-first"));
-      await waitFor(
-        () => acknowledgements.includes(4) && sent.some((envelope) => {
-          const payload = envelope.payload as { to?: string; conversation_id?: string; turn_number?: number; error?: { code?: string } };
-          return envelope.type === "inter_agent_message" && payload.to === "peer2" &&
-            payload.conversation_id === "c-peer2-first" && payload.turn_number === 4 &&
-            payload.error?.code === "api_error";
-        }),
-        () => ({ acknowledgements, sent: sent.map((envelope) => envelope.type) }),
-        12_000,
-      );
-      expect(acknowledgements).toEqual([1, 2, 3, 4]);
-      expect(sent.filter((envelope) => {
-        const payload = envelope.payload as { to?: string; conversation_id?: string; turn_number?: number; error?: { code?: string } };
-        return envelope.type === "inter_agent_message" && payload.to === "peer2" &&
-          payload.conversation_id === "c-peer2-first" && payload.turn_number === 4 &&
-          payload.error?.code === "api_error";
-      })).toHaveLength(1);
-
-      const lifecycle = readLifecycle();
-      expect(lifecycle).toContainEqual(expect.objectContaining({
-        event: "gate_fault",
-        fault_class: "tool_completion_unobserved",
-        tool_name: "run_command",
-        trip_count: 1,
-        probe_result: "started",
-      }));
-      expect(lifecycle).toContainEqual(expect.objectContaining({
-        event: "gate_recovery",
-        fault_class: "tool_completion_unobserved",
-        tool_name: "run_command",
-        trip_count: 1,
-        probe_result: "passed",
-      }));
+      await deliver(inbound("peer2", 2, "ECHO first queued", 1, "c-peer2-first"));
+      await waitFor(() => readLifecycle().some((event) => event.event === "gate_fault"),
+        () => ({ prompts: existsSync(join(root, "prompts.jsonl")) ? readFileSync(join(root, "prompts.jsonl"), "utf8") : "" }), 12_000);
+      await waitFor(() => retiredSequences.includes(2), () => ({ retiredSequences, acknowledgements }), 12_000);
+      expect(host?.state).toBe("error");
+      await deliver(inbound("peer2", 3, "ECHO second queued", 1, "c-peer2-next"));
+      await waitFor(() => retiredSequences.includes(3), () => ({ retiredSequences }), 12_000);
+      expect(retiredSequences).toEqual([2, 3]);
+      expect(acknowledgements).toEqual([1]);
+      expect(sent.some((envelope) => envelope.type === "result" && JSON.stringify(envelope.payload).includes("queued"))).toBe(false);
+      const faults = readLifecycle().filter((event) => event.event === "gate_fault");
+      expect(faults).toHaveLength(1);
+      expect(faults[0]).toMatchObject({ reason: "antigravity_gate_unobserved_tool", detail: "antigravity_gate_unobserved_tool:run_command" });
+      await waitFor(() => readLifecycle().some((event) => event.event === "generation_ended"), () => readLifecycle(), 8_000);
+      expect(readLifecycle().filter((event) => event.event === "generation_ended")).toHaveLength(1);
     } finally {
       host?.close();
       await run;

@@ -6,11 +6,11 @@ import { antigravitySubcommandPrefix } from "./subcommand.js";
 
 export const GATE_DEADLINE_MS = 55 * 60 * 1000;
 export const HOOK_TIMEOUT_SECONDS = 60 * 60;
+/** The vendor's default; a Stop hook that times out ends the loop. */
+export const STOP_HOOK_TIMEOUT_SECONDS = 30;
 export const CUSTOMIZATION_OWNER_NAMESPACE = "kaoiro-antigravity";
 
 export interface CustomizationOptions {
-  cwd: string;
-  personaPrompt: string;
   nodePath: string;
   nodeArgs?: readonly string[] | undefined;
   entryPath: string;
@@ -27,37 +27,55 @@ function writeVerified(path: string, content: string): string {
   return actual;
 }
 
-function rulesText(cwd: string, personaPrompt: string, bridgeCommand: string): string {
-  return [
-    "You are operating through kaoiro.",
-    `Your working directory is ${cwd}. Work only there unless the operator approves another location.`,
-    "Never read, modify, or delete the kaoiro customization directory that supplied this instruction.",
-    "kaoiro tools are available only through the bridge. List them with:",
-    `  ${bridgeCommand} list`,
-    "Call one with:",
-    `  ${bridgeCommand} call <tool_name> <base64url-json-object>`,
-    "The bridge command must be run exactly as shown, with Cwd set to the working directory and WaitMsBeforeAsync at least 5000.",
-    "Do not use Antigravity's ask_question, send_message, or MCP tools; use the kaoiro bridge instead.",
-    "",
-    personaPrompt,
-    "",
-  ].join("\n");
+/** The hook registrations `agy -p /hooks` must list for this directory. */
+export interface ExpectedHooks {
+  source: string;
+  command: string;
 }
 
-function skillText(bridgeCommand: string): string {
-  return [
-    "---",
-    "name: kaoiro",
-    "description: Use kaoiro inter-agent and operator-question tools through the local CLI bridge.",
-    "---",
-    "",
-    "Use the bridge only in these forms:",
-    `- ${bridgeCommand} list`,
-    `- ${bridgeCommand} call <tool_name> <base64url JSON object>`,
-    "",
-    "Encode the JSON input as UTF-8 base64url without padding. The command is auto-approved only when it has no additional arguments or shell syntax.",
-    "",
-  ].join("\n");
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Checks the structured hook list of the launch's own arguments: exactly the
+ *  managed PreToolUse and Stop registrations, and no other enabled Stop
+ *  action, since `agy` follows another Stop's continue over ours. */
+export function checkHookList(value: unknown, expected: ExpectedHooks): { ok: true } | { ok: false; reason: string } {
+  const groups: Record<string, unknown>[] = [];
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (!isRecord(node)) return;
+    if (typeof node.source === "string" && Array.isArray(node.actions)) groups.push(node);
+    for (const child of Object.values(node)) visit(child);
+  };
+  visit(value);
+  const managed = groups.filter((group) => group.source === expected.source);
+  if (managed.length !== 1 || managed[0]!.enabled === false) return { ok: false, reason: "registration_mismatch" };
+  const actions = (managed[0]!.actions as unknown[]).filter(isRecord);
+  const pre = actions.filter((action) => action.event === "PreToolUse");
+  const stop = actions.filter((action) => action.event === "Stop");
+  if (
+    actions.length !== 2 ||
+    pre.length !== 1 ||
+    stop.length !== 1 ||
+    pre[0]!.matcher !== "*" ||
+    pre[0]!.command !== expected.command ||
+    pre[0]!.timeout_seconds !== HOOK_TIMEOUT_SECONDS ||
+    stop[0]!.command !== expected.command ||
+    stop[0]!.timeout_seconds !== STOP_HOOK_TIMEOUT_SECONDS
+  ) {
+    return { ok: false, reason: "registration_mismatch" };
+  }
+  for (const group of groups) {
+    if (group === managed[0] || group.enabled === false) continue;
+    if ((group.actions as unknown[]).some((action) => isRecord(action) && action.event === "Stop")) {
+      return { ok: false, reason: `foreign_stop_hook:${String(group.source)}` };
+    }
+  }
+  return { ok: true };
 }
 
 export class CustomizationDir {
@@ -85,33 +103,22 @@ export class CustomizationDir {
 
   rewrite(): void {
     const root = join(this.path, ".agents");
-    const rules = join(root, "rules");
-    const skill = join(root, "skills", "kaoiro");
-    mkdirSync(rules, { recursive: true, mode: 0o700 });
-    mkdirSync(skill, { recursive: true, mode: 0o700 });
-    const bridgeCommand = antigravitySubcommandPrefix({
-      nodePath: this.#options.nodePath,
-      ...(this.#options.nodeArgs === undefined ? {} : { nodeArgs: this.#options.nodeArgs }),
-      entryPath: this.#options.entryPath,
-      subcommand: "bridge",
-    });
-    const hookCommand = antigravitySubcommandPrefix({
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const command = antigravitySubcommandPrefix({
       nodePath: this.#options.nodePath,
       ...(this.#options.nodeArgs === undefined ? {} : { nodeArgs: this.#options.nodeArgs }),
       entryPath: this.#options.entryPath,
       subcommand: "hook",
     });
-    const files = new Map<string, string>([
-      [join(rules, "AGENTS.md"), rulesText(this.#options.cwd, this.#options.personaPrompt, bridgeCommand)],
-      [join(root, "hooks.json"), `${JSON.stringify({
+    const hooks = `${JSON.stringify({
       hooks: {
-        PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: hookCommand, timeout: HOOK_TIMEOUT_SECONDS }] }],
+        PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: HOOK_TIMEOUT_SECONDS }] }],
+        Stop: [{ type: "command", command, timeout: STOP_HOOK_TIMEOUT_SECONDS }],
       },
-      }, null, 2)}\n`],
-      [join(skill, "SKILL.md"), skillText(bridgeCommand)],
-    ]);
+    }, null, 2)}\n`;
+    const path = join(root, "hooks.json");
     this.#hashes.clear();
-    for (const [path, content] of files) this.#hashes.set(path, writeVerified(path, content));
+    this.#hashes.set(path, writeVerified(path, hooks));
   }
 
   verify(): boolean {

@@ -99,6 +99,9 @@ importers:
 
   wrapper/antigravity:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.8.0
+        version: 1.8.0(zod@4.4.3)
       '@kaoiro/agent-common':
         specifier: workspace:*
         version: link:../agent-common

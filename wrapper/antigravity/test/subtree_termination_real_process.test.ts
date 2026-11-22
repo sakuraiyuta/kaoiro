@@ -12,15 +12,16 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // guarantee here (issue #379); skip elsewhere with the reason in the
 // describe name.
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PermissionBroker, type WrapperConfig } from "@kaoiro/agent-common";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
-import { embeddedPidMarkerWriter, readPidMarker } from "../../core/test/pid_marker.js";
+import { readPidMarker } from "../../core/test/pid_marker.js";
 import { AntigravityHost, type AntigravityHostOptions } from "../src/host.js";
 import { signalTarget } from "../src/subtree_termination.js";
+import { writeFakeAgy } from "./fake_agy_executable.js";
 
 const isLinux = process.platform === "linux";
 
@@ -80,58 +81,35 @@ function forceKill(rawPid: unknown, signal: SignalBackend = (pid, value) => proc
   }
 }
 
-/** A fixture "agy" that spawns a real grandchild which always ignores
- *  SIGTERM, writes both pids to files as soon as it is ready, then streams
- *  ACTIVE progress forever (never resolves) so the turn stays open until
- *  interrupted. `ignoreOwnSigterm` controls whether the LEADER itself also
- *  ignores SIGTERM. */
+/** A real "agy" (fixtures/fake-agy-acp.mjs) whose SUBTREE prompt starts a
+ *  real grandchild that ignores SIGTERM, publishes both pids, shows a
+ *  run_command that never ends, and leaves session/cancel unanswered, so the
+ *  abort deadline decides. `ignoreOwnSigterm` makes the leader ignore
+ *  SIGTERM too. */
 function writeFixture(
   root: string,
-  options: { ignoreOwnSigterm: boolean },
+  options: { ignoreOwnSigterm: boolean; ignoreCancel?: boolean },
 ): { executable: string; selfPidFile: string; grandchildPidFile: string; grandchildReadyFile: string } {
-  const executable = join(root, "agy-fixture.mjs");
   const selfPidFile = join(root, "self.pid");
   const grandchildPidFile = join(root, "grandchild.pid");
   const grandchildReadyFile = join(root, "grandchild.ready");
-  // The grandchild script writes its OWN ready marker right after
-  // registering the SIGTERM handler -- registering that handler is not
-  // instantaneous with the OS-level fork/exec `spawn()` returns from, so
-  // the test must wait for this file (not just the pid file) before
-  // sending SIGTERM, or the signal can race a not-yet-registered handler
-  // and kill the grandchild via Node's default behavior instead of
-  // exercising the ignore-SIGTERM path this fixture means to test.
+  // The grandchild writes its ready marker right after registering its
+  // SIGTERM handler, so no signal races a not-yet-registered handler.
   const grandchildScript = join(root, "grandchild.mjs");
-  writeFileSync(grandchildScript, `#!${process.execPath}
-import { writeFileSync } from "node:fs";
+  writeFileSync(grandchildScript, `import { writeFileSync } from "node:fs";
 process.on("SIGTERM", () => {});
 writeFileSync(${JSON.stringify(grandchildReadyFile)}, "");
 setInterval(() => {}, 1_000);
 `);
-  chmodSync(grandchildScript, 0o755);
-  writeFileSync(executable, `#!${process.execPath}
-import { spawn } from "node:child_process";
-import { renameSync, writeFileSync } from "node:fs";
-const publishPidMarker = ${embeddedPidMarkerWriter()};
-const args = process.argv.slice(2);
-const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-if (args[0] === "models") {
-  process.stdout.write("fixture-model\\tFixture Model\\n");
-} else if (args[0] === "--print") {
-  line({ event: "init", conversation_id: "cid-subtree", init: { tools: ["run_command"] } });
-  const grandchild = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(grandchildScript)}], { stdio: "ignore" });
-  publishPidMarker(${JSON.stringify(grandchildPidFile)}, grandchild.pid, { writeFileSync, renameSync });
-  publishPidMarker(${JSON.stringify(selfPidFile)}, process.pid, { writeFileSync, renameSync });
-  ${options.ignoreOwnSigterm ? "process.on('SIGTERM', () => {});" : ""}
-  // issue #379 pin 5 / #377: a run_command tool step that stays ACTIVE
-  // forever, exactly like a promoted background task whose completion the
-  // real agy stream waits on -- the grandchild above stands in for that
-  // background task's own process tree.
-  setInterval(() => line({ event: "step_update", step_update: { conversation_id: "cid-subtree", step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "sleep 1000" } } } }), 50);
-} else {
-  process.exitCode = 2;
-}
-`);
-  chmodSync(executable, 0o755);
+  const executable = writeFakeAgy(root, {
+    env: {
+      FAKE_AGY_PID_FILE: selfPidFile,
+      FAKE_AGY_GRANDCHILD: grandchildScript,
+      FAKE_AGY_GRANDCHILD_PID_FILE: grandchildPidFile,
+      FAKE_AGY_IGNORE_TERM: options.ignoreOwnSigterm ? "1" : "0",
+      FAKE_AGY_IGNORE_CANCEL: options.ignoreCancel === false ? "0" : "1",
+    },
+  });
   return { executable, selfPidFile, grandchildPidFile, grandchildReadyFile };
 }
 
@@ -149,8 +127,8 @@ function hostHarness(
     appendSystemPrompt: "persona",
     permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
     onState: () => {},
-    verifyGate: async () => true, // gate self-verification (F4b) is out of scope here
     agyPath,
+    probeModels: async () => null,
     ...(options.abortGraceMs === undefined ? {} : { abortGraceMs: options.abortGraceMs }),
     ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
     ...(options.signalTarget === undefined ? {} : { signalTarget: options.signalTarget }),
@@ -159,7 +137,7 @@ function hostHarness(
 }
 
 describe.skipIf(!isLinux)("Antigravity subtree termination against real processes (issue #379, Linux-only)", () => {
-  it("interrupt() terminates a real parent + grandchild that both ignore SIGTERM, as a group, after grace, during a promoted run_command background task (pins 1 + 5)", async () => {
+  it("interrupt() cancels; when agy does not answer, the abort deadline kills a real parent + grandchild that both ignore SIGTERM, as a group (pins 1 + 5)", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-signal-test-subtree-"));
     const { executable, selfPidFile, grandchildPidFile, grandchildReadyFile } =
       writeFixture(root, { ignoreOwnSigterm: true });
@@ -167,7 +145,7 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
     let selfPid: number | undefined;
     let grandchildPid: number | undefined;
     try {
-      void host.send("run the fixture");
+      void host.send("SUBTREE");
       await waitForFile(grandchildReadyFile);
       selfPid = await readPidFile(selfPidFile);
       grandchildPid = await readPidFile(grandchildPidFile);
@@ -175,7 +153,7 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
       expect(isAlive(grandchildPid)).toBe(true);
 
       await host.interrupt();
-      // Both ignore SIGTERM, so nothing should die before the grace elapses.
+      // Only a cancel was sent; nothing dies before the grace elapses.
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(isAlive(selfPid)).toBe(true);
       expect(isAlive(grandchildPid)).toBe(true);
@@ -204,14 +182,13 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
     let selfPid: number | undefined;
     let grandchildPid: number | undefined;
     try {
-      void host.send("run the fixture");
+      void host.send("SUBTREE");
       await waitForFile(grandchildReadyFile);
       selfPid = await readPidFile(selfPidFile);
       grandchildPid = await readPidFile(grandchildPidFile);
 
       await host.interrupt();
-      // The leader accepts a plain SIGTERM here (ignoreOwnSigterm: false),
-      // so it exits promptly without ever needing the SIGKILL escalation.
+      // The deadline's SIGKILL goes to the leader's pid only.
       await waitFor(() => !isAlive(selfPid!), 2_000);
       // The grandchild was never in a group `signalSubtree` could target
       // (no detached spawn) and was never itself signalled -- it survives.
@@ -224,41 +201,23 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
     }
   }, 10_000);
 
-  it("a child that exits on SIGTERM never receives a SIGKILL (pin 2)", async () => {
+  it("a child that answers the cancel and exits on the retirement SIGTERM never receives a SIGKILL (pin 2)", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-signal-test-subtree-clean-"));
-    const executable = join(root, "agy-fixture-clean.mjs");
-    const readyFile = join(root, "ready");
-    writeFileSync(executable, `#!${process.execPath}
-import { writeFileSync } from "node:fs";
-const args = process.argv.slice(2);
-const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-if (args[0] === "models") {
-  process.stdout.write("fixture-model\\tFixture Model\\n");
-} else if (args[0] === "--print") {
-  line({ event: "init", conversation_id: "cid-clean", init: { tools: [] } });
-  writeFileSync(${JSON.stringify(readyFile)}, "");
-  process.on("SIGTERM", () => process.exit(0));
-  setInterval(() => line({ event: "step_update", step_update: { conversation_id: "cid-clean", step_index: 1, state: "ACTIVE", step_type: "agent_response", text_delta: "." } }), 50);
-} else {
-  process.exitCode = 2;
-}
-`);
-    chmodSync(executable, 0o755);
+    const selfPidFile = join(root, "self.pid");
+    const executable = writeFakeAgy(root, { env: { FAKE_AGY_PID_FILE: selfPidFile } });
     const { host } = hostHarness(executable, { abortGraceMs: 300 });
     // SIGKILL is uncatchable, so the fixture cannot self-report receiving
     // one; a passthrough spy on the real `process.kill` is the only vantage
-    // point that can observe whether host.ts's `exit`/`close` cancellation
-    // wiring actually suppressed the escalation against a REAL child's real
-    // exit timing (the timer math itself is already unit-tested against
-    // fake timers in subtree_termination.test.ts).
+    // point that sees whether the escalation stayed silent for a real exit.
     const killSpy = vi.spyOn(process, "kill");
     try {
-      const sent = host.send("run the fixture");
-      await waitForFile(readyFile);
+      const sent = host.send("BLOCK");
+      const selfPid = await readPidFile(selfPidFile, 5_000);
+      await new Promise((resolve) => setTimeout(resolve, 200));
       await host.interrupt();
       await sent;
-      // Give the (should-not-fire) escalation timer a chance to prove it
-      // stayed silent -- well past the 300ms grace.
+      await waitFor(() => !isAlive(selfPid), 2_000);
+      // Well past the 300 ms grace: the escalation must not have fired.
       await new Promise((resolve) => setTimeout(resolve, 500));
       const sigkillCalls = killSpy.mock.calls.filter((call) => call[1] === "SIGKILL");
       expect(sigkillCalls).toEqual([]);
