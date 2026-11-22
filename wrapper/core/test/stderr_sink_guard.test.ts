@@ -282,16 +282,18 @@ function approvedTransportImport(
   const names = path === ACP_CONNECTION && specifier === "node:stream"
     ? "Readable,Writable"
     : path === TOOL_HOST && specifier === "node:http" ? "createServer" : null;
-  if (!names || !ts.isImportDeclaration(node) || node.parent !== source)
+  const declaration = node.parent;
+  if (!names || !ts.isImportDeclaration(declaration) ||
+    declaration.moduleSpecifier !== node || declaration.parent !== source)
     return false;
-  const clause = node.importClause;
+  const clause = declaration.importClause;
   const bindings = clause?.namedBindings;
   if (!bindings || clause.name || clause.isTypeOnly || !ts.isNamedImports(bindings))
     return false;
   const runtime = bindings.elements.filter((entry) => !entry.isTypeOnly);
   if (runtime.some((entry) => entry.propertyName) ||
     runtime.map((entry) => entry.name.text).join(",") !== names) return false;
-  return node === source.statements.find((stmt) => ts.isImportDeclaration(stmt) &&
+  return declaration === source.statements.find((stmt) => ts.isImportDeclaration(stmt) &&
     ts.isStringLiteral(stmt.moduleSpecifier) && stmt.moduleSpecifier.text === specifier);
 }
 
