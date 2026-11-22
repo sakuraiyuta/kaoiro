@@ -870,15 +870,12 @@ describe("buildRegister", () => {
       "gemini-3.6-flash-high",
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-low",
-      "gemini-3.1-pro-high",
-      "gemini-3.1-pro-low",
       "claude-opus-5-5-low",
       "claude-opus-5-5-medium",
       "claude-opus-5-5-high",
       "claude-sonnet-5-5-low",
       "claude-sonnet-5-5-medium",
       "claude-sonnet-5-5-high",
-      "gpt-oss-120b-medium",
       "gemini-4-nova",
     ]);
     expect(

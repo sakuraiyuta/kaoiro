@@ -37,7 +37,13 @@ describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
       );
       expect(models[0]).toEqual({ value: "", display_name: "account default" });
       // Pinned snapshot's non-default entries (catalog.ts SNAPSHOT_1_3_1).
-      expect(models.map((m) => m.value)).toContain("gemini-3.8-flash-high");
+      const values = models.map((m) => m.value);
+      expect(values).toContain("gemini-3.8-flash-high");
+      // The three values agy 1.5.14 rejects are not offered by the fallback.
+      for (const rejected of ["gemini-3.1-pro-high", "gemini-3.1-pro-low", "gpt-oss-120b-medium"]) {
+        expect(values).not.toContain(rejected);
+      }
+      expect(values).toHaveLength(16);
       const warning = stderr.mock.calls.flat().join("");
       expect(warning).toContain("agy models` probe failed");
       expect(warning).toContain("1.3.1 snapshot");

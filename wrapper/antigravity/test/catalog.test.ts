@@ -25,17 +25,22 @@ describe("Antigravity catalog and source resolution", () => {
       "gemini-3.6-flash-high",
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-low",
-      "gemini-3.1-pro-high",
-      "gemini-3.1-pro-low",
       "claude-opus-5-5-low",
       "claude-opus-5-5-medium",
       "claude-opus-5-5-high",
       "claude-sonnet-5-5-low",
       "claude-sonnet-5-5-medium",
       "claude-sonnet-5-5-high",
-      "gpt-oss-120b-medium",
     ]);
     expect(catalogFromAgyModels(["gemini-3.8-flash-low", "gemini-3.8-flash-low", "gpt-oss-120b-medium"]).map((model) => model.value)).toEqual(["", "gemini-3.8-flash-low", "gpt-oss-120b-medium"]);
+  });
+
+  it("leaves out the three values agy 1.5.14 rejects, keeping every other entry", () => {
+    const rejected = ["gemini-3.1-pro-high", "gemini-3.1-pro-low", "gpt-oss-120b-medium"];
+    const values = antigravityCatalogSnapshot().map((model) => model.value);
+    for (const value of rejected) expect(values).not.toContain(value);
+    expect(values).toHaveLength(16);
+    expect(values[0]).toBe("");
   });
 
   it("agy modelsのTAB区切り実出力をdisplay name付きで読む", () => {
