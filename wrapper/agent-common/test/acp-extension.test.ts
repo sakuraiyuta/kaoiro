@@ -208,9 +208,10 @@ async function heldPrompt(text = "hello") {
   });
   const child = Object.assign(new EventEmitter(), { stdout, stdin });
   const onWrite = vi.fn();
+  const onWriteStart = vi.fn();
   const h = handlers();
   const conn = connectAcp(child as unknown as ChildProcessWithoutNullStreams,
-    h, { onWrite });
+    h, { onWrite, onWriteStart });
   const session = new AcpSession(conn);
   session.sessionId = "session";
   const result = session.prompt(text);
@@ -218,8 +219,8 @@ async function heldPrompt(text = "hello") {
   const line = await written;
   expect(line.method).toBe("session/prompt");
   expect(onWrite).not.toHaveBeenCalled();
-  return { child, stdin, stdout, conn, onWrite, metadata: h.metadata,
-    result, line, release };
+  return { child, stdin, stdout, conn, onWrite, onWriteStart,
+    metadata: h.metadata, session, result, line, release };
 }
 
 it.each([true, false])("receives a response before callback ok=%s", async (ok) => {
@@ -289,3 +290,37 @@ it.each([
     }
   },
 );
+
+it.each([
+  ["normal", "hello"],
+  ["oversized", "x".repeat(4 * 1024 * 1024)],
+] as const)("reports the start of a %s write before its callback",
+  async (_kind, text) => {
+    const p = await heldPrompt(text);
+    try {
+      expect(p.onWriteStart.mock.calls).toEqual([[
+        { id: p.line.id, method: "session/prompt" },
+      ]]);
+    } finally {
+      p.release();
+      p.conn.close();
+      p.stdin.destroy();
+    }
+  },
+);
+
+it("reports no start for a message queued behind a failed write", async () => {
+  const p = await heldPrompt();
+  void p.session.cancel().catch(() => {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  p.release(new Error("write failed"));
+  await expect(p.result).rejects.toThrow();
+  await p.conn.closed;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(p.onWriteStart.mock.calls.map(([identity]) => identity.method))
+    .toEqual(["session/prompt"]);
+  expect(p.onWrite.mock.calls).toEqual([[
+    { id: p.line.id, method: "session/prompt", ok: false },
+  ]]);
+  p.stdin.destroy();
+});

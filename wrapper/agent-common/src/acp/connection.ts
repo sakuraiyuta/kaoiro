@@ -49,6 +49,12 @@ export interface AcpExtension<M extends WireMetadata = WireMetadata> {
    * the connection. Messages still queued by the SDK receive no report.
    */
   onWrite?: (result: AcpWriteResult) => void;
+  /**
+   * Reports each write as it begins on child stdin, whatever its size; each
+   * one later gets its `onWrite` report. A message still queued by the SDK
+   * behind a failed write never begins. Takes effect with `onWrite`.
+   */
+  onWriteStart?: (identity: Omit<AcpWriteResult, "ok">) => void;
   notifications?: readonly AcpNotification[];
   /**
    * Vendor fields for one parsed JSON-RPC line, merged after `variant`. A
@@ -187,6 +193,7 @@ function callbackOutput<M extends WireMetadata>(
   metadata: (metadata: M) => void,
   wireFields: AcpExtension<M>["wireFields"],
   onWrite: (result: AcpWriteResult) => void,
+  onWriteStart: AcpExtension<M>["onWriteStart"],
   closeConnection: (error: Error) => void,
 ) {
   const { stdin } = child;
@@ -227,6 +234,11 @@ function callbackOutput<M extends WireMetadata>(
         }
       } catch {
         // Diagnostic observers cannot block transport.
+      }
+      try {
+        onWriteStart?.(identity);
+      } catch {
+        // A notification cannot change the native write.
       }
       return new Promise<void>((resolve, reject) => {
         const finish = (error?: Error | null) => {
@@ -282,7 +294,8 @@ export function connectAcp<M extends WireMetadata = WireMetadata>(
   let output: WritableStream<Uint8Array>;
   if (extension.onWrite) {
     output = callbackOutput(child, handlers.metadata, extension.wireFields,
-      extension.onWrite, (error) => connection.close(error));
+      extension.onWrite, extension.onWriteStart,
+      (error) => connection.close(error));
   } else {
     const tee = metadataTee("out", handlers.metadata, extension.wireFields);
     void tee.readable.pipeTo(Writable.toWeb(child.stdin)).catch(() => {});
