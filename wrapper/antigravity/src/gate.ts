@@ -42,6 +42,7 @@ const classes: Readonly<Record<AntigravityToolClass, readonly string[]>> = {
   ],
   write: [
     "write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file", "notebook_edit",
+    "write_file", "edit_file",
   ],
   shell: ["run_command", "send_command_input", "notebook_execution"],
   network: [
@@ -86,6 +87,8 @@ const WRITE_TARGET_KEYS: Readonly<Record<string, readonly string[]>> = {
   multi_replace_file_content: ["TargetFile", "AbsolutePath"],
   sed_file: ["TargetFile", "AbsolutePath"],
   notebook_edit: ["TargetFile", "AbsolutePath"],
+  write_file: ["Path"],
+  edit_file: ["Path"],
 };
 const MAX_BRIDGE_PAYLOAD_BYTES = 87 * 1024;
 const LOCAL_COMMAND_TOKEN = /^[A-Za-z0-9_./:@%+=,~-]+$/;
@@ -562,6 +565,152 @@ export class AntigravityGate {
     if (match === null) return false;
     if (match[1] === undefined) return true;
     return this.#toolNames().has(match[1]) && knownBridgePayload(match[2]!);
+  }
+}
+
+const KAOIRO_MCP_PREFIX = "mcp_kaoiro_";
+
+const allowed: GateDecision = { decision: "allow" };
+const asked: GateDecision = { decision: "ask" };
+
+function denied(reason: string): GateDecision {
+  return { decision: "deny", reason };
+}
+
+export interface AcpToolPolicyOptions {
+  config: AntigravityLaunchConfig;
+  cwd: string;
+  customizationDir: string;
+  /** Names of the registered kaoiro tools, without the MCP prefix. */
+  kaoiroToolNames: () => ReadonlySet<string>;
+  broker: PermissionBroker;
+  onPermissionRequest?: () => void;
+  onPermissionResolved?: () => void;
+}
+
+/** Decides a PreToolUse hook request when `agy` runs over ACP with its own
+ *  permission prompts off, so this hook is the only check. The evaluation
+ *  order runs first and the first match decides; then the cell of the tool's
+ *  class. A command's `Cwd` is not read: under `--sandbox` the shell tools are
+ *  decided per command, not by where they run. */
+export class AcpToolPolicy {
+  readonly #cwd: string;
+  readonly #customizationDir: string;
+  readonly #kaoiroToolNames: () => ReadonlySet<string>;
+  readonly #broker: PermissionBroker;
+  readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
+  readonly #approval: NonNullable<AntigravityLaunchConfig["approval"]>;
+  readonly #networkAccess: boolean;
+  readonly #onPermissionRequest: (() => void) | undefined;
+  readonly #onPermissionResolved: (() => void) | undefined;
+
+  constructor(options: AcpToolPolicyOptions) {
+    this.#cwd = canonical(options.cwd) ?? resolve(options.cwd);
+    this.#customizationDir = canonical(options.customizationDir) ?? resolve(options.customizationDir);
+    this.#kaoiroToolNames = options.kaoiroToolNames;
+    this.#broker = options.broker;
+    this.#sandbox = options.config.sandbox ?? "workspace-write";
+    this.#approval = options.config.approval ?? "on-request";
+    this.#networkAccess = effectiveNetworkAccess(this.#sandbox, options.config.network_access ?? false);
+    this.#onPermissionRequest = options.onPermissionRequest;
+    this.#onPermissionResolved = options.onPermissionResolved;
+  }
+
+  evaluate(toolCall: HookToolCall): GateDecision {
+    const toolClass = TOOL_CLASS_BY_NAME.get(toolCall.name);
+    if (toolCall.name === "read_file" && !validReadFileArguments(toolCall.args)) {
+      return denied("kaoiro: read_file argument is missing or malformed");
+    }
+    let paths: PathArguments | undefined;
+    if (toolClass === "write") {
+      paths = pathArguments(toolCall.name, toolCall.args);
+      if (!paths.valid || paths.targets.length === 0) {
+        return denied("kaoiro: write target is missing or malformed");
+      }
+    }
+    // Any path argument counts, a command's Cwd included: the hooks.json
+    // there decides every later call.
+    if (
+      referencesDirectory(toolCall.args, this.#customizationDir) ||
+      commandReferencesDirectory(toolCall.args, this.#customizationDir)
+    ) {
+      return denied("kaoiro: customization directory is protected");
+    }
+    if (toolClass === "agent-internal") {
+      return denied("kaoiro: tool is not available through kaoiro");
+    }
+    if (
+      toolCall.name.startsWith(KAOIRO_MCP_PREFIX) &&
+      this.#kaoiroToolNames().has(toolCall.name.slice(KAOIRO_MCP_PREFIX.length))
+    ) {
+      return allowed;
+    }
+    if (toolClass === "network" && !this.#networkAccess) {
+      return denied("kaoiro: network access is disabled");
+    }
+    return this.#cell(toolClass, toolCall, paths);
+  }
+
+  async decide(
+    toolCall: HookToolCall,
+    signal?: AbortSignal,
+  ): Promise<{ decision: "allow" | "deny"; reason?: string }> {
+    const policy = this.evaluate(toolCall);
+    if (policy.decision !== "ask") return policy;
+    this.#onPermissionRequest?.();
+    try {
+      const result: PermissionDecision = await this.#broker.decide(toolCall.name, toolCall.args, signal);
+      return result.allow
+        ? { decision: "allow" }
+        : { decision: "deny", reason: result.message ?? "kaoiro: operator rejected" };
+    } finally {
+      this.#onPermissionResolved?.();
+    }
+  }
+
+  #cell(
+    toolClass: AntigravityToolClass | undefined,
+    toolCall: HookToolCall,
+    paths: PathArguments | undefined,
+  ): GateDecision {
+    if (this.#sandbox === "read-only") {
+      if (toolClass === "read") return allowed;
+      return denied(toolClass === undefined ? "kaoiro: unclassified tool denied" : "kaoiro: read-only sandbox");
+    }
+    if (toolClass === "read") return allowed;
+    if (toolClass === "write") {
+      const targets = paths!;
+      if (this.#sandbox === "workspace-write" && targets.all.some((path) => !isInside(path, this.#cwd))) {
+        return denied("kaoiro: write is outside the permitted workspace");
+      }
+      if (this.#approval === "untrusted") return asked;
+      if (this.#approval === "local" && targets.targets.some((path) => gitMetadataPath(path, this.#cwd))) {
+        return asked;
+      }
+      return allowed;
+    }
+    if (toolClass === undefined) {
+      return this.#approval === "never" ? denied("kaoiro: unclassified tool denied") : asked;
+    }
+    return this.#shellColumn(toolCall);
+  }
+
+  /** Shell tools, and the network and subagent classes that use their column. */
+  #shellColumn(toolCall: HookToolCall): GateDecision {
+    if (this.#sandbox === "workspace-write") {
+      if (!this.#networkAccess) return denied("kaoiro: this tool needs network access in workspace-write");
+      return this.#approval === "never" ? denied("kaoiro: approval policy never denies this tool") : asked;
+    }
+    if (this.#approval === "never") return allowed;
+    if (
+      this.#approval === "local" &&
+      toolCall.name === "run_command" &&
+      typeof toolCall.args.CommandLine === "string" &&
+      localCommandAllowed(toolCall.args.CommandLine, this.#cwd)
+    ) {
+      return allowed;
+    }
+    return asked;
   }
 }
 
