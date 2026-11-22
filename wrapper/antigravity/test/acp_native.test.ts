@@ -441,7 +441,7 @@ const CASES: (CaseSpec & { retry?: boolean })[] = [
     id: "N9",
     config: FULL,
     interruptWhen: continued,
-    prompts: ["Use run_command to start this command in the background without waiting for it: sleep 120; echo late. Then wait until it has finished and reply with its output."],
+    prompts: ["Use run_command to start this command in the background without waiting for it: sleep 20; echo kaoiro-n9-done. Then wait until it has finished and reply with its output."],
   },
   {
     id: "N10",
