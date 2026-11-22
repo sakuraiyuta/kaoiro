@@ -1051,6 +1051,36 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
 
+    for reason <- ["engine_auth_invalid", "engine_auth_unsupported"] do
+      test "resolves reset refused for #{reason}" do
+        reason = unquote(reason)
+        host = "test-reset-auth"
+        agent = host <> ".agent"
+        request = acquire_reset_lock(agent, "previous")
+        @endpoint.subscribe("agents:lobby")
+        socket = join_runner(host)
+
+        ref =
+          push(socket, "session_reset_result", %{
+            "agent_id" => agent,
+            "request_id" => request,
+            "mode" => "new",
+            "ok" => false,
+            "reason" => reason
+          })
+
+        assert_reply ref, :ok
+
+        assert_broadcast "session_reset_failed", %{
+          "agent_id" => ^agent,
+          "request_id" => ^request,
+          "reason" => ^reason
+        }
+
+        refute KaoiroServer.SessionResets.pending?(agent)
+      end
+    end
+
     # issue #397: permission_ceiling_conflict relays a structured per-axis
     # detail (never surfaced as the generic spawn_failed) through to the
     # session_reset_failed broadcast operators see.

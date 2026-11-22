@@ -359,6 +359,15 @@ change immediately.
 `runner.config.json`'s `antigravity` block passes Antigravity-engine-specific
 settings (phase-34 Stage B6, issue #292).
 
+- `auth` selects `google-cloud-adc` or `google-cloud-sign-in`. An unrecognized value reports
+  `engine_auth_invalid`; other engines keep running. Omission
+  refuses Antigravity launches and selects the snapshot catalog. Set
+  `AGY_ADC_AUTH=true` for ADC. If `GOOGLE_APPLICATION_CREDENTIALS` is set,
+  it must name a readable regular file. Otherwise the runner checks
+  `~/.config/gcloud/application_default_credentials.json`. Both methods
+  require HOME and refuse a nonempty `GEMINI_API_KEY`. Configure Cloud
+  project sign-in only after selecting a Cloud project with Pay As You Go.
+  See [authentication setup](../../operations/runner-install.md#antigravity-authentication).
 - `cli_path` is an optional absolute path to `agy`. It is used unchanged for
   the model probe, hook registration, and every Antigravity turn. When it is
   absent, the runner searches only absolute directories in its own `PATH`.

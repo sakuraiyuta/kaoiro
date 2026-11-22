@@ -1004,6 +1004,8 @@ export type SessionResetErrorReason =
   | "spawn_failed"
   | "rollback_failed"
   | "timeout"
+  | "engine_auth_invalid"
+  | "engine_auth_unsupported"
   | "permission_ceiling_conflict";
 
 /** Per-axis detail for a `permission_ceiling_conflict` reset refusal
@@ -1825,7 +1827,9 @@ export interface SwitchSessionMessage {
 /** Why a spawn failed (protocol.md). already_running = a live wrapper already
  *  owns the agent_id; cwd_not_found = the cwd is not in the host's allow-list;
  *  session_not_found = a resume/switch_session target failed the T3 existence
- *  check under the bound cwd; permission_ceiling_conflict = an antigravity
+ *  check under the bound cwd; engine_auth_unsupported = Antigravity authentication
+ *  declaration missing or markers refused; engine_auth_invalid = unrecognized
+ *  Antigravity authentication declaration; permission_ceiling_conflict = an antigravity
  *  spawn declared an `antigravity.max_*` ceiling narrower than its own launch
  *  value (ADR-0057 F4c Stage B0, issue #359), rejected fail-closed; error =
  *  any other failure. */
@@ -1833,6 +1837,8 @@ export type SpawnFailReason =
   | "already_running"
   | "cwd_not_found"
   | "session_not_found"
+  | "engine_auth_invalid"
+  | "engine_auth_unsupported"
   | "permission_ceiling_conflict"
   | "error";
 

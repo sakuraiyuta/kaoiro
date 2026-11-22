@@ -54,6 +54,8 @@ wrapper のようなサーバ署名トークン経路が無いため、issue #13
 
 See [Runner configuration](../docs/reference/configuration/runner.md#other-runnerconfigjson-and-env-fields) for the remaining runner config fields and environment variables.
 
+For Antigravity, configure [Google Cloud authentication](../docs/operations/runner-install.md#antigravity-authentication) before starting agents.
+
 ## Setup wizard
 
 The [setup wizard reference](../docs/reference/configuration/setup-wizards.md) covers runner config and environment file generation. When Antigravity is selected, the wizard checks for `agy` and reports its version when available; the runner's later `agy --version` probe is informational and does not gate startup.

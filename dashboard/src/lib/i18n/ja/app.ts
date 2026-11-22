@@ -1,3 +1,12 @@
+function launchReason(reason: string): string {
+  if (reason === "engine_auth_invalid") {
+    return `${reason} — antigravity.auth の値が無効です。google-cloud-adc または google-cloud-sign-in を指定してください。`;
+  }
+  return reason === "engine_auth_unsupported"
+    ? `${reason} — runner の antigravity.auth の宣言と認証用の環境変数を確認してください。`
+    : reason;
+}
+
 export const app = {
   quagmireRally: (p: {
     names: string;
@@ -24,9 +33,9 @@ export const app = {
     `その後も network_access が上限を超える場合は ${p.ceiling} に狭めてください。`,
   spawnStarted: (p: { label: string }) => `起動しました: ${p.label}`,
   spawnFailed: (p: { label: string; reason: string }) =>
-    `起動に失敗: ${p.label} (${p.reason})`,
+    `起動に失敗: ${p.label} (${launchReason(p.reason)})`,
   terminateFailed: (p: { reason: string }) => `終了できません (${p.reason})`,
-  restoreFailed: (p: { reason: string }) => `復帰できません (${p.reason})`,
+  restoreFailed: (p: { reason: string }) => `復帰できません (${launchReason(p.reason)})`,
   attachRejected: (p: {
     uploadId: string;
     reason: string;
@@ -40,7 +49,7 @@ export const app = {
     reason: string;
     hint: string | null;
   }) =>
-    `session_reset 失敗 (${p.mode}): ${p.reason}${p.hint !== null ? ` — ${p.hint}` : ""}`,
+    `session_reset 失敗 (${p.mode}): ${launchReason(p.reason)}${p.hint !== null ? ` — ${p.hint}` : ""}`,
   restoreAllConfirm: (p: { count: number }) =>
     `${p.count} 体のオフラインエージェントを一括復元します。よろしいですか?`,
   deleteAllConfirm: (p: { count: number }) =>

@@ -16,6 +16,7 @@
     "internal_subagents": true
   },
   "antigravity": {
+    "auth": "google-cloud-adc",
     "cli_path": "/home/user/.local/bin/agy",
     "probe_timeout_ms": 30000
   },

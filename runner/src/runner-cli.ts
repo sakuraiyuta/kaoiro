@@ -39,12 +39,14 @@ import {
   resolveCodexAuthMode,
   shouldWarnUnsetCodexAuthMode,
 } from "./codex-auth.js";
+import { antigravityAuthProblem } from "./antigravity-auth.js";
 import { resolveAntigravityCatalog } from "./antigravity-catalog.js";
 import { resolveAgyVersion } from "./antigravity-version.js";
 import { GrokCatalog, probeGrokCatalog, type GrokCatalogProbeOptions } from "./grok-catalog.js";
 import { grokProbesSettled } from "./grok_acp_probe.js";
 import {
   DEFAULT_AGY_PROBE_TIMEOUT_MS,
+  antigravityCatalogSnapshot,
   resolveAgyExecutable,
   type AgyExecutableResolution,
 } from "@kaoiro/antigravity";
@@ -205,7 +207,13 @@ async function startRunner(
   const applyOverride = dependencies.applyServerUrlOverride ?? applyServerUrlOverride;
   const resolveCodex = dependencies.resolveCodexAuthMode ?? resolveCodexAuthMode;
   const resolveExecutable = dependencies.resolveAgyExecutable ?? resolveAgyExecutable;
-  const resolveCatalog = dependencies.resolveAntigravityCatalog ?? resolveAntigravityCatalog;
+  const probeCatalog = dependencies.resolveAntigravityCatalog ?? resolveAntigravityCatalog;
+  function resolveCatalog(config: RunnerConfig, executable: AgyExecutableResolution, timeout: number) {
+    const problem = antigravityAuthProblem(config.antigravity?.auth, process.cwd());
+    if (problem === null) return probeCatalog(executable, timeout);
+    process.stderr.write(`runner: skipping agy models: ${problem}\n`);
+    return antigravityCatalogSnapshot();
+  }
   const resolveVersion = dependencies.resolveAgyVersion ?? resolveAgyVersion;
   const createLauncher = dependencies.makeLauncher ?? makeLauncher;
   const createSupervisor = dependencies.createSupervisor ?? ((options) => new Supervisor(options));
@@ -274,7 +282,7 @@ async function startRunner(
     antigravityExecutable === undefined
       ? undefined
       : await resolveCatalog(
-          antigravityExecutable,
+          config, antigravityExecutable,
           antigravityProbeTimeoutMs,
         );
   // issue #387 Part 2(A): `agy --version` alongside the catalog probe above,
@@ -333,6 +341,7 @@ async function startRunner(
       ? {}
       : { codexInternalSubagents: config.codex.internal_subagents }),
     ...extraModelsOptions(config),
+    antigravityAuth: config.antigravity?.auth,
     antigravityExecutable,
     antigravityProbeTimeoutMs,
     antigravityMax: antigravityMaxFrom(config),
@@ -536,7 +545,7 @@ async function startRunner(
     const nextAntigravityCatalog = nextAntigravityExecutable === undefined
       ? undefined
       : await resolveCatalog(
-          nextAntigravityExecutable,
+          next, nextAntigravityExecutable,
           nextAntigravityProbeTimeoutMs,
         );
     if (closed) return;
@@ -557,6 +566,7 @@ async function startRunner(
       codexChatgptPlan: next.codex?.chatgpt_plan,
       codexInternalSubagents: next.codex?.internal_subagents,
       ...extraModelsRuntimeUpdate(next),
+      antigravityAuth: next.antigravity?.auth,
       antigravityExecutable: nextAntigravityExecutable,
       antigravityProbeTimeoutMs: nextAntigravityProbeTimeoutMs,
       antigravityMax: antigravityMaxFrom(next),

@@ -197,6 +197,8 @@ for candidate sources and notice timing.
 
 ### Models, effort, usage, rate limits
 
+- On registration and reload, failed authentication preflight publishes the
+  snapshot catalog and skips the model probe.
 - `agy models` prints one model per line as `<slug><TAB><display name>`
   on stdout (progress goes to stderr) *(measured 2026-09-04 evening via a
   pipe and via `execFile`: 14 lines, e.g. `gemini-3.8-flash-high\tGemini
@@ -309,15 +311,9 @@ for candidate sources and notice timing.
 
 ### Authentication and host requirements
 
-- OAuth personal login stored under `~/.gemini/` (`selectedAuthType:
-  "oauth-personal"`); the child inherits the wrapper's environment and HOME,
-  so no credential handling in kaoiro (ADR-0032 F7 convention).
-  `GEMINI_API_KEY` is the API-key alternative *(docs, unverified)*.
-- Requires `agy` on `PATH`. The runner probes `agy models` at register
-  time (quota-free); reporting `agy --version` and re-triggering checks on
-  a version change is Stage B4. This spec was measured against 1.1.26, and
-  a version change is the trigger to re-run the measurements marked
-  *(measured)* here, because the binary self-updates.
+- Configure [supported Cloud authentication](../../operations/runner-install.md#antigravity-authentication).
+  The runner checks the declaration before launch; the version probe is
+  independent of that check. See the [1.5.14 measurements](../../evidence/antigravity/agy-1.5.14-authentication.md).
 
 ## Constraints
 

@@ -27,7 +27,8 @@ This architecture is paired with the
 
 **Status: provisional** — claims marked *(measured)* were observed on
 2026-09-04 with `agy` 1.1.26 (x86-64 Linux, OAuth personal login) on the
-development host. The CLI self-updated from 1.1.8 to 1.1.26 during the
+development host. Current supported authentication is defined by
+[ADR-0077](../adr/0077-antigravity-authentication.md). The CLI self-updated from 1.1.8 to 1.1.26 during the
 session, so vendor drift remains a live risk. The target, invocation
 conditions, and unverified vendor claims are recorded in
 [Antigravity CLI contract evidence](../evidence/antigravity/cli-contract.md).

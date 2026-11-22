@@ -1,6 +1,15 @@
 import type { Messages } from "../ja";
 import { plural } from "./plural";
 
+function launchReason(reason: string): string {
+  if (reason === "engine_auth_invalid") {
+    return `${reason} — Invalid antigravity.auth. Use google-cloud-adc or google-cloud-sign-in.`;
+  }
+  return reason === "engine_auth_unsupported"
+    ? `${reason} — Check antigravity.auth in the runner configuration and the authentication environment variables.`
+    : reason;
+}
+
 export const app = {
   quagmireRally: ({ names, turns, conversations, threshold }) =>
     `The exchange between ${names} reached ${plural(turns, "message", "messages")} ` +
@@ -19,15 +28,15 @@ export const app = {
   ceilingNetworkNarrow: ({ ceiling }) =>
     `If network_access still exceeds the ceiling after that, narrow it to ${ceiling}.`,
   spawnStarted: ({ label }) => `Launched: ${label}`,
-  spawnFailed: ({ label, reason }) => `Launch failed: ${label} (${reason})`,
+  spawnFailed: ({ label, reason }) => `Launch failed: ${label} (${launchReason(reason)})`,
   terminateFailed: ({ reason }) => `Cannot terminate (${reason})`,
-  restoreFailed: ({ reason }) => `Cannot restore (${reason})`,
+  restoreFailed: ({ reason }) => `Cannot restore (${launchReason(reason)})`,
   attachRejected: ({ uploadId, reason, detail }) =>
     `Attachment rejected: ${uploadId} (${reason}${detail !== null ? ` — ${detail}` : ""})`,
   instructionRejected: ({ reason, detail }) =>
     `Instruction rejected: ${reason}${detail !== null ? ` — ${detail}` : ""}`,
   sessionResetFailed: ({ mode, reason, hint }) =>
-    `session_reset failed (${mode}): ${reason}${hint !== null ? ` — ${hint}` : ""}`,
+    `session_reset failed (${mode}): ${launchReason(reason)}${hint !== null ? ` — ${hint}` : ""}`,
   restoreAllConfirm: ({ count }) =>
     `This restores ${plural(count, "offline agent", "offline agents")} in bulk. Continue?`,
   deleteAllConfirm: ({ count }) =>

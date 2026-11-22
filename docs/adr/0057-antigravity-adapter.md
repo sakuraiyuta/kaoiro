@@ -858,3 +858,5 @@ is unchanged. These are acceptance items of phase-34, not follow-ups.
 | Prefix match for the bridge auto-allow | Trivially bypassed by shell chaining (`; curl … \| sh`) |
 | `--sandbox` as the sandbox axis | Measured ineffective; would present a guarantee that does not exist |
 | Custom agent (`--agent`) for persona | Unknown whether it replaces default scaffolding; rules file is sufficient and measured |
+
+Authentication policy: [ADR-0077](0077-antigravity-authentication.md).

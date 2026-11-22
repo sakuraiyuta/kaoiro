@@ -223,6 +223,38 @@ KAOIRO_RUNNER_DIR="$tmp" timeout 6 sh runner/deploy/kaoiro-runner-launch.sh
 Either replace with `gtimeout` from `brew install coreutils`, or omit `timeout` and
 stop with Ctrl-C.
 
+### Antigravity authentication
+
+Before updating the runner, set `antigravity.auth` in its configuration.
+Deploy the server and dashboard before or together with the runner so the
+new reset failure reason is understood.
+
+For Google Cloud ADC with a long-lived service account key:
+
+1. Restrict the account to `roles/aiplatform.user` on the intended project.
+   Keep the key in a directory accessible only to the runner user (0700),
+   with file permissions 0600. Keep its contents out of logs and shell output.
+2. Set `AGY_ADC_AUTH=true` and `GOOGLE_APPLICATION_CREDENTIALS` to the key
+   path in the runner service environment. Set `antigravity.auth` to
+   `google-cloud-adc`. Unset `GEMINI_API_KEY`. A readable user ADC file in
+   the [default location](../reference/configuration/runner.md#antigravity-configuration)
+   is also accepted when the explicit credential path is unset.
+3. Remove personal sign-in credentials from the runner user's home when
+   switching to ADC. The measured CLI looked up both
+   `~/.gemini/antigravity-cli/antigravity-oauth-token` and
+   `~/.config/antigravity/credential-user-scope`. It also caches the project
+   ID under `~/.gemini/antigravity-cli/cache/`.
+4. To rotate the key, provision the replacement, switch the service to it,
+   restart the runner, then revoke the old key. Revoke a suspected compromised
+   key immediately.
+5. Budget alerts do not cap expenditure. When notified, review project usage,
+   the budget and its thresholds. To stop key use revoke it; unlink billing
+   to stop billable use project-wide, affecting other uses of the project too.
+
+For Google account sign-in select a Google Cloud project with Pay As You Go,
+then declare `google-cloud-sign-in`. The operator verifies the project;
+the runner cannot distinguish this method from a personal login.
+
 ### Antigravity presence check and version reporting
 
 When the `antigravity` capability is selected during `kaoiro-runner-setup.sh`

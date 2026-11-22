@@ -909,6 +909,8 @@ export const SESSION_RESET_ERROR_REASONS = [
   "spawn_failed",
   "rollback_failed",
   "timeout",
+  "engine_auth_invalid",
+  "engine_auth_unsupported",
   "permission_ceiling_conflict",
 ] as const;
 export type SessionResetErrorReason =

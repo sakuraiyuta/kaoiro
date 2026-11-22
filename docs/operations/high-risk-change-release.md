@@ -83,6 +83,7 @@ git diff --name-only <base>..<head> -- \
   wrapper/agent-common/src/state.ts wrapper/agent-common/src/inter_agent.ts \
   wrapper/agent-common/src/pending.ts wrapper/agent-common/src/approval_gate.ts \
   wrapper/agent-common/src/delivery_modes.ts \
+  runner/src/antigravity-auth.ts \
   wrapper/codex/src/startup.ts wrapper/codex/src/app_server_host_runtime.ts \
   wrapper/codex/src/app_server_input.ts wrapper/codex/src/app_server_session.ts \
   wrapper/codex/src/app_server_transport.ts wrapper/codex/src/app_server_rpc.ts \

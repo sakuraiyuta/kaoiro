@@ -164,6 +164,9 @@ wrapper reports it and the server stores the `(agent_id, host, cwd, session_id)`
 
 ### Session reset failure diagnostics (issue #397)
 
+An Antigravity authentication refusal before reset reports
+`engine_auth_invalid` (unsupported declaration) or `engine_auth_unsupported` and leaves the existing child running.
+
 `reset_session` checks the requested/resumed axes (`sandbox` / `approval` /
 `network_access`) against the immutable per-agent `permissionCeiling` pinned
 at spawn/restore. A conflict there reports the `SessionResetErrorReason`

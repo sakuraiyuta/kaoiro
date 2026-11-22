@@ -560,6 +560,12 @@ describe("parseRunnerConfig", () => {
     );
   });
 
+  it.each(["misspelled", null, 42, false, {}])(
+    "isolates an invalid Antigravity declaration from the runner config: %j", (auth) => {
+      const config = parseRunnerConfig({ ...valid, antigravity: { auth } });
+      expect(config.antigravity?.auth).toBe("invalid");
+    });
+
   // Phase-24: explicit `codex.auth_mode` closed enum for the dogfood
   // 環境依存回帰対策。旧 config 互換 (auth_mode 省略 = doctor fallback)
   // も同時に pin する。

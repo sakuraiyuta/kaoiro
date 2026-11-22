@@ -1,3 +1,4 @@
+import { parseAntigravityAuth, type AntigravityAuth } from "./antigravity-auth.js";
 import { parseInFlightDelivery, type InFlightDeliveryConfig } from "./behaviour-settings.js";
 import { createDeliverySnapshot, projectDeliveryRegister, type AppliedDeliverySnapshot } from "./delivery-settings.js";
 // Loading and validation of the runner config (ADR-0023, ADR-0031). The
@@ -126,6 +127,7 @@ export interface CodexConfig extends CodexBehaviourConfig {
 }
 
 export interface AntigravityConfig extends AntigravityBehaviourConfig {
+  auth?: AntigravityAuth;
   cli_path?: string;
   probe_timeout_ms?: number;
   /** Operator-declared models to add to the resolved catalog, on top of
@@ -502,6 +504,9 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
       throw new ConfigError("antigravity must be an object");
     }
     const antigravity: AntigravityConfig = {};
+    if (raw.antigravity.auth !== undefined) {
+      antigravity.auth = parseAntigravityAuth(raw.antigravity.auth);
+    }
     if (raw.antigravity.cli_path !== undefined) {
       const path = raw.antigravity.cli_path;
       if (

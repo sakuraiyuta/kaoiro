@@ -174,6 +174,7 @@ function harness(
       | null
       | undefined;
     contextWorkBudgetPercent?: number;
+    antigravityAuth?: SupervisorOptions["antigravityAuth"];
     antigravityExecutable?: AgyExecutableResolution;
     antigravityProbeTimeoutMs?: number;
     codexHomeProblem?: () => string | null;
@@ -226,6 +227,7 @@ function harness(
     ...(opts.contextWorkBudgetPercent === undefined
       ? {}
       : { contextWorkBudgetPercent: opts.contextWorkBudgetPercent }),
+    antigravityAuth: "antigravityAuth" in opts ? opts.antigravityAuth : "google-cloud-sign-in",
     ...(opts.antigravityExecutable === undefined
       ? {}
       : { antigravityExecutable: opts.antigravityExecutable }),
@@ -256,6 +258,51 @@ function harness(
     last: () => children[children.length - 1]!,
   };
 }
+
+describe("Antigravity launch authorization", () => {
+  const message = { ...spawnMsg, engine: "antigravity" };
+  const executable = { ok: true, path: process.execPath } as const;
+
+  it.each([{}, { apply_resume_snapshot: true }, { resume_session_id: "resume" }])(
+    "refuses a usable binary before starting or restoring %o", (extra) => {
+      const h = harness({ exists: true, antigravityExecutable: executable,
+        antigravityAuth: undefined, codexHomeProblem: () => null });
+      h.sup.handleSpawn({ ...message, ...extra });
+      expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "engine_auth_unsupported" });
+      expect(h.children).toHaveLength(0);
+      for (const engine of ["claude-code", "codex"]) {
+        h.sup.handleSpawn({ ...spawnMsg, engine, agent_id: `lab-pc-1.${engine}` });
+        expect(h.results.at(-1)).toMatchObject({ ok: true });
+      }
+    });
+
+  it("retains the child and reports the reason on restart, switch and reset", () => {
+    const h = harness({ exists: true, antigravityExecutable: executable });
+    h.sup.handleSpawn(message);
+    expect(h.children).toHaveLength(1);
+    vi.stubEnv("GEMINI_API_KEY", "test-marker-value");
+    const stderr = vi.spyOn(process.stderr, "write");
+    try {
+      h.sup.handleRestart({ agent_id: message.agent_id, request_id: "restart" });
+      h.sup.handleSwitchSession({ agent_id: message.agent_id,
+        request_id: "switch", resume_session_id: "next" });
+      h.sup.handleResetSession({ agent_id: message.agent_id,
+        request_id: "reset", mode: "new" });
+      for (const id of ["restart", "switch"]) {
+        expect(h.results).toContainEqual(expect.objectContaining({
+          request_id: id, reason: "engine_auth_unsupported", ok: false }));
+      }
+      expect(h.resetResults.at(-1)).toMatchObject({
+        request_id: "reset", reason: "engine_auth_unsupported", ok: false });
+      expect(h.last().kills).toBe(0);
+      expect(JSON.stringify([stderr.mock.calls, h.results, h.resetResults]))
+        .not.toContain("test-marker-value");
+    } finally {
+      stderr.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+});
 
 describe("spawn-only external child recovery", () => {
   const message = { ...spawnMsg, engine: "sample", initial_prompt: "first" };
@@ -872,6 +919,7 @@ describe("Supervisor.handleSpawn", () => {
     expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
 
     h.sup.updateRuntimeConfig({
+      antigravityAuth: "google-cloud-sign-in",
       cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: undefined, codexChatgptPlan: undefined,
       codexInternalSubagents: undefined, codexExtraModels: undefined,
@@ -892,6 +940,7 @@ describe("Supervisor.handleSpawn", () => {
     const antigravity = { ...spawnMsg, engine: "antigravity" };
     h.sup.handleSpawn(antigravity);
     h.sup.updateRuntimeConfig({
+      antigravityAuth: "google-cloud-sign-in",
       cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: undefined, codexChatgptPlan: undefined,
       codexInternalSubagents: undefined, codexExtraModels: undefined,
@@ -1627,6 +1676,7 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     const antigravity = { ...spawnMsg, agent_id: "lab-pc-1.antigravity-a", engine: "antigravity" };
     h.sup.handleSpawn(antigravity);
     h.sup.updateRuntimeConfig({
+      antigravityAuth: "google-cloud-sign-in",
       cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: undefined, codexChatgptPlan: undefined,
       codexInternalSubagents: undefined, codexExtraModels: undefined,
@@ -2892,6 +2942,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
   it("swapping antigravityExtraModels reaches subsequent antigravity spawns' WrapperConfig (issue #292)", () => {
     const h = harness({ cwdAllowlist: ["/cwd"] });
     h.sup.updateRuntimeConfig({
+      antigravityAuth: "google-cloud-sign-in",
       cwdAllowlist: ["/cwd"],
       wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: undefined,
@@ -2913,6 +2964,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
   it("resetting antigravityExtraModels to undefined clears it from subsequent antigravity spawns too", () => {
     const h = harness({ cwdAllowlist: ["/cwd"] });
     h.sup.updateRuntimeConfig({
+      antigravityAuth: "google-cloud-sign-in",
       cwdAllowlist: ["/cwd"],
       wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: undefined,
@@ -2926,6 +2978,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       getClaudeEngineCatalog: undefined,
     });
     h.sup.updateRuntimeConfig({
+      antigravityAuth: "google-cloud-sign-in",
       cwdAllowlist: ["/cwd"],
       wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: undefined,

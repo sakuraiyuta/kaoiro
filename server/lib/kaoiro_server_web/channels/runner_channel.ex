@@ -712,6 +712,8 @@ defmodule KaoiroServerWeb.RunnerChannel do
     "spawn_failed",
     "rollback_failed",
     "timeout",
+    "engine_auth_invalid",
+    "engine_auth_unsupported",
     "permission_ceiling_conflict"
   ]
   defp parse_reset_reason(nil, true), do: {:ok, nil}

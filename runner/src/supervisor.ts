@@ -1,3 +1,4 @@
+import { antigravityAuthProblem, type AntigravityAuth } from "./antigravity-auth.js";
 import type { RecoverySnapshot } from "@kaoiro/wrapper-core";
 import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 // Process supervisor (ADR-0023, phases 4-4b/4-5). Owns the host's wrapper child
@@ -52,6 +53,8 @@ import {
   listSessions as defaultListSessions,
   sessionExists as defaultSessionExists,
 } from "./sessions.js";
+
+type LaunchRefusal = "error" | "engine_auth_unsupported" | "engine_auth_invalid";
 
 /** Cap on automatic restarts after crashes within RESTART_WINDOW_MS, per agent.
  *  A wrapper that keeps crashing in a tight loop is left down rather than
@@ -203,6 +206,7 @@ export interface SupervisorOptions {
    *  for the same value-collision merge the runner's own `buildRegister`
    *  already applied to the register's launch catalog. */
   antigravityExtraModels?: EngineModelInfo[];
+  antigravityAuth?: AntigravityAuth | undefined;
   antigravityExecutable?: AgyExecutableResolution | undefined;
   antigravityProbeTimeoutMs?: number | undefined;
   /** Host-local antigravity permission-switch ceilings from
@@ -668,6 +672,7 @@ export interface SupervisorRuntimeUpdate {
   codexBackend?: WrapperConfig["codex_backend"];
   codexExtraModels: EngineModelInfo[] | undefined;
   antigravityExtraModels: EngineModelInfo[] | undefined;
+  antigravityAuth?: AntigravityAuth | undefined;
   antigravityExecutable?: AgyExecutableResolution | undefined;
   antigravityProbeTimeoutMs?: number | undefined;
   antigravityMax?: AntigravityMaxConfig | undefined;
@@ -710,6 +715,7 @@ export class Supervisor {
   #codexBackend: WrapperConfig["codex_backend"];
   #codexExtraModels: EngineModelInfo[] | undefined;
   #antigravityExtraModels: EngineModelInfo[] | undefined;
+  #antigravityAuth: AntigravityAuth | undefined;
   #antigravityExecutable: AgyExecutableResolution | undefined;
   #antigravityProbeTimeoutMs: number | undefined;
   #antigravityMax: AntigravityMaxConfig | undefined;
@@ -760,6 +766,7 @@ export class Supervisor {
     this.#codexBackend = options.codexBackend;
     this.#codexExtraModels = options.codexExtraModels;
     this.#antigravityExtraModels = options.antigravityExtraModels;
+    this.#antigravityAuth = options.antigravityAuth;
     this.#antigravityExecutable = options.antigravityExecutable;
     this.#antigravityProbeTimeoutMs = options.antigravityProbeTimeoutMs;
     this.#antigravityMax = options.antigravityMax;
@@ -800,6 +807,7 @@ export class Supervisor {
     this.#codexBackend = update.codexBackend;
     this.#codexExtraModels = update.codexExtraModels;
     this.#antigravityExtraModels = update.antigravityExtraModels;
+    this.#antigravityAuth = update.antigravityAuth;
     this.#antigravityExecutable = update.antigravityExecutable;
     this.#antigravityProbeTimeoutMs = update.antigravityProbeTimeoutMs;
     this.#antigravityMax = update.antigravityMax;
@@ -936,10 +944,11 @@ export class Supervisor {
       this.#fail(agentId, "error", requestId);
       return;
     }
-    if (!this.#launchable(agentId, entry.parsed)) {
+    const refusal = this.#launchRefusal(agentId, entry.parsed);
+    if (refusal !== null) {
       // The server opened a planned-downtime window for this restart id; a
       // failed result with the same id closes it and keeps the running child.
-      this.#fail(agentId, "error", requestId);
+      this.#fail(agentId, refusal, requestId);
       return;
     }
     if (requestId !== undefined) {
@@ -1039,8 +1048,9 @@ export class Supervisor {
       this.#fail(agentId, "session_not_found", requestId);
       return;
     }
-    if (!this.#launchable(agentId, entry.parsed)) {
-      this.#fail(agentId, "error", requestId);
+    const refusal = this.#launchRefusal(agentId, entry.parsed);
+    if (refusal !== null) {
+      this.#fail(agentId, refusal, requestId);
       return;
     }
     // Resume snapshot (ADR-0014 F1 追補「resume 時の privilege 三軸再適用」,
@@ -1180,7 +1190,8 @@ export class Supervisor {
         mode, request_id: requestId, ok: false, reason: "unsupported_session_reset" });
       return;
     }
-    if (!this.#launchable(agentId, entry.parsed)) {
+    const refusal = this.#launchRefusal(agentId, entry.parsed);
+    if (refusal !== null) {
       this.#sendResetResult({
         version: "0",
         host_id: this.#hostId,
@@ -1188,7 +1199,7 @@ export class Supervisor {
         mode: mode as SessionResetMode,
         request_id: requestId,
         ok: false,
-        reason: "spawn_failed",
+        reason: refusal === "error" ? "spawn_failed" : refusal,
       });
       return;
     }
@@ -1462,9 +1473,10 @@ export class Supervisor {
       }
     }
     try {
-      if (!this.#start(agentId, parsed)) {
+      const refusal = this.#start(agentId, parsed);
+      if (refusal !== null) {
         if (resume !== undefined) this.#activeSessions.delete(resume);
-        this.#fail(agentId, "error", parsed.requestId);
+        this.#fail(agentId, refusal, parsed.requestId);
         return;
       }
     } catch (error) {
@@ -1510,33 +1522,39 @@ export class Supervisor {
     });
   }
 
-  #launchable(agentId: string, parsed: ParsedSpawn): boolean {
-    if (!isEngine(parsed.engine)) return !!this.#externalCatalog?.(parsed.engine);
+  #launchRefusal(agentId: string, parsed: ParsedSpawn): LaunchRefusal | null {
+    if (!isEngine(parsed.engine)) return this.#externalCatalog?.(parsed.engine) ? null : "error";
     if (parsed.engine === "codex") {
       // Fail closed: with an unusable CODEX_HOME every Codex wrapper would exit
       // at once and crash-loop until the restart cap. Other engines are
       // unaffected.
       const problem = this.#codexHomeProblem();
-      if (problem === null) return true;
+      if (problem === null) return null;
       process.stderr.write(
         `runner: codex launch refused for ${agentId}: ${problem}\n`,
       );
-      return false;
+      return "error";
     }
-    if (parsed.engine !== "antigravity") return true;
+    if (parsed.engine !== "antigravity") return null;
+    const problem = antigravityAuthProblem(this.#antigravityAuth, parsed.cwd);
+    if (problem !== null) {
+      process.stderr.write(`runner: antigravity launch refused for ${agentId}: ${problem}\n`);
+      return this.#antigravityAuth === "invalid"
+        ? "engine_auth_invalid" : "engine_auth_unsupported";
+    }
     const executable = this.#antigravityExecutable;
-    if (executable === undefined) return true;
+    if (executable === undefined) return null;
     // A config snapshot fixes the executable spelling, but not the file's
     // continued availability. Recheck that exact path before a lifecycle
     // transition can terminate an existing wrapper; never rediscover PATH.
     const current = executable.ok
       ? resolveAgyExecutable(executable.path)
       : executable;
-    if (current.ok) return true;
+    if (current.ok) return null;
     process.stderr.write(
       `runner: antigravity launch refused for ${agentId}: ${agyFailureDetail(current.reason)}\n`,
     );
-    return false;
+    return "error";
   }
 
   #wrapperConfig(
@@ -1621,8 +1639,9 @@ export class Supervisor {
     return { conflict, conflictAxes };
   }
 
-  #start(agentId: string, parsed: ParsedSpawn): boolean {
-    if (!this.#launchable(agentId, parsed)) return false;
+  #start(agentId: string, parsed: ParsedSpawn): LaunchRefusal | null {
+    const refusal = this.#launchRefusal(agentId, parsed);
+    if (refusal !== null) return refusal;
     // Resolve the permission ceiling ONCE here and pin it on the ChildEntry;
     // #launchSpawn already rejected a conflicting initial config, so the
     // resolution is safe (issue #359).
@@ -1647,7 +1666,7 @@ export class Supervisor {
     };
     this.#children.set(agentId, entry);
     child.on("exit", () => this.#onExit(agentId, child));
-    return true;
+    return null;
   }
 
   /** Drives the old reset target to a definitive outcome. The old process is
@@ -1831,8 +1850,9 @@ export class Supervisor {
   }
 
   #relaunch(agentId: string, entry: ChildEntry, requestId?: string): void {
-    if (!this.#launchable(agentId, entry.parsed)) {
-      if (requestId !== undefined) this.#fail(agentId, "error", requestId);
+    const refusal = this.#launchRefusal(agentId, entry.parsed);
+    if (refusal !== null) {
+      if (requestId !== undefined) this.#fail(agentId, refusal, requestId);
       this.#remove(agentId, entry);
       return;
     }
@@ -1879,7 +1899,8 @@ export class Supervisor {
   #relaunchForReset(agentId: string, entry: ChildEntry): void {
     const pending = entry.pendingReset;
     if (pending === undefined) return;
-    if (!this.#launchable(agentId, entry.parsed)) {
+    const refusal = this.#launchRefusal(agentId, entry.parsed);
+    if (refusal !== null) {
       this.#rollback(agentId, entry, "spawn_failed");
       return;
     }
@@ -1974,7 +1995,8 @@ export class Supervisor {
     }
     // Restore entry.parsed to the pre-reset state.
     entry.parsed = { ...entry.parsed, resumeSessionId: rollbackSid };
-    if (!this.#launchable(agentId, entry.parsed)) {
+    const refusal = this.#launchRefusal(agentId, entry.parsed);
+    if (refusal !== null) {
       this.#sendResetResult({
         version: "0",
         host_id: this.#hostId,

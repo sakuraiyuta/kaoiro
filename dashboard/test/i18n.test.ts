@@ -9,6 +9,25 @@ import {
 } from "../src/lib/i18n/index.svelte";
 import { plural } from "../src/lib/i18n/en/plural";
 
+import { parseSessionResetFailed } from "../src/lib/protocol";
+
+it.each(["en", "ja"] as const)("explains both authentication refusals in %s", (locale) => {
+  setLocale(locale);
+  for (const reason of ["engine_auth_unsupported", "engine_auth_invalid"]) {
+    const notice = { request_id: "request", agent_id: "agent", mode: "new", reason };
+    expect(parseSessionResetFailed(notice)?.reason).toBe(reason);
+    for (const text of [
+      msg().app.spawnFailed({ label: "agent", reason }),
+      msg().app.restoreFailed({ reason }),
+      msg().app.sessionResetFailed({ mode: "new", reason, hint: null }),
+    ]) {
+      expect(text).toContain(reason);
+      expect(text).toContain("antigravity.auth");
+      if (reason === "engine_auth_invalid") expect(text).toContain("google-cloud-adc");
+    }
+  }
+});
+
 describe("resolveLocale (issue #269, B1)", () => {
   it("auto takes the first supported language of the list", () => {
     expect(resolveLocale("auto", ["ja-JP", "en-US"])).toBe("ja");

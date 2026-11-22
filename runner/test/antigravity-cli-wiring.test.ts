@@ -53,7 +53,7 @@ class FakeRunnerLink {
     this.#options.onResetSession?.(payload);
   }
 
-  sendSpawnResult(): void {}
+  sendSpawnResult = vi.fn();
   sendSessions(): void {}
   sendResetResult(): void {}
   sendStopAgent(): void {}
@@ -293,7 +293,7 @@ describe("runner CLI Antigravity config wiring", () => {
       server_url: "ws://runner.invalid/runner",
       cwd_allowlist: [root],
       capabilities: ["antigravity"],
-      antigravity: { cli_path: cliPath, probe_timeout_ms: 45_000 },
+      antigravity: { auth: "google-cloud-sign-in", cli_path: cliPath, probe_timeout_ms: 45_000 },
     });
     writeFileSync(configPath, JSON.stringify(makeConfig(firstExecutable)));
 
@@ -436,7 +436,7 @@ describe("runner CLI Antigravity config wiring", () => {
       server_url: "ws://runner.invalid/runner",
       cwd_allowlist: [root],
       capabilities: ["antigravity"],
-      antigravity: { cli_path: cliPath },
+      antigravity: { auth: "google-cloud-sign-in", cli_path: cliPath },
     });
     writeFileSync(configPath, JSON.stringify(makeConfig(firstExecutable)));
     let link: FakeRunnerLink | undefined;
@@ -590,6 +590,78 @@ describe("runner CLI Antigravity config wiring", () => {
     }
   });
 
+  it.each([
+    [undefined, "engine_auth_unsupported"],
+    ["misspelled", "engine_auth_invalid"],
+    [null, "engine_auth_invalid"],
+    [73, "engine_auth_invalid"],
+  ])("isolates declaration %j at startup and reload", async (invalid, reason) => {
+    root = mkdtempSync(join(tmpdir(), "runner-auth-"));
+    const executable = join(root, "agy");
+    const calls = join(root, "calls");
+    writeFileSync(calls, "");
+    writeFileSync(executable, `#!/bin/sh
+echo "$1" >> "${calls}"
+case "$1" in
+  --version) echo fixture-version ;;
+  models) printf 'fixture-model\\tFixture Model\\n' ;;
+esac
+`);
+    chmodSync(executable, 0o700);
+    vi.stubEnv("PATH", root + ":" + process.env.PATH);
+    vi.stubEnv("GEMINI_API_KEY", "");
+    const path = join(root, "runner.config.json");
+    const save = (auth: unknown) => writeFileSync(path, JSON.stringify({
+      host_id: "test", server_url: "ws://runner.invalid/runner", cwd_allowlist: [root],
+      ...(auth === undefined ? {} : { antigravity: { auth } }),
+    }));
+    save(invalid);
+    let link: FakeRunnerLink | undefined;
+    let reload!: () => void;
+    const launch = vi.fn(() => new FakeChild());
+    const runtime = await runRunnerCli({
+      createRunnerLink: (_url, _host, options) => (link = new FakeRunnerLink(options)),
+      makeLauncher: () => launch,
+      watchRunnerConfig: (_, onReload) => {
+        reload = () => onReload(loadRunnerConfig(path));
+        return { close: () => {} };
+      },
+      installSignalHandlers: false,
+    }, [path]);
+    try {
+      const spawn = (id: string) => link!.spawn({ ...spawnPayload(id), cwd: root });
+      const probeCalls = () => readFileSync(calls, "utf8").trim().split("\n");
+      const models = (reg: RunnerRegister) =>
+        reg.engines!.find(e => e.id === "antigravity")!.models;
+      spawn("test.first");
+      expect(launch).not.toHaveBeenCalled();
+      expect(link!.sendSpawnResult).toHaveBeenLastCalledWith(expect.objectContaining({ reason }));
+      expect(probeCalls()).toEqual(["--version"]);
+      const snapshot = models(link!.initialRegister);
+      expect(snapshot.length).toBeGreaterThan(1);
+      save("google-cloud-sign-in");
+      reload();
+      await runtime!.waitForReloads();
+      spawn("test.second");
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(models(link!.updatedRegisters.at(-1)!)).toContainEqual(
+        expect.objectContaining({ value: "fixture-model" }));
+      save(invalid);
+      reload();
+      await runtime!.waitForReloads();
+      spawn("test.third");
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(link!.sendSpawnResult).toHaveBeenLastCalledWith(expect.objectContaining({ reason }));
+      expect(models(link!.updatedRegisters.at(-1)!)).toEqual(snapshot);
+      expect(probeCalls()).toEqual(["--version", "models", "--version", "--version"]);
+      link!.spawn({ ...spawnPayload("test.other"), engine: "claude-code", cwd: root });
+      expect(launch).toHaveBeenCalledTimes(2);
+    } finally {
+      runtime?.close();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("re-probes agy models and updates registered models when reloading an unchanged config", async () => {
     root = mkdtempSync(join(tmpdir(), "kaoiro-runner-agy-catalog-reload-"));
     const executable = join(root, "agy");
@@ -603,7 +675,7 @@ describe("runner CLI Antigravity config wiring", () => {
         server_url: "ws://runner.invalid/runner",
         cwd_allowlist: [root],
         capabilities: ["antigravity"],
-        antigravity: { cli_path: executable },
+        antigravity: { auth: "google-cloud-sign-in", cli_path: executable },
       }),
     );
 
