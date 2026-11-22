@@ -27,7 +27,7 @@ Moved to [Main API and process model](../reference/engines/antigravity-events.md
 
 ### stream-json events (actual 1.1.26 shapes)
 
-Moved to [stream-json events (actual 1.1.26 shapes)](../reference/engines/antigravity-events.md#stream-json-events-actual-1126-shapes).
+Removed with the stream-json host; the ACP updates are in [ACP updates and their classes](../reference/engines/antigravity-events.md#acp-updates-and-their-classes).
 
 ### State derivation
 
@@ -51,7 +51,7 @@ Moved to [MCP is not available in headless mode](../evidence/antigravity/cli-con
 
 ### Tool definition (CLI bridge over the wrapper tool host)
 
-Moved to [Tool definition (CLI bridge over the wrapper tool host)](../reference/engines/antigravity-tools-permissions.md#tool-definition-cli-bridge-over-the-wrapper-tool-host).
+Removed with the CLI bridge; the kaoiro tools are in [kaoiro tools](../reference/engines/antigravity-tools-permissions.md#kaoiro-tools).
 
 ### System-prompt equivalent (persona personality injection)
 

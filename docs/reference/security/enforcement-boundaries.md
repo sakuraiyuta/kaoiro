@@ -1,7 +1,7 @@
 ---
 title: Security enforcement boundaries
 status: accepted
-last_updated: 2026-11-10
+last_updated: 2026-11-23
 ---
 
 # Security enforcement boundaries
@@ -213,84 +213,76 @@ boundary ([ADR-0036](../../adr/0036-session-lifecycle-commands.md)).
   previous_session_id / to_session_id are invisible to viewers, inheriting
   [ADR-0021](../../adr/0021-role-information-disclosure-policy.md) + ADR-0036 F3).
 
-### Antigravity engine — the wrapper is the only enforcement point (phase-34)
+### Antigravity engine — the wrapper is the only enforcement point
 
-The `antigravity` engine drives the `agy` CLI with the CLI's own approval
-prompts disabled, because headless `agy` auto-denies anything that would
-need a prompt and a PreToolUse hook cannot lift that denial
-([ADR-0057](../../adr/0057-antigravity-adapter.md) F4). Threat 1 (instruction
+The `antigravity` engine runs `agy acp` with the CLI's own approval prompts
+off (`--dangerously-skip-permissions`), one `agy` process per prompt, and a
+PreToolUse hook that asks the wrapper's gate
+([ADR-0078](../../adr/0078-antigravity-over-acp.md)). Threat 1 (instruction
 = remote tool execution) keeps its blast radius, but the mechanism that
-bounds it moves entirely into the wrapper: unlike Claude (SDK `canUseTool`)
+bounds it sits entirely in the wrapper: unlike Claude (SDK `canUseTool`)
 and Codex (OS enforcement when the selected sandbox policy enables it,
 [ADR-0033](../../adr/0033-permission-model-dual-axis.md) F3), nothing behind
-the wrapper will refuse a tool call. The layers below record what that
-costs. Design decisions live in ADR-0057; boundary mechanics live in
-[auth-and-authz](../../architecture/security-boundaries.md).
+the wrapper refuses a tool call the gate allows. The permission mapping is in
+[antigravity tools and permissions](../engines/antigravity-tools-permissions.md).
 
-- **The failure direction is inverted.** With prompts disabled, a hook that
-  does not fire means unrestricted execution, not a denial. That is not
-  hypothetical: the same hook configuration placed under the cwd's
-  `.agents/` was measured **not** to fire, root cause unresolved
-  ([antigravity tools and permissions](../engines/antigravity-tools-permissions.md#permission-hooks-are-the-approval-channel)). Every gate failure
-  the wrapper can observe — socket error, wrapper deadline, malformed
-  payload, missing nonce, hook connection closed before an answer — is
-  answered `deny`. The one it cannot observe is the hook never running,
-  which is what F4b exists to catch.
-- **Gate self-verification detects; it does not prevent**
-  (ADR-0057 F4b). A quota-free registration check runs before the first
-  turn, and completion correlation applies only to measured hook classes
-  (write / read / shell / subagent / network; the scope in ADR-0057 F4b is
-  the class-list authority). A tool step in those classes reaching `DONE`
-  or `ERROR` with no gate request observed for its step index terminates
-  the child and freezes the session. Unclassified names only warn; names
-  outside the measured classes are not subject to this check. Because the check
-  is keyed on completion, the tool has already run when the violation is
-  seen. It bounds how long an unenforced session continues, not whether
-  the first unenforced call executes.
-- **F4b is not an authorization boundary.** The per-spawn nonce and the
-  correlation state are readable by any shell the agent obtains, so a
-  misaligned or compromised agent can forge gate requests that satisfy the
-  invariant. F4b covers a vendor mechanism that silently stops firing; it
-  must never be cited as a defence against the model itself.
+- **The failure direction is inverted.** With prompts off, a hook that does
+  not run means unrestricted execution, not a denial. Every gate failure the
+  wrapper can observe (socket error, deadline, malformed payload, wrong
+  nonce, hook connection closed before an answer) is answered `deny`. Before
+  each spawn the wrapper reads `agy`'s own hook list and refuses the start
+  unless both managed hooks are listed and no other Stop hook is enabled.
+- **Call verification detects; it does not prevent.** The gate joins every
+  hook request to the ACP tool call with the same session and call ID. A
+  call that ACP shows finishing with no hook request is a gate fault that
+  fails the turn and refuses later input until the wrapper restarts or the
+  session resets. The tool has already run when the fault is seen, so this
+  bounds how long an unenforced session continues, not whether the first
+  unenforced call executes. Calls inside a subagent appear in no ACP update
+  and cannot be joined.
+- **Verification is not an authorization boundary.** The gate's socket path
+  and nonce are in `agy`'s environment, so any shell the agent obtains can
+  send forged hook requests. Verification covers a vendor mechanism that
+  stops calling the hook; it must never be cited as a defence against the
+  model itself.
 - **The sandbox axis is advisory, and the operator has to be told.**
-  `--sandbox` was measured to have no effect (a write outside cwd and an
-  outbound `curl` both succeeded), so `read-only` and `workspace-write`
-  are enforced by wrapper argument inspection alone. A shell command
-  approved under `workspace-write` can still write anywhere on the host.
-  The envelope carries `ext.permission.enforcement = "advisory"` and the
-  dashboard badges it permanently, so an identical-looking two-axis badge
-  never implies the Codex guarantee
+  `read-only` and `workspace-write` launch `agy` with `--sandbox`, but under
+  these launch flags the sandbox was measured not to confine writes in the
+  home or outbound HTTPS. The gate therefore denies shell tools in
+  `workspace-write` with network access off and asks for each command with
+  it on. The envelope carries `ext.permission.enforcement = "advisory"` and
+  the dashboard badges it, so an identical-looking two-axis badge never
+  implies the Codex guarantee
   ([ADR-0033](../../adr/0033-permission-model-dual-axis.md) F1).
-- **The bridge auto-allow is a convenience, not a boundary.**
-  `run_command` executes through `bash`, so a prefix match on the bridge
-  invocation is satisfied by `…; curl … | sh`. The gate instead
-  whole-string matches a metacharacter-free alphabet and falls through to
-  the ordinary operator round trip on any mismatch (ADR-0057 F5). The
-  `ToolHost` socket itself is reachable from any shell the agent runs; it
-  exposes only tools that agent already holds, so it grants no new
-  capability, and the match protects the *auto-allow* from being widened
-  by shell chaining, nothing more.
-- **The customization dir is part of the trusted computing base, and its
-  protection is detection, not prevention.** It holds the gate
-  configuration and the persona rules and is re-read on every per-turn
-  spawn. The agent runs as the same uid, and a bash command line cannot be
-  canonicalised, so a shell string check can only be best-effort; file
-  tools are denied by resolved path. The real control is that the wrapper
-  rewrites the files from memory before every spawn and verifies their
-  hashes after every turn (success, error, and interrupt alike); a
-  mismatch fails the session closed. Damage from a tamper is therefore
-  bounded to the remainder of one turn, not eliminated (ADR-0057 F3 / F4).
+- **kaoiro tools ride a per-generation bearer.** Each `agy` process reaches
+  the kaoiro tools on the wrapper's HTTP tool host with a bearer minted for
+  that process; the gate allows a registered `mcp_kaoiro_*` tool without a
+  dialog. The tool host closes when the process is retired, so a stored
+  bearer authorizes nothing afterwards. The tools are the ones that agent
+  already holds; the bearer grants no new capability.
+- **`agy`'s home holds conversations and the running process's bearer.**
+  `agy` stores each conversation, including the tool host's bearer, under
+  its own home, and a subagent's transcript is readable there
+  by its parent. That home must not be shared with other agents or users.
+- **The customization directory is part of the trusted computing base, and
+  its protection is detection, not prevention.** It holds the gate's hook
+  registration. The agent runs as the same uid and the directory is a
+  workspace root writable from inside the sandbox, and a shell command line
+  cannot be canonicalised, so the gate's check of command lines is
+  best-effort; file tools are denied by resolved path. The wrapper rewrites
+  the files before every spawn and verifies their hashes when each input
+  settles; a mismatch is a gate fault. Damage from tampering is bounded to
+  the rest of one turn, not eliminated.
 - **Tool-input disclosure has a wider surface.** Threat 3 applies as
-  before, with `toolCall.args` carrying the command line, absolute paths,
-  `Cwd`, and the transcript path into the operator dialog unmasked
-  (tool-input masking remains a future item in the table above).
+  before, with the tool arguments carrying command lines, absolute paths
+  and `Cwd` into the operator dialog unmasked (tool-input masking remains a
+  future item in the table above).
 - **Prompt disabling is scoped to the wrapper's own child process.** The
-  `--dangerously-skip-permissions` flag was measured to affect only that
-  process (ADR-0057 Q1); kaoiro never writes `toolPermission` into the
-  host's `~/.gemini/antigravity-cli/settings.json`, so the operator's own
-  interactive `agy` sessions keep their prompts. Any future change that
-  needs a host-wide setting is a threat-model change, not a deployment
-  note.
+  flag was measured to affect only that process
+  ([ADR-0057](../../adr/0057-antigravity-adapter.md) Q1); kaoiro never writes `toolPermission` into
+  the host's `agy` settings, so the operator's own interactive `agy`
+  sessions keep their prompts. Any future change that needs a host-wide
+  setting is a threat-model change, not a deployment note.
 
 ## Child process environments
 

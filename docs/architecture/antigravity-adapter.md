@@ -1,70 +1,78 @@
 ---
 title: Antigravity adapter
-description: Why kaoiro drives the Antigravity CLI and how the adapter owns its process and persona boundary.
+description: Why kaoiro drives the Antigravity CLI over ACP and how the adapter owns its process and persona boundary.
 status: provisional
-last_updated: 2026-09-26
+last_updated: 2026-11-23
 related: [protocol, plugin-model, claude-events, codex-exec-events]
 ---
 
 # Antigravity adapter
 
-<!-- markdownlint-disable MD033 -->
-
 ## Purpose
 
-Explains why the Antigravity CLI (`agy`) is the substrate of the third engine
-`antigravity` ([ADR-0057](../adr/0057-antigravity-adapter.md)) and how the
-adapter owns its process and persona boundary. Its mapping from CLI events to
-[protocol state](../specs/protocol.md) and its session contract are in
-[Antigravity events](../reference/engines/antigravity-events.md);
-the tool and permission contract is in
+Explains why the Antigravity CLI (`agy`) is the substrate of the engine
+`antigravity` and how the adapter owns its process and persona boundary.
+The decisions are [ADR-0057](../adr/0057-antigravity-adapter.md) and
+[ADR-0078](../adr/0078-antigravity-over-acp.md). The mapping from ACP
+updates to [protocol state](../specs/protocol.md) and the turn lifecycle are
+in [Antigravity events](../reference/engines/antigravity-events.md); the tool
+and permission contract is in
 [Antigravity tools and permissions](../reference/engines/antigravity-tools-permissions.md).
-Measured CLI behavior is recorded in
-[Antigravity CLI contract evidence](../evidence/antigravity/cli-contract.md).
 This architecture is paired with the
 [Claude event contract](../reference/engines/claude-events.md) and
 [Codex exec event contract](../reference/engines/codex-exec-events.md).
 
-**Status: provisional** — claims marked *(measured)* were observed on
-2026-09-04 with `agy` 1.1.26 (x86-64 Linux, OAuth personal login) on the
-development host. Current supported authentication is defined by
-[ADR-0077](../adr/0077-antigravity-authentication.md). The CLI self-updated from 1.1.8 to 1.1.26 during the
-session, so vendor drift remains a live risk. The target, invocation
-conditions, and unverified vendor claims are recorded in
-[Antigravity CLI contract evidence](../evidence/antigravity/cli-contract.md).
-The CLI 1.3.1 catalog baseline and effort measurements are recorded in
-[Antigravity CLI 1.3.1 evidence](../evidence/antigravity/agy-1.3.1-models-2026-10-08.md).
-Promote to `accepted` after the phase-34 Stage A dogfood.
+**Status: provisional** — the ACP behaviour it relies on was measured with
+`agy` 1.5.14 on 2026-11-22 and 2026-11-23
+([measurements](../evidence/antigravity/agy-1.5.14-acp-measurements-2026-11-22-setup-and-sessions.md),
+[native acceptance](../evidence/antigravity/agy-1.5.14-acp-native-acceptance-2026-11-23.md)).
+Supported authentication is defined by
+[ADR-0077](../adr/0077-antigravity-authentication.md). `agy` updates itself,
+so vendor drift remains a live risk.
 
-## Why the CLI and not the Python SDK
+## Why the CLI, over ACP
 
-The issue #181 premise was the Antigravity **SDK**. It is Python-only
-(`google-antigravity` 0.1.16, no Node/TS SDK exists), which conflicts with
-the TS in-process hosting premise of [ADR-0023](../adr/0023-host-runner-architecture.md)
-D3. The CLI `agy` is a self-updating Go binary already installed on hosts
-that use Antigravity. Its headless NDJSON stream maps onto kaoiro's state
-machine at least as well as `codex exec`; the observed stream contract is in
-[Antigravity events](../reference/engines/antigravity-events.md). The adapter
-drives it as a child process, so no Python bridge is needed. The SDK route
-stays available as a future alternative
-(`LocalAgentConfig(system_instructions=…, mcp_servers=[…])`,
-`ask_user(handler=…)` policies) but is out of scope.
+The [issue #181](https://github.com/sakuraiyuta/kaoiro/issues/181) premise
+was the Antigravity **SDK**. It is Python-only, which conflicts with the TS
+in-process hosting premise of
+[ADR-0023](../adr/0023-host-runner-architecture.md) D3. The CLI `agy` is a
+self-updating binary already installed on hosts that use Antigravity, and
+`agy acp` serves the Agent Client Protocol on stdin and stdout: a session,
+structured updates, a prompt response, cancellation, and an HTTP MCP server
+per session. The adapter drives it as a child process, as the Grok adapter
+does for its CLI, so no Python bridge is needed.
 
-### System-prompt equivalent (persona personality injection)
+## One process per prompt
 
-`<dir>/.agents/rules/AGENTS.md` is created lazily before the first turn from
-the server-pushed persona prompt (personality + footer, ADR-0029 F9) plus
-the kaoiro operating preamble (working directory, bridge usage). It is
-rewritten before every epoch spawn (issue #377 Stage 2: one `agy` process
-per several turns, not per turn) and read by that epoch's spawn.
-`display_name_sync` updates the displayed name only; it does not rewrite the
-persona prompt. Persona packs stay engine-independent (ADR-0032 F3).
+Every input runs on its own `agy acp` process, a *generation*: spawn,
+`initialize`, `session/new` or `session/resume`, the model and level, the
+kaoiro tools listed on the shared HTTP tool host, then one
+`session/prompt`. The generation is retired once the input settles, and the
+next one starts only after the previous process exited. The conversation
+continues through `session/resume`. A permission change therefore needs
+nothing but the next start: its launch flags are chosen per generation.
+
+The cost is a start per turn, a median of 2.2 s for `session/new` and 2.7 s
+for retire and resume with `agy` 1.5.14. In exchange, no process outlives
+its input, and a background command ends with its generation at the latest
+(the exceptions are in
+[Antigravity tools and permissions](../reference/engines/antigravity-tools-permissions.md)).
+A prompt that waits for background work stays open through the Stop hook,
+up to 10 continuations.
+
+## System-prompt equivalent (persona personality injection)
+
+The server-pushed persona prompt (personality + footer, ADR-0029 F9) is
+appended to `agy`'s system prompt when a conversation is created
+(`session/new`); `session/resume` keeps it, so a later generation does not
+send it again. `display_name_sync` updates the displayed name only; it does
+not rewrite the persona prompt. Persona packs stay engine-independent
+(ADR-0032 F3). The managed customization directory holds only the hook
+registration.
 
 ## See Also
 
-- [ADR-0057](../adr/0057-antigravity-adapter.md) — decisions
-- [phase-34-antigravity-adapter](../plans/phase-34-antigravity-adapter.md) — implementation plan
+- [ADR-0057](../adr/0057-antigravity-adapter.md) and
+  [ADR-0078](../adr/0078-antigravity-over-acp.md) — decisions
 - [ADR-0032](../adr/0032-codex-adapter.md) / [ADR-0033](../adr/0033-permission-model-dual-axis.md)
-- Vendor: https://antigravity.google/docs/cli/overview ,
-  https://antigravity.google/docs/sdk/overview , bundled
-  `~/.gemini/antigravity-cli/builtin/skills/agy-customizations/docs/*.md`
+- Vendor: https://antigravity.google/docs/cli/overview

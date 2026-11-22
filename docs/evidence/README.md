@@ -14,6 +14,11 @@ Antigravity (`agy` CLI) adapter measurements.
 - [usage-rate-limits.md](antigravity/usage-rate-limits.md) — `/usage` response fields and current family mapping contract
 - [issue-384-probe-stop-2026-10-03.md](antigravity/issue-384-probe-stop-2026-10-03.md) — PID-directed stop behavior of the live `/usage` probe
 - [print-mode-background-tasks.md](antigravity/print-mode-background-tasks.md) — `agy --print` background-task promotion/loss behavior (issue #377)
+- [agy-1.5.10-acp-investigation-2026-11-18.md](antigravity/agy-1.5.10-acp-investigation-2026-11-18.md) — first look at `agy acp` 1.5.10: sessions, permission requests, hooks, `--sandbox`, MCP
+- [agy-1.5.14-acp-measurements-2026-11-22-setup-and-sessions.md](antigravity/agy-1.5.14-acp-measurements-2026-11-22-setup-and-sessions.md) — `agy acp` 1.5.14 measurement setup, sessions, start cost, models and self-update
+- [agy-1.5.14-acp-measurements-2026-11-22-hooks-and-turns.md](antigravity/agy-1.5.14-acp-measurements-2026-11-22-hooks-and-turns.md) — PreToolUse and Stop hooks, background commands and the Stop-hook hold
+- [agy-1.5.14-acp-measurements-2026-11-22-sandbox-and-subagents.md](antigravity/agy-1.5.14-acp-measurements-2026-11-22-sandbox-and-subagents.md) — teardown, `--sandbox` confinement and subagents
+- [agy-1.5.14-acp-native-acceptance-2026-11-23.md](antigravity/agy-1.5.14-acp-native-acceptance-2026-11-23.md) — native acceptance of the ACP host (issue #1238)
 
 ## claude/
 

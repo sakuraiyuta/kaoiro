@@ -3,7 +3,8 @@
 The TypeScript wrapper packages host agent CLIs, derive kaoiro state from
 engine events, and translate them into the common envelope. The workspace
 contains six packages ([ADR-0017](../docs/adr/0017-wrapper-multientity-packages.md),
-[ADR-0032](../docs/adr/0032-codex-adapter.md), [ADR-0057](../docs/adr/0057-antigravity-adapter.md)).
+[ADR-0032](../docs/adr/0032-codex-adapter.md), [ADR-0057](../docs/adr/0057-antigravity-adapter.md),
+[ADR-0078](../docs/adr/0078-antigravity-over-acp.md)).
 
 ## Packages
 
@@ -13,7 +14,7 @@ contains six packages ([ADR-0017](../docs/adr/0017-wrapper-multientity-packages.
 | `@kaoiro/agent-common` | `agent-common/` | Shared state machine (`stepState`), envelope creation, `EngineAdapter`, permission and question brokers, and tool descriptors |
 | `@kaoiro/claude-code` | `claude-code/` | Claude Code adapter: SDK event mapping, file uploads, inter-agent tools, and CLI |
 | `@kaoiro/codex` | `codex/` | Codex adapter: thread and turn event mapping, tool host bridge, session restore, model catalog, file uploads, and CLI |
-| `@kaoiro/antigravity` | `antigravity/` | Antigravity adapter: CLI event mapping, tool bridge, and CLI |
+| `@kaoiro/antigravity` | `antigravity/` | Antigravity adapter: ACP host with one `agy` process per prompt, hook gate, kaoiro tools over the shared HTTP tool host, and CLI |
 | `@kaoiro/grok` | `grok/` | Grok Build adapter: resident ACP session, authenticated HTTP MCP server, cancellation and CLI |
 
 Dependency graph (arrows point to dependencies):

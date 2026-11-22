@@ -48,6 +48,13 @@ wiring of F1 and the hook and bridge commands handed to `agy` as
 `<node> <package file>` (F4 and F5) are replaced by [ADR-0075](0075-runner-engine-launch-contract.md)
 (D1 and D2). The other decisions stand.
 
+Partially superseded (2026-11-23): [ADR-0078](0078-antigravity-over-acp.md)
+replaces F2, F2a in part (the stop routes and graces stand; a watchdog
+cancel is final), F3, the sandbox and `Cwd` parts of F4, the key and
+recovery of F4b, F5, and the ACK transport of F5a (its meaning stands).
+Antigravity runs over ACP with one `agy` process per prompt
+([issue #1238](https://github.com/sakuraiyuta/kaoiro/issues/1238)).
+
 ## Context
 
 Issue #181 asks for Google Antigravity as a third kaoiro engine next to
@@ -725,8 +732,8 @@ settles only its matching token before a successor batch is released.
 
 The delivery acknowledgement runtime observes the server watermark, immediate
 non-injection acknowledgements, and host `onTurnStart`. For injected work,
-`onTurnStart` occurs only after gate registration, a live epoch (issue
-#377 Stage 2: freshly spawned, or already running from a prior turn --
+`onTurnStart` occurs only after gate registration, a live epoch
+(issue #377 Stage 2: freshly spawned, or already running from a prior turn --
 either way, "the agy process this turn's line will reach" exists), AND
 (issue #377 Stage 1 M4) a confirmed stdin delivery of the turn's prompt
 line -- queue admission, a live epoch existing, or a bare `write()` return
@@ -741,8 +748,8 @@ Antigravity has an adapter-local `TurnWatchdog`, configured by
 reset inactivity. Timeout requests SIGTERM only for the active token; expiry
 of the grace period freezes new coordinator work and leaves the uncertain
 active delivery for supervisor recovery. The same watchdog also owns the
-absolute per-tool deadline `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` (issue
-#350): a tool step still `ACTIVE` after it is terminated through the same
+absolute per-tool deadline `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS`
+(issue #350): a tool step still `ACTIVE` after it is terminated through the same
 interrupt / grace path and the turn ends as `tool_timeout`
 ([Antigravity tools and permissions](../reference/engines/antigravity-tools-permissions.md)).
 

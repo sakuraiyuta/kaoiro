@@ -1,403 +1,426 @@
 ---
 title: Antigravity tools and permissions
-description: Current hook-gate, tool-child, bridge, and permission contract for the Antigravity CLI adapter.
+description: The permission mapping and hook gate, call verification and gate faults, the Stop hook answer, kaoiro tools over the shared HTTP tool host, retirement, and the known limitations of the Antigravity ACP host.
 status: provisional
-last_updated: 2026-11-07
+last_updated: 2026-11-23
 related: [protocol, antigravity-adapter]
 ---
 
 # Antigravity tools and permissions
 
-### Permission (hooks are the approval channel)
+How the `antigravity` engine decides tool calls and serves kaoiro tools. The
+process model, turn lifecycle and outcomes are in
+[Antigravity events](antigravity-events.md); the decision is
+[ADR-0078](../../adr/0078-antigravity-over-acp.md); the threat model is in
+[enforcement boundaries](../security/enforcement-boundaries.md#antigravity-engine--the-wrapper-is-the-only-enforcement-point).
+Vendor behaviour marked as measured was measured with `agy` 1.5.14: hooks,
+turn end and the Stop hook in
+[hooks and turns](../../evidence/antigravity/agy-1.5.14-acp-measurements-2026-11-22-hooks-and-turns.md);
+teardown, sandbox scope and subagents in
+[sandbox and subagents](../../evidence/antigravity/agy-1.5.14-acp-measurements-2026-11-22-sandbox-and-subagents.md);
+sessions and the kaoiro MCP server in
+[setup and sessions](../../evidence/antigravity/agy-1.5.14-acp-measurements-2026-11-22-setup-and-sessions.md).
 
-Headless `agy` cannot prompt. Measured behaviour by configuration:
+## Permission (hooks are the approval channel)
 
-| Configuration | `run_command` needing approval |
+`agy acp` runs with `--dangerously-skip-permissions`, so `agy` never asks;
+a PreToolUse hook asks the wrapper's gate, and that answer is the only
+check. The status envelope carries `ext.permission.enforcement = "advisory"`.
+
+| kaoiro sandbox | `--sandbox` | What bounds a command |
+|---|---|---|
+| `read-only` | yes | The gate denies shell tools |
+| `workspace-write` | yes | The gate; under these launch flags the sandbox was measured not to confine writes in the home or outbound HTTPS |
+| `danger-full-access` | no | The gate only |
+
+Effective network access is `false` for `read-only`, `true` for
+`danger-full-access`, and the configured value for `workspace-write`
+(`wrapper/antigravity/src/network_access.ts`). Supported approvals are
+`untrusted`, `on-request`, `local` and `never`; `on-failure` is refused when
+the host is created.
+
+### Evaluation order
+
+`AcpToolPolicy` in `wrapper/antigravity/src/gate.ts` decides each hook
+request. The first match decides:
+
+1. `read_file` whose arguments are not exactly `Path` (non-empty string) and
+   optional integer `StartLine` / `EndLine` and non-negative integer
+   `ByteOffset`: deny.
+2. A write-class tool with a path argument that is not a non-empty,
+   canonicalizable string, or with no target path: deny.
+3. Any path argument (`AbsolutePath`, `DirectoryPath`, `TargetFile`, `Cwd`,
+   `Path`) inside the customization directory, a non-string path argument,
+   or a `CommandLine` containing the directory's canonical path: deny.
+4. An agent-internal tool: deny.
+5. `mcp_kaoiro_<name>` for a registered kaoiro tool: allow, in every cell.
+6. A network-class tool while effective network access is off: deny.
+7. The cell of the tool's class:
+
+| Class | `read-only` | `workspace-write` | `danger-full-access` |
+|---|---|---|---|
+| read | allow | allow | allow |
+| write | deny | Every path argument inside the cwd, else deny; then `untrusted` asks, `local` asks for a target inside `.git`, others allow | `untrusted` asks, `local` asks for a target inside `.git`, others allow |
+| shell | deny | Network off: deny. On: `never` denies, others ask | `never` allows; `local` allows a `run_command` whose command line passes the observational allowlist (`localCommandAllowed`) and asks otherwise; others ask |
+| network | deny | As shell (network on) | As shell |
+| subagent | deny | As shell | As shell |
+| unclassified, including other `mcp_*` names | deny | `never` denies, others ask | `never` denies, others ask |
+
+| Class | Tools |
 |---|---|
-| default (`request-review`) | auto-denied: `TOOL_ERROR … user denied permission to run command`, stderr `jetski: … headless mode cannot prompt for, so it was auto-denied`, `result.denied_actions` |
-| `settings.json` `permissions.allow: ["command(ls -1)"]` | exact command allowed and executed; other commands still auto-denied |
-| PreToolUse hook returning `{"decision":"allow"}` or `permissionOverrides` under `request-review` | **still auto-denied** — hooks cannot lift the headless denial |
-| `settings.json` `toolPermission: "always-proceed"` + PreToolUse hook | hook decides: `allow` → executed (`output` present); `deny` → `TOOL_ERROR: tool call denied by pre-tool hook: <reason>`; the model sees the reason and continues |
-| `--dangerously-skip-permissions` + PreToolUse hook | `init.permission_mode = "always-proceed"` for that process only; the hook fired for both `run_command` steps (stepIdx 2, 4) and the commands ran *(measured by the operator, 2026-09-04; host `settings.json` untouched)* |
-| `--sandbox` (always-proceed, hook allow) | **no effect observed**: `touch` outside cwd and `curl https://example.com` both succeeded *(measured on WSL2; the terminal sandbox is advisory for this adapter)* |
+| read | `view_file`, `read_file`, `list_dir`, `grep_search`, `find_by_name`, `command_status`, `list_permissions`, `manage_task`, `wait`, `wait_5_seconds`, `finish` |
+| write | `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file`, `notebook_edit`, `write_file`, `edit_file` |
+| shell | `run_command`, `send_command_input`, `notebook_execution` |
+| network | `read_url_content`, `search_web`, `search_marketplace`, `open_browser_url`, `generate_image`, `read_browser_page`, `list_browser_pages`, the `browser_*` tools, `capture_browser_console_logs`, `capture_browser_screenshot`, `click_browser_pixel`, `execute_browser_javascript`, `browser_subagent` |
+| subagent | `define_subagent`, `invoke_subagent`, `manage_subagents` |
+| agent-internal | `ask_question`, `ask_permission`, `ask_custom_permission`, `schedule`, `send_message`, `manage_inbox`, `delete_knowledge`, `call_mcp_tool`, `list_resources`, `read_resource`, `list_plugin_accounts`, `run_workflow` |
 
-Therefore the adapter's approval channel is a **PreToolUse hook** shipped in
-the per-agent customization dir (`.agents/hooks.json`, matcher `*`); measured
-customization discovery and root behavior are recorded in
-[Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#customization-discovery-persona-hooks-skills).
-The hook command receives the tool call on stdin and answers on stdout:
+The table in `gate.ts` is the source of truth; a name outside it is
+unclassified. `browser_subagent` is in the network class so the network
+setting can switch it off.
+
+- A command's `Cwd` decides no cell; it counts only as a path argument for
+  step 3. `BypassSandbox` is not read: a `run_command` with
+  `BypassSandbox: true` is decided by the shell row and, once allowed, runs
+  outside `agy`'s sandbox (measured).
+- An ask goes to the operator through the permission broker. A rejection is
+  answered `deny` with the broker's message, or `kaoiro: operator rejected`;
+  the model sees the reason and the turn continues (measured).
+- A hook request is decided only inside the prompt's window and before a
+  stop latched. Otherwise it is denied without a dialog: `kaoiro: no turn is
+  open for this tool call` (also recorded as an `out_of_turn_event`) or
+  `kaoiro: the turn is stopping`.
+- A hook request from a subagent's conversation is decided by the same
+  cell; [call verification](#call-verification-and-gate-faults) treats it
+  separately.
+
+## Hooks and the hook list
+
+- **Customization directory.** The host creates one private temporary
+  directory (mode 0700, with an owner marker) and passes it with
+  `--add-dir`. Before every start it rewrites `.agents/hooks.json` and
+  records its SHA-256; when an input settles it compares the file with that
+  hash. The directory is removed on close, and directories left by dead
+  wrapper processes of the same uid are removed when a host is created
+  (`wrapper/antigravity/src/customization.ts`).
+- **Registrations.** One command, `<node> ['<execArg>' ...]
+  '<kaoiro entry>' wrapper antigravity hook`, is registered for
+  `PreToolUse` (matcher `*`, timeout 3600 s) and for `Stop` (timeout 30 s).
+- **Hook list check.** Before every spawn the host runs
+  `agy -p /hooks --add-dir <cwd> --add-dir <customization dir>
+  --output-format json` (probe timeout 30 s by default). The start is
+  refused unless the managed `hooks.json` is listed once, enabled, with
+  exactly the two actions above (same command and timeouts), and no other
+  enabled group has a Stop action; the refusal names the other group's file
+  (`antigravity_hooks_refused:foreign_stop_hook:<file>`).
+- **Hook protocol.** The hook reads the payload on stdin, adds the gate
+  nonce, sends it as one JSON line to the gate socket and prints the answer.
+  The gate reads only these fields:
 
 ```jsonc
-// stdin (camelCase, protojson)
-{"conversationId":"<uuid>","workspacePaths":["…"],
- "transcriptPath":"~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl",
- "artifactDirectoryPath":"~/.gemini/antigravity-cli/brain/<uuid>",
- "modelName":"gemini-3.8-flash-high","stepIdx":2,
- "toolCall":{"name":"run_command","args":{"CommandLine":"ls -1","Cwd":"/…","WaitMsBeforeAsync":5000,
-             "toolAction":"Listing directory contents","toolSummary":"List directory contents"}}}
-// stdout
-{"decision":"allow"}                                     // or
-{"decision":"deny","reason":"kaoiro: operator rejected"}
+// PreToolUse: toolCall.id is the ACP toolCallId, conversationId the session ID (measured)
+{"hookEventName":"PreToolUse","conversationId":"<session id>",
+ "toolCall":{"id":"<call id>","name":"run_command","args":{"CommandLine":"ls"}}}
+// Stop
+{"hookEventName":"Stop","conversationId":"<session id>",
+ "terminationReason":"NO_TOOL_CALL","fullyIdle":false}
+// answers printed on stdout
+{"decision":"allow"}
+{"decision":"deny","reason":"kaoiro: ..."}
+{"decision":"continue","reason":"..."}  // Stop only
+{}                                      // Stop: let agy's loop end
 ```
 
-- Hook `timeout` is per handler in seconds (CLI default 30); the wrapper
-  configures 60 minutes and its gate deadline is 55 minutes. If that gate
-  deadline expires, the hook returns `deny`. The current launch sets
-  `--print-timeout 0`, which disables the CLI print timeout, so the effective
-  ordering is **gate deadline < hook timeout**, with the turn watchdog able to
-  terminate a tool earlier. A handler given `timeout: 3600` blocked for 100
-  seconds; the tool stayed `ACTIVE` for 110 seconds before running (measured).
-  The disabled print timeout was measured in
-  [print-mode background-task evidence](../../evidence/antigravity/print-mode-background-tasks.md#--print-timeout-0-issue-377-stage-2).
-  The CLI's fail-closed hook timeout was measured in
-  [Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#customization-discovery-persona-hooks-skills).
-- A long `run_command` holds the turn: `sleep 70; echo …` stayed `ACTIVE`
-  for 77 s, then `DONE` with output, and the model waited for it
-  *(measured; `WaitMsBeforeAsync: 5000` in the args did not detach it)*. A
-  bridge call that blocks on an operator answer therefore holds the turn.
-- The hook payload's `stepIdx` equals the stream's `step_index` of the
-  matching `tool` step (4 of 4 tool calls across 3 conversations,
-  *measured*), which is what the ADR-0057 F4b correlation invariant keys on.
-- The wrapper runs a quota-free `agy -p /hooks --add-dir <dir>
-  --output-format json` registration check before the first turn. Its measured
-  output and the effect of omitting `--add-dir` are recorded in
-  [Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#customization-discovery-persona-hooks-skills).
-- `PreToolUse` fires for every tool including reads. The `agy` 1.5.2
-  `init.tools` inventory contained 60 names. The model also invoked
-  `read_file` at runtime even though it was absent from that inventory. These
-  names are classified for ADR-0057 F4 — the table is the source of truth and
-  any name outside it is *unclassified*:
+- **Failure answers.** Every failure the hook or gate can observe answers
+  PreToolUse with `deny` and Stop with `{}`:
 
-  | class | tools |
+  | Failure | PreToolUse reason |
   |---|---|
-  | read (local, side-effect free) | `view_file`, `read_file`, `list_dir`, `grep_search`, `find_by_name`, `command_status`, `list_permissions`, `manage_task`, `wait`, `wait_5_seconds`, `finish` |
-  | write (local files) | `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file`, `notebook_edit` |
-  | shell | `run_command`, `send_command_input`, `notebook_execution` |
-  | network | `read_url_content`, `search_web`, `search_marketplace`, `open_browser_url`, `generate_image`, `read_browser_page`, `list_browser_pages`, `browser_*` (15 names), `capture_browser_console_logs`, `capture_browser_screenshot`, `click_browser_pixel`, `execute_browser_javascript`, `browser_subagent` |
-  | subagent | `define_subagent`, `invoke_subagent`, `manage_subagents` (`browser_subagent` is in network so the `network_access` toggle can switch it off) |
-  | agent-internal (deny in headless) | `ask_question`, `ask_permission`, `ask_custom_permission`, `schedule`, `send_message`, `manage_inbox`, `delete_knowledge`, `call_mcp_tool`, `list_resources`, `read_resource`, `list_plugin_accounts`, `run_workflow` |
+  | Gate variables missing in the hook's environment | `kaoiro: gate environment is not configured` |
+  | Payload not a JSON object | `kaoiro: malformed hook payload` |
+  | Gate socket error, closed or late, or a malformed gate answer | `kaoiro: gate unavailable (<cause>)` |
+  | Wrong nonce or missing request fields | `kaoiro: invalid gate request` |
+  | A second request with the same key | `kaoiro: duplicate tool call` |
+  | The gate's decision failed | `kaoiro: gate failure` |
 
-- `read_file` accepts only `Path` (non-empty string), optional integer
-  `StartLine` / `EndLine`, and optional non-negative integer `ByteOffset`.
-  It rejects malformed or extra arguments with
-  `kaoiro: read_file argument is missing or malformed` before checking whether
-  the path references the protected customization directory. A valid path
-  into that directory is denied with
-  `kaoiro: customization directory is protected`.
+- **Timeouts.** A PreToolUse hook waits for the gate up to
+  `KAOIRO_GATE_DEADLINE_MS` (55 min), below its 60 min hook timeout. An
+  operator ask is also bounded by the permission broker's timeout and by the
+  per-tool deadline, which started at the call's `tool_call` update (that
+  update precedes the hook request, measured). A Stop hook asks the gate for
+  at most 25 s, below its 30 s timeout. A PreToolUse hook that exceeds its
+  timeout is killed and its call fails; a Stop hook that fails or times out
+  ends `agy`'s loop (measured).
 
-- Hooks are also the only PostToolUse / Stop observation channel; not used
-  by the adapter in Stage A.
+## The Stop hook answer
 
-### Gate fault and recovery (ADR-0057 F4b)
+`agy` runs its Stop hooks whenever its execution loop ends: at the end of
+every prompt and when it re-invokes the model by itself. A `continue` answer
+re-enters the loop. `agy` honoured at most 10 continuations per prompt, does
+not call the Stop hook on `session/cancel`, and follows another enabled Stop
+hook's `continue` over kaoiro's (measured).
 
-An unmatched completed tool step makes the host visibly `error` and ends the
-current `agy` epoch. The host retires queued peer batches through the ordinary
-settlement path; it does not acknowledge them as model input. Only the sole
-eligible recovery candidate bypasses the gate-broken rejection. That candidate
-is held in the host queue until the tripping turn has returned, the gate
-registration smoke test passes, and a replacement child starts. A failed
-attempt is rejected and not replayed. Further peer batches are retired or get
-one immediate legacy `interrupted` notice and can be retried by their sender.
-A sticky fault (customization tampering, a second trip before a clean result,
-or an exhausted recovery budget) has no recovery candidate.
+The gate answers `continue`, with a fixed reason asking the model to wait for
+its background command and reply with the result, only when all of these
+hold (`wrapper/antigravity/src/stop_answer.ts`):
 
-The first eligible model-bound input may be an operator instruction, a
-`onWorkNotice` delivery (including one queued before host creation), or a
-session-reset cancellation notice delivered through
-`SessionResetCoordinator.notify`. In particular, cancellation of the
-tripping turn's reset reservation can itself be the recovery candidate; if its
-probe fails it is not replayed, while peer input rejected during that probe
-can be retried by its sender.
+1. the request's `conversationId` is the generation's session ID;
+2. the prompt's window is open and no stop route latched for the input;
+3. `terminationReason` is `NO_TOOL_CALL`;
+4. `fullyIdle` is `false`;
+5. fewer than 10 continuations were granted for this prompt (the tenth is
+   granted, the next request is answered stop).
 
-After a successful smoke test and child start, the host clears the visible
-fault and applies `user_send` before delivering the candidate. The new epoch
-remains on probation until one dispatched turn returns a normal `SUCCESS`
-result without another gate fault; model/API errors do not confirm recovery.
-The host allows five attempts in a fixed 60-second window starting with the
-first attempt; an attempt at the exact 60-second boundary starts a new window.
-Exhausting that budget makes the fault sticky, as does customization tampering;
-the operator restores admission by restarting the wrapper. A new
-`gate_fault` record with `probe_result: "started"` means recovery is eligible
-but has not begun; `gate_recovery` records `started` when the probe actually
-begins. `suppressed_latched` records a distinct fault observed while a
-recoverable fault is already latched; it does not start another probe.
+Otherwise it answers stop, printed as `{}`. A Stop request from another
+conversation is a subagent's own loop; it is answered stop and not counted.
 
-For a peer retired through the negotiated server path, notice delivery starts
-immediately when connected and no resync request is in flight. If connected
-with a resync request in flight, retry is scheduled after 30 seconds. After a
-disconnect, retry resumes on reconnect; there is no fixed upper bound while
-disconnected. The legacy direct `interrupted` fallback is immediate.
+A command `agy` promotes to the background lets the prompt return
+`end_turn` while the command runs; its ACP tool call stays `in_progress`
+until the command ends. Answering `continue` while `fullyIdle` was false kept
+the prompt open until the output was in the reply (4 of 4 runs, measured).
+The conditions and costs of this hold are listed under
+[known limitations](#known-limitations).
 
-The missing-path `view_file` “declaring permissions … invalid tool call
-error (invalid_args)” form remains unmeasured and fail-closed. Hisui owns the
-follow-up recorded in issue comment 6063583273, with at most two probes in a
-disposable hooked environment. Close it only after recording the capture and
-result: if the hook fires, no classifier exception is needed; if the hook is
-silent and this form appears, add only its anchored grammar and a hook-enabled
-negative control. Genuine executed-tool runtime errors and
-`define_subagent` remain unmeasured.
+## Call verification and gate faults
 
-Classifier evidence rows and limits:
+`wrapper/antigravity/src/call_verification.ts` joins each tool call that ACP
+shows (C) to the PreToolUse request with the same key (H), per generation.
 
-| Row | Source | Evidence limit |
+- **H** is keyed by (conversation ID, call ID) and holds the tool name and
+  canonical arguments (object keys sorted). It is recorded as `received`
+  before the request is decided, then becomes `allow` or `deny` once the
+  answer was written to the hook socket without error, or `abandoned` when
+  the hook connection closed first. A second H with the same key is a fault
+  and is answered `deny`. Stop requests make no H.
+- **C** is keyed by call ID for the generation's own session, with the name
+  and `rawInput` of its first update. Its first terminal status settles it;
+  repeats are ignored. When a stop route latches or the connection closes,
+  every C still open is marked as stopped while open.
+- **Check**, when a C reaches `completed` or `failed` (also after the input
+  settled, while the generation's updates still arrive), and for each C
+  still open when the input settles, before its result is published:
+
+| C | H of the generation's session with the same call ID | Result |
 |---|---|---|
-| `additional properties 'Action' not allowed` | `fixture-r1-hiiro.md`, SHA-256 `35dcbdff1b7c475c40e0079d43fe02658d67e082d0046462c79787185ba05300`, raw event line 40; `view_file` | The event shape is observed; this fixture has no hook stub and does not establish hook silence. |
-| `missing property 'toolSummary'` | `fixture-r3-momo.md`, SHA-256 `a27f7eabfe0608cd92e7858528efcfed2903fe9e897eb8db633e7c82b70a1c28`, lines 14, 18, 20; `run_command` | Hook silence comes only from the separate logging-stub observation at lines 24–28, not from production `GateServer`. |
-| Two-line combination | Synthetic grammar-only test | Not observed in a live fixture. |
+| `completed` | `allow`, same name and arguments | ok |
+| `failed` | `allow` or `deny`, same name and arguments | ok |
+| `failed`, or open at settlement, and stopped while open | `received`, `abandoned` or none | ok |
+| Open at settlement | `allow`, same name and arguments | ok |
+| Any other | | gate fault |
 
-### `run_command` Cwd containment
+- An H from another conversation (a call inside a subagent) keeps its record
+  and duplicate check but needs no C. A C whose only H has another
+  conversation ID is a fault.
+- There is no pre-execution exception. Calls that `agy`'s argument
+  validation rejected reached neither the hook nor ACP (measured).
+- **Faults:** the last row and a duplicate H, reported as
+  `antigravity_gate_unobserved_tool` with detail
+  `antigravity_gate_unobserved_tool:<tool name>`, and a changed
+  `hooks.json` at settlement, reported as
+  `antigravity_customization_tampered`.
+- **A fault latches at once** and writes a `gate_fault` lifecycle record.
+  Queued input and every later `send()` are rejected as `gate_broken`, no
+  generation starts, and state publications show `error`. A fault during an
+  input stops it (route `gate_fault`) and fails it
+  ([outcome rows](antigravity-events.md#turn-outcome)); a fault found after
+  the input's result was published leaves that result. There is no
+  automatic recovery; the latch lasts until the wrapper restarts or the
+  session is reset.
+- For a rejected inter-agent input the wrapper retires its deliveries
+  through the server; if that retirement fails, the sender gets an
+  `interrupted` notice and may retry
+  ([delivery](../inter-agent/delivery.md#dispatch-confirmation-ledger-issue-237)).
 
-The gate canonicalizes `Cwd` and treats an equal or descendant path as inside
-the agent cwd. Inside paths use the ordinary sandbox and approval cell: `never`
-allows, `on-request` asks, `local` consults the restricted command allowlist,
-and `read-only` denies. For an outside, absent, non-string, or uncanonicalizable
-`Cwd`, `workspace-write` asks for `untrusted`, `on-request`, or `local`, while
-`never` denies with `kaoiro: command Cwd is outside the permitted workspace`.
-The outside check precedes the `local` allowlist, so an observational command
-cannot escape the agent workspace. `read-only` denies regardless of Cwd, and
-`danger-full-access` applies its ordinary shell policy because this adapter's
-sandbox axis is advisory. Bridge auto-allow remains restricted to its exact-cwd
-grammar.
+## Tool children: prompts disabled, absolute tool deadline (issue #350)
 
-### Tool children: prompts disabled, absolute tool deadline (issue #350)
+A tool child of `agy` owns a PTY, so an interactive prompt inside a tool
+(`ssh` passphrase, `git` credential, host-key confirmation) would block it.
 
-An `agy` tool child owns a PTY, so an interactive prompt inside a tool
-(`ssh` passphrase, `git` credential, host-key confirmation) blocks there even
-though the wrapper closes the parent's stdin; the CLI's own "waiting for
-input" detection is model-backed and was unavailable in the incident. The
-wrapper therefore does both of the following.
+- **Prompts disabled through the environment.** Every `agy` process gets
+  `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=never`, and
+  `GIT_SSH_COMMAND=ssh -o BatchMode=yes` unless the operator set a
+  `GIT_SSH_COMMAND`; then it is left untouched and the CLI prints one
+  launch-time line saying BatchMode was not injected
+  (`wrapper/antigravity/src/tool_child_env.ts`). At launch, when
+  `SSH_AUTH_SOCK` is set and `LC_ALL=C ssh-add -l` exits 1 with
+  `The agent has no identities.`, the CLI warns once on stderr; a missing
+  `ssh-add`, a dead socket, a timeout or identities present stay silent.
+- **Absolute tool deadline.** The turn watchdog
+  (`wrapper/antigravity/src/turn_watchdog.ts`) starts at the ACK. Every turn
+  carries a watchdog token: an inter-agent delivery its own, an operator
+  instruction one the host creates. Each ACP tool call in the window is
+  tracked from its first update to its `completed` or `failed` update; the
+  oldest open call is bounded by `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS`
+  (default 600000 ms, minimum 1000), and progress never extends that bound.
+  On expiry the wrapper logs `[kaoiro] antigravity turn watchdog tool
+  timeout: … step=<n> tool=<name> elapsed=<ms> threshold=<ms>` and a
+  `tool_timeout` lifecycle record (step index in order of first sight and
+  tool name only), then stops the input through the `watchdog` route. The
+  turn ends with `error_detail: tool_timeout`, and an inter-agent sender
+  gets `peer_error.code = "timeout"`.
+- **Inactivity.** With no progress (activity or control updates and hook
+  requests in the window) for the inactivity timeout (default 30 min), the
+  watchdog stops the input the same way. After the watchdog's cancel,
+  progress does not resume monitoring; if the input has not settled when the
+  abort grace ends, the watchdog fail-stops the host
+  ([stop routes](antigravity-events.md#stopping-an-input)).
 
-- **Prompts disabled through the environment.** Every `agy` turn is spawned
-  with `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=never`, and with
-  `GIT_SSH_COMMAND=ssh -o BatchMode=yes` unless the operator already set a
-  `GIT_SSH_COMMAND` (then it is left untouched and the CLI prints one
-  launch-time line saying BatchMode was not injected). `BatchMode=yes`
-  disables passphrase and host-key interaction (`man ssh_config`), so
-  `git ls-remote` over SSH exits non-zero at once without an identity and
-  succeeds unchanged with one *(measured against GitHub and Gitea)*. At
-  launch, when `SSH_AUTH_SOCK` is set and `LC_ALL=C ssh-add -l` exits 1 with
-  `The agent has no identities.` *(measured shape)*, the CLI warns once on
-  stderr; a missing `ssh-add`, a dead socket, a timeout, or identities present
-  stay silent.
-- **Absolute tool deadline in the turn watchdog.** Every turn carries a
-  watchdog token — an inter-agent delivery keeps its own, an operator
-  instruction gets one synthesized by the host (Codex parity; the
-  inter-agent bookkeeping ignores a token it never issued) — so both kinds
-  are bounded. The single `TurnWatchdog` also tracks every parsed
-  `step_update` `tool` step from `ACTIVE` to its `DONE` / `ERROR` (keyed by
-  `step_index`); an `ACTIVE` step whose `step_index` or tool name cannot be
-  correlated is fail-closed like an unprovable completion (SIGTERM, ADR-0057
-  F4b) rather than left untracked. The oldest active step is bounded
-  by `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` (default 600000 = 10 minutes, the
-  Claude Code Bash ceiling; minimum 1000). Stream progress extends only the
-  inactivity bound, never this deadline. On expiry the wrapper logs
-  `[kaoiro] antigravity turn watchdog tool timeout: … step=<n> tool=<name>
-  elapsed=<ms> threshold=<ms>` plus a `[kaoiro][antigravity-lifecycle]`
-  record `{"event":"tool_timeout",…}` (tool name and index only — never the
-  raw tool input), SIGTERMs the child through the existing interrupt path,
-  and reuses the existing abort grace (`…_ABORT_GRACE_MS`) and fail-stop.
-  Whatever the CLI prints on the way out, the turn ends as
-  `result{is_error: true, error_subtype: "error_during_execution",
-  error_detail: "tool_timeout"}` (state `error` → `waiting_input`) and an
-  inter-agent injection in that turn gets `peer_error.code = "timeout"`. No
-  new wire type.
+The deadline is the last safety net, not a scheduler: a background command
+keeps its call open, so healthy work past the deadline is also cut with the
+turn.
 
-The deadline is the last safety net, not a scheduler: when `agy` keeps a step
-`ACTIVE` while a long-running command works in the background, healthy work
-past 10 minutes is also cut with the whole turn. A visible failure is
-preferred to a silent `tool_running` that only an operator's `kill` ends.
-The inactivity watchdog alone would have ended the incident's shape, but
-only after its 30-minute default: a blocked tool emits no stdout events, so
-inactivity does accrue *(measured: 22.6 s without stdout events during a
-mock passphrase prompt; the indefinite hang itself was not reproduced because
-the CLI backgrounded the child and the print timeout ended the turn)*.
+## kaoiro tools
 
-### Operator interrupt: turn settlement (issue #371)
+- **Transport.** Each generation gets its own instance of the shared HTTP
+  tool host of `@kaoiro/agent-common`, passed to `agy` as the `kaoiro` MCP
+  server in `session/new` or `session/resume`, with a bearer minted for
+  that instance. Listener, request checks and bearer handling are those of
+  the shared tool host ([tool transport](grok-acp.md#tool-transport)). The
+  host does not require `mcpCapabilities.http`. `agy` lists the tools before
+  the attach response. It also sends two unauthenticated discovery `GET`s;
+  when they are refused with 401 it continues (measured with a stub that
+  applies the same checks).
+- **Readiness.** The start waits up to 15 s for an authenticated
+  `tools/list`, else it fails with `kaoiro MCP server did not connect`.
+- **Gate.** A registered tool's hook request (`mcp_kaoiro_<name>`) is
+  allowed without a dialog in every cell.
+- **Signals.** A handler gets a signal that aborts when its HTTP request
+  ends or the prompt's window closes; a call made while no window is open
+  gets an already aborted signal. A `send_to_agent` result whose signal
+  aborted is discarded as stale. The tool host closes when the generation is
+  retired, aborting calls in flight, and a later request with that bearer
+  is refused.
+- **Operator-interactive tools.** `ask_user_question` opens a question
+  dialog through the question broker (`waiting_question`).
+  `request_session_reset` and `request_peer_session_reset` ask for approval
+  through the permission broker (`operatorApprovalGated`), shown as
+  `mcp__kaoiro__request_session_reset` and
+  `mcp__kaoiro__request_peer_session_reset` (`waiting_permission`). Each
+  wait closes when the call's signal aborts, and an approval that arrives
+  after that reserves nothing.
+- **The 180 s MCP limit.** `agy` aborts the HTTP request of a `tools/call`
+  held for 180 s and sends `notifications/cancelled`; the call fails and the
+  model sees a timeout (measured with a stub tool, not the real tool host).
+  The aborted request aborts the handler's signal, so a question or approval
+  closes at the cut, and at the latest when the turn's window closes.
+  `notifications/cancelled` arrives as a separate stateless request and
+  does not by itself abort the held call.
+- **Session reset.** A reset reserved through `request_session_reset` is
+  bound to the turn whose window was open; it is carried out only when that
+  turn ends with a prompt response from `agy` and no interrupt, and any
+  other end cancels it with a notice to the agent
+  ([session tools](../inter-agent/session-tools.md#request_session_reset-phase-28-c2)).
 
-`interrupt()` closes the permission/question brokers, the gate server, and
-the tool host, then sends the `agy` child one `SIGTERM` — killing the
-process was already reliable *(measured on production: agy and every hook
-child gone within tens of ms of the signal in all three reproduced cases)*.
-Since issue #377 Stage 2 this ends the whole EPOCH, not just the active
-turn: an idle `interrupt()` (no turn in flight) now has a live process to
-stop, where Stage 1's per-turn process meant idle already meant no process
-existed. The next `send()` respawns with `--conversation <id>` for the
-same session ([ADR-0057 F2](../../adr/0057-antigravity-adapter.md#f2--process-model-one-agy-process-per-epoch-prompt-over-stdin-sigterm-to-end-it)).
-What was missing was settlement: the state machine stayed at whatever the
-last applied event left (`sending`, `tool_running`, `waiting_permission`)
-indefinitely, `onTurnEnd` fired without a `cancellation`, so an inter-agent
-sender's turn classified as `api_error` instead of `interrupted`, and nothing
-reached the `[antigravity-lifecycle]` stream.
+## Retirement and command cleanup
 
-- **An operator-interrupted turn always ends at rest, including one still
-  queued.** `#runTurn` returns a discriminated outcome (`stale` / `error` /
-  `result`) instead of deciding its own terminal state, and `#drainTurns`'s
-  `finally` converts a `stale` outcome to `"interrupted"` when
-  `interrupt()`'s own record matches this turn and the host is still in
-  normal admission (not `close()`d) — regardless of what the machine's
-  CURRENT state happens to be. This matters for a turn that was only queued
-  behind another one: it dequeues already at the PRIOR turn's at-rest state
-  (its own `send()` never got the chance to move the machine to `sending`),
-  so a state-based "already settled" check cannot tell that turn apart from
-  a genuinely finished one. The dashboard never shows a stale `tool_running`
-  / `waiting_permission` / `sending` after an interrupt, queued or active.
-  `close()` and a watchdog fail-stop also produce `stale`, but with no
-  matching interrupt record, so they keep the pre-issue-#371 behavior
-  exactly (no fabricated result, no interrupt lifecycle event): the host is
-  tearing down in both cases, so there is nothing left to settle for an
-  observer.
-- **Lifecycle events.** `interrupt_requested` (turn token, whether a
-  permission/question was pending, child pid) logs when `interrupt()` runs;
-  `interrupt_settled` (exit code, signal, elapsed ms) logs once the turn
-  reaches the "interrupted" settlement above. An interrupt with no turn in
-  flight (idle) produces neither.
-- **`send()`'s silent non-start paths are now diagnosable.** `send()` on a
-  closed, gate-broken, or watchdog-fail-stopped host resolves without starting
-  a turn and without throwing, so a caller's
-  `.catch()` never sees it. That reason, and any other unclassified `send()`
-  rejection, is now logged as `send_not_started` (turn token and delivery
-  seqs only, never the inbound instruction text) before classification.
-- **Escalation past the single `SIGTERM`** (process-group kill reaching a
-  `run_command` grandchild, a `SIGKILL` grace timer for a child that ignores
-  the initial signal) is issue #379, not this section — this section only
-  covers what settles after the existing kill. See
-  [ADR-0057](../../adr/0057-antigravity-adapter.md) F2a for the
-  process-group / grace / timer-ownership contract, including the same
-  escalation now applied to the ADR-0057 F4b correlation-failure kill above
-  (line ~123 of this document) and, since issue #377 Stage 2, to every
-  other epoch-end reason (`tamper`, `spec_change`, `close`, `idle_ttl`,
-  `watchdog`) via the same generic `terminateWithGrace` helper.
+- When an input settles, its generation is retired: the tool host closes
+  (aborting calls in flight), the gate socket closes (a pending hook fails
+  closed in its client), the hook-list probe stops and the child is ended
+  through its process group ([stop routes](antigravity-events.md#stopping-an-input)).
+  Tool updates that still arrive from it are checked by
+  [call verification](#call-verification-and-gate-faults) and never
+  projected.
+- Work left when the input settles does not carry into another turn through
+  the process, since no process is reused. A background command still
+  running is ended by the process-group signals; nothing tracks descendants
+  outside the group.
+- With `--sandbox`, no command was left after SIGTERM with grace or after
+  SIGKILL, and a cancel removed a promoted command (measured once per
+  route). Commands run outside the sandbox can outlive `agy`
+  ([known limitations](#known-limitations)).
+- A subagent runs inside `agy`'s process, so its work ends with the
+  generation (inferred).
 
-Every wrapper signal target must be a live `ChildProcess` with an integer PID
-of at least 2 that is not the wrapper's own PID. The detached `agy` child is
-signalled only through its process group; a failed group signal has no PID
-fallback. The non-detached hook-registration and model probes are signalled by
-their checked child PID.
+## Known limitations
 
-Antigravity tests that use fakes construct hosts through
-`test/host_test_harness.ts`, which supplies fake turn/probe spawns and signal
-operations by default. Process-backed tests stay outside that harness:
-the configured-executable case in `host.test.ts` exercises the default CLI,
-model probe, and hook probe composition;
-`host_signal_guard_real_process.test.ts` exercises the default model and hook
-probe timeout/cancellation paths; `subtree_termination_real_process.test.ts`
-exercises a real detached epoch group but overrides the gate verifier and
-runtime-asset check; `cli_sigterm_subtree_termination.test.ts` exercises the
-production CLI close path with a real fixture subtree; and
-`tool_prompt_fail_fast.test.ts` exercises a real fixture CLI and tool child.
-`live_agy_stream_input.test.ts` is an opt-in account-backed probe.
-
-### Tool definition (CLI bridge over the wrapper tool host)
-
-The Antigravity wrapper starts its own `ToolHost` (NDJSON over a socket in a
-private temporary directory: `list_tools` / `call_tool`) and exposes a
-**CLI** bridge via the `kaoiro wrapper antigravity bridge` subcommand
-(`runAntigravityBridge` in `dist/bridge.js`). `ToolHost.listen()` and
-`GateServer.listen()` both complete before the `agy` child starts. The
-measured absence of MCP in headless mode is recorded in
-[Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#mcp-is-not-available-in-headless-mode).
-The bridge accepts these invocations (built by `antigravitySubcommandPrefix`,
-unconditionally shell single-quoting each `execArgv` item, when present, and the
-`kaoiro` entry path with `'` escaped as `'\''`):
-
-```text
-<node absolute path> ['<execArg>' ...] '<kaoiro entry absolute path>' wrapper antigravity bridge call <tool_name> <base64url-json>
-<node absolute path> ['<execArg>' ...] '<kaoiro entry absolute path>' wrapper antigravity bridge list
-```
-
-- The model learns the bridge from the always-on rules file (tool names,
-  one-line contracts, the exact invocation form) and a skill with fuller
-  examples. The socket path and per-spawn nonce travel in the environment
-  of the `agy` child, which `run_command` inherits *(measured)*.
-- The gate auto-allows a `run_command` only when `Cwd` resolves to the
-  agent's canonical cwd, `WaitMsBeforeAsync` meets the floor, and
-  `CommandLine` full-matches the bridge grammar of ADR-0057 F5 (escaped
-  `antigravitySubcommandPrefix` with canonical node path, exact quoted
-  `execArgv` if any, canonical quoted entry path, and
-  `wrapper antigravity bridge`; plus `list` or `call <tool_name> <base64url-json>`
-  for a registered tool with parseable JSON object input and no trailing
-  arguments or shell syntax). `run_command` runs through `bash` *(measured:
-  `$0` = bash, `/proc/$$/exe` = bash)*, so `;`, `&&`, `$(…)` in a command line
-  are interpreted *(measured)*.
-- `ask_user_question` goes through the same bridge; the bridge blocks until
-  the operator answers, which holds the `run_command` step and therefore the
-  turn *(a 70 s tool call held the turn, measured)* — the same mechanism
-  that makes `waiting_question` hold on Codex (ADR-0032 F6).
-  The CLI print timeout is disabled by `--print-timeout 0`. A question wait
-  without a configured timeout can reach the 55-minute gate deadline; the
-  configurable turn watchdog can end the turn earlier.
-- `request_session_reset` (issue #396, ADR-0043 Neutral amendment) lets the
-  agent ask the operator to start its own session over, the same tool
-  Claude Code and Codex already register. Antigravity has no `canUseTool`
-  hook, so the wrapper asks the operator on the tool's own behalf through
-  the same `PermissionBroker` every other approval dialog uses
-  (`operatorApprovalGated`, Codex parity). The approval dialog shows the
-  SDK-shared FQN (`mcp__kaoiro__request_session_reset`), not the bridge's
-  own tool name (`request_session_reset`) — intentional, so the dialog
-  looks identical regardless of engine. Like `ask_user_question`, the wait
-  blocks the bridge and therefore the turn, so the operator must answer
-  within the turn watchdog's absolute tool deadline
-  (`KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS`, default 10 minutes) or the
-  watchdog ends the turn first. A reservation is bound to the turn that
-  made it (ADR-0043 D3): any other turn boundary — an interrupt, or the
-  wrapper shutting down before the turn resolves — drops the reservation
-  and tells the agent, never firing a reset for a turn that no longer
-  owns it. During a turn watchdog fail-stop specifically, the ACTIVE
-  turn's `onTurnEnd` never fires at all (only queued-but-unstarted turns
-  are settled), so a reservation made during that turn stays frozen —
-  neither dispatched nor cancelled — only if the queue is empty at
-  fail-stop time. An unstarted turn still in the queue settles with its
-  own non-authoritative `onTurnEnd`, which cancels ANY pending
-  reservation on sight (before checking which turn owns it), so the
-  active turn's reservation is dropped with a notice instead of freezing.
-- While either this bridge approval or a native hook approval is pending, the
-  host holds `waiting_permission`. Each wait has a unique owner ID and active
-  turn token; the host emits the entry transition on the first owner and the
-  return to `tool_running` only after the final owner releases. Broker pending
-  metadata updates do not acquire a second owner for the native hook wait.
-  Releases from a stale turn cannot restore state over a later turn's state.
-- A completed tool step requires its matching PreToolUse gate request;
-  the observed `stepIdx` / `step_index` equality and sample set are recorded
-  in [gate tool-step evidence](../../evidence/antigravity/gate-tool-observations.md)
-  and [ADR-0057 F4b](../../adr/0057-antigravity-adapter.md#f4b--gate-self-verification-on-the-production-path).
+- **Commands outside the sandbox can outlive `agy`.** This covers every
+  command under `danger-full-access` and an approved `run_command` with
+  `BypassSandbox: true` under `workspace-write`. Without `--sandbox` a
+  background command survived SIGTERM, and foreground and background
+  commands survived SIGKILL to the process group; an approved bypass's
+  background command survived SIGTERM of the group with grace (measured,
+  one run each). An approved bypass under SIGKILL or cancel is not measured.
+  This is accepted as is.
+- **Holding a prompt for background work** (the Stop answer):
+  - The hold ends after 10 continuations or when the model stops waiting.
+    While waiting the model polls `manage_task status`; in one run it killed
+    the task and the output was lost. Output that arrives after the prompt
+    settled is lost: `agy` re-invokes the model outside any prompt, which is
+    recorded, not projected, and the process is retired.
+  - A timer the model scheduled kept `fullyIdle` false while it was pending
+    (measured; inferred to be the only pending task), so it can hold the
+    prompt up to the cap.
+  - A Stop hook that fails or times out ends `agy`'s loop, and with it the
+    hold.
+  - Commands longer than a few minutes are not measured. The per-tool
+    deadline still ends the turn while the command's call is open.
+  - Held prompts used 126k to 286k tokens per prompt (5 runs) against 17.8k
+    for the same prompt without the hook; the extra tokens are not metered.
+- **Another Stop hook.** `agy` runs every enabled Stop hook it finds (the
+  workspace's `.agents/hooks.json`, its global hook configuration, plugins
+  with a manifest), and another Stop's `continue` overrides kaoiro's answer
+  (measured). The start is refused while the hook list shows one. A Stop
+  hook added after the list and before the spawn is not listed but is run
+  (measured once); the check cannot see it.
+- **Sandbox paths not measured.** Under `--sandbox
+  --dangerously-skip-permissions`, a sandboxed `run_command` wrote to the
+  cwd, the customization directory, the system temporary directory, the
+  user's cache directory and another directory in the home, and reached
+  HTTPS through `agy`'s proxy; the SSH directory was hidden, raw TCP failed,
+  and a seccomp filter was set (one run per case). Not measured: the user's
+  configuration directory and other sensitive paths, the proxy's rules,
+  `agy`'s other modes, and an approved bypass under SIGKILL or cancel. The
+  cells above do not rely on these paths.
+- **Subagents.**
+  - Waiting for a subagent is bounded like any background work by the
+    Stop answer. The parent model may report before the subagent has, or
+    stop it (measured).
+  - `invoke_subagent` and `manage_subagents` follow the subagent row, which
+    uses the shell column.
+  - The parent may read a subagent's transcript under `agy`'s home
+    (measured).
+  - A subagent's work ends with its generation (inferred); a command it
+    started outside the sandbox is covered by the first item.
+  - The write targets of `invoke_subagent` with `Workspace` `branch` or
+    `share` are not measured; the call follows the same row.
+  - A call that neither goes through the hook nor appears in ACP cannot be
+    found by call verification, which joins a hook to an ACP call. Calls
+    inside a subagent have no ACP call to join.
 
 ## Constraints
 
-- Every approval decision has to be made by the wrapper's hook gate — the
-  CLI itself is run with prompts disabled. The gate must fail closed on
-  socket failure, timeout, or malformed payload.
-
+- Every approval decision is made by the wrapper's hook gate; `agy`'s own
+  prompts are off. The gate fails closed on a socket failure, a timeout or a
+  malformed payload.
 - The permission substrate is the per-process flag
-  `--dangerously-skip-permissions` (ADR-0057 Q1, measured); the host-wide
-  `toolPermission` setting is not used.
-
-- The sandbox axis is advisory for this engine (`--sandbox` measured
-  ineffective; enforcement is the wrapper's argument inspection only).
-  The envelope must say so (ADR-0057 F4).
-
-- When permission-sync negotiation succeeds and the runner supplies all three
-  launch ceilings, the wrapper advertises `supports_permission_switch` with
-  sandbox, network-access, and approval maxima. It applies an accepted
-  `set_permission` at the next turn boundary and rejects an over-ceiling value
-  again in the wrapper; this does not make sandbox enforcement non-advisory.
-
+  `--dangerously-skip-permissions`; the host-wide `toolPermission` setting
+  is not used.
+- The sandbox axis is advisory for this engine: `--sandbox` is passed, but
+  the gate's cells are the enforcement, and the envelope says so.
+- When permission-sync negotiation succeeds and the runner supplies all
+  three launch ceilings, the wrapper advertises `supports_permission_switch`
+  with sandbox, network-access and approval maxima. An accepted
+  `set_permission` takes effect with the next input's generation, and the
+  wrapper rejects an over-ceiling value again
+  ([permission switch evidence](antigravity-events.md#permission-switch-evidence)).
+  This does not make sandbox enforcement non-advisory.
 - Resume checks for `reset_session` and `switch_session` compare effective
-  network access on both sides. `danger-full-access` makes the effective value
-  `true`, `read-only` makes it `false`, and `workspace-write` follows the
-  configured network value. The ceiling uses the same mapping with its
-  `max_sandbox` and raw `max_network_access`. Stored and relayed `max_*` values
-  remain raw; spawn validation also continues to check raw launch values.
-
+  network access on both sides. `danger-full-access` makes the effective
+  value `true`, `read-only` makes it `false`, and `workspace-write` follows
+  the configured network value. The ceiling uses the same mapping with its
+  `max_sandbox` and raw `max_network_access`. Stored and relayed `max_*`
+  values remain raw; spawn validation also checks raw launch values.
 - **Troubleshooting: a session reset (`/new` / `/clear`) refused with
   `permission_ceiling_conflict`** means the agent's current live permission
-  on the named axis is wider than the immutable ceiling pinned at its launch
-  (ADR-0057 F4c Stage B0). The dashboard names the axis, its current value,
-  and the ceiling. This is not a dead end and does not require deleting and
-  respawning the agent: narrow that axis back through the normal permission
-  picker (`set_permission`), then retry the reset (issue #397).
-  If both `sandbox` and `network_access` conflict while the current sandbox is
+  on the named axis is wider than the immutable ceiling pinned at its
+  launch. The dashboard names the axis, its current value and the ceiling.
+  Narrow that axis through the normal permission picker (`set_permission`),
+  then retry the reset
+  ([issue #397](https://github.com/sakuraiyuta/kaoiro/issues/397)). If both
+  `sandbox` and `network_access` conflict while the current sandbox is
   `danger-full-access`, narrow `sandbox` first: that sandbox fixes effective
-  network access to `true`, so changing `network_access` alone cannot lower it.
+  network access to `true`, so changing `network_access` alone cannot lower
+  it.
 
 For permission synchronization deadlines and failed-input recovery, see
 [permission state](../protocol/permission-state.md#synchronization-failure-visibility).

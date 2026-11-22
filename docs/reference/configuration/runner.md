@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-11-21
+last_updated: 2026-11-23
 ---
 
 # Runner configuration
@@ -204,7 +204,7 @@ hidden by a variable.
 | `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS` | `antigravity.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS` | `antigravity.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` | `antigravity.tool_timeout_ms` | integer | 1000..2147483647 | 600000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
-| `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` | `antigravity.epoch_idle_ms` | integer | 1000..2147483647 | 1800000 | Antigravity wrapper (`resolveEpochIdleMs`) | variable > file > default |
+| `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` | `antigravity.epoch_idle_ms` | integer | 1000..2147483647 | none | none: obsolete, accepted and ignored | variable > file |
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | 1..2147483647 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CODEX_APPROVAL_AXIS` | `codex.approval_axis` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |
 | `KAOIRO_RUNNER_SERVER_URL` | `server_url` | string | `ws://` or `wss://` URL | required in the file | the runner (`applyServerUrlOverride`) | variable > file |
@@ -219,10 +219,10 @@ Whitespace-only values are invalid for every numeric variable. What each Claude
 scheduler key controls is in [Wrapper configuration](wrapper.md).
 
 `antigravity.tool_timeout_ms` is the absolute bound on one Antigravity tool
-step, and `antigravity.epoch_idle_ms` is how long an idle `agy` epoch lives
-before it is ended. Both variables use the digits-only grammar; the epoch idle
-variable is capped at 2147483647 (a larger value reached `setTimeout`,
-which clamps it to 1 ms). `server_url` and `log_phoenix_heartbeats` are acted on
+step. `antigravity.epoch_idle_ms` is obsolete: the runner still checks the key
+and its variable (digits-only, 1000..2147483647) and relays the key, but the
+Antigravity wrapper ignores it, because no `agy` process outlives its prompt
+([ADR-0078](../../adr/0078-antigravity-over-acp.md)). `server_url` and `log_phoenix_heartbeats` are acted on
 by the runner itself and are never relayed to a wrapper.
 
 ## Codex home

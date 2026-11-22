@@ -2,7 +2,7 @@
 title: Launch contract between the runner and a wrapper
 description: How the runner finds, starts, configures, supervises and stops a wrapper process ("contract 1"), the engine-specific work the runner does outside that contract, and the paths a wrapper hands to its engine.
 status: accepted
-last_updated: 2026-11-21
+last_updated: 2026-11-23
 related: [protocol, architecture]
 ---
 
@@ -69,7 +69,7 @@ followed by `wrapper <engine> <verb>`.
 | Engine | Path handed over |
 |---|---|
 | Codex | The MCP server `kaoiro`: `command` and `args` are `selfCommand()` (`[process.execPath, ...process.execArgv, entryPath]`) followed by `wrapper`, `codex`, `bridge`; `command` is the first item and `args` the rest. The socket is passed in `KAOIRO_BRIDGE_SOCKET`. |
-| Antigravity | The PreToolUse hook command `<node> ['<execArg>' ...] '<entry>' wrapper antigravity hook`, and instructions to run `<node> ['<execArg>' ...] '<entry>' wrapper antigravity bridge list` or `call <tool> <payload>`, built by one helper (`antigravitySubcommandPrefix`) from `selfCommand()` (`[process.execPath, ...process.execArgv, entryPath]`). Each `execArgv` item (if any) and `<entry>` are unconditionally shell single-quoted (`'` escaped as `'\''`). The wrapper checks hook registration by matching that exact hook command string. The gate builds its bridge regex from the same helper, canonicalising only `<node>` and `<entry>` as paths while preserving and regex-escaping `execArgv`. The runner dispatches `antigravity hook` / `bridge` to exported functions, where `bridge` validates its argument count after the entry and subcommand dispatch (`list`: 1 trailing arg; `call <tool> <payload>`: 3 trailing args); no standalone script existence check is performed. |
+| Antigravity | The PreToolUse and Stop hook command `<node> ['<execArg>' ...] '<entry>' wrapper antigravity hook`, built by one helper (`antigravitySubcommandPrefix`) from `selfCommand()` (`[process.execPath, ...process.execArgv, entryPath]`). Each `execArgv` item (if any) and `<entry>` are unconditionally shell single-quoted (`'` escaped as `'\''`). Before each spawn the wrapper checks, in `agy`'s own hook list, that both hooks are registered with that exact command string. The kaoiro tools are not a command: each `agy` process gets the URL and a bearer of the wrapper's HTTP MCP tool host. The runner dispatches `antigravity hook` to an exported function; no standalone script existence check is performed. |
 | Claude Code | None to the engine. The runner and the Claude wrapper, through the probe client, start `<entry> wrapper claude-code probe` with the command of contract 1. |
 | Grok | None. The wrapper serves an HTTP MCP endpoint on loopback and hands its URL to Grok. |
 

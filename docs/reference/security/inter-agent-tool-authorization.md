@@ -2,7 +2,7 @@
 title: Inter-agent tool authorization
 description: Which engine gate decides each kaoiro inter-agent MCP tool call (send_to_agent / list_agents / whoami and the session companions), and when a send_to_agent call reaches the operator.
 status: accepted
-last_updated: 2026-10-15
+last_updated: 2026-11-23
 ---
 
 # Inter-agent tool authorization
@@ -33,9 +33,9 @@ Per-engine authorization of the kaoiro inter-agent MCP tools (`send_to_agent` / 
   asks the operator for approval, and the common footer asks for one at the
   start and end of every piece of work. Add `mcp__kaoiro__set_status_line` and
   `mcp__kaoiro__read_status_line` to such lists (the same rule already applies
-  to `mcp__kaoiro__list_agents` and `mcp__kaoiro__whoami`). Codex and
-  Antigravity expose the tools through their own bridge and host, so this
-  concerns Claude peers only.
+  to `mcp__kaoiro__list_agents` and `mcp__kaoiro__whoami`). Codex exposes
+  the tools through its tool-host bridge and Antigravity through the
+  wrapper's HTTP tool host, so this concerns Claude peers only.
 
 - Codex auto-approves kaoiro bridge calls at the engine boundary, so
   `request_session_reset` uses the wrapper's `operatorApprovalGated` helper.
@@ -137,11 +137,13 @@ from the server for that pair**.
   F3), so `send_to_agent` is already unconditionally allowed and this
   whitelist has no additional role.
 - Antigravity's inter-agent tools (`send_to_agent` / `list_agents` /
-  `whoami`) are registered through `ToolHost.listen` (`wrapper/antigravity/src/host.ts`),
-  a separate MCP-serving path that never passes through `AntigravityGate`'s
-  tool-class table (`wrapper/antigravity/src/gate.ts`) — they carry no
-  approval axis at all, unconditionally allowed by construction, not merely
-  fixed to `never` like Codex.
+  `whoami`) are served by the wrapper's HTTP tool host (`ToolHost.listen` in
+  `wrapper/antigravity/src/host.ts`). Each call goes through the PreToolUse
+  hook like every tool, and the gate (`AcpToolPolicy` in
+  `wrapper/antigravity/src/gate.ts`) allows a registered `mcp_kaoiro_*` tool
+  before the network check and the permission cell. They carry no approval
+  axis: allowed by the gate's evaluation order, not merely fixed to `never`
+  like Codex.
 - Kind does not affect the decision (query/response and request/propose share
   the whitelist). Responsibility scope from ADR-0044 F2 is not an auto-allow
   axis; only first approval per conversation is the gate.
