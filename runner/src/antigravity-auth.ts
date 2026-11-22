@@ -15,8 +15,10 @@ export function antigravityAuthProblem(
   cwd: string,
   env = process.env,
 ): string | null {
-  if (auth === "invalid") return "unsupported antigravity.auth declaration";
-  if (!auth) return "set antigravity.auth in the runner configuration";
+  if (auth === undefined) return "set antigravity.auth in the runner configuration";
+  if (auth !== "google-cloud-adc" && auth !== "google-cloud-sign-in") {
+    return "unsupported antigravity.auth declaration";
+  }
   if (env.GEMINI_API_KEY) return "unset GEMINI_API_KEY";
   if (!env.HOME) return "HOME is missing";
   if (auth === "google-cloud-sign-in") return null;

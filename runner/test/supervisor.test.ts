@@ -277,12 +277,20 @@ describe("Antigravity launch authorization", () => {
     });
 
   it("retains the child and reports the reason on restart, switch and reset", () => {
-    const h = harness({ exists: true, antigravityExecutable: executable });
-    h.sup.handleSpawn(message);
-    expect(h.children).toHaveLength(1);
-    vi.stubEnv("GEMINI_API_KEY", "test-marker-value");
+    const root = mkdtempSync(join(tmpdir(), "runner-adc-"));
+    const credentials = join(root, "adc.json");
+    const fileMarker = "fixture-adc-file-contents";
+    const keyMarker = "fixture-api-key-value";
     const stderr = vi.spyOn(process.stderr, "write");
     try {
+      writeFileSync(credentials, JSON.stringify({ marker: fileMarker }));
+      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentials);
+      vi.stubEnv("AGY_ADC_AUTH", "true");
+      const h = harness({ exists: true, antigravityExecutable: executable,
+        antigravityAuth: "google-cloud-adc" });
+      h.sup.handleSpawn(message);
+      expect(h.children).toHaveLength(1);
+      vi.stubEnv("GEMINI_API_KEY", keyMarker);
       h.sup.handleRestart({ agent_id: message.agent_id, request_id: "restart" });
       h.sup.handleSwitchSession({ agent_id: message.agent_id,
         request_id: "switch", resume_session_id: "next" });
@@ -295,11 +303,25 @@ describe("Antigravity launch authorization", () => {
       expect(h.resetResults.at(-1)).toMatchObject({
         request_id: "reset", reason: "engine_auth_unsupported", ok: false });
       expect(h.last().kills).toBe(0);
-      expect(JSON.stringify([stderr.mock.calls, h.results, h.resetResults]))
-        .not.toContain("test-marker-value");
+      expect(stderr.mock.calls.flat().join("")).toContain("unset GEMINI_API_KEY");
+      for (const output of [stderr.mock.calls, h.results, h.resetResults]) {
+        const text = JSON.stringify(output);
+        expect(text).not.toContain(fileMarker);
+        expect(text).not.toContain(keyMarker);
+      }
+
+      // The same captures expose the marker when it is a public identifier.
+      const controlId = `lab-pc-1.${fileMarker}`;
+      h.sup.handleSpawn({ ...message, agent_id: controlId });
+      h.sup.handleResetSession({ agent_id: message.agent_id,
+        request_id: fileMarker, mode: "new" });
+      expect(stderr.mock.calls.flat().join("")).toContain(controlId);
+      expect(h.results.at(-1)?.agent_id).toBe(controlId);
+      expect(h.resetResults.at(-1)?.request_id).toBe(fileMarker);
     } finally {
       stderr.mockRestore();
       vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

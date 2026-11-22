@@ -8,7 +8,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { antigravityAuthProblem } from "../src/antigravity-auth.js";
+import { antigravityAuthProblem, parseAntigravityAuth } from "../src/antigravity-auth.js";
 
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
@@ -43,6 +43,16 @@ describe("Antigravity credential markers", () => {
     readFileSync(link);
     expect(readFileSync).toHaveBeenCalledWith(link);
   });
+
+  it.each(["misspelled", null, 73])(
+    "refuses declaration %j even with usable ADC credentials", (value) => {
+      expect(check()).toBeNull();
+      const auth = parseAntigravityAuth(value);
+      expect(auth).toBe("invalid");
+      expect(antigravityAuthProblem(auth, home, env))
+        .toBe("unsupported antigravity.auth declaration");
+    },
+  );
 
   it("resolves relative sources from the child cwd without collapsing symlinks", () => {
     mkdirSync(join(home, "other", "child"), { recursive: true });

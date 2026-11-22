@@ -608,8 +608,11 @@ case "$1" in
 esac
 `);
     chmodSync(executable, 0o700);
-    vi.stubEnv("PATH", root + ":" + process.env.PATH);
-    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("PATH", root);
+    vi.stubEnv("AGY_ADC_AUTH", "true");
+    const credentials = join(root, "credentials");
+    writeFileSync(credentials, "fixture credentials");
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentials);
     const path = join(root, "runner.config.json");
     const save = (auth: unknown) => writeFileSync(path, JSON.stringify({
       host_id: "test", server_url: "ws://runner.invalid/runner", cwd_allowlist: [root],

@@ -18,6 +18,7 @@ export default defineConfig({
   },
   test: {
     ...selection,
+    env: { GEMINI_API_KEY: "" },
     setupFiles: [
       "../scripts/test/fixtures/test-isolation.mjs",
       "test/vitest.setup.ts",
