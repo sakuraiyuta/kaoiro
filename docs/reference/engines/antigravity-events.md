@@ -51,8 +51,9 @@ agy acp --add-dir <customization dir> [--sandbox] --dangerously-skip-permissions
      server and the persona as `_meta.antigravity.systemPrompt.append`, or
      `session/resume` with the session ID, the cwd and the MCP server;
   5. apply the model and level ([models](#models-effort-usage-rate-limits));
-  6. wait up to 15 s for an authenticated `tools/list` from `agy` (one
-     already received counts), else the start fails;
+  6. wait for an authenticated `tools/list` from `agy` until 15 s after the
+     attach response (one already received counts; the model step counts
+     against the 15 s), else the start fails;
   7. run the inter-agent `prepareInput` check, which may skip the input
      (no prompt, no result);
   8. open the prompt's window and send one `session/prompt` with the input
@@ -82,7 +83,9 @@ agy acp --add-dir <customization dir> [--sandbox] --dangerously-skip-permissions
   input (route `permission`) and the input fails with
   `antigravity_unexpected_permission_request`; outside the window it is only
   recorded. Any other request from `agy` has no handler, and the ACP SDK
-  answers it with a JSON-RPC error.
+  answers it with a JSON-RPC error. Each incoming message of another method,
+  in and outside the window, leaves an `out_of_turn_event` record
+  `other:<method>` with the method name only; it is never projected.
 
 ### State derivation
 
@@ -146,10 +149,11 @@ it.
 | 13 | Any other stop reason | Error `antigravity_stop_reason:<reason>` |
 
 A waiting inter-agent sender gets `interrupted` for row 3, `receipt_unknown`
-for row 5 when the line was attempted, `timeout` for row 7, and `api_error`
-for row 11 whatever the message says. Every other detail goes through the
-shared classifier: `api_error`, unless the text names a rate limit or a
-context overflow ([peer error codes](../inter-agent/errors.md)).
+for row 5 when the line's write began (whatever its size), `timeout` for row
+7, and `api_error` for row 11 and for a row 4 `antigravity_api_error`
+whatever the message says. Every other detail goes through the shared
+classifier: `api_error`, unless the text names a rate limit or a context
+overflow ([peer error codes](../inter-agent/errors.md)).
 
 | Start-failure detail | Cause |
 |---|---|
@@ -157,6 +161,8 @@ context overflow ([peer error codes](../inter-agent/errors.md)).
 | `antigravity_hooks_refused:<reason>` | The hook list check failed: `registration_mismatch`, `foreign_stop_hook:<file>`, `timeout`, `stopped`, `nonzero_exit`, `invalid_json` or `spawn_failure:<detail>` |
 | `antigravity_cli_spawn_failure: <detail>` | The spawn threw |
 | `antigravity_auth_required` | Attach was answered with the captured "Authentication required" error |
+| `antigravity_api_error: <message>` | Another JSON-RPC error answered `initialize`, `session/new` or `session/resume`; a waiting peer gets `api_error`, also when the message mentions 429 |
+| `antigravity_cli_process_error: <detail>` | The child process failed during the start, for example a spawn that found no executable (no process, so the queue goes on at once) |
 | `antigravity_resume_failed` | `session/resume` was answered `-32603`; the recovery checkpoint refuses the launch |
 | `antigravity_resume_echoed_another_session` | The resume response echoed another session ID |
 | `antigravity_model_not_applied:<slug>` | The committed model could not be applied |
@@ -297,7 +303,10 @@ This engine applies a switch by starting the next generation with it:
   | A later step failed | The previous pair is restored and verified; `ext.switch_error` with the reason and `rolled_back_to` (the committed slug) |
   | The restore failed | The start fails |
 
-  A switch to `""` re-applies the pair `agy` reported right after attach.
+  A switch to `""` (the account default) sends nothing: the next start
+  commits it and keeps the pair `agy` reported right after attach. A value
+  staged while a switch is in flight stays pending for the next start; the
+  switch in flight neither clears it nor reports a `switch_error` over it.
 - `supports_effort_switch` is false and `setEffort` is refused: the level is
   part of the slug.
 - The catalog comes from `agy models`, run once when the host is created
@@ -309,8 +318,9 @@ This engine applies a switch by starting the next generation with it:
 - The host publishes no `rate_limits` and runs no usage probe. A
   `usage_update` is a control update and is not projected. How `agy` reports
   a rate limit over ACP is not measured, so nothing is classified as one: a
-  JSON-RPC error reaches the operator as `error_detail` and a peer as
-  `api_error`, also when its message mentions 429.
+  JSON-RPC error, during the start or as the prompt's answer, reaches the
+  operator as `error_detail` and a peer as `api_error`, also when its message
+  mentions 429.
 
 ### Authentication and host requirements
 

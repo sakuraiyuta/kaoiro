@@ -42,10 +42,49 @@ call the case needs).
 | N4 `BypassSandbox` | workspace-write, on-request, network on | `run_command` with `BypassSandbox: true` asked and was approved; the command wrote its file | pass |
 | N5 kaoiro tool | workspace-write, on-request, network off | `mcp_kaoiro_whoami` allowed with no dialog; result | pass |
 | N6 background output | danger-full-access, never | `run_command`, two Stop requests answered `continue` while the model polled with `manage_task` and read the output, then `stop`; the command's output was in the reply | pass |
-| N7 subagent report | danger-full-access, never | `invoke_subagent`; the subagent's own calls arrived with another conversation ID (`send_message` denied as agent-internal, `mcp_kaoiro_*` allowed); two `continue`, then `stop` for the subagent's and the parent's loops; the report text was in the reply | pass |
+| N7 subagent report | danger-full-access, never | `invoke_subagent`; the subagent's own calls arrived with another conversation ID (`send_message` denied as agent-internal, `mcp_kaoiro_*` allowed); two `continue`, then `stop` for the subagent's and the parent's loops; the report text was in the reply | pass under the first judge; undetermined under the current one (below) |
 | N8 cancel during a subagent | danger-full-access, never | the interrupt came once the subagent's `run_command` hook was seen; the turn ended `interrupted`; no `agy` process was alive afterwards | pass |
 | N9 cancel during a held prompt | danger-full-access, never | first run (`sleep 120; echo late`): the first Stop request was answered `stop`, so the prompt was never held and the case could not be judged. Retry (`sleep 20; echo kaoiro-n9-done`, same wording): `run_command` allowed, the Stop request answered `continue`, the interrupt ended the turn `interrupted`, and no `agy` process was alive afterwards | pass on the retry |
 | N10 permission switch | workspace-write to danger-full-access | the first turn's `agy` had `--sandbox`; after `set_permission` the second turn ran on a new process without it, and the permission state became `applied` | pass |
+
+### Judges changed after the implementation review
+
+The first N7 judge passed when the reply held a marker that the parent's own
+prompt contained, so it could pass without any report from the subagent.
+The current N7 judge places a random value in a workspace file that no
+prompt names, and passes only when a subagent call naming that file was
+allowed, the parent used no tool that could read it, the parent's prompt was
+held (a Stop `continue`), and the reply holds the value. The N7 record above
+has no subagent read of such a file, so it is undetermined under the current
+judge. The N6 judge now also requires a parent `manage_task` or `read_file`
+after the first `continue`; the N6 record above has both, so its verdict is
+unchanged.
+
+## `edit_file` hook requests
+
+On 2026-11-23 the implementation review ran one `read-only` case through the
+N2 harness: a single `edit_file` call on an existing file. ACP showed the
+call, the gate recorded no hook request for it, and the generation ended in
+a gate fault. Whether the hook ran, and what it sent, were not recorded.
+
+Four further prompts, on commit `4efbd56a` under the conditions above, each
+asked for one `edit_file` call on a seeded file. The test recorded every
+gate-socket connection (event, tool name, argument names and types, the
+answer) and every ACP tool update, then was restored.
+
+| Run | Cell | Call | Hook request | Answer | ACP status | File |
+|---|---|---|---|---|---|---|
+| E1 | read-only | existing text, absolute `Path` | `Path`, `Replacement`, `Target` (strings) | deny (`kaoiro: read-only sandbox`) | failed | unchanged |
+| E2 | workspace-write, on-request | existing text, absolute `Path` | same | allow | completed | edited |
+| E5 | read-only | text not in the file | same | deny | failed | unchanged |
+| E6 | workspace-write, on-request | text not in the file; the model sent a relative `Path` | same | allow | failed (`agy`: the path must be absolute, after the hook) | unchanged |
+
+- Observed: every `edit_file` call reached the PreToolUse hook (4 of 4),
+  with the session's conversation ID, before `agy` ran it, and none ended
+  in a gate fault. The first review run was not reproduced; its cause is
+  unknown.
+- Inferred, not measured: a hook request the gate refused as malformed would
+  leave no H record, and so would a hook that never ran.
 
 ## Transcript path
 

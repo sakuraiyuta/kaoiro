@@ -77,7 +77,11 @@ request. The first match decides:
 
 The table in `gate.ts` is the source of truth; a name outside it is
 unclassified. `browser_subagent` is in the network class so the network
-setting can switch it off.
+setting can switch it off. `write_file` and `edit_file` name their target
+in `Path`, the other write tools in `TargetFile` or `AbsolutePath`. The
+`edit_file` hook requests of `agy` 1.5.14 carried `Path`, `Replacement` and
+`Target`, all strings, and reached the hook under `read-only` and
+`workspace-write` (4 runs, measured).
 
 - A command's `Cwd` decides no cell; it counts only as a path argument for
   step 3. `BypassSandbox` is not read: a `run_command` with
@@ -105,12 +109,15 @@ setting can switch it off.
   (`wrapper/antigravity/src/customization.ts`).
 - **Registrations.** One command, `<node> ['<execArg>' ...]
   '<kaoiro entry>' wrapper antigravity hook`, is registered for
-  `PreToolUse` (matcher `*`, timeout 3600 s) and for `Stop` (timeout 30 s).
+  `PreToolUse` (matcher `*`, timeout 3600 s) and for `Stop` (timeout 30 s,
+  no matcher; the JSON hook list gives a Stop row no `matcher` field,
+  measured).
 - **Hook list check.** Before every spawn the host runs
   `agy -p /hooks --add-dir <cwd> --add-dir <customization dir>
   --output-format json` (probe timeout 30 s by default). The start is
   refused unless the managed `hooks.json` is listed once, enabled, with
-  exactly the two actions above (same command and timeouts), and no other
+  exactly the two actions above (same command and timeouts, `*` for
+  PreToolUse and no matcher for Stop), and no other
   enabled group has a Stop action; the refusal names the other group's file
   (`antigravity_hooks_refused:foreign_stop_hook:<file>`).
 - **Hook protocol.** The hook reads the payload on stdin, adds the gate
@@ -194,7 +201,8 @@ shows (C) to the PreToolUse request with the same key (H), per generation.
   and is answered `deny`. Stop requests make no H.
 - **C** is keyed by call ID for the generation's own session, with the name
   and `rawInput` of its first update. Its first terminal status settles it;
-  repeats are ignored. When a stop route latches or the connection closes,
+  repeats are ignored, and the first repeat leaves an `out_of_turn_event`
+  record `repeated_terminal` with the call ID. When a stop route latches or the connection closes,
   every C still open is marked as stopped while open.
 - **Check**, when a C reaches `completed` or `failed` (also after the input
   settled, while the generation's updates still arrive), and for each C
@@ -386,6 +394,13 @@ turn.
   - A call that neither goes through the hook nor appears in ACP cannot be
     found by call verification, which joins a hook to an ACP call. Calls
     inside a subagent have no ACP call to join.
+- **An unexplained `edit_file` gate fault.** In one run an `edit_file` call
+  that ACP showed had no matching hook request, and the generation ended in
+  a gate fault. Four later runs did not reproduce it: each `edit_file` call
+  reached the hook. The cause is not known. A hook request the gate refuses
+  as malformed (`kaoiro: invalid gate request`) leaves no H record, and
+  neither does a hook that never ran; the record cannot tell the two
+  apart. Either way the fault fails closed, like any other gate fault.
 
 ## Constraints
 
