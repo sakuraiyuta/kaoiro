@@ -3,11 +3,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createConnection } from "node:net";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker } from "@kaoiro/agent-common";
-import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "../src/gate.js";
-import { antigravitySubcommandPrefix } from "../src/subcommand.js";
+import { AcpToolPolicy, type AntigravityLaunchConfig } from "../src/gate.js";
 
 function config(overrides: Partial<AntigravityLaunchConfig> = {}): AntigravityLaunchConfig {
   return {
@@ -22,110 +20,28 @@ function config(overrides: Partial<AntigravityLaunchConfig> = {}): AntigravityLa
   };
 }
 
-function makeGate(
-  overrides: Partial<AntigravityLaunchConfig> = {},
-  omitApproval = false,
-  entryOptions: { entryPath?: string; nodeArgs?: readonly string[] } = {},
-) {
+function makeGate(overrides: Partial<AntigravityLaunchConfig> = {}, omitApproval = false) {
   const root = mkdtempSync(join(tmpdir(), "agy-gate-test-"));
   const cwd = join(root, "workspace");
   const customizationDir = join(root, "custom");
   mkdirSync(cwd);
   mkdirSync(customizationDir);
-  const entryPath = entryOptions.entryPath ?? join(root, "kaoiro.js");
-  if (entryOptions.entryPath === undefined) writeFileSync(entryPath, "");
-  const warnings: string[] = [];
   const configured = config(overrides);
   const { approval: _approval, ...withoutApproval } = configured;
   const launchConfig = omitApproval ? withoutApproval : configured;
-  const gate = new AntigravityGate({
+  const gate = new AcpToolPolicy({
     config: launchConfig,
     cwd,
     customizationDir,
-    nodePath: process.execPath,
-    ...(entryOptions.nodeArgs === undefined ? {} : { nodeArgs: entryOptions.nodeArgs }),
-    entryPath,
-    toolNames: () => new Set(["whoami"]),
+    kaoiroToolNames: () => new Set(["whoami"]),
     broker: new PermissionBroker({ config: launchConfig, send: () => {} }),
-    warn: (message) => warnings.push(message),
   });
-  return { gate, root, cwd, customizationDir, entryPath, warnings };
+  return { gate, root, cwd, customizationDir };
 }
 
-describe("AntigravityGate", () => {
-  it("F4の既定セルでread/write/shell/networkを導出する", () => {
-    const { gate, root, cwd } = makeGate();
-    try {
-      expect(gate.evaluate({ name: "view_file", args: {} })).toEqual({ decision: "allow" });
-      expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(cwd, "a.txt") } })).toEqual({ decision: "allow" });
-      expect(gate.evaluate({ name: "run_command", args: { CommandLine: "pwd", Cwd: cwd } })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({ name: "search_web", args: { query: "kaoiro" } })).toEqual({ decision: "deny", reason: "kaoiro: network access is disabled" });
-      expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(root, "outside.txt") } })).toEqual({ decision: "deny", reason: "kaoiro: write is outside the permitted workspace" });
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it("pins the F4 cells for read, write, shell, subagent, and network", () => {
-    const expected: Record<string, Record<"read" | "write" | "shell" | "subagent", "allow" | "ask" | "deny">> = {
-      "read-only/untrusted": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
-      "read-only/on-request": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
-      "read-only/local": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
-      "read-only/never": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
-      "workspace-write/untrusted": { read: "allow", write: "ask", shell: "ask", subagent: "ask" },
-      "workspace-write/on-request": { read: "allow", write: "allow", shell: "ask", subagent: "ask" },
-      "workspace-write/local": { read: "allow", write: "allow", shell: "allow", subagent: "ask" },
-      "workspace-write/never": { read: "allow", write: "allow", shell: "allow", subagent: "allow" },
-      "danger-full-access/untrusted": { read: "allow", write: "ask", shell: "ask", subagent: "ask" },
-      "danger-full-access/on-request": { read: "allow", write: "allow", shell: "ask", subagent: "ask" },
-      "danger-full-access/local": { read: "allow", write: "allow", shell: "allow", subagent: "ask" },
-      "danger-full-access/never": { read: "allow", write: "allow", shell: "allow", subagent: "allow" },
-    };
-    for (const [cell, decisions] of Object.entries(expected)) {
-      const [sandbox, approval] = cell.split("/") as [NonNullable<AntigravityLaunchConfig["sandbox"]>, NonNullable<AntigravityLaunchConfig["approval"]>];
-      const { gate, root, cwd } = makeGate({ sandbox, approval, network_access: true });
-      try {
-        expect(gate.evaluate({ name: "view_file", args: {} }).decision, `${cell}:read`).toBe(decisions.read);
-        expect(gate.evaluate({ name: "read_file", args: { Path: join(cwd, "README.md") } }).decision, `${cell}:read_file`).toBe(decisions.read);
-        expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(cwd, "a.txt") } }).decision, `${cell}:write`).toBe(decisions.write);
-        expect(gate.evaluate({ name: "run_command", args: { CommandLine: "pwd", Cwd: cwd } }).decision, `${cell}:shell`).toBe(decisions.shell);
-        expect(gate.evaluate({ name: "invoke_subagent", args: {} }).decision, `${cell}:subagent`).toBe(decisions.subagent);
-      } finally { rmSync(root, { recursive: true, force: true }); }
-    }
-
-    for (const approval of ["on-request", "local"] as const) {
-      for (const networkAccess of [false, true]) {
-        const { gate, root } = makeGate({ sandbox: "workspace-write", approval, network_access: networkAccess });
-        try {
-          expect(
-            gate.evaluate({ name: "search_web", args: { query: "kaoiro" } }).decision,
-            `${approval}:network=${networkAccess}`,
-          ).toBe(networkAccess ? "ask" : "deny");
-        } finally { rmSync(root, { recursive: true, force: true }); }
-      }
-    }
-
-    for (const approval of ["untrusted", "on-request", "local", "never"] as const) {
-      const { gate, root } = makeGate({ approval, network_access: true });
-      try {
-        expect(gate.evaluate({ name: "ask_question", args: {} }).decision, `${approval}:internal`).toBe("deny");
-        expect(gate.evaluate({ name: "list_plugin_accounts", args: {} }).decision, `${approval}:plugin accounts`).toBe("deny");
-        expect(gate.evaluate({ name: "run_workflow", args: {} }).decision, `${approval}:workflow`).toBe("deny");
-        expect(gate.evaluate({ name: "future_vendor_tool", args: {} }).decision, `${approval}:unknown`).toBe(approval === "never" ? "deny" : "ask");
-      } finally { rmSync(root, { recursive: true, force: true }); }
-    }
-
-    const enabledNetwork = makeGate({ sandbox: "danger-full-access", approval: "never", network_access: true });
-    try {
-      expect(enabledNetwork.gate.evaluate({ name: "search_marketplace", args: {} })).toEqual({ decision: "allow" });
-    } finally { rmSync(enabledNetwork.root, { recursive: true, force: true }); }
-    const disabledNetwork = makeGate({ sandbox: "workspace-write", approval: "never", network_access: false });
-    try {
-      expect(disabledNetwork.gate.evaluate({ name: "search_marketplace", args: {} })).toEqual({
-        decision: "deny",
-        reason: "kaoiro: network access is disabled",
-      });
-    } finally { rmSync(disabledNetwork.root, { recursive: true, force: true }); }
-  });
-
+// The path and command helpers behind the policy's read, write and local
+// allowlist decisions; the class-by-cell table is in acp_tool_policy.test.ts.
+describe("AcpToolPolicy path and command checks", () => {
   it("validates read_file arguments before customization-directory protection", () => {
     const { gate, root, cwd, customizationDir } = makeGate({ approval: "never", network_access: true });
     try {
@@ -172,11 +88,11 @@ describe("AntigravityGate", () => {
   });
 
   it("defaults to on-request and does not silently enable local commands", () => {
-    const { gate, root, cwd } = makeGate({}, true);
+    const { gate, root, cwd } = makeGate({ sandbox: "danger-full-access" }, true);
     try {
       expect(gate.evaluate({
         name: "run_command",
-        args: { CommandLine: "git status", Cwd: cwd },
+        args: { CommandLine: "git status" },
       })).toEqual({ decision: "ask" });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -224,12 +140,12 @@ describe("AntigravityGate", () => {
     "cat README.md | wc -l README.md",
     "cat future.txt",
   ])("local approval allows a classified local command: %s", (command) => {
-    const { gate, root, cwd } = makeGate({ approval: "local" });
+    const { gate, root, cwd } = makeGate({ sandbox: "danger-full-access", approval: "local" });
     try {
       writeFileSync(join(cwd, "README.md"), "hello\n");
       expect(gate.evaluate({
         name: "run_command",
-        args: { CommandLine: command, Cwd: cwd },
+        args: { CommandLine: command },
       })).toEqual({ decision: "allow" });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -299,11 +215,11 @@ describe("AntigravityGate", () => {
     "ls ~",
     "cat ~user/x",
   ])("local approval asks for an unclassified or elevated command: %s", (command) => {
-    const { gate, root, cwd } = makeGate({ approval: "local", network_access: true });
+    const { gate, root, cwd } = makeGate({ sandbox: "danger-full-access", approval: "local", network_access: true });
     try {
       expect(gate.evaluate({
         name: "run_command",
-        args: { CommandLine: command, Cwd: cwd },
+        args: { CommandLine: command },
       })).toEqual({ decision: "ask" });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -384,19 +300,19 @@ describe("AntigravityGate", () => {
     ["on-request", "ask"],
     ["never", "allow"],
   ] as const)("%s preserves commit and merge behavior", (approval, decision) => {
-    const { gate, root, cwd } = makeGate({ approval });
+    const { gate, root, cwd } = makeGate({ sandbox: "danger-full-access", approval });
     try {
       for (const command of ["git commit -m x", "git merge feature"]) {
         expect(gate.evaluate({
           name: "run_command",
-          args: { CommandLine: command, Cwd: cwd },
+          args: { CommandLine: command },
         }).decision, command).toBe(decision);
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("local approval rejects read paths that escape through a symlink", () => {
-    const { gate, root, cwd } = makeGate({ approval: "local" });
+    const { gate, root, cwd } = makeGate({ sandbox: "danger-full-access", approval: "local" });
     try {
       const outside = join(root, "outside-read");
       mkdirSync(outside);
@@ -404,157 +320,17 @@ describe("AntigravityGate", () => {
       symlinkSync(outside, join(cwd, "linked"));
       expect(gate.evaluate({
         name: "run_command",
-        args: { CommandLine: "cat linked/secret", Cwd: cwd },
+        args: { CommandLine: "cat linked/secret" },
       })).toEqual({ decision: "ask" });
       expect(gate.evaluate({
         name: "run_command",
-        args: { CommandLine: "git diff linked/secret README.md", Cwd: cwd },
+        args: { CommandLine: "git diff linked/secret README.md" },
       })).toEqual({ decision: "ask" });
       expect(gate.evaluate({
         name: "run_command",
-        args: { CommandLine: `git commit --template ${join(cwd, "linked", "secret")}`, Cwd: cwd },
+        args: { CommandLine: `git commit --template ${join(cwd, "linked", "secret")}` },
       })).toEqual({ decision: "ask" });
     } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it.each([
-    ["read-only", "untrusted", "inside", "deny"],
-    ["read-only", "on-request", "outside", "deny"],
-    ["read-only", "local", "missing", "deny"],
-    ["read-only", "never", "malformed", "deny"],
-    ["workspace-write", "untrusted", "inside", "ask"],
-    ["workspace-write", "on-request", "inside", "ask"],
-    ["workspace-write", "local", "inside", "allow"],
-    ["workspace-write", "never", "inside", "allow"],
-    ["workspace-write", "untrusted", "outside", "ask"],
-    ["workspace-write", "on-request", "outside", "ask"],
-    ["workspace-write", "local", "outside", "ask"],
-    ["workspace-write", "never", "outside", "deny"],
-    ["workspace-write", "on-request", "missing", "ask"],
-    ["workspace-write", "local", "missing", "ask"],
-    ["workspace-write", "never", "missing", "deny"],
-    ["workspace-write", "never", "malformed", "deny"],
-    ["danger-full-access", "untrusted", "outside", "ask"],
-    ["danger-full-access", "on-request", "missing", "ask"],
-    ["danger-full-access", "local", "outside", "allow"],
-    ["danger-full-access", "never", "malformed", "allow"],
-  ] as const)(
-    "applies Cwd containment before shell approval: %s/%s/%s",
-    (sandbox, approval, location, expected) => {
-      const { gate, root, cwd } = makeGate({ sandbox, approval, network_access: true });
-      try {
-        mkdirSync(join(cwd, "nested"));
-        const args = {
-          CommandLine: "pwd",
-          ...(location === "inside"
-            ? { Cwd: join(cwd, "nested") }
-            : location === "outside"
-              ? { Cwd: root }
-              : location === "malformed"
-                ? { Cwd: "\0invalid" }
-                : {}),
-        };
-        const result = gate.evaluate({ name: "run_command", args });
-        expect(result.decision).toBe(expected);
-        if (result.decision === "deny") {
-          expect(result.reason).toBe(
-            sandbox === "read-only"
-              ? "kaoiro: read-only sandbox"
-              : "kaoiro: command Cwd is outside the permitted workspace",
-          );
-        }
-      } finally { rmSync(root, { recursive: true, force: true }); }
-    },
-  );
-
-  it("always denies customization references", () => {
-    const { gate, root, customizationDir } = makeGate({ approval: "never", network_access: true });
-    try {
-      expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(customizationDir, "x") } })).toMatchObject({ decision: "deny" });
-      expect(gate.evaluate({ name: "ask_question", args: {} })).toMatchObject({ decision: "deny" });
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it("F5 bridge auto-allow は字句どおりの subcommand 正規形だけに限る (V10a)", () => {
-    const { gate, root, cwd, entryPath } = makeGate();
-    try {
-      const payload = Buffer.from(JSON.stringify({}), "utf8").toString("base64url");
-      const prefix = antigravitySubcommandPrefix({ nodePath: process.execPath, entryPath, subcommand: "bridge" });
-      const command = `${prefix} call whoami ${payload}`;
-      const args = { CommandLine: command, Cwd: cwd, WaitMsBeforeAsync: 5000 };
-      expect(gate.evaluate({ name: "run_command", args })).toEqual({ decision: "allow" });
-      expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${prefix} list`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
-      // Negative control: old bridge.js form and unquoted entryPath are never auto-allowed.
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${join(root, "bridge.js")} call whoami ${payload}` } })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${entryPath} wrapper antigravity call whoami ${payload}` } })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${entryPath} wrapper antigravity bridge list` } })).toEqual({ decision: "ask" });
-      for (const injection of ["; id", " && id", " | id", " $(id)", "\necho injected", " extra", ` ${Buffer.from("not-json").toString("base64url")}`]) {
-        expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: command + injection } })).toEqual({ decision: "ask" });
-      }
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${prefix} call whoami !!!` } })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({ name: "run_command", args: { ...args, Extra: true } })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({ name: "run_command", args: { ...args, WaitMsBeforeAsync: 4999 } })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({ name: "run_command", args: { CommandLine: command, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${prefix} call unknown_tool ${payload}` } })).toEqual({ decision: "ask" });
-      const nonJson = Buffer.from("not-json", "utf8").toString("base64url");
-      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${prefix} call whoami ${nonJson}` } })).toEqual({ decision: "ask" });
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it("V10a: allows single-quoted spaces, single quotes, regex metacharacters, symlink canonicalisation, and execArgv", () => {
-    const payload = Buffer.from(JSON.stringify({}), "utf8").toString("base64url");
-    const outer = mkdtempSync(join(tmpdir(), "agy-gate-v10a-"));
-    try {
-      for (const segment of ["dir with space", "it's a dir", "meta.+(1)[x]"]) {
-        const sub = join(outer, segment);
-        mkdirSync(sub, { recursive: true });
-        const entryPath = join(sub, "kaoiro.js");
-        writeFileSync(entryPath, "");
-        const { gate, root, cwd } = makeGate({}, false, { entryPath });
-        try {
-          const prefix = antigravitySubcommandPrefix({ nodePath: process.execPath, entryPath, subcommand: "bridge" });
-          expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${prefix} call whoami ${payload}`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
-          expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${prefix} list`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
-          // Old form and unquoted path fail closed even with Cwd present.
-          expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${process.execPath} ${entryPath} call whoami ${payload}`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
-          if (segment.includes(".")) {
-            // Regex metacharacters in entryPath must be escaped, not wildcards.
-            const mutated = prefix.replace("meta.+", "metax+");
-            expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${mutated} list`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
-          }
-        } finally { rmSync(root, { recursive: true, force: true }); }
-      }
-
-      // Symlinked entryPath: gate canonicalises only entryPath, adding quotes/subcommand words afterward.
-      const realDir = join(outer, "real target");
-      mkdirSync(realDir);
-      const realEntry = join(realDir, "kaoiro.js");
-      writeFileSync(realEntry, "");
-      const linkEntry = join(outer, "current-kaoiro.js");
-      symlinkSync(realEntry, linkEntry);
-      const symlinkGate = makeGate({}, false, { entryPath: linkEntry });
-      try {
-        const realPrefix = antigravitySubcommandPrefix({ nodePath: process.execPath, entryPath: realEntry, subcommand: "bridge" });
-        const linkPrefix = antigravitySubcommandPrefix({ nodePath: process.execPath, entryPath: linkEntry, subcommand: "bridge" });
-        expect(symlinkGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${realPrefix} list`, Cwd: symlinkGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
-        expect(symlinkGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${linkPrefix} list`, Cwd: symlinkGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
-      } finally { rmSync(symlinkGate.root, { recursive: true, force: true }); }
-
-      // Non-empty execArgv (Q1): nodeArgs with a space-containing element and regex metacharacters.
-      const nodeArgs = ["--import", "/tmp/tsx loader/entry.(1).mjs"];
-      const argsGate = makeGate({}, false, { nodeArgs });
-      try {
-        const prefix = antigravitySubcommandPrefix({ nodePath: process.execPath, nodeArgs, entryPath: argsGate.entryPath, subcommand: "bridge" });
-        expect(prefix).toContain("'/tmp/tsx loader/entry.(1).mjs'");
-        expect(argsGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${prefix} call whoami ${payload}`, Cwd: argsGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
-        const wrongArg = antigravitySubcommandPrefix({ nodePath: process.execPath, nodeArgs: ["--import", "/tmp/tsx loader/entryX(1).mjs"], entryPath: argsGate.entryPath, subcommand: "bridge" });
-        const extraArg = antigravitySubcommandPrefix({ nodePath: process.execPath, nodeArgs: [...nodeArgs, "--no-warnings"], entryPath: argsGate.entryPath, subcommand: "bridge" });
-        const missingArg = antigravitySubcommandPrefix({ nodePath: process.execPath, nodeArgs: ["--import"], entryPath: argsGate.entryPath, subcommand: "bridge" });
-        expect(argsGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${wrongArg} list`, Cwd: argsGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
-        expect(argsGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${extraArg} list`, Cwd: argsGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
-        expect(argsGate.gate.evaluate({ name: "run_command", args: { CommandLine: `${missingArg} list`, Cwd: argsGate.cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
-      } finally { rmSync(argsGate.root, { recursive: true, force: true }); }
-    } finally { rmSync(outer, { recursive: true, force: true }); }
   });
 
   it("writeはtarget schema、全path、symlink祖先をfail-closedにする", () => {
@@ -578,92 +354,4 @@ describe("AntigravityGate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("danger-full-access/on-requestのcwd外writeはF4表どおりallowする", () => {
-    const { gate, root } = makeGate({ sandbox: "danger-full-access", approval: "on-request" });
-    try {
-      expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(root, "outside.txt") } })).toEqual({ decision: "allow" });
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it("issue #377 Stage 1 M3: GateServerがcompleted toolのgate相関ledgerを持つ", async () => {
-    const { gate, root, warnings } = makeGate();
-    const broker = new PermissionBroker({ config: config(), send: () => {} });
-    const server = await GateServer.listen({ gate, onSocketClose: () => broker.close() });
-    try {
-      expect(server.observeCompletedTool(2, "run_command")).toBe(false);
-      server.observeGateRequest(2);
-      expect(server.observeCompletedTool(2, "run_command")).toBe(true);
-      expect(server.observeCompletedTool(3, "future_vendor_tool")).toBe(true);
-      expect(warnings).toContain("antigravity: unclassified completed tool: future_vendor_tool");
-    } finally {
-      server.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("issue #377 Stage 1 M3: setGate()はledgerを保持したまま policy を差し替える", async () => {
-    const { gate, root, warnings } = makeGate();
-    const secondWarnings: string[] = [];
-    const secondGate = new AntigravityGate({
-      config: config(),
-      cwd: join(root, "workspace"),
-      customizationDir: join(root, "custom"),
-      nodePath: process.execPath,
-      entryPath: join(root, "kaoiro.js"),
-      toolNames: () => new Set(["whoami"]),
-      broker: new PermissionBroker({ config: config(), send: () => {} }),
-      warn: (message) => secondWarnings.push(message),
-    });
-    const server = await GateServer.listen({ gate });
-    try {
-      server.observeGateRequest(5);
-      server.setGate(secondGate);
-      expect(server.observeCompletedTool(5, "run_command")).toBe(true);
-      // A step the ledger never saw still fails closed after the swap.
-      expect(server.observeCompletedTool(6, "run_command")).toBe(false);
-      expect(server.observeCompletedTool(7, "future_vendor_tool")).toBe(true);
-      expect(secondWarnings).toContain("antigravity: unclassified completed tool: future_vendor_tool");
-      expect(warnings).not.toContain("antigravity: unclassified completed tool: future_vendor_tool");
-    } finally {
-      server.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("nonce欠落はdenyし、gate socket closeはpending brokerをdeny解決する", async () => {
-    const root = mkdtempSync(join(tmpdir(), "agy-gate-server-test-"));
-    const cwd = join(root, "workspace");
-    const customizationDir = join(root, "custom");
-    mkdirSync(cwd);
-    mkdirSync(customizationDir);
-    let pending = false;
-    const broker = new PermissionBroker({ config: config(), send: () => {}, onPendingChange: (value) => { pending = value !== null; } });
-    const gate = new AntigravityGate({
-      config: config(), cwd, customizationDir, nodePath: process.execPath, entryPath: join(root, "kaoiro.js"), toolNames: () => new Set(), broker,
-    });
-    const server = await GateServer.listen({ gate, nonce: "nonce", onSocketClose: () => broker.close() });
-    try {
-      const missingNonce = createConnection(server.socketPath);
-      const denied = new Promise<string>((resolve) => {
-        missingNonce.setEncoding("utf8");
-        missingNonce.once("data", (line: string) => resolve(line));
-      });
-      await new Promise<void>((resolve) => missingNonce.once("connect", () => resolve()));
-      missingNonce.end(`${JSON.stringify({ stepIdx: 1, toolCall: { name: "run_command", args: { CommandLine: "pwd", Cwd: cwd } } })}\n`);
-      await expect(denied).resolves.toContain('"decision":"deny"');
-
-      const pendingSocket = createConnection(server.socketPath);
-      await new Promise<void>((resolve) => pendingSocket.once("connect", () => resolve()));
-      pendingSocket.write(`${JSON.stringify({ nonce: "nonce", stepIdx: 2, toolCall: { name: "run_command", args: { CommandLine: "pwd", Cwd: cwd } } })}\n`);
-      for (let index = 0; index < 50 && !pending; index += 1) await new Promise((resolve) => setTimeout(resolve, 1));
-      expect(pending).toBe(true);
-      pendingSocket.destroy();
-      for (let index = 0; index < 50 && pending; index += 1) await new Promise((resolve) => setTimeout(resolve, 1));
-      expect(pending).toBe(false);
-    } finally {
-      server.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
-

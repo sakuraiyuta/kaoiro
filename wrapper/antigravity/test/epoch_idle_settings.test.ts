@@ -1,42 +1,55 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_EPOCH_IDLE_MS,
-  EPOCH_IDLE_MS_ENV,
-  readEpochIdleMs,
-  resolveEpochIdleMs,
-} from "../src/epoch.js";
+import { describe, expect, it, vi } from "vitest";
+import type { WrapperConfig } from "@kaoiro/agent-common";
+import { runAntigravityCli } from "../src/cli.js";
 import {
   TOOL_TIMEOUT_ENV,
   resolveTurnWatchdogSettings,
 } from "../src/turn_watchdog.js";
 
-describe("epoch idle setting (issue #469)", () => {
-  it("selects the config field, then the variable, then the default, with its source", () => {
-    expect(resolveEpochIdleMs({})).toEqual({ value: 1_800_000, source: "default" });
-    expect(DEFAULT_EPOCH_IDLE_MS).toBe(1_800_000);
-    expect(resolveEpochIdleMs({ [EPOCH_IDLE_MS_ENV]: "5000" })).toEqual({
-      value: 5000,
-      source: "env",
-    });
-    expect(resolveEpochIdleMs({ [EPOCH_IDLE_MS_ENV]: "" })).toEqual({
-      value: 1_800_000,
-      source: "default",
-    });
-    expect(resolveEpochIdleMs({ [EPOCH_IDLE_MS_ENV]: "5000" }, 7000)).toEqual({
-      value: 7000,
-      source: "config",
-    });
-    expect(readEpochIdleMs({ [EPOCH_IDLE_MS_ENV]: "5000" })).toBe(5000);
-  });
+const EPOCH_IDLE_MS_ENV = "KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS";
 
-  it("keeps the digits-only grammar and adds a ceiling of 2147483647", () => {
-    expect(readEpochIdleMs({ [EPOCH_IDLE_MS_ENV]: "1000" })).toBe(1000);
-    expect(readEpochIdleMs({ [EPOCH_IDLE_MS_ENV]: "2147483647" })).toBe(2_147_483_647);
-    for (const bad of [" ", "999", "1e3", "-1", "0x10", "2147483648"]) {
-      expect(() => readEpochIdleMs({ [EPOCH_IDLE_MS_ENV]: bad }), bad).toThrow(
-        EPOCH_IDLE_MS_ENV,
-      );
+describe("antigravity.epoch_idle_ms (accepted and ignored)", () => {
+  it("starts with the setting in the config and the variable, and reports neither", async () => {
+    const previous = process.env[EPOCH_IDLE_MS_ENV];
+    // Below the old reader's floor, so a wrapper that still read it would throw.
+    process.env[EPOCH_IDLE_MS_ENV] = "999";
+    const lines: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+    const config: WrapperConfig = {
+      agent_id: "a1",
+      persona: { id: "momo", name: "Momo", sprite_set: "momo" },
+      display_name: "Momo",
+      server_url: "ws://localhost:4000",
+      antigravity_epoch_idle_ms: 3000,
+    };
+    const host = {
+      state: "idle" as const,
+      abortGraceMs: 60_000,
+      statusExtSnapshot: () => ({ engine: "antigravity" }),
+      run: async () => {},
+    };
+    try {
+      await runAntigravityCli({
+        parseCliArgs: () => ({ configPath: "test" }),
+        loadConfig: () => config,
+        createServerLink: (_url, _agentId, options) => {
+          queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+          return { close: () => {}, send: () => {} } as never;
+        },
+        createHost: () => host as never,
+      });
+      // Both settings lines were captured, so their silence about the epoch is
+      // an observation.
+      expect(lines.filter((line) => line.includes("tool_timeout_ms="))).toHaveLength(2);
+      expect(lines.filter((line) => line.includes("epoch"))).toEqual([]);
+    } finally {
+      stderr.mockRestore();
+      if (previous === undefined) delete process.env[EPOCH_IDLE_MS_ENV];
+      else process.env[EPOCH_IDLE_MS_ENV] = previous;
     }
   });
 });

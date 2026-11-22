@@ -1,6 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 // issue #677: the Antigravity CLI exposes `request_peer_session_reset` on the
-// bridge behind the same per-call broker approval as request_session_reset
+// tool host behind the same per-call broker approval as request_session_reset
 // (no autonomous path on this engine). Pins the composition (registration,
 // approval class, hand-off of the link's answer and of a result nobody waited
 // for); the gate's lifetime semantics are pinned in session_reset_gate.test.ts.
@@ -65,7 +65,7 @@ describe("Antigravity CLI request_peer_session_reset (issue #677)", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("is exposed on the bridge next to request_session_reset", async () => {
+  it("is exposed on the tool host next to request_session_reset", async () => {
     const { descriptors, peerReset } = await compose();
     const names = descriptors.map((d) => d.name);
     expect(names).toContain("request_session_reset");

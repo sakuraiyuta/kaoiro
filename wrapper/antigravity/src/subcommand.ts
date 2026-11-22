@@ -1,4 +1,4 @@
-export type AntigravitySubcommand = "hook" | "bridge";
+export type AntigravitySubcommand = "hook";
 
 /** Wraps a shell argument in single quotes unconditionally so spaces or
  *  metacharacters in paths and execArgv cannot split or expand in `sh -c`. */
@@ -13,8 +13,8 @@ export interface AntigravitySubcommandOptions {
   subcommand: AntigravitySubcommand;
 }
 
-/** Builds the shared command prefix for hooks.json, model instructions,
- *  registration verification, and the gate's bridge regex. */
+/** Builds the command prefix that hooks.json registers and the hook list
+ *  check compares. */
 export function antigravitySubcommandPrefix(options: AntigravitySubcommandOptions): string {
   return [
     options.nodePath,

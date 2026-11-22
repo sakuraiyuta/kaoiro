@@ -7,10 +7,8 @@
 // disagree about whether it is set.
 
 import { readTurnWatchdogSettings as readCodexWatchdog } from "@kaoiro/codex";
-import {
-  readEpochIdleMs,
-  readTurnWatchdogSettings as readAntigravityWatchdog,
-} from "@kaoiro/antigravity";
+import { readTurnWatchdogSettings as readAntigravityWatchdog } from "@kaoiro/antigravity";
+import { readDigitsMs } from "@kaoiro/wrapper-core";
 import {
   CLAUDE_SCHEDULER_SETTINGS,
   PERMISSION_TIMEOUT_ENV,
@@ -352,9 +350,16 @@ const ANTIGRAVITY_TIMING_ROWS: readonly BehaviourRow[] = [
       }
       return value;
     },
+    // Accepted and ignored by the wrapper; the variable keeps its grammar.
     parseEnv: (raw) => {
       try {
-        return readEpochIdleMs({ KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS: raw });
+        return readDigitsMs(
+          { KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS: raw },
+          "KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS",
+          ANTIGRAVITY_MIN_TIMING_MS,
+          ANTIGRAVITY_MIN_TIMING_MS,
+          TURN_WATCHDOG_MAX_DELAY_MS,
+        );
       } catch (error) {
         throw new ConfigError(error instanceof Error ? error.message : String(error));
       }

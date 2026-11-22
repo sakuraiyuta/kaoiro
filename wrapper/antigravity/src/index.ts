@@ -11,15 +11,13 @@ export type {
 export { handleAntigravityInterAgentMessage } from "./inter_agent_message_handler.js";
 export type { AntigravityInterAgentMessageHandlerContext } from "./inter_agent_message_handler.js";
 export { TurnWatchdog, readTurnWatchdogSettings } from "./turn_watchdog.js";
-export { readEpochIdleMs } from "./epoch.js";
 export type {
   TurnWatchdogOptions,
   TurnWatchdogSettings,
   TurnWatchdogWarning,
 } from "./turn_watchdog.js";
-export { AntigravityGate, GateServer, TOOL_CLASS_BY_NAME } from "./gate.js";
+export { TOOL_CLASS_BY_NAME } from "./gate.js";
 export { CustomizationDir, checkHookList, sweepStaleCustomizationDirs } from "./customization.js";
-export { ToolHost } from "./toolhost.js";
 export { effectiveNetworkAccess } from "./network_access.js";
 export { applyAntigravityEnvDefaultModel, resolveAntigravitySources } from "./source_resolution.js";
 export {
@@ -31,15 +29,3 @@ export {
 } from "./cli-path.js";
 export type { AgyExecutableFailureReason, AgyExecutableResolution } from "./cli-path.js";
 export { runAntigravityCli } from "./cli.js";
-export {
-  agyEventToErrorDetail,
-  agyEventToEvents,
-  agyEventIsSuccessfulResult,
-  agyEventToLogs,
-  agyEventToQuotaExhaustion,
-  agyEventToResult,
-  agyEventToSessionId,
-  parseAgyStreamLine,
-} from "./adapter.js";
-export type { AgyStreamEvent } from "./adapter.js";
-export type { AgyQuotaExhaustion } from "./adapter.js";

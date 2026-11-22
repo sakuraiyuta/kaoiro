@@ -1,7 +1,7 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 // Issue 482. The status line tools reach Antigravity through
 // `...interAgent.descriptors()` in the production CLI. This composes the real
-// CLI around a stand-in link and calls the tool the way the bridge would, so a
+// CLI around a stand-in link and calls the tool the way the tool host would, so a
 // tool that is not in the real composition, or is not wired to the link's
 // setStatusLine / readStatusLine, fails here and not only in a unit test of
 // InterAgentTool.
@@ -61,7 +61,7 @@ async function compose() {
 }
 
 describe("Antigravity CLI status line composition (issue 482)", () => {
-  it("offers both tools on the bridge", async () => {
+  it("offers both tools on the tool host", async () => {
     const { descriptors } = await compose();
 
     expect(descriptors.map((d) => d.name)).toEqual(

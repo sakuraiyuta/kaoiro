@@ -67,7 +67,7 @@ describe("Antigravity CLI session-reset availability (issue #396)", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("exposes request_session_reset on the bridge, gated, and never request_compact", async () => {
+  it("exposes request_session_reset on the tool host, gated, and never request_compact", async () => {
     const gate = vi.spyOn(common, "operatorApprovalGated");
     let descriptors: ToolDescriptor[];
     try {

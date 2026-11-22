@@ -356,7 +356,6 @@ describe("kaoiro-runner-install.sh (issue #219)", () => {
     ["codex", "node_modules/@kaoiro/codex/dist/bridge.js"],
     ["grok", "node_modules/@kaoiro/grok/dist/build-info.json"],
     ["claude-code", "node_modules/@kaoiro/claude-code/dist/probe.js"],
-    ["antigravity(bridge.js)", "node_modules/@kaoiro/antigravity/dist/bridge.js"],
     ["antigravity(hook.js)", "node_modules/@kaoiro/antigravity/dist/hook.js"],
   ])("%s の宣言された runtime asset の欠落を拒否する", (_pkg, asset) => {
     // These files are reachable only at runtime, through a path the wrapper
@@ -366,9 +365,7 @@ describe("kaoiro-runner-install.sh (issue #219)", () => {
     // verifier enforces that declaration — no longer read out of call text.
     // Every wrapper with a `new URL`-resolved asset is covered because a
     // version of this suite that covered only codex passed while
-    // claude-code's real probe.js sat undeclared, and antigravity carries
-    // TWO such assets (bridge.js AND hook.js, ふじ SF-2) — covering only one
-    // of the two would repeat that exact gap for the other.
+    // claude-code's real probe.js sat undeclared.
     const revision = revisionOf(`runtime-asset-${_pkg}`);
     const archive = makeReleaseTarball(work, revision, {
       omit: [asset],
@@ -384,7 +381,7 @@ describe("kaoiro-runner-install.sh (issue #219)", () => {
   it("antigravity パッケージ全体の欠落を拒否する (ふじ SF-2: ENTRY_PACKAGES 除外の negative control)", () => {
     // Distinct from the single-asset cases above: this removes the WHOLE
     // node_modules/@kaoiro/antigravity directory the manifest still lists
-    // (package.json, dist/cli.js, dist/bridge.js, dist/hook.js,
+    // (package.json, dist/cli.js, dist/hook.js,
     // dist/build-info.json — all of it), modelling a release whose builder
     // silently dropped the package (e.g. a future ENTRY_PACKAGES edit that
     // forgot verify-release.mjs's own copy of the list, ADR-0053's

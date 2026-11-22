@@ -1,17 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   PermissionBroker,
-  boundErrorDetail,
-  writeRedactedStderr,
   type PermissionDecision,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
 import { effectiveNetworkAccess } from "./network_access.js";
-import { antigravitySubcommandPrefix } from "./subcommand.js";
 
 export type AntigravityLaunchConfig = WrapperConfig & {
   approval?: "untrusted" | "on-request" | "local" | "on-failure" | "never";
@@ -62,23 +56,12 @@ const classes: Readonly<Record<AntigravityToolClass, readonly string[]>> = {
   ],
 };
 
-export const MEASURED_HOOK_CLASSES = new Set<AntigravityToolClass>([
-  "read", "write", "shell", "network", "subagent",
-]);
-
 export const TOOL_CLASS_BY_NAME: ReadonlyMap<string, AntigravityToolClass> = new Map(
   Object.entries(classes).flatMap(([toolClass, names]) =>
     names.map((name) => [name, toolClass as AntigravityToolClass] as const),
   ),
 );
 
-const BRIDGE_ARG_KEYS = new Set([
-  "CommandLine",
-  "Cwd",
-  "WaitMsBeforeAsync",
-  "toolAction",
-  "toolSummary",
-]);
 const PATH_ARGUMENT_KEYS = new Set(["AbsolutePath", "DirectoryPath", "TargetFile", "Cwd", "Path"]);
 const READ_FILE_ARGUMENT_KEYS = new Set(["Path", "StartLine", "EndLine", "ByteOffset"]);
 const WRITE_TARGET_KEYS: Readonly<Record<string, readonly string[]>> = {
@@ -90,7 +73,6 @@ const WRITE_TARGET_KEYS: Readonly<Record<string, readonly string[]>> = {
   write_file: ["Path"],
   edit_file: ["Path"],
 };
-const MAX_BRIDGE_PAYLOAD_BYTES = 87 * 1024;
 const LOCAL_COMMAND_TOKEN = /^[A-Za-z0-9_./:@%+=,~-]+$/;
 const REMOTE_GIT_SUBCOMMANDS = new Set([
   "clone", "fetch", "ls-remote", "pull", "push", "remote", "submodule",
@@ -382,192 +364,6 @@ function pathArguments(toolName: string, args: Record<string, unknown>): PathArg
   return { all, targets, valid: true };
 }
 
-function knownBridgePayload(encoded: string): boolean {
-  if (!/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length > MAX_BRIDGE_PAYLOAD_BYTES) return false;
-  try {
-    const json = Buffer.from(encoded, "base64url");
-    return json.byteLength <= 64 * 1024 && isRecord(JSON.parse(json.toString("utf8")));
-  } catch {
-    return false;
-  }
-}
-
-export interface GatePolicyOptions {
-  config: AntigravityLaunchConfig;
-  cwd: string;
-  customizationDir: string;
-  nodePath: string;
-  nodeArgs?: readonly string[] | undefined;
-  entryPath: string;
-  toolNames: () => ReadonlySet<string>;
-  broker: PermissionBroker;
-  waitMsBeforeAsyncFloor?: number;
-  warn?: (message: string) => void;
-  onPermissionRequest?: () => void;
-  onPermissionResolved?: () => void;
-}
-
-export class AntigravityGate {
-  readonly #cwd: string;
-  readonly #customizationDir: string;
-  readonly #nodePath: string;
-  readonly #nodeArgs: readonly string[];
-  readonly #entryPath: string;
-  readonly #toolNames: () => ReadonlySet<string>;
-  readonly #broker: PermissionBroker;
-  readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
-  readonly #approval: NonNullable<AntigravityLaunchConfig["approval"]>;
-  readonly #networkAccess: boolean;
-  readonly #waitMsBeforeAsyncFloor: number;
-  readonly #warn: (message: string) => void;
-  readonly #onPermissionRequest: (() => void) | undefined;
-  readonly #onPermissionResolved: (() => void) | undefined;
-
-  constructor(options: GatePolicyOptions) {
-    this.#cwd = canonical(options.cwd) ?? resolve(options.cwd);
-    this.#customizationDir = canonical(options.customizationDir) ?? resolve(options.customizationDir);
-    this.#nodePath = canonical(options.nodePath) ?? resolve(options.nodePath);
-    this.#nodeArgs = [...(options.nodeArgs ?? [])];
-    this.#entryPath = canonical(options.entryPath) ?? resolve(options.entryPath);
-    this.#toolNames = options.toolNames;
-    this.#broker = options.broker;
-    this.#sandbox = options.config.sandbox ?? "workspace-write";
-    this.#approval = options.config.approval ?? "on-request";
-    this.#networkAccess = effectiveNetworkAccess(this.#sandbox, options.config.network_access ?? false);
-    this.#waitMsBeforeAsyncFloor = options.waitMsBeforeAsyncFloor ?? 5_000;
-    this.#warn = (message): void => {
-      if (options.warn !== undefined) {
-        options.warn(boundErrorDetail(message));
-        return;
-      }
-      writeRedactedStderr(`${message}\n`);
-    };
-    this.#onPermissionRequest = options.onPermissionRequest;
-    this.#onPermissionResolved = options.onPermissionResolved;
-  }
-
-  inspectToolInventory(tools: readonly unknown[]): void {
-    for (const tool of tools) {
-      if (typeof tool === "string" && !TOOL_CLASS_BY_NAME.has(tool)) {
-        this.#warn(`antigravity: unknown init tool: ${tool}`);
-      }
-    }
-  }
-
-  /** issue #377 Stage 1 M3: exposed read-only so `GateServer` (the ledger's
-   *  new owner) can classify a completed tool without duplicating
-   *  `TOOL_CLASS_BY_NAME` / `MEASURED_HOOK_CLASSES` lookups or the warn
-   *  wiring. `AntigravityGate` stays pure policy over its readonly axes --
-   *  it holds no step-correlation state of its own. */
-  warnUnclassifiedTool(toolName: string): void {
-    this.#warn(`antigravity: unclassified completed tool: ${toolName}`);
-  }
-
-  evaluate(toolCall: HookToolCall): GateDecision {
-    if (toolCall.name === "read_file" && !validReadFileArguments(toolCall.args)) {
-      return { decision: "deny", reason: "kaoiro: read_file argument is missing or malformed" };
-    }
-    const toolClass = TOOL_CLASS_BY_NAME.get(toolCall.name);
-    if (toolClass === undefined) return this.#approval === "never"
-      ? { decision: "deny", reason: "kaoiro: unclassified tool denied" }
-      : { decision: "ask" };
-    if (toolClass === "agent-internal") {
-      return { decision: "deny", reason: "kaoiro: tool requires the Antigravity TUI" };
-    }
-    if (toolClass === "network" && !this.#networkAccess) {
-      return { decision: "deny", reason: "kaoiro: network access is disabled" };
-    }
-    if ((toolClass === "read" || toolClass === "write") && referencesDirectory(toolCall.args, this.#customizationDir)) {
-      return { decision: "deny", reason: "kaoiro: customization directory is protected" };
-    }
-    if (toolClass === "shell" && commandReferencesDirectory(toolCall.args, this.#customizationDir)) {
-      return { decision: "deny", reason: "kaoiro: customization directory is protected" };
-    }
-    if (toolCall.name === "run_command" && this.#isBridgeCall(toolCall.args)) {
-      return { decision: "allow" };
-    }
-    if (toolCall.name === "run_command") {
-      const commandCwd = typeof toolCall.args.Cwd === "string"
-        ? canonical(toolCall.args.Cwd)
-        : null;
-      const commandCwdInside = commandCwd !== null && isInside(commandCwd, this.#cwd);
-      if (!commandCwdInside && this.#sandbox !== "danger-full-access") {
-        if (this.#sandbox === "read-only") {
-          return { decision: "deny", reason: "kaoiro: read-only sandbox" };
-        }
-        if (this.#approval === "never") {
-          return { decision: "deny", reason: "kaoiro: command Cwd is outside the permitted workspace" };
-        }
-        // Check the Cwd before the local allowlist so an otherwise safe
-        // command cannot observe a workspace outside this agent's boundary.
-        return { decision: "ask" };
-      }
-    }
-    const policyClass = toolClass === "network" ? "shell" : toolClass;
-    if (policyClass === "read") return { decision: "allow" };
-    if (policyClass === "write") {
-      const paths = pathArguments(toolCall.name, toolCall.args);
-      if (!paths.valid || paths.targets.length === 0) {
-        return { decision: "deny", reason: "kaoiro: write target is missing or malformed" };
-      }
-      if (this.#sandbox === "read-only" || (this.#sandbox === "workspace-write" && paths.all.some((path) => !isInside(path, this.#cwd)))) {
-        return { decision: "deny", reason: "kaoiro: write is outside the permitted workspace" };
-      }
-      if (
-        this.#approval === "local" &&
-        paths.targets.some((path) => gitMetadataPath(path, this.#cwd))
-      ) {
-        return { decision: "ask" };
-      }
-      return this.#approval === "untrusted" ? { decision: "ask" } : { decision: "allow" };
-    }
-    if (this.#sandbox === "read-only") {
-      return { decision: "deny", reason: "kaoiro: read-only sandbox" };
-    }
-    if (
-      this.#approval === "local" &&
-      toolCall.name === "run_command" &&
-      typeof toolCall.args.CommandLine === "string" &&
-      localCommandAllowed(toolCall.args.CommandLine, this.#cwd)
-    ) {
-      return { decision: "allow" };
-    }
-    return this.#approval === "never" ? { decision: "allow" } : { decision: "ask" };
-  }
-
-  async decide(toolCall: HookToolCall): Promise<{ decision: "allow" | "deny"; reason?: string }> {
-    const policy = this.evaluate(toolCall);
-    if (policy.decision !== "ask") return policy;
-    this.#onPermissionRequest?.();
-    try {
-      const result: PermissionDecision = await this.#broker.decide(toolCall.name, toolCall.args);
-      return result.allow
-        ? { decision: "allow" }
-        : { decision: "deny", reason: result.message ?? "kaoiro: operator rejected" };
-    } finally {
-      this.#onPermissionResolved?.();
-    }
-  }
-
-  #isBridgeCall(args: Record<string, unknown>): boolean {
-    if (Object.keys(args).some((key) => !BRIDGE_ARG_KEYS.has(key))) return false;
-    if (typeof args.Cwd !== "string" || canonical(args.Cwd) !== this.#cwd) return false;
-    if (typeof args.WaitMsBeforeAsync !== "number" || args.WaitMsBeforeAsync < this.#waitMsBeforeAsyncFloor) return false;
-    if (typeof args.CommandLine !== "string") return false;
-    const bridgePrefix = antigravitySubcommandPrefix({
-      nodePath: this.#nodePath,
-      nodeArgs: this.#nodeArgs,
-      entryPath: this.#entryPath,
-      subcommand: "bridge",
-    });
-    const escapedPrefix = bridgePrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = new RegExp(`^${escapedPrefix} (?:list|call ([a-z_]{1,64}) ([A-Za-z0-9_-]{1,${MAX_BRIDGE_PAYLOAD_BYTES}}))$`).exec(args.CommandLine);
-    if (match === null) return false;
-    if (match[1] === undefined) return true;
-    return this.#toolNames().has(match[1]) && knownBridgePayload(match[2]!);
-  }
-}
-
 const KAOIRO_MCP_PREFIX = "mcp_kaoiro_";
 
 const allowed: GateDecision = { decision: "allow" };
@@ -711,117 +507,5 @@ export class AcpToolPolicy {
       return allowed;
     }
     return asked;
-  }
-}
-
-export interface GateServerOptions {
-  nonce?: string;
-  gate: AntigravityGate;
-  onSocketClose?: () => void;
-}
-
-export class GateServer {
-  readonly #server: Server;
-  readonly #dir: string;
-  readonly nonce: string;
-  readonly socketPath: string;
-  #gate: AntigravityGate;
-  readonly #onSocketClose: (() => void) | undefined;
-  readonly #sockets = new Set<Socket>();
-  // issue #377 Stage 1 M3: moved out of `AntigravityGate` -- `GateServer` is
-  // the per-epoch object (Stage 2: several turns share one server across a
-  // `setGate()` swap), so the step-correlation ledger belongs here, not on
-  // the policy object a swap replaces.
-  readonly #observedSteps = new Set<number>();
-  #closed = false;
-
-  private constructor(server: Server, dir: string, nonce: string, gate: AntigravityGate, onSocketClose?: () => void) {
-    this.#server = server;
-    this.#dir = dir;
-    this.nonce = nonce;
-    this.socketPath = join(dir, "gate.sock");
-    this.#gate = gate;
-    this.#onSocketClose = onSocketClose;
-  }
-
-  static async listen(options: GateServerOptions): Promise<GateServer> {
-    const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-gate-"));
-    const server = createServer();
-    const gate = new GateServer(server, dir, options.nonce ?? randomUUID(), options.gate, options.onSocketClose);
-    server.on("connection", (socket) => gate.#serve(socket));
-    await new Promise<void>((resolveListen, reject) => {
-      server.once("error", reject);
-      server.listen(gate.socketPath, () => {
-        server.removeListener("error", reject);
-        resolveListen();
-      });
-    });
-    return gate;
-  }
-
-  close(): void {
-    if (this.#closed) return;
-    this.#closed = true;
-    for (const socket of this.#sockets) socket.destroy();
-    this.#sockets.clear();
-    this.#server.close();
-    rmSync(this.#dir, { recursive: true, force: true });
-  }
-
-  /** issue #377 Stage 1 M3 (Stage 2 use): swaps the policy object a turn
-   *  boundary applies, without touching the socket or the step-correlation
-   *  ledger -- a step `ACTIVE` before the swap still resolves against the
-   *  same ledger once it goes `DONE` after it. */
-  setGate(gate: AntigravityGate): void {
-    this.#gate = gate;
-  }
-
-  observeGateRequest(stepIdx: number): void {
-    this.#observedSteps.add(stepIdx);
-  }
-
-  observeCompletedTool(stepIdx: number, toolName: string): boolean {
-    const toolClass = TOOL_CLASS_BY_NAME.get(toolName);
-    if (toolClass === undefined) {
-      this.#gate.warnUnclassifiedTool(toolName);
-      return true;
-    }
-    if (!MEASURED_HOOK_CLASSES.has(toolClass)) return true;
-    return this.#observedSteps.delete(stepIdx);
-  }
-
-  #serve(socket: Socket): void {
-    let buffer = "";
-    let replied = false;
-    this.#sockets.add(socket);
-    socket.setEncoding("utf8");
-    socket.on("close", () => {
-      this.#sockets.delete(socket);
-      if (!replied) this.#onSocketClose?.();
-    });
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      const newline = buffer.indexOf("\n");
-      if (newline === -1 || replied) return;
-      const line = buffer.slice(0, newline);
-      void this.#handleLine(socket, line, () => { replied = true; });
-    });
-  }
-
-  async #handleLine(socket: Socket, line: string, markReplied: () => void): Promise<void> {
-    const deny = (reason: string): void => {
-      markReplied();
-      socket.end(`${JSON.stringify({ decision: "deny", reason })}\n`);
-    };
-    let request: unknown;
-    try { request = JSON.parse(line); } catch { deny("kaoiro: malformed hook payload"); return; }
-    if (!isRecord(request) || request.nonce !== this.nonce || typeof request.stepIdx !== "number" || !isRecord(request.toolCall) || typeof request.toolCall.name !== "string" || !isRecord(request.toolCall.args)) {
-      deny("kaoiro: invalid gate request");
-      return;
-    }
-    this.observeGateRequest(request.stepIdx);
-    const decision = await this.#gate.decide({ name: request.toolCall.name, args: request.toolCall.args });
-    markReplied();
-    if (!socket.destroyed) socket.end(`${JSON.stringify(decision)}\n`);
   }
 }

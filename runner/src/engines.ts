@@ -47,9 +47,6 @@ export const ENGINES: Record<EngineKind, Engine> = {
       hook: async () => {
         await (await import("@kaoiro/antigravity/dist/hook.js")).runAntigravityHook();
       },
-      bridge: async (args) => {
-        await (await import("@kaoiro/antigravity/dist/bridge.js")).runAntigravityBridge(args);
-      },
     },
   },
   grok: {

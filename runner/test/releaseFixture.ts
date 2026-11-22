@@ -255,14 +255,10 @@ export function writeReleaseTree(
     // DECLARES it and the verifier enforces the declaration.
     // claude-code and codex each carry one asset this way, because the real
     // ones do: codex composes ../dist/bridge.js with `new URL`, claude-code
-    // resolves ./probe.js through createRequire. antigravity's adapter body
-    // (ADR-0057 F5/A6/A8) carries TWO the same way — host.ts resolves both
-    // ../dist/bridge.js (the CLI tool bridge) and ../dist/hook.js (the
-    // PreToolUse gate) via `new URL`, plus dist/build-info.json (declared,
-    // not `new URL`-resolved, like codex/claude-code's own build-info.json
-    // — ADR-0053). A fixture that modelled only one of the two `new URL`
-    // sites would let the other's deletion survive review, the same class
-    // of gap that missed probe.js in round 2.
+    // resolves ./probe.js through createRequire. antigravity carries one the
+    // same way, ../dist/hook.js (its PreToolUse and Stop hook), plus
+    // dist/build-info.json (declared, not `new URL`-resolved, like
+    // codex/claude-code's own build-info.json — ADR-0053).
     // grok declares only its build info: its tools are served over HTTP, so
     // it composes no asset path of its own.
     const asset: string[] =
@@ -272,7 +268,7 @@ export function writeReleaseTree(
           ? ["dist/build-info.json"]
           : wrapper === "claude-code"
             ? ["dist/probe.js"]
-            : ["dist/bridge.js", "dist/hook.js", "dist/build-info.json"];
+            : ["dist/hook.js", "dist/build-info.json"];
     const runtime = { kaoiro: { runtimeAssets: asset } };
     put(
       `node_modules/@kaoiro/${wrapper}/package.json`,
@@ -302,8 +298,7 @@ export function writeReleaseTree(
       wrapper === "codex"
         ? 'const b = new URL("../dist/bridge.js", import.meta.url);\n'
         : wrapper === "antigravity"
-          ? 'const b = new URL("../dist/bridge.js", import.meta.url);\n' +
-            'const h = new URL("../dist/hook.js", import.meta.url);\n'
+          ? 'const h = new URL("../dist/hook.js", import.meta.url);\n'
           : "";
     put(
       `node_modules/@kaoiro/${wrapper}/dist/cli.js`,
@@ -312,7 +307,6 @@ export function writeReleaseTree(
   }
   put("node_modules/@kaoiro/codex/dist/bridge.js", "// stub bridge\n");
   put("node_modules/@kaoiro/claude-code/dist/probe.js", "// stub probe\n");
-  put("node_modules/@kaoiro/antigravity/dist/bridge.js", "// stub bridge\n");
   put("node_modules/@kaoiro/antigravity/dist/hook.js", "// stub hook\n");
   put(
     "node_modules/@kaoiro/grok/dist/build-info.json",
