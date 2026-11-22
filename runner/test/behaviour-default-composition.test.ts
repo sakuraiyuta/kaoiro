@@ -515,9 +515,11 @@ describe("default composition (issue #469)", () => {
             "permission_broker_timeout_ms=7000 operator_steer=on approval_axis=on " +
             "approval_deadline_ms=7000 approval_inactivity_limit_ms=90000",
         );
+        // antigravity.epoch_idle_ms is accepted and ignored: set in the config
+        // above, reported on neither Antigravity line.
         expect(antigravity[2]).toBe(
           "turn_watchdog_inactivity_ms=80000 turn_watchdog_abort_grace_ms=5000 " +
-            "tool_timeout_ms=2000 host_abort_grace_ms=5000 epoch_idle_ms=3000 " +
+            "tool_timeout_ms=2000 host_abort_grace_ms=5000 " +
             "permission_broker_timeout_ms=7000",
         );
 
@@ -545,7 +547,7 @@ describe("default composition (issue #469)", () => {
         );
         expect(antigravityBehaviour[1]).toBe(
           "turn_watchdog_inactivity_ms=80000(config) turn_watchdog_abort_grace_ms=5000(config) " +
-            "permission_timeout_ms=7000 tool_timeout_ms=2000(config) epoch_idle_ms=3000(config)",
+            "permission_timeout_ms=7000 tool_timeout_ms=2000(config)",
         );
       } catch (error) {
         primary = error;
