@@ -449,6 +449,7 @@ describe("default composition (issue #469)", () => {
               turn_watchdog_abort_grace_ms: 3000,
             },
             antigravity: {
+              auth: "google-cloud-sign-in",
               cli_path: agy,
               turn_watchdog_inactivity_ms: 80_000,
               turn_watchdog_abort_grace_ms: 5000,

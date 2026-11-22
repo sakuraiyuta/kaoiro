@@ -167,7 +167,7 @@ describe("behaviour settings relay (issue #469)", () => {
                 codex: { auth_mode: "chatgpt", ...relay },
                 antigravity: { cli_path: agy },
               }
-            : { antigravity: { cli_path: agy, ...relay } },
+            : { antigravity: { auth: "google-cloud-sign-in", cli_path: agy, ...relay } },
           capabilities,
         );
         const runtime = await runRunnerCli(h.dependencies, [configPath]);
@@ -240,7 +240,8 @@ describe("behaviour settings relay (issue #469)", () => {
       writeFileSync(agy, "#!/bin/sh\nexit 0\n");
       chmodSync(agy, 0o755);
       h.writeConfig(
-        { antigravity: { cli_path: agy, tool_timeout_ms: 2000, epoch_idle_ms: 3000 } },
+        { antigravity: { auth: "google-cloud-sign-in", cli_path: agy,
+          tool_timeout_ms: 2000, epoch_idle_ms: 3000 } },
         capabilities,
       );
       const runtime = await runRunnerCli(h.dependencies, [configPath]);
@@ -253,7 +254,8 @@ describe("behaviour settings relay (issue #469)", () => {
         });
         expect(h.configs[1]).not.toHaveProperty("antigravity_tool_timeout_ms");
         h.writeConfig(
-          { antigravity: { cli_path: agy, tool_timeout_ms: 2500 } },
+          { antigravity: { auth: "google-cloud-sign-in", cli_path: agy,
+            tool_timeout_ms: 2500 } },
           capabilities,
         );
         await h.reload(runtime!);
