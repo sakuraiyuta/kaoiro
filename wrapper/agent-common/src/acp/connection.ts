@@ -113,18 +113,23 @@ function filterSdkConsole(observer: Observer): () => void {
 
 const metadataLimit = 4 * 1024 * 1024;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function observeMessage<M extends WireMetadata>(
-  msg: Record<string, any>,
+  msg: Record<string, unknown>,
   direction: "in" | "out",
   observer: (metadata: M) => void,
   wireFields?: AcpExtension<M>["wireFields"],
 ) {
+  const method = safeName(msg.method);
+  const update = isRecord(msg.params) ? msg.params.update : undefined;
+  const variant = isRecord(update) ? safeName(update.sessionUpdate) : undefined;
   observer({
     direction,
-    ...(safeName(msg.method) ? { method: safeName(msg.method)! } : {}),
-    ...(safeName(msg.params?.update?.sessionUpdate)
-      ? { variant: safeName(msg.params.update.sessionUpdate)! }
-      : {}),
+    ...(method ? { method } : {}),
+    ...(variant ? { variant } : {}),
     ...(wireFields?.(msg) ?? {}),
   } as M);
 }
@@ -165,8 +170,8 @@ export function metadataTee<M extends WireMetadata = WireMetadata>(
         oversized = false;
         offset = newline + 1;
         try {
-          const msg = JSON.parse(line);
-          if (!msg || typeof msg !== "object") continue;
+          const msg: unknown = JSON.parse(line);
+          if (!isRecord(msg)) continue;
           observeMessage(msg, direction, observer, wireFields);
         } catch {
           /* Invalid JSON is handled by the SDK, without body logging. */
@@ -207,7 +212,8 @@ function callbackOutput<M extends WireMetadata>(
     write(chunk) {
       if (failure) throw failure;
       // The pinned SDK encodes one complete JSON-RPC message per write.
-      const msg = JSON.parse(new TextDecoder().decode(chunk));
+      const msg: Record<string, unknown> & Pick<AcpWriteResult, "id"> =
+        JSON.parse(new TextDecoder().decode(chunk));
       const method = safeName(msg.method);
       const identity = {
         ...(method !== undefined ? { method } : {}),

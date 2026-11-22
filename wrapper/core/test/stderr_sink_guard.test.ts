@@ -33,6 +33,8 @@ const SOURCE_ROOTS = [
 ] as const;
 const SINK_FILE = "wrapper/core/src/redact.ts";
 const SINK_EXPORT = "writeRedactedStderr";
+const ACP_CONNECTION = "wrapper/agent-common/src/acp/connection.ts";
+const TOOL_HOST = "wrapper/agent-common/src/toolhost.ts";
 const APPROVED_NODE_BUILTIN_MODULES = new Set([
   "node:child_process",
   "node:crypto",
@@ -252,6 +254,47 @@ function approvedSink(node: ts.Node, source: ts.SourceFile): boolean {
   return false;
 }
 
+// The SDK uses the process-wide console. Only capturing, installing and
+// restoring its two filtered methods belongs to this function.
+function approvedSdkConsole(node: ts.Identifier, source: ts.SourceFile): boolean {
+  if (relative(REPOSITORY_ROOT, source.fileName) !== ACP_CONNECTION) return false;
+  const member = node.parent;
+  if (!ts.isPropertyAccessExpression(member) || member.expression !== node ||
+    (member.name.text !== "error" && member.name.text !== "warn")) return false;
+  if (!ts.findAncestor(node, (parent) => ts.isFunctionDeclaration(parent) &&
+    parent.parent === source && parent.name?.text === "filterSdkConsole")) return false;
+
+  const use = member.parent;
+  if (ts.isVariableDeclaration(use))
+    return use.initializer === member && ts.isIdentifier(use.name) &&
+      use.name.text === member.name.text;
+  return ts.isBinaryExpression(use) && use.left === member &&
+    use.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    (ts.isArrowFunction(use.right) ||
+      (ts.isIdentifier(use.right) && use.right.text === member.name.text));
+}
+
+// Each transport needs one static import. Type-only bindings are erased.
+function approvedTransportImport(
+  source: ts.SourceFile, node: ts.Node, specifier: string,
+): boolean {
+  const path = relative(REPOSITORY_ROOT, source.fileName);
+  const names = path === ACP_CONNECTION && specifier === "node:stream"
+    ? "Readable,Writable"
+    : path === TOOL_HOST && specifier === "node:http" ? "createServer" : null;
+  if (!names || !ts.isImportDeclaration(node) || node.parent !== source)
+    return false;
+  const clause = node.importClause;
+  const bindings = clause?.namedBindings;
+  if (!bindings || clause.name || clause.isTypeOnly || !ts.isNamedImports(bindings))
+    return false;
+  const runtime = bindings.elements.filter((entry) => !entry.isTypeOnly);
+  if (runtime.some((entry) => entry.propertyName) ||
+    runtime.map((entry) => entry.name.text).join(",") !== names) return false;
+  return node === source.statements.find((stmt) => ts.isImportDeclaration(stmt) &&
+    ts.isStringLiteral(stmt.moduleSpecifier) && stmt.moduleSpecifier.text === specifier);
+}
+
 function isAllowedProcessReference(node: ts.Expression, source: ts.SourceFile): boolean {
   if (!ts.isIdentifier(node) || node.text !== "process") return false;
   const parent = node.parent;
@@ -337,7 +380,8 @@ function scanSources(
       new Set(["createRequire", "getBuiltinModule"]),
     );
   const checkModuleSpecifier = (source: ts.SourceFile, node: ts.Node, specifier: string): void => {
-    if (isNodeBuiltinSpecifier(specifier) && !APPROVED_NODE_BUILTIN_MODULES.has(specifier)) {
+    if (isNodeBuiltinSpecifier(specifier) && !APPROVED_NODE_BUILTIN_MODULES.has(specifier) &&
+      !approvedTransportImport(source, node, specifier)) {
       add(source, node, `${specifier} module loading is not approved`);
     }
   };
@@ -348,7 +392,8 @@ function scanSources(
         if (FORBIDDEN_GLOBALS.has(node.text) && symbolIsGlobalCapability(checker.getSymbolAtLocation(node))) {
           add(source, node, `${node.text} is not an approved diagnostic capability`);
         }
-        if (node.text === "console" || symbolIsConsole(checker.getSymbolAtLocation(node))) {
+        if ((node.text === "console" || symbolIsConsole(checker.getSymbolAtLocation(node))) &&
+          !approvedSdkConsole(node, source)) {
           add(source, node, "console is not an approved diagnostic sink");
         }
         if (symbolHasNodeDeclaration(
@@ -438,9 +483,12 @@ function scanSources(
   };
 }
 
-function scanText(text: string): ScanResult {
+function scanText(
+  text: string,
+  path = "wrapper/core/src/stderr-sink-guard-probe.ts",
+): ScanResult {
   const config = projectConfig("wrapper/core/tsconfig.json");
-  const file = resolve(REPOSITORY_ROOT, "wrapper/core/src/stderr-sink-guard-probe.ts");
+  const file = resolve(REPOSITORY_ROOT, path);
   const host = ts.createCompilerHost(config.options, true);
   const originalGetSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) =>
@@ -495,6 +543,27 @@ describe("wrapper stderr sink guard", () => {
     }
     expect(result.approvedSinkHits).toBe(1);
     expect(result.unresolvedMemberAccesses).toBe(0);
+  });
+
+  it.each([
+    [ACP_CONNECTION, 'import { Readable, Writable } from "node:stream";',
+      'import { PassThrough } from "node:stream";', "node:stream module loading"],
+    [TOOL_HOST, 'import { createServer } from "node:http";',
+      'import { request } from "node:http";', "node:http module loading"],
+    [ACP_CONNECTION, "function filterSdkConsole() { const warn = console.warn; }",
+      "function other() { const warn = console.warn; }", "console is not"],
+  ])("restricts %s permission for %s", (path, approved, extra, message) => {
+    const sameFile = scanText(approved + "\n" + extra, path);
+    const otherFile = scanText(approved);
+    expect(sameFile.diagnostics).toEqual([]);
+    expect(otherFile.diagnostics).toEqual([]);
+    expect(sameFile.violations).toEqual([{
+      file: path, message: expect.stringContaining(message),
+    }]);
+    expect(sameFile.violations[0]!.message).toMatch(/ at 2$/);
+    expect(otherFile.violations).toEqual([{
+      file: expect.any(String), message: expect.stringContaining(message),
+    }]);
   });
 
   it("rejects a scan with a required source root omitted", () => {
