@@ -824,9 +824,10 @@ export class AntigravityHost implements EngineAdapter {
     this.#options.onTurnStart?.({ turnToken: active.token, conversationIds: active.conversationIds });
   }
 
+  /** The SDK rejects the open prompt when the connection closes, which
+   *  settles P. */
   #connectionClosed(active: Active): void {
     active.verifier?.stopLatched();
-    active.settle?.({ kind: "closed" });
   }
 
   // --- engine input --------------------------------------------------------
