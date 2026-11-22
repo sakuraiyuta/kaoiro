@@ -44,7 +44,10 @@ export interface AcpWriteResult {
  * extension) registers ACP methods only and adds no vendor metadata.
  */
 export interface AcpExtension<M extends WireMetadata = WireMetadata> {
-  /** Selects native write confirmation for each outbound JSON-RPC line. */
+  /**
+   * Reports each write attempted on child stdin. A failed write closes
+   * the connection. Messages still queued by the SDK receive no report.
+   */
   onWrite?: (result: AcpWriteResult) => void;
   notifications?: readonly AcpNotification[];
   /**

@@ -193,7 +193,7 @@ it("adapts this child's stdin with Writable.toWeb by default", () => {
   }
 });
 
-async function heldPrompt() {
+async function heldPrompt(text = "hello") {
   const stdout = new PassThrough();
   let release!: (error?: Error) => void;
   let capture!: (line: { id: number; method: string }) => void;
@@ -208,16 +208,18 @@ async function heldPrompt() {
   });
   const child = Object.assign(new EventEmitter(), { stdout, stdin });
   const onWrite = vi.fn();
+  const h = handlers();
   const conn = connectAcp(child as unknown as ChildProcessWithoutNullStreams,
-    handlers(), { onWrite });
+    h, { onWrite });
   const session = new AcpSession(conn);
   session.sessionId = "session";
-  const result = session.prompt("hello");
+  const result = session.prompt(text);
   void result.catch(() => {});
   const line = await written;
   expect(line.method).toBe("session/prompt");
   expect(onWrite).not.toHaveBeenCalled();
-  return { child, stdin, stdout, conn, onWrite, result, line, release };
+  return { child, stdin, stdout, conn, onWrite, metadata: h.metadata,
+    result, line, release };
 }
 
 it.each([true, false])("receives a response before callback ok=%s", async (ok) => {
@@ -252,5 +254,38 @@ it.each(["callback", "stdin error", "stdin close", "child close"])(
       { id: p.line.id, method: p.line.method, ok: false },
     ]]);
     p.stdin.destroy();
+  },
+);
+
+it("closes an idle connection on stdin error", async () => {
+  const { child, end } = fakeChild();
+  const onWrite = vi.fn();
+  const conn = connectAcp(child, handlers(), { onWrite });
+  let closed = false;
+  void conn.closed.then(() => { closed = true; });
+  try {
+    child.stdin.emit("error", new Error("idle stdin failure"));
+    await vi.waitFor(() => expect(closed).toBe(true));
+    expect(onWrite).not.toHaveBeenCalled();
+  } finally {
+    conn.close();
+    end();
+  }
+});
+
+it.each([
+  ["normal", "hello", { direction: "out", method: "session/prompt" }],
+  ["oversized", "x".repeat(4 * 1024 * 1024),
+    { direction: "out", oversized_lines: 1 }],
+] as const)("reports %s outbound metadata on callback writes",
+  async (_kind, text, expected) => {
+    const p = await heldPrompt(text);
+    try {
+      expect(p.metadata.mock.calls).toEqual([[expected]]);
+    } finally {
+      p.release();
+      p.conn.close();
+      p.stdin.destroy();
+    }
   },
 );

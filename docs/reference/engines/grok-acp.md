@@ -73,6 +73,9 @@ re-export the shared modules. Grok uses the default `Writable.toWeb`
 output and the existing question lifetime. Vendor behaviour reaches the client
 through injection points; Grok's side of each lives in `src/grok/wire.ts`
 and `src/grok/events.ts`.
+Each wrapper importing `@kaoiro/agent-common/dist/*.js` maps those imports
+to `../agent-common/src/*.ts` in its typecheck tsconfig so they resolve
+before the workspace build.
 
 | Injection point | Where | Grok's value |
 |---|---|---|

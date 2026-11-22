@@ -1,4 +1,5 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { getEventListeners } from "node:events";
 import { askUserQuestionDescriptor } from "../src/ask_user_question.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QuestionBroker } from "../src/question.js";
@@ -208,4 +209,29 @@ it("does not publish a question for an aborted request", async () => {
   const result = await tool.handler({ questions }, { signal: AbortSignal.abort() });
   expect(JSON.parse(result.content[0]!.text)).toEqual({ cancelled: true });
   expect(sent).toEqual([]);
+});
+
+it("settles an abort during question publication", async () => {
+  const controller = new AbortController();
+  const slots = vi.fn((pending: PendingQuestionExt | null) => {
+    if (pending) controller.abort();
+  });
+  const { broker } = makeBroker({ onPendingChange: slots });
+  const decision = broker.decide(questions, controller.signal);
+  try {
+    expect(slots.mock.lastCall).toEqual([null]);
+    await expect(decision).resolves.toEqual({ cancelled: true });
+  } finally {
+    broker.close();
+  }
+});
+
+it("removes the abort listener after an answer", async () => {
+  const { broker } = makeBroker();
+  const { signal } = new AbortController();
+  const decision = broker.decide(questions, signal);
+  expect(getEventListeners(signal, "abort")).toHaveLength(1);
+  broker.resolve({ request_id: "q-1", answers: { a: "b" } });
+  await decision;
+  expect(getEventListeners(signal, "abort")).toHaveLength(0);
 });
