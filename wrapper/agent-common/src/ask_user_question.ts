@@ -53,13 +53,13 @@ const DESCRIPTION =
 /** Builds the ask_user_question descriptor around the wrapper's question
  *  path (normally QuestionBroker#decide). */
 export function askUserQuestionDescriptor(
-  decide: (questions: Question[]) => Promise<QuestionDecision>,
+  decide: (questions: Question[], signal?: AbortSignal) => Promise<QuestionDecision>,
 ): ToolDescriptor {
   return {
     name: "ask_user_question",
     description: DESCRIPTION,
     inputSchema: z.toJSONSchema(INPUT_SCHEMA, { io: "input" }),
-    handler: async (input) => {
+    handler: async (input, context) => {
       const parsed = INPUT_SCHEMA.safeParse(input);
       if (!parsed.success) {
         return {
@@ -72,7 +72,7 @@ export function askUserQuestionDescriptor(
           isError: true,
         };
       }
-      const decision = await decide(parsed.data.questions);
+      const decision = await decide(parsed.data.questions, context?.signal);
       if (decision.cancelled) {
         return {
           content: [

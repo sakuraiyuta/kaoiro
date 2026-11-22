@@ -162,6 +162,8 @@ describe("src/acp/ is engine-neutral", () => {
       expect.arrayContaining(["connection.ts", "session.ts"]),
     );
     expect(scanTree(acpDir)).toEqual([]);
+    const host = readFileSync(join(acpDir, "../toolhost.ts"), "utf8");
+    expect(scanSource(host)).toEqual([]);
   });
 });
 

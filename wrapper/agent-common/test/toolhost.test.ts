@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bindToolResultHandoff,
   type ToolDescriptor,
-} from "@kaoiro/agent-common";
+} from "../src/index.js";
 import { readBoundedBody, ToolHost } from "../src/toolhost.js";
 
 const rawHttp = fileURLToPath(

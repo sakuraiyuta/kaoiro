@@ -1,5 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -177,3 +178,78 @@ describe("AcpSession.open", () => {
     });
   });
 });
+
+it("adapts this child's stdin with Writable.toWeb by default", () => {
+  const { child, end } = fakeChild();
+  const adapter = vi.spyOn(Writable, "toWeb");
+  try {
+    const connection = connectAcp(child, handlers());
+    expect(adapter).toHaveBeenCalledWith(child.stdin);
+    connection.close();
+  } finally {
+    adapter.mockRestore();
+    end();
+  }
+});
+
+async function heldPrompt() {
+  const stdout = new PassThrough();
+  let release!: (error?: Error) => void;
+  let capture!: (line: { id: number; method: string }) => void;
+  const written = new Promise<{ id: number; method: string }>(
+    (resolve) => { capture = resolve; },
+  );
+  const stdin = new Writable({
+    write(chunk, _encoding, cb) {
+      release = cb;
+      capture(JSON.parse(chunk.toString()));
+    },
+  });
+  const child = Object.assign(new EventEmitter(), { stdout, stdin });
+  const onWrite = vi.fn();
+  const conn = connectAcp(child as unknown as ChildProcessWithoutNullStreams,
+    handlers(), { onWrite });
+  const session = new AcpSession(conn);
+  session.sessionId = "session";
+  const result = session.prompt("hello");
+  void result.catch(() => {});
+  const line = await written;
+  expect(line.method).toBe("session/prompt");
+  expect(onWrite).not.toHaveBeenCalled();
+  return { child, stdin, stdout, conn, onWrite, result, line, release };
+}
+
+it.each([true, false])("receives a response before callback ok=%s", async (ok) => {
+  const p = await heldPrompt();
+  p.stdout.write(JSON.stringify({
+    jsonrpc: "2.0", id: p.line.id, result: { stopReason: "end_turn" },
+  }) + "\n");
+  await expect(p.result).resolves.toMatchObject({ stopReason: "end_turn" });
+  expect(p.onWrite).not.toHaveBeenCalled();
+  p.release(ok ? undefined : new Error("delayed failure"));
+  await vi.waitFor(() => expect(p.onWrite.mock.calls).toEqual([[
+    { id: p.line.id, method: p.line.method, ok },
+  ]]));
+  if (ok) p.conn.close();
+  await p.conn.closed;
+  p.stdin.destroy();
+});
+
+it.each(["callback", "stdin error", "stdin close", "child close"])(
+  "closes a pending prompt on %s", async (event) => {
+    const p = await heldPrompt();
+    const error = new Error("deferred failure");
+    if (event === "callback") p.release(error);
+    if (event === "stdin error") p.stdin.destroy(error);
+    if (event === "stdin close") p.stdin.destroy();
+    if (event === "child close") p.child.emit("close");
+    await expect(p.result).rejects.toThrow();
+    await p.conn.closed;
+    if (event !== "callback") p.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(p.onWrite.mock.calls).toEqual([[
+      { id: p.line.id, method: p.line.method, ok: false },
+    ]]);
+    p.stdin.destroy();
+  },
+);

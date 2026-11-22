@@ -65,7 +65,8 @@ export class QuestionBroker {
   }
 
   /** Compatible with AgentHostOptions#decideQuestion. */
-  decide(questions: Question[]): Promise<QuestionDecision> {
+  decide(questions: Question[], signal?: AbortSignal): Promise<QuestionDecision> {
+    if (signal?.aborted) return Promise.resolve({ cancelled: true });
     const requestId = this.#newId();
     const ts = this.#now();
     const payload: Record<string, unknown> = {
@@ -95,13 +96,17 @@ export class QuestionBroker {
     this.#options.onPendingChange?.(this.#slot());
 
     return new Promise((resolve) => {
+      const abort = () => this.#registry.resolve(requestId, { cancelled: true });
       const settle = (decision: QuestionDecision): void => {
+        signal?.removeEventListener("abort", abort);
         this.#live.delete(requestId);
         this.#options.onPendingChange?.(this.#slot());
         resolve(decision);
       };
       // Timeout / close deny by cancellation, matching the permission path.
       this.#registry.add(requestId, settle, () => ({ cancelled: true }));
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
     });
   }
 

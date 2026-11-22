@@ -1,7 +1,4 @@
-// The kaoiro tools Grok calls, served as an MCP server over HTTP on
-// 127.0.0.1. Grok connects from its own process, so the read-only sandbox's
-// block on AF_UNIX connect (which stopped a child bridge) does not apply. Every
-// request must pass the checks in `#screen` before its body is read.
+// Every request must pass screening before its body is read.
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
@@ -23,9 +20,9 @@ import {
 import {
   handoffToolResult,
   discardToolResult,
-  type ToolDescriptor,
   type ReplyOrigin,
-} from "@kaoiro/agent-common";
+} from "./reply_basis.js";
+import type { ToolDescriptor } from "./tooling.js";
 
 /** Bounds one request body; far above any real tool input (the biggest is
  *  ask_user_question's 4 questions x 4 options). */
@@ -175,8 +172,8 @@ export class ToolHost {
     return host;
   }
 
-  /** The `mcpServers` entry for ACP. The URL carries no secret, because Grok
-   *  stores MCP server URLs in its session files; the token rides in a header. */
+  /** The `mcpServers` entry for ACP. The URL carries no secret, because clients
+   *  can persist MCP server URLs; the token rides in a header. */
   mcpServer(): acp.McpServerHttp & { type: "http" } {
     return {
       type: "http",
@@ -195,9 +192,8 @@ export class ToolHost {
     };
   }
 
-  /** Resolves after the first `tools/list` that passed every check, which is
-   *  how Grok shows it connected: on a transport or token fault it carries on
-   *  without the server and reports nothing. Rejects after `timeoutMs`, or when
+  /** Resolves after the first `tools/list` that passed every check, which
+   *  confirms the client connected. Rejects after `timeoutMs`, or when
    *  the host closes first. */
   listed(timeoutMs: number): Promise<void> {
     if (this.#lists > 0) return Promise.resolve();
@@ -248,7 +244,7 @@ export class ToolHost {
     if (request.headers.host !== this.#authority) {
       return { status: 403, message: "forbidden", code: -32002 };
     }
-    // Grok's MCP client sends no Origin, so no value is legitimate here, and
+    // The native MCP client sends no Origin, so no value is legitimate here, and
     // `null` is not either. This is what stops a page in a browser.
     if (request.headers.origin !== undefined) {
       return { status: 403, message: "forbidden", code: -32002 };

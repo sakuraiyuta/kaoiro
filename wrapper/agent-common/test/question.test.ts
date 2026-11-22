@@ -1,4 +1,5 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { askUserQuestionDescriptor } from "../src/ask_user_question.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QuestionBroker } from "../src/question.js";
 import type {
@@ -178,4 +179,32 @@ describe("QuestionBroker", () => {
     await expect(a).resolves.toStrictEqual({ cancelled: true });
     await expect(b).resolves.toStrictEqual({ cancelled: true });
   });
+});
+
+it.each([0, 1])("aborts only question %i", async (index) => {
+  const slots = vi.fn();
+  const { broker } = makeBroker({ onPendingChange: slots });
+  const tool = askUserQuestionDescriptor(broker.decide.bind(broker));
+  const calls = [new AbortController(), new AbortController()];
+  const results = calls.map(({ signal }) => tool.handler({ questions }, { signal }));
+  calls[index]!.abort();
+  const survivor = 1 - index;
+  const id = `q-${survivor + 1}`;
+  expect(slots.mock.lastCall?.[0]?.request_id).toBe(id);
+  expect(JSON.parse((await results[index]!).content[0]!.text))
+    .toEqual({ cancelled: true });
+  broker.resolve({ request_id: id, answers: { a: "b" } });
+  const result = await results[survivor]!;
+  expect(JSON.parse(result.content[0]!.text).answers).toEqual({ a: "b" });
+  slots.mockClear();
+  calls[survivor]!.abort();
+  expect(slots).not.toHaveBeenCalled();
+});
+
+it("does not publish a question for an aborted request", async () => {
+  const { broker, sent } = makeBroker();
+  const tool = askUserQuestionDescriptor(broker.decide.bind(broker));
+  const result = await tool.handler({ questions }, { signal: AbortSignal.abort() });
+  expect(JSON.parse(result.content[0]!.text)).toEqual({ cancelled: true });
+  expect(sent).toEqual([]);
 });

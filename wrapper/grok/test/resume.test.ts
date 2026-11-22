@@ -1,4 +1,5 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { RecoveryReporter } from "@kaoiro/wrapper-core";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -451,4 +452,14 @@ describe("switch provenance", () => {
     expect(t.ext()).toMatchObject({ model: "grok-4.7", model_source: "env", effort: "high", effort_source: "default" });
     expect(t.states().some((ext) => ext.effort_reset === true)).toBe(false);
   });
+});
+
+it("refuses recovery after the peer rejects a cold resume", async () => {
+  const id = "unknown-session";
+  const recovery = new RecoveryReporter(base, id, vi.fn());
+  const refused = vi.spyOn(recovery, "refuseLaunch");
+  const t = await launch({ options: { resumeSessionId: id, recovery }, wait: false });
+  await expect(t.run).rejects.toThrow("grok could not resume the session");
+  expect(t.methods()).toContain("session/resume");
+  expect(refused).toHaveBeenCalledTimes(1);
 });

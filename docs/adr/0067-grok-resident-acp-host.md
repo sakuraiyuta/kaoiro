@@ -66,3 +66,10 @@ an observation; without it, that selection is blocked. Approval remains
 `on-request`, and mode switching remains unsupported. See the
 [engine reference](../reference/engines/grok-acp.md) and
 [dated measurements](../evidence/grok/2026-10-14-permission-switch.md).
+
+## Shared ACP client and HTTP host
+
+The second ACP engine uses the connection, session and authenticated HTTP
+MCP host from agent-common. Each engine imports the relevant subpaths.
+Grok retains its existing transport and question defaults. See the
+[Grok ACP reference](../reference/engines/grok-acp.md#acp-module-boundary).

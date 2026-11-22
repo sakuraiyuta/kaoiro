@@ -81,7 +81,7 @@ import {
   reportedSelection,
   type GrokModel,
 } from "./grok/usage.js";
-import { MCP_NOT_CONNECTED, ToolHost, type ToolHostStats } from "./toolhost.js";
+import { MCP_NOT_CONNECTED, ToolHost, type ToolHostStats } from "@kaoiro/agent-common/dist/toolhost.js";
 import {
   attachmentDirPrefix,
   buildAttachmentParts,

@@ -67,9 +67,10 @@ connect" after 15 s). `waiting_input` is reported only after both.
 
 ## ACP module boundary
 
-`wrapper/grok/src/acp/` is engine-neutral so that it can move to
-`agent-common` when a second ACP engine arrives. It refers only to ACP
-methods and `@agentclientprotocol/sdk` types. Vendor behaviour reaches it
+The ACP client lives in `wrapper/agent-common/src/acp/`; the loopback HTTP
+MCP host lives alongside it in `src/toolhost.ts`. Grok's `src/acp/` files
+re-export the shared modules. Grok uses the default `Writable.toWeb`
+output and the existing question lifetime. Vendor behaviour reaches the client
 through injection points; Grok's side of each lives in `src/grok/wire.ts`
 and `src/grok/events.ts`.
 
@@ -88,7 +89,8 @@ the transport is not interrupted. Grok's reads of a prompt result `_meta`
 `cancellationKind` in `grok/events.ts`, called by the host, so `acp/` never
 sees them.
 
-`test/acp-boundary.test.ts` fails when any file under `src/acp/` names
+In agent-common, `test/acp-boundary.test.ts` also checks the HTTP host for
+vendor names. It fails when any file under `src/acp/` names
 `_x.ai`, `GROK_`, `grok`, a Grok `_meta` or wire-metadata key
 (`promptId`, `requestId`, `prompt_id`, `request_id`, `cancellationCategory`,
 `vendor_kind`, `hook_event`), uses `rules` as code, or has a module specifier
