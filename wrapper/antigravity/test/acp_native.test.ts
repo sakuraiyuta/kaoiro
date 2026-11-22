@@ -10,13 +10,15 @@ import { permitHostAccess } from "../../../scripts/test/fixtures/test-isolation.
 // without the opt-in.
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
 import { runAntigravityCli } from "../src/cli.js";
+import { TOOL_CLASS_BY_NAME } from "../src/gate.js";
 import { HookGateServer } from "../src/hook_gate.js";
 import { AntigravityHost, type AntigravityHostOptions } from "../src/host.js";
 
@@ -33,7 +35,8 @@ const PROMPT_BUDGET = 15;
 const WRITE_TOOLS = /^(write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content|sed_file|notebook_edit)$/;
 
 type GateEntry =
-  | { kind: "pre"; tool: string; decision: "allow" | "deny"; sub: boolean; bypass: boolean }
+  /** `args` is the request's arguments as JSON; it is never printed. */
+  | { kind: "pre"; tool: string; decision: "allow" | "deny"; sub: boolean; bypass: boolean; args: string }
   | { kind: "stop"; decision: "continue" | "stop"; sub: boolean };
 
 export interface CaseRecord {
@@ -45,6 +48,8 @@ export interface CaseRecord {
   permission: string | undefined;
   /** Spawned `agy` processes still alive after the case closed. */
   alive: number;
+  /** A random value the case placed in a workspace file and never in a prompt. */
+  marker?: string;
 }
 
 export type Verdict = "pass" | "fail" | "undetermined";
@@ -57,6 +62,18 @@ const interrupted = (r: CaseRecord) => r.results.at(-1)?.error_detail === "inter
 const text = (r: CaseRecord) => String(r.results.at(-1)?.text ?? "");
 const sandboxed = (args: string[]) => args.includes("--sandbox");
 const verdict = (seen: boolean, ok: boolean): Verdict => (!seen ? "undetermined" : ok ? "pass" : "fail");
+const N7_FILE = "n7.txt";
+/** Read-class tools that wait or report task state and reach no file. */
+const WAITING_TOOLS = new Set(["manage_task", "command_status", "wait", "wait_5_seconds", "finish"]);
+/** A parent call that could have read a workspace file itself. */
+const parentCouldRead = (e: GateEntry) =>
+  e.kind === "pre" && !e.sub && e.decision === "allow" && !e.tool.startsWith("mcp_kaoiro_") &&
+  !WAITING_TOOLS.has(e.tool) && TOOL_CLASS_BY_NAME.get(e.tool) !== "subagent";
+/** A parent call matching `tool` after the parent's first Stop continue. */
+const afterContinue = (r: CaseRecord, tool: RegExp) => {
+  const first = r.gate.findIndex((e) => e.kind === "stop" && !e.sub && e.decision === "continue");
+  return first !== -1 && r.gate.slice(first + 1).some((e) => e.kind === "pre" && !e.sub && e.decision === "allow" && tool.test(e.tool));
+};
 
 /** One judge per case: undetermined when the model never made the call the
  *  case needs, otherwise pass or fail on the records. */
@@ -91,10 +108,24 @@ export const JUDGES: Record<string, (r: CaseRecord) => Verdict> = {
     const calls = pre(r, /^mcp_kaoiro_whoami$/);
     return verdict(calls.length > 0, calls.every((c) => c.decision === "allow") && r.dialogs.length === 0 && succeeded(r.results.at(-1)));
   },
-  // The Stop hook holds the prompt until a background command's output reaches the reply.
-  N6: (r) => verdict(pre(r, /^run_command$/).length > 0, continued(r) && succeeded(r.results.at(-1)) && text(r).includes("kaoiro-n6-done")),
-  // A subagent's report reaches the reply while the prompt is held.
-  N7: (r) => verdict(r.gate.some((e) => e.kind === "pre" && /subagent/.test(e.tool)), succeeded(r.results.at(-1)) && text(r).includes("kaoiro-n7-report")),
+  // The Stop hook holds the prompt until a background command's output
+  // reaches the reply. A reply without the parent reading the task after a
+  // continue does not show where its text came from.
+  N6: (r) => {
+    if (pre(r, /^run_command$/).length === 0) return "undetermined";
+    if (!continued(r)) return "fail";
+    if (!afterContinue(r, /^(manage_task|read_file)$/)) return "undetermined";
+    return succeeded(r.results.at(-1)) && text(r).includes("kaoiro-n6-done") ? "pass" : "fail";
+  },
+  // A subagent's report reaches the reply while the prompt is held: the
+  // subagent read the marker file, the parent could not, and the reply has it.
+  N7: (r) => {
+    const started = pre(r, /subagent/).some((c) => !c.sub && c.decision === "allow");
+    const reported = r.gate.some((e) => e.kind === "pre" && e.sub && e.decision === "allow" && e.args.includes(N7_FILE));
+    const marker = r.marker;
+    const seen = started && reported && !r.gate.some(parentCouldRead) && marker !== undefined;
+    return verdict(seen, marker !== undefined && continued(r) && succeeded(r.results.at(-1)) && text(r).includes(marker));
+  },
   // An interrupt while a subagent runs ends the turn and every process.
   N8: (r) => verdict(r.gate.some((e) => e.sub), interrupted(r) && r.alive === 0),
   // An interrupt while the Stop hook holds the prompt ends the turn and every process.
@@ -107,11 +138,15 @@ function sample(overrides: Partial<CaseRecord> = {}): CaseRecord {
   return { gate: [], dialogs: [], results: [{ text: "ok" }], argv: [["acp", "--sandbox"]], files: [], permission: undefined, alive: 0, ...overrides };
 }
 
-const cmd = (decision: "allow" | "deny", extra: Partial<Extract<GateEntry, { kind: "pre" }>> = {}): GateEntry =>
-  ({ kind: "pre", tool: "run_command", decision, sub: false, bypass: false, ...extra });
+const call = (tool: string, decision: "allow" | "deny", extra: Partial<Extract<GateEntry, { kind: "pre" }>> = {}): GateEntry =>
+  ({ kind: "pre", tool, decision, sub: false, bypass: false, args: "{}", ...extra });
+const cmd = (decision: "allow" | "deny", extra: Partial<Extract<GateEntry, { kind: "pre" }>> = {}): GateEntry => call("run_command", decision, extra);
+const proceed: GateEntry = { kind: "stop", decision: "continue", sub: false };
+const n7Read = call("read_file", "allow", { sub: true, args: JSON.stringify({ Path: `/w/${N7_FILE}` }) });
 
-/** Per judge: a passing record, records that must fail, and one without the call. */
-const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermined: CaseRecord }> = {
+/** Per judge: a passing record, records that must fail, and records it
+ *  cannot judge. */
+const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermined: CaseRecord[] }> = {
   N1: {
     pass: sample({ gate: [cmd("deny")], dialogs: [{ tool: "run_command", allow: false }] }),
     fail: [
@@ -119,15 +154,15 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("deny")], dialogs: [] }),
       sample({ gate: [cmd("deny")], dialogs: [{ tool: "run_command", allow: false }], results: [{ is_error: true }] }),
     ],
-    undetermined: sample(),
+    undetermined: [sample()],
   },
   N2: {
-    pass: sample({ gate: [{ kind: "pre", tool: "write_file", decision: "deny", sub: false, bypass: false }] }),
+    pass: sample({ gate: [call("write_file", "deny")] }),
     fail: [
-      sample({ gate: [{ kind: "pre", tool: "write_file", decision: "allow", sub: false, bypass: false }] }),
-      sample({ gate: [{ kind: "pre", tool: "write_file", decision: "deny", sub: false, bypass: false }], files: ["n2.txt"] }),
+      sample({ gate: [call("write_file", "allow")] }),
+      sample({ gate: [call("write_file", "deny")], files: ["n2.txt"] }),
     ],
-    undetermined: sample({ gate: [cmd("deny")] }),
+    undetermined: [sample({ gate: [cmd("deny")] })],
   },
   N3a: {
     pass: sample({ gate: [cmd("deny")] }),
@@ -136,7 +171,7 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("deny")], files: ["n3a.txt"] }),
       sample({ gate: [cmd("deny")], argv: [["acp"]] }),
     ],
-    undetermined: sample(),
+    undetermined: [sample()],
   },
   N3b: {
     pass: sample({ gate: [cmd("allow")], dialogs: [{ tool: "run_command", allow: true }], files: ["n3b.txt"] }),
@@ -145,7 +180,7 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("allow")], dialogs: [{ tool: "run_command", allow: true }] }),
       sample({ gate: [cmd("allow")], dialogs: [{ tool: "run_command", allow: true }], files: ["n3b.txt"], argv: [["acp"]] }),
     ],
-    undetermined: sample(),
+    undetermined: [sample()],
   },
   N4: {
     pass: sample({ gate: [cmd("allow", { bypass: true })], dialogs: [{ tool: "run_command", allow: true }], files: ["n4.txt"] }),
@@ -153,28 +188,44 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("deny", { bypass: true })], dialogs: [{ tool: "run_command", allow: true }], files: ["n4.txt"] }),
       sample({ gate: [cmd("allow", { bypass: true })], dialogs: [{ tool: "run_command", allow: true }] }),
     ],
-    undetermined: sample({ gate: [cmd("allow")], files: ["n4.txt"] }),
+    undetermined: [sample({ gate: [cmd("allow")], files: ["n4.txt"] })],
   },
   N5: {
-    pass: sample({ gate: [{ kind: "pre", tool: "mcp_kaoiro_whoami", decision: "allow", sub: false, bypass: false }] }),
+    pass: sample({ gate: [call("mcp_kaoiro_whoami", "allow")] }),
     fail: [
-      sample({ gate: [{ kind: "pre", tool: "mcp_kaoiro_whoami", decision: "allow", sub: false, bypass: false }], dialogs: [{ tool: "mcp_kaoiro_whoami", allow: true }] }),
-      sample({ gate: [{ kind: "pre", tool: "mcp_kaoiro_whoami", decision: "deny", sub: false, bypass: false }] }),
+      sample({ gate: [call("mcp_kaoiro_whoami", "allow")], dialogs: [{ tool: "mcp_kaoiro_whoami", allow: true }] }),
+      sample({ gate: [call("mcp_kaoiro_whoami", "deny")] }),
     ],
-    undetermined: sample(),
+    undetermined: [sample()],
   },
   N6: {
-    pass: sample({ gate: [cmd("allow"), { kind: "stop", decision: "continue", sub: false }], results: [{ text: "kaoiro-n6-done" }] }),
+    pass: sample({ gate: [cmd("allow"), proceed, call("manage_task", "allow"), call("read_file", "allow"), proceed], results: [{ text: "kaoiro-n6-done" }] }),
     fail: [
-      sample({ gate: [cmd("allow")], results: [{ text: "kaoiro-n6-done" }] }),
-      sample({ gate: [cmd("allow"), { kind: "stop", decision: "continue", sub: false }], results: [{ text: "waiting" }] }),
+      sample({ gate: [cmd("allow"), call("manage_task", "allow")], results: [{ text: "kaoiro-n6-done" }] }),
+      sample({ gate: [cmd("allow"), proceed, call("manage_task", "allow")], results: [{ text: "waiting" }] }),
     ],
-    undetermined: sample(),
+    undetermined: [
+      sample(),
+      // Held, but the parent never read the task: the reply may echo the prompt.
+      sample({ gate: [cmd("allow"), proceed], results: [{ text: "kaoiro-n6-done" }] }),
+      sample({ gate: [cmd("allow"), call("read_file", "allow"), proceed], results: [{ text: "kaoiro-n6-done" }] }),
+    ],
   },
   N7: {
-    pass: sample({ gate: [{ kind: "pre", tool: "invoke_subagent", decision: "allow", sub: false, bypass: false }], results: [{ text: "kaoiro-n7-report" }] }),
-    fail: [sample({ gate: [{ kind: "pre", tool: "invoke_subagent", decision: "allow", sub: false, bypass: false }], results: [{ text: "started" }] })],
-    undetermined: sample({ results: [{ text: "kaoiro-n7-report" }] }),
+    pass: sample({ gate: [call("invoke_subagent", "allow"), proceed, n7Read, call("manage_subagents", "allow")], results: [{ text: "m-1" }], marker: "m-1" }),
+    fail: [
+      sample({ gate: [call("invoke_subagent", "allow"), n7Read], results: [{ text: "m-1" }], marker: "m-1" }),
+      sample({ gate: [call("invoke_subagent", "allow"), proceed, n7Read], results: [{ text: "started" }], marker: "m-1" }),
+    ],
+    undetermined: [
+      // The reply has the value, but no subagent reported it.
+      sample({ gate: [call("invoke_subagent", "allow"), proceed], results: [{ text: "m-1" }], marker: "m-1" }),
+      sample({ gate: [call("invoke_subagent", "allow"), proceed, call("read_file", "allow", { sub: true, args: JSON.stringify({ Path: "/w/other.txt" }) })], results: [{ text: "m-1" }], marker: "m-1" }),
+      // The parent could have read the file itself.
+      sample({ gate: [call("invoke_subagent", "allow"), proceed, n7Read, call("read_file", "allow", { args: JSON.stringify({ Path: `/w/${N7_FILE}` }) })], results: [{ text: "m-1" }], marker: "m-1" }),
+      sample({ gate: [call("invoke_subagent", "allow"), proceed, n7Read, call("grep_search", "allow")], results: [{ text: "m-1" }], marker: "m-1" }),
+      sample({ gate: [proceed, n7Read], results: [{ text: "m-1" }], marker: "m-1" }),
+    ],
   },
   N8: {
     pass: sample({ gate: [cmd("allow", { sub: true })], results: [{ is_error: true, error_detail: "interrupted" }] }),
@@ -182,7 +233,7 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("allow", { sub: true })], results: [{ text: "done" }] }),
       sample({ gate: [cmd("allow", { sub: true })], results: [{ is_error: true, error_detail: "interrupted" }], alive: 1 }),
     ],
-    undetermined: sample({ results: [{ is_error: true, error_detail: "interrupted" }] }),
+    undetermined: [sample({ results: [{ is_error: true, error_detail: "interrupted" }] })],
   },
   N9: {
     pass: sample({ gate: [{ kind: "stop", decision: "continue", sub: false }], results: [{ is_error: true, error_detail: "interrupted" }] }),
@@ -190,7 +241,7 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [{ kind: "stop", decision: "continue", sub: false }], results: [{ text: "late" }] }),
       sample({ gate: [{ kind: "stop", decision: "continue", sub: false }], results: [{ is_error: true, error_detail: "interrupted" }], alive: 1 }),
     ],
-    undetermined: sample({ gate: [{ kind: "stop", decision: "continue", sub: true }] }),
+    undetermined: [sample({ gate: [{ kind: "stop", decision: "continue", sub: true }] })],
   },
   N10: {
     pass: sample({ results: [{ text: "ONE" }, { text: "TWO" }], argv: [["acp", "--sandbox"], ["acp"]], permission: "applied" }),
@@ -199,7 +250,7 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ results: [{ text: "ONE" }, { text: "TWO" }], argv: [["acp", "--sandbox"], ["acp"]], permission: "unknown" }),
       sample({ results: [{ text: "ONE" }, { text: "TWO" }], argv: [["acp", "--sandbox"]], permission: "applied" }),
     ],
-    undetermined: sample({ results: [{ text: "ONE" }] }),
+    undetermined: [sample({ results: [{ text: "ONE" }] })],
   },
 };
 
@@ -213,7 +264,7 @@ describe("Antigravity ACP native acceptance: the judges (negative controls)", ()
       const judge = JUDGES[id]!;
       expect(judge(control.pass)).toBe("pass");
       for (const record of control.fail) expect(judge(record)).toBe("fail");
-      expect(judge(control.undetermined)).toBe("undetermined");
+      for (const record of control.undetermined) expect(judge(record)).toBe("undetermined");
     });
   }
 });
@@ -229,6 +280,8 @@ interface CaseSpec {
   interruptWhen?: (record: CaseRecord) => boolean;
   /** Runs before the second prompt. */
   between?: (callbacks: Record<string, any>) => void;
+  /** Workspace files written before the first prompt, given the run's marker. */
+  seed?: (marker: string) => Record<string, string>;
 }
 
 let promptsSent = 0;
@@ -260,6 +313,10 @@ async function runCase(spec: CaseSpec): Promise<CaseRecord> {
   const origCwd = process.cwd();
   process.chdir(root);
   const record: CaseRecord = { gate: [], dialogs: [], results: [], argv: [], files: [], permission: undefined, alive: 0 };
+  if (spec.seed !== undefined) {
+    record.marker = randomBytes(12).toString("hex");
+    for (const [name, content] of Object.entries(spec.seed(record.marker))) writeFileSync(join(root, name), content);
+  }
   const sessions = new Set<string>();
   const pids: number[] = [];
   let callbacks: Record<string, any> | undefined;
@@ -313,7 +370,7 @@ async function runCase(spec: CaseSpec): Promise<CaseRecord> {
       handlers: {
         preToolUse: async (request, signal) => {
           const answer = await options.handlers.preToolUse(request, signal);
-          record.gate.push({ kind: "pre", tool: request.name, decision: answer.decision, sub: !sessions.has(request.conversationId), bypass: request.args.BypassSandbox === true });
+          record.gate.push({ kind: "pre", tool: request.name, decision: answer.decision, sub: !sessions.has(request.conversationId), bypass: request.args.BypassSandbox === true, args: JSON.stringify(request.args) });
           return answer;
         },
         stop: (request) => {
@@ -429,7 +486,8 @@ const CASES: (CaseSpec & { retry?: boolean })[] = [
     id: "N7",
     retry: true,
     config: FULL,
-    prompts: ["Start a subagent whose only task is to reply with exactly kaoiro-n7-report. Wait for its report, then reply with the report text."],
+    seed: (marker) => ({ [N7_FILE]: `${marker}\n` }),
+    prompts: [`Start a subagent whose only task is to read the file ${N7_FILE} in the current directory and report its exact content. Do not read the file yourself. Wait for the subagent's report, then reply with the content it reported.`],
   },
   {
     id: "N8",
