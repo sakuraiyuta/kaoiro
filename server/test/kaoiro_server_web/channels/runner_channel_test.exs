@@ -1057,6 +1057,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
         host = "test-reset-auth"
         agent = host <> ".agent"
         request = acquire_reset_lock(agent, "previous")
+        on_exit(fn -> KaoiroServer.SessionResets.cancel(agent, request) end)
         @endpoint.subscribe("agents:lobby")
         socket = join_runner(host)
 
