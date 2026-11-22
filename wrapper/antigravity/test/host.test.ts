@@ -458,7 +458,7 @@ describe("AntigravityHost over ACP: delivery ACK (L7)", () => {
     }
   });
 
-  it("ACKs on first-seen activity while the write callback is held", async () => {
+  it("ACKs once on first-seen activity while the write callback is held; later confirmations add nothing", async () => {
     const r = setup();
     r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
     await r.test.host.send("one", undefined, undefined, "t1");
@@ -466,8 +466,49 @@ describe("AntigravityHost over ACP: delivery ACK (L7)", () => {
     agy.message("hi");
     await waitFor(() => r.acks.length === 1);
     agy.update({ sessionUpdate: "usage_update", used: 1, size: 2 });
+    agy.message("more");
+    agy.releasePromptWrite();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(r.acks).toEqual(["t1"]);
+  });
+
+  it("an error response confirms delivery: one ACK, and the turn fails with the API error", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.fail(-32603, "boom");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.acks).toEqual(["t1"]);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_api_error: boom" });
+  });
+
+  it("a callback that returns after the pre-ACK bound settled the input changes nothing", async () => {
+    const r = setup({}, { preAckBoundMs: 60, closeGraceMs: 500 });
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await waitFor(() => r.ends.length === 1);
+    agy.releasePromptWrite();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(r.acks).toEqual([]);
+    expect(r.ends).toHaveLength(1);
+  });
+
+  it("a prompt the closed connection never wrote settles as unacknowledged and unread", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.listOnAttach = false; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.count("session/new") === 1);
+    const agy = r.test.agys[0]!;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    agy.exit(1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await agy.listTools();
+    await waitFor(() => r.ends.length === 1);
+    expect(agy.count("session/prompt")).toBe(0);
+    expect(r.acks).toEqual([]);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_delivery_unconfirmed" });
   });
 
   it("a control update is not a confirmation; a callback that never returns hits the pre-ACK bound", async () => {
@@ -628,9 +669,9 @@ class ManualClock {
   }
 }
 
-function clocked(overrides: Partial<WrapperConfig> = {}) {
+function clocked(overrides: Partial<WrapperConfig> = {}, options: Record<string, unknown> = {}) {
   const clock = new ManualClock();
-  const r = setup(overrides, { setTimer: clock.set, clearTimer: clock.clear, nowMs: clock.nowMs, abortGraceMs: 60_000, closeGraceMs: 2_000, preAckBoundMs: 1_800_000 });
+  const r = setup(overrides, { setTimer: clock.set, clearTimer: clock.clear, nowMs: clock.nowMs, abortGraceMs: 60_000, closeGraceMs: 2_000, preAckBoundMs: 1_800_000, ...options });
   const killed = (agy: FakeAgy) => r.test.signals.filter((s) => s.pid === agy.pid).map((s) => s.signal);
   return { r, clock, killed };
 }
@@ -680,6 +721,19 @@ describe("AntigravityHost over ACP: stop deadlines (L3)", () => {
     await waitFor(() => r.ends.length === 1);
     expect(killed(agy)).toEqual(["SIGTERM"]);
     await clock.advance(2_000);
+    expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("ordinary retirement keeps the close grace when the abort grace is shorter", async () => {
+    const { r, clock, killed } = clocked({}, { abortGraceMs: 1_000 });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.survivesTerm = true;
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    await clock.advance(1_999);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(1);
     expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
@@ -756,6 +810,58 @@ describe("AntigravityHost over ACP: stop deadlines (L3)", () => {
     expect(second.killed(held)).toEqual(["SIGTERM"]);
     await second.clock.advance(2_000);
     expect(second.killed(held)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("an unexpected permission request cancels and arms the abort grace; with no response the group is killed at the deadline", async () => {
+    const { r, clock, killed } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.survivesTerm = true;
+    agy.requestPermission();
+    await waitFor(() => agy.count("session/cancel") === 1);
+    await clock.advance(59_999);
+    expect(killed(agy)).toEqual([]);
+    await clock.advance(1);
+    expect(killed(agy)).toEqual(["SIGKILL"]);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_unexpected_permission_request" });
+  });
+
+  it("a later route sends no second cancel and keeps the first deadline (D19)", async () => {
+    const { r, clock, killed } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.hold.add("session/cancel");
+    agy.survivesTerm = true;
+    await r.test.host.interrupt();
+    await clock.advance(30_000);
+    agy.requestPermission();
+    // The host's answer to the request follows any cancel it wrote.
+    await waitFor(() => agy.requests.some((q) => q.id === "perm-1"));
+    expect(agy.count("session/cancel")).toBe(1);
+    await clock.advance(29_999);
+    expect(killed(agy)).toEqual([]);
+    await clock.advance(1);
+    expect(killed(agy)).toEqual(["SIGKILL"]);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ reason: "interrupted" });
+  });
+
+  it("before the prompt is written, close right after an interrupt shortens the child's grace to the close grace", async () => {
+    const { r, clock, killed } = clocked();
+    r.test.onSpawn = (agy) => { agy.hold.add("session/new"); agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.requests.some((q) => q.method === "session/new") === true);
+    const agy = r.test.agys[0]!;
+    void r.test.host.interrupt();
+    void r.test.host.close();
+    await waitFor(() => r.ends.length === 1);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(1_999);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(1);
+    expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
   });
 });
 
@@ -1048,6 +1154,16 @@ describe("AntigravityHost over ACP: outcome precedence (L2 rows)", () => {
     agy.exit(1);
     await waitFor(() => r.ends.length === 1);
     expect(r.ends[0]!.error).toEqual({ detail: "antigravity_unexpected_permission_request" });
+  });
+
+  it("(7) over (8): a process error outranks the closed connection it causes", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.emit("error", new Error("write EPIPE"));
+    agy.exit(1);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_cli_process_error: write EPIPE" });
   });
 
   it("(8): a closed connection without a response; (9): the response decides; another stop reason is an error", async () => {
