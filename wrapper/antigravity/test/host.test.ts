@@ -1132,6 +1132,28 @@ describe("AntigravityHost over ACP: model and level (4.8)", () => {
     expect((await prompted(r, 2)).count("session/set_config_option")).toBe(0);
   });
 
+  it("an account default staged while the saved slug is applied sends nothing more and waits for the next start", async () => {
+    const { r, ext } = modelSetup("gemini-4-neon");
+    r.test.onSpawn = (agy) => { agy.hold.add("session/set_config_option"); };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.count("session/set_config_option") === 1);
+    const agy = r.test.agys[0]!;
+    await r.test.host.setModel("");
+    agy.hold.delete("session/set_config_option");
+    agy.release("session/set_config_option");
+    await prompted(r, 1);
+    expect(agy.count("session/set_config_option")).toBe(1);
+    expect(ext()).toMatchObject({ model: "gemini-4-neon", pending_model: "" });
+    expect(r.states.some((s) => (s.ext as Record<string, any>).switch_error !== undefined)).toBe(false);
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    r.test.onSpawn = () => {};
+    await r.test.host.send("two", undefined, undefined, "t2");
+    expect((await prompted(r, 2)).count("session/set_config_option")).toBe(0);
+    expect(ext().model).toBe("");
+    expect(ext().pending_model).toBeUndefined();
+  });
+
   it("a selection staged while a switch is in flight stays pending, after a completion and after a refusal", async () => {
     for (const first of ["gemini-4-neon", "not-a-model"] as const) {
       const { r, ext } = modelSetup(undefined, first);
