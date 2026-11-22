@@ -137,6 +137,20 @@ describe("AcpToolPolicy: evaluation order and reasons", () => {
     expect(gate.evaluate({ name: "edit_file", args: { Path: join(cwd, "a") } })).toEqual({ decision: "allow" });
   });
 
+  it("decides edit_file with its measured arguments (Path, Replacement, Target) as a write to Path", () => {
+    // The argument names and types of the 1.5.14 hook requests in the
+    // implementation-review native runs (read-only and workspace-write).
+    const edit = (path: string) => ({ name: "edit_file", args: { Path: path, Replacement: "goodbye", Target: "hello" } });
+    expect(policy("read-only", "never", false).evaluate(edit(join(cwd, "a.txt")))).toEqual({ decision: "deny", reason: "kaoiro: read-only sandbox" });
+    expect(policy("workspace-write", "on-request", false).evaluate(edit(join(cwd, "a.txt")))).toEqual({ decision: "allow" });
+    expect(policy("workspace-write", "on-request", false).evaluate(edit(join(root, "outside.txt")))).toEqual({
+      decision: "deny", reason: "kaoiro: write is outside the permitted workspace",
+    });
+    expect(policy("workspace-write", "on-request", false).evaluate({ name: "edit_file", args: { Replacement: "goodbye", Target: "hello" } })).toEqual({
+      decision: "deny", reason: "kaoiro: write target is missing or malformed",
+    });
+  });
+
   it("protects the customization directory through any path argument, a command's Cwd included", () => {
     const protectedReason = { decision: "deny", reason: "kaoiro: customization directory is protected" };
     const gate = policy("danger-full-access", "never", true);

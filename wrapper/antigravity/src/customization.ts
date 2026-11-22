@@ -64,6 +64,8 @@ export function checkHookList(value: unknown, expected: ExpectedHooks): { ok: tr
     pre[0]!.matcher !== "*" ||
     pre[0]!.command !== expected.command ||
     pre[0]!.timeout_seconds !== HOOK_TIMEOUT_SECONDS ||
+    // Measured on 1.5.14: the JSON list gives a Stop row no matcher field.
+    "matcher" in stop[0]! ||
     stop[0]!.command !== expected.command ||
     stop[0]!.timeout_seconds !== STOP_HOOK_TIMEOUT_SECONDS
   ) {

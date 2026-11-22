@@ -100,7 +100,7 @@ type Settlement =
   | { kind: "closed" }
   | { kind: "stopped" }
   | { kind: "skipped" }
-  | { kind: "start_failed"; detail: string; permissionSyncTimeout?: boolean };
+  | { kind: "start_failed"; detail: string; permissionSyncTimeout?: boolean; apiError?: boolean };
 
 interface Active {
   token: string;
@@ -631,14 +631,21 @@ export class AntigravityHost implements EngineAdapter {
     await this.#previousExit;
   }
 
-  /** Races a start step with a stop of the input. */
-  #until<T>(active: Active, promise: Promise<T>): Promise<T> {
+  /** Races a start step with a stop of the input. A value that arrives after
+   *  the stop is handed to `release`, since nothing else owns it. */
+  #until<T>(active: Active, promise: Promise<T>, release?: (value: T) => void): Promise<T> {
+    const abandon = (): void => {
+      promise.then((value) => release?.(value), () => {});
+    };
     if (active.stop !== null) {
-      void promise.catch(() => {});
+      abandon();
       return Promise.reject(new Stopped());
     }
     return new Promise<T>((resolve, reject) => {
-      const onStop = (): void => reject(new Stopped());
+      const onStop = (): void => {
+        abandon();
+        reject(new Stopped());
+      };
       active.stopped.signal.addEventListener("abort", onStop, { once: true });
       promise.then(
         (value) => {
@@ -658,7 +665,12 @@ export class AntigravityHost implements EngineAdapter {
     if (error instanceof PermissionSyncTimeoutError) {
       return { kind: "start_failed", detail: "permission_sync_timeout", permissionSyncTimeout: true };
     }
-    if (error instanceof RequestError && isAuthRequired(error)) return { kind: "start_failed", detail: AUTH_REQUIRED };
+    // A process that failed to run explains the failed step after it.
+    if (active.processError !== null) return { kind: "start_failed", detail: active.processError };
+    if (error instanceof RequestError) {
+      if (isAuthRequired(error)) return { kind: "start_failed", detail: AUTH_REQUIRED };
+      return { kind: "start_failed", detail: `antigravity_api_error: ${boundErrorDetail(error.message)}`, apiError: true };
+    }
     return { kind: "start_failed", detail: error instanceof Error ? error.message : String(error) };
   }
 
@@ -675,11 +687,12 @@ export class AntigravityHost implements EngineAdapter {
     const toolHost = await this.#until(active, (this.#options.toolHostListen ?? ((descriptors, options) => ToolHost.listen(descriptors, options)))(
       this.#options.toolDescriptors ?? [],
       { turnSignal: () => active.window?.signal ?? null },
-    ));
+    ), (late) => late.close());
     active.toolHost = toolHost;
     const verifier = new CallVerifier({
       sessionId: () => active.sessionId,
       onFault: (fault) => this.#verificationFault(active, fault),
+      onRepeat: (callId) => this.#options.onOutOfTurnEvent?.({ eventKind: "repeated_terminal", callId }),
     });
     active.verifier = verifier;
     // Each ask holds one lease while the operator answers; asks may overlap.
@@ -702,7 +715,7 @@ export class AntigravityHost implements EngineAdapter {
         preToolUse: (request, signal) => this.#preToolUse(active, policy, request, signal),
         stop: (request) => this.#answerStop(active, request),
       },
-    }));
+    }), (late) => late.close());
     const listed = await this.#until(active, this.#hookList(active, executable, customization));
     if (!listed.ok) throw new StartFailure(`antigravity_hooks_refused:${listed.reason}`);
     const sandboxed = (this.#config.sandbox ?? "workspace-write") !== "danger-full-access";
@@ -733,6 +746,7 @@ export class AntigravityHost implements EngineAdapter {
       error: (error) => {
         active.processError ??= `antigravity_cli_process_error: ${boundErrorDetail(error.message)}`;
       },
+      other: (method) => this.#options.onOutOfTurnEvent?.({ eventKind: `other:${method}` }),
     });
     active.generation = generation;
     void generation.connection.closed.then(() => this.#connectionClosed(active), () => this.#connectionClosed(active));
@@ -755,6 +769,8 @@ export class AntigravityHost implements EngineAdapter {
     if (attached.observedSessionId !== undefined && attached.observedSessionId !== attached.sessionId) {
       throw new StartFailure("antigravity_resume_echoed_another_session");
     }
+    // The readiness bound counts from the attach response (design 4.4).
+    const ready = toolHost.listed(this.#options.mcpReadyTimeoutMs ?? DEFAULT_MCP_READY_TIMEOUT_MS).then(() => true, () => false);
     active.sessionId = attached.sessionId;
     active.observedSessionId = attached.observedSessionId;
     if (this.#options.recovery?.accept(attached.sessionId, requested) === false) {
@@ -767,8 +783,7 @@ export class AntigravityHost implements EngineAdapter {
       this.#options.onSessionId?.(attached.sessionId);
     }
     await this.#until(active, this.#applyModel(generation));
-    await this.#until(active, toolHost.listed(this.#options.mcpReadyTimeoutMs ?? DEFAULT_MCP_READY_TIMEOUT_MS)
-      .catch(() => { throw new StartFailure(MCP_NOT_CONNECTED); }));
+    if (!(await this.#until(active, ready))) throw new StartFailure(MCP_NOT_CONNECTED);
     const prepared = this.#options.prepareInput?.(active.token);
     if (prepared === null) return "skipped";
     if (prepared !== undefined) {
@@ -1083,7 +1098,9 @@ export class AntigravityHost implements EngineAdapter {
     if (active.interruptedAt !== null) return { kind: "interrupted" };
     if (settlement.kind === "start_failed") {
       if (settlement.permissionSyncTimeout === true) return { kind: "permission_sync_timeout" };
-      return { kind: "error", detail: settlement.detail, classify: { detail: settlement.detail } };
+      // As for P's error response: the message text is not classified (4.7).
+      const classify = settlement.apiError === true ? { detail: settlement.detail, reason: "api_error" as const } : { detail: settlement.detail };
+      return { kind: "error", detail: settlement.detail, classify };
     }
     if (!active.acked) {
       const attempted = active.delivery === "attempted";
@@ -1212,10 +1229,11 @@ export class AntigravityHost implements EngineAdapter {
     this.#emitState(this.#machine.state);
   }
 
-  /** The captured prompt's response or first activity arrived. */
+  /** The captured prompt's response or first activity arrived. Like the ACK,
+   *  it counts only before P settled (design L7, L8). */
   #evidence(active: Active): void {
     const submission = active.submission;
-    if (submission === null || active.evidence) return;
+    if (submission === null || active.evidence || active.resolved) return;
     active.evidence = true;
     const current = this.#permissionControl;
     const same = current !== null && current.revision === submission.revision;
@@ -1334,26 +1352,31 @@ export class AntigravityHost implements EngineAdapter {
    *  start. */
   async #applyModel(generation: Generation): Promise<void> {
     const session = generation.session;
-    const defaults = reportedPair(session);
+    // The account default is the pair attach reports; nothing is sent for it.
+    if (this.#pendingModel === "") {
+      this.#commitModel("");
+      return;
+    }
     const committed = this.#config.model ?? "";
     if (committed !== "") {
-      const result = await switchModel(session, splitSlug(committed, session), defaults);
+      const result = await switchModel(session, splitSlug(committed, session), reportedPair(session));
       if (result.kind !== "applied") throw new StartFailure(`antigravity_model_not_applied:${committed}`);
     }
+    // An account default staged while the committed slug was being applied
+    // waits for the next start: this G no longer has the attach pair.
     const pending = this.#pendingModel;
-    if (pending === null) return;
+    if (pending === null || pending === "") return;
     if (pending === committed) {
       this.#commitModel(pending);
       return;
     }
-    const previous = reportedPair(session);
-    const target = pending === "" ? defaults : splitSlug(pending, session);
-    const result = await switchModel(session, target, previous);
+    const result = await switchModel(session, splitSlug(pending, session), reportedPair(session));
     if (result.kind === "applied") {
       this.#commitModel(pending);
       return;
     }
     if (result.kind === "failed") throw new StartFailure(result.detail);
+    if (this.#pendingModel !== pending) return;
     this.#pendingModel = null;
     this.#switchError = {
       kind: "model",
@@ -1364,11 +1387,15 @@ export class AntigravityHost implements EngineAdapter {
     this.#emitState(this.#machine.state);
   }
 
+  /** The applied slug becomes the committed one; a newer selection staged
+   *  meanwhile stays pending (as `#promotePendingModel` did before ACP). */
   #commitModel(value: string): void {
     this.#config.model = value;
     this.#config.model_source = "config";
-    this.#pendingModel = null;
-    this.#switchError = null;
+    if (this.#pendingModel === value) {
+      this.#pendingModel = null;
+      this.#switchError = null;
+    }
     this.#emitState(this.#machine.state);
   }
 
@@ -1582,4 +1609,3 @@ type Outcome =
   | { kind: "permission_sync_timeout" }
   | { kind: "error"; detail: string; classify: InterAgentErrorClassifyInput; terminal?: boolean }
   | { kind: "result" };
-

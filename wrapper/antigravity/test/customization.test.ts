@@ -134,6 +134,7 @@ describe("checkHookList (design 4.3 item 1, D18)", () => {
     ["another PreToolUse timeout", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 60 }, { event: "Stop", command, timeout_seconds: 30 }]))],
     ["another Stop command", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "Stop", command: "other", timeout_seconds: 30 }]))],
     ["another Stop timeout", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "Stop", command, timeout_seconds: 60 }]))],
+    ["a Stop with a matcher", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "Stop", matcher: "*", command, timeout_seconds: 30 }]))],
     ["an action that is not an object", list(managed([{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, "Stop"]))],
   ])("refuses %s", async (_label, value) => {
     const { checkHookList } = await import("../src/customization.js");

@@ -299,6 +299,24 @@ describe("AntigravityHost over ACP: the window (L5)", () => {
     expect(r.results()[0]?.text).toBe("");
   });
 
+  it("records an agent request of another class by method only, inside and after the window; the SDK answers it with an error (L5)", async () => {
+    const { r } = clocked();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.survivesTerm = true;
+    agy.request("r1", "fs/read_text_file", { sessionId: agy.sessionId, path: "a.txt" });
+    await waitFor(() => agy.responses.some((m) => m.id === "r1"));
+    expect(agy.responses.find((m) => m.id === "r1")).toMatchObject({ error: { code: -32601 } });
+    expect(r.outOfTurn).toEqual([{ eventKind: "other:fs/read_text_file" }]);
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    agy.request("r2", "terminal/create", { sessionId: agy.sessionId, command: "ls" });
+    await waitFor(() => r.outOfTurn.length === 2);
+    expect(r.outOfTurn[1]).toEqual({ eventKind: "other:terminal/create" });
+    expect(r.ends[0]!.error).toBeUndefined();
+    expect(r.results()[0]?.text).toBe("");
+  });
+
   it("answers an unexpected permission request cancelled, cancels the prompt and fails the turn with its own reason (D17)", async () => {
     const r = setup();
     await r.test.host.send("one", undefined, undefined, "t1");
@@ -327,18 +345,23 @@ describe("AntigravityHost over ACP: verification (L6, 4.3)", () => {
     expect(r.ends[0]!.error).toBeUndefined();
   });
 
-  it("a late completed with no hook record latches the fault for later input and keeps the published outcome", async () => {
-    const r = setup();
+  it("a call a stop let pass at settlement, completed late with no hook record, latches the fault for later input and keeps the published outcome", async () => {
+    const { r } = clocked();
     await r.test.host.send("one", undefined, undefined, "t1");
     const agy = await prompted(r, 1);
     agy.survivesTerm = true;
     agy.toolCall("c1", "run_command", { CommandLine: "sleep 9" });
-    agy.respond("end_turn");
+    await waitFor(() => r.logs.some((e) => (e.payload as { kind?: string }).kind === "tool_use"));
+    await r.test.host.interrupt();
     await waitFor(() => r.ends.length === 1);
+    // The stop exception of 4.3 applied at settlement: no fault before the late update.
+    expect(r.faults).toEqual([]);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", error: { reason: "interrupted" } });
     agy.toolDone("c1", "run_command", { CommandLine: "sleep 9" });
     await waitFor(() => r.faults.length === 1);
     expect(r.faults[0]).toEqual({ reason: "antigravity_gate_unobserved_tool", detail: "antigravity_gate_unobserved_tool:run_command" });
     expect(r.ends).toHaveLength(1);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", error: { reason: "interrupted" } });
     await r.test.host.send("two", undefined, undefined, "t2");
     expect(r.rejected.at(-1)).toMatchObject({ turnToken: "t2", reason: "gate_broken" });
     expect(r.test.host.state).toBe("error");
@@ -368,6 +391,20 @@ describe("AntigravityHost over ACP: verification (L6, 4.3)", () => {
     agy.respond("end_turn");
     await waitFor(() => r.ends.length === 1);
     expect(r.ends[0]!.error!.detail).toBe("antigravity_gate_unobserved_tool:run_command");
+  });
+
+  it("logs a repeated terminal update of a settled call once, by call ID (4.3 item 3)", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.toolCall("c1", "read_file", { Path: "a" });
+    await agy.preToolUse("c1", "read_file", { Path: "a" });
+    for (let i = 0; i < 3; i += 1) agy.toolDone("c1", "read_file", { Path: "a" });
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.outOfTurn).toEqual([{ eventKind: "repeated_terminal", callId: "c1" }]);
+    expect(r.faults).toEqual([]);
+    expect(r.ends[0]!.error).toBeUndefined();
   });
 
   it("decides a subagent's hook by the same cell, records it, and needs no ACP call for it (V7)", async () => {
@@ -549,6 +586,17 @@ describe("AntigravityHost over ACP: delivery ACK (L7)", () => {
     expect(agy.count("session/prompt")).toBe(1);
   });
 
+  it("an oversized prompt whose write fails settles as ambiguous: the attempt does not depend on the metadata limit", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+    await r.test.host.send("x".repeat(4 * 1024 * 1024 + 16), undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.releasePromptWrite(new Error("EPIPE"));
+    await waitFor(() => r.ends.length === 1);
+    expect(r.acks).toEqual([]);
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_delivery_unconfirmed", reason: "receipt_unknown" });
+  });
+
   it("close with the callback pending settles once without an ACK; a late callback changes nothing", async () => {
     const r = setup();
     r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
@@ -563,11 +611,12 @@ describe("AntigravityHost over ACP: delivery ACK (L7)", () => {
   });
 });
 
-function switching(overrides: Partial<WrapperConfig> = {}) {
+function switching(overrides: Partial<WrapperConfig> = {}, options: Record<string, unknown> = {}) {
   const lifecycle: Record<string, any>[] = [];
   const r = setup({ max_sandbox: "danger-full-access", max_approval: "never", max_network_access: true, ...overrides } as Partial<WrapperConfig>, {
     permissionSyncSupported: true,
     onPermissionLifecycle: (event: Record<string, any>) => lifecycle.push(event),
+    ...options,
   });
   const control = () => (r.states.at(-1)!.ext as Record<string, any>).permission_control as Record<string, any>;
   return { r, lifecycle, control };
@@ -637,6 +686,25 @@ describe("AntigravityHost over ACP: permission evidence (L8)", () => {
       await waitFor(() => r.ends.length === 1);
       expect(control()).toMatchObject({ status: "unknown", submitted: { revision: 6 }, reason: { write: "delivery_unconfirmed", rpc: "rpc_error", closed: "connection_closed" }[how] });
     }
+  });
+
+  it("a response after the pre-ACK bound settled the input publishes no evidence; the report and the selection stay (L7, L8)", async () => {
+    const { r, lifecycle, control } = switching({}, { preAckBoundMs: 60, closeGraceMs: 500 });
+    await r.test.host.setPermission({ revision: 9, requested: { sandbox: "read-only", network_access: false, approval: "on-request" } });
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await waitFor(() => r.ends.length === 1);
+    expect(control()).toMatchObject({ revision: 9, status: "unknown", reason: "delivery_unconfirmed" });
+    agy.respond("end_turn");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(agy.exitCode).toBeNull();
+    expect(lifecycle).toEqual([]);
+    expect(control()).toMatchObject({ revision: 9, status: "unknown", reason: "delivery_unconfirmed" });
+    r.test.onSpawn = () => {};
+    await r.test.host.send("two", undefined, undefined, "t2");
+    await prompted(r, 2);
+    expect(control()).toMatchObject({ revision: 9, status: "applying", submitted: { revision: 9, execution_id: "t2" } });
   });
 
   it("a newer selection while applying stays pending and is captured by the next turn", async () => {
@@ -852,7 +920,7 @@ describe("AntigravityHost over ACP: stop deadlines (L3)", () => {
     await clock.advance(30_000);
     agy.requestPermission();
     // The host's answer to the request follows any cancel it wrote.
-    await waitFor(() => agy.requests.some((q) => q.id === "perm-1"));
+    await waitFor(() => agy.responses.some((m) => m.id === "perm-1"));
     expect(agy.count("session/cancel")).toBe(1);
     await clock.advance(29_999);
     expect(killed(agy)).toEqual([]);
@@ -939,6 +1007,27 @@ describe("AntigravityHost over ACP: kaoiro tools (L9, D13)", () => {
     await waitFor(() => r.ends.length === 2);
     expect(r.ends[1]!.error).toBeUndefined();
     expect(seen).toEqual([]);
+  });
+
+  it("counts the readiness bound from the attach response, across a held model step (4.4)", async () => {
+    for (const listed of ["late", "early"] as const) {
+      const r = setup({ model: "gemini-4-neon" }, { mcpReadyTimeoutMs: 40 });
+      r.test.onSpawn = (agy) => { agy.listOnAttach = listed === "early"; agy.hold.add("session/set_config_option"); };
+      await r.test.host.send("one", undefined, undefined, "t1");
+      await waitFor(() => r.test.agys[0]?.count("session/set_config_option") === 1);
+      const agy = r.test.agys[0]!;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (listed === "late") expect(await agy.listTools()).toBe(200);
+      agy.hold.delete("session/set_config_option");
+      agy.release("session/set_config_option");
+      if (listed === "late") {
+        await waitFor(() => r.ends.length === 1);
+        expect(r.ends[0]!.error).toEqual({ detail: "kaoiro MCP server did not connect" });
+        expect(agy.count("session/prompt")).toBe(0);
+      } else {
+        expect((await prompted(r, 1)).count("session/prompt")).toBe(1);
+      }
+    }
   });
 
   it("fails the start when agy does not list the kaoiro tools in time", async () => {
@@ -1030,6 +1119,44 @@ describe("AntigravityHost over ACP: model and level (4.8)", () => {
     expect(errors.at(-1)).toEqual({ kind: "model", requested: "gemini-4-carbon-ultra", reason: "level not offered", rolled_back_to: "gemini-4-neon" });
   });
 
+  it("an account-default selection from a saved slug sends nothing and commits the default (4.8 item 5)", async () => {
+    const { r, ext } = modelSetup("gemini-4-neon", "");
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    expect(agy.count("session/set_config_option")).toBe(0);
+    expect(ext().model).toBe("");
+    expect(ext().pending_model).toBeUndefined();
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    expect((await prompted(r, 2)).count("session/set_config_option")).toBe(0);
+  });
+
+  it("a selection staged while a switch is in flight stays pending, after a completion and after a refusal", async () => {
+    for (const first of ["gemini-4-neon", "not-a-model"] as const) {
+      const { r, ext } = modelSetup(undefined, first);
+      r.test.onSpawn = (agy) => { agy.hold.add("session/set_config_option"); };
+      await r.test.host.send("one", undefined, undefined, "t1");
+      await waitFor(() => r.test.agys[0]?.count("session/set_config_option") === 1);
+      const agy = r.test.agys[0]!;
+      await r.test.host.setModel("gemini-3.8-flash");
+      agy.hold.delete("session/set_config_option");
+      agy.release("session/set_config_option");
+      await prompted(r, 1);
+      expect(ext().pending_model).toBe("gemini-3.8-flash");
+      expect(ext().model).toBe(first === "gemini-4-neon" ? "gemini-4-neon" : "");
+      expect(r.states.some((s) => (s.ext as Record<string, any>).switch_error !== undefined)).toBe(false);
+      agy.respond("end_turn");
+      await waitFor(() => r.ends.length === 1);
+      r.test.onSpawn = () => {};
+      await r.test.host.send("two", undefined, undefined, "t2");
+      const second = await prompted(r, 2);
+      expect(second.config.get("model")).toBe("gemini-3.8-flash");
+      expect(ext().model).toBe("gemini-3.8-flash");
+      expect(ext().pending_model).toBeUndefined();
+    }
+  });
+
   it("fails the start when the committed slug can no longer be applied", async () => {
     const { r } = modelSetup("gone-model");
     await r.test.host.send("one", undefined, undefined, "t1");
@@ -1061,6 +1188,74 @@ describe("AntigravityHost over ACP: start failures", () => {
       await waitFor(() => r.ends.length === 1);
       expect(r.ends[0]!.error!.detail).toBe(detail ?? "antigravity_api_error: Authentication required.");
     }
+  });
+
+  it("a JSON-RPC error during the start stays an API error even when it mentions 429; the auth form keeps its detail (4.7)", async () => {
+    const text = "upstream returned 429 Too Many Requests";
+    for (const [message, expected] of [
+      [text, { detail: `antigravity_api_error: ${text}`, reason: "api_error" }],
+      ["Authentication required", { detail: "antigravity_auth_required" }],
+    ] as const) {
+      const r = setup();
+      r.test.onSpawn = (agy) => { agy.failRequest.set("initialize", { code: -32000, message }); };
+      await r.test.host.send("one", undefined, undefined, "t1");
+      await waitFor(() => r.ends.length === 1);
+      expect(r.ends[0]!.error).toEqual(expected);
+      expect(r.test.agys[0]!.count("session/prompt")).toBe(0);
+    }
+    expect(classifyInterAgentError({ detail: `antigravity_api_error: ${text}`, reason: "api_error" }).code).toBe("api_error");
+    // Without the reason, the shared classifier reads the text as a rate limit.
+    expect(classifyInterAgentError({ detail: `antigravity_api_error: ${text}` }).code).toBe("rate_limit");
+  });
+
+  it("a spawn that fails without a process settles its input with the process error; the queue and close go on (L2, L4)", async () => {
+    const ended: { reason: string; code: number | null }[] = [];
+    const r = setup({}, { onGenerationEnded: (info: { reason: string; code: number | null }) => ended.push({ reason: info.reason, code: info.code }) });
+    r.test.onSpawn = (agy) => {
+      if (r.test.agys.length !== 1) return;
+      // Node 22 (measured): a failed spawn has no PID and emits error, then close, never exit.
+      Object.defineProperty(agy, "pid", { value: undefined });
+      process.nextTick(() => {
+        agy.exitCode = -2;
+        agy.emit("error", Object.assign(new Error("spawn /fake/agy ENOENT"), { code: "ENOENT" }));
+        agy.stdout.end();
+        agy.stderr.end();
+        agy.emit("close", -2, null);
+      });
+    };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await r.test.host.send("two", undefined, undefined, "t2");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", error: { detail: "antigravity_cli_process_error: spawn /fake/agy ENOENT" } });
+    expect(ended[0]).toEqual({ reason: "start_failed", code: null });
+    const second = await prompted(r, 2);
+    second.respond("end_turn");
+    await waitFor(() => r.ends.length === 2);
+    expect(r.ends[1]).toMatchObject({ turnToken: "t2", terminal: true });
+    await r.test.host.close();
+  });
+
+  it.each(["tool host", "gate socket"] as const)("a %s listener that resolves after an interrupt gave up the start is closed (L2, L4)", async (site) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let listening = false;
+    let closed = 0;
+    const late = { close: () => { closed += 1; }, socketPath: "/nonexistent", nonce: "n" };
+    const listen = async () => {
+      listening = true;
+      await held;
+      return late;
+    };
+    const r = setup({}, site === "tool host" ? { toolHostListen: listen } : { gateServerListen: listen });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => listening);
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", error: { reason: "interrupted" } });
+    expect(closed).toBe(0);
+    release();
+    await waitFor(() => closed === 1);
+    expect(r.test.agys).toHaveLength(0);
   });
 
   it("a prepareInput that returns null skips the input without a prompt", async () => {

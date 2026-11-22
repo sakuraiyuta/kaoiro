@@ -18,6 +18,10 @@ export class FakeAgy extends EventEmitter {
   readonly args: string[];
   readonly env: NodeJS.ProcessEnv;
   readonly requests: { method: string; params: Record<string, unknown>; id?: number | string }[] = [];
+  /** The host's answers to requests this process sent. */
+  readonly responses: Record<string, unknown>[] = [];
+  /** Answers a request of this method with this JSON-RPC error. */
+  readonly failRequest = new Map<string, { code: number; message: string }>();
   readonly signals: NodeJS.Signals[] = [];
   sessionId = "session-1";
   config = new Map<string, string>([["model", "gemini-4-carbon"], ["thought_level", "medium"]]);
@@ -110,6 +114,10 @@ export class FakeAgy extends EventEmitter {
   }
 
   async #receive(message: Record<string, unknown>): Promise<void> {
+    if (message.method === undefined) {
+      this.responses.push(message);
+      return;
+    }
     const method = String(message.method);
     const params = (message.params ?? {}) as Record<string, unknown>;
     this.requests.push({ method, params, ...(message.id === undefined ? {} : { id: message.id as number | string }) });
@@ -119,6 +127,11 @@ export class FakeAgy extends EventEmitter {
       return;
     }
     const id = message.id;
+    const failure = this.failRequest.get(method);
+    if (failure !== undefined) {
+      this.#send({ id, error: failure });
+      return;
+    }
     switch (method) {
       case "initialize":
         this.#send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] } });
@@ -189,6 +202,11 @@ export class FakeAgy extends EventEmitter {
 
   message(text: string): void {
     this.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+  }
+
+  /** A request of a method the host does not serve. */
+  request(id: string, method: string, params: Record<string, unknown> = {}): void {
+    this.#send({ id, method, params });
   }
 
   requestPermission(): void {

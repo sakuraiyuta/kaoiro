@@ -19,6 +19,9 @@ export interface GenerationHandlers {
   promptAttempted: () => void;
   /** The child process failed (spawn or signal error). */
   error: (error: Error) => void;
+  /** An incoming JSON-RPC message of a method the host does not serve; the
+   *  SDK answers a request with an error. Only the method name is passed. */
+  other: (method: string) => void;
 }
 
 export interface AttachOptions {
@@ -41,6 +44,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const SERVED_METHODS = new Set(["session/update", "session/request_permission"]);
+
 /** One `agy acp` process with its ACP connection. It serves one prompt and is
  *  never reused. */
 export class Generation {
@@ -48,7 +53,7 @@ export class Generation {
   readonly child: AcpAgyChild;
   readonly session: AcpSession;
   readonly connection: acp.ClientConnection;
-  /** Resolves once the child exited. */
+  /** Resolves once the child exited, or failed without ever running. */
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   #resumeRequestId: unknown;
   #echoedSessionId: string | undefined;
@@ -58,9 +63,15 @@ export class Generation {
     this.serial = serial;
     this.child = child;
     this.exited = new Promise((resolve) => {
-      child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+      const ended = (code: number | null, signal: NodeJS.Signals | null): void => {
+        if (this.#exit !== undefined) return;
         this.#exit = { code, signal };
         resolve(this.#exit);
+      };
+      child.once("exit", ended);
+      // A spawn that failed has no PID and emits no `exit` (Node 22).
+      child.on("error", () => {
+        if (child.pid === undefined) ended(null, null);
       });
     });
     child.on("error", handlers.error);
@@ -72,14 +83,23 @@ export class Generation {
         handlers.permissionRequest();
         return { outcome: { outcome: "cancelled" } };
       },
-      metadata: () => {},
+      metadata: (metadata) => {
+        if (metadata.direction === "in" && metadata.method !== undefined && !SERVED_METHODS.has(metadata.method)) {
+          handlers.other(metadata.method);
+        }
+      },
     }, {
       onWrite: handlers.write,
+      // Independent of the metadata size limit, unlike `wireFields`.
+      onWriteStart: (identity) => {
+        if (identity.method === "session/prompt") handlers.promptAttempted();
+      },
       // The SDK's resume response type has no session ID, so the echo is read
       // off the wire: the outgoing request names the ID to match.
       wireFields: (message) => {
-        // Only the client sends these two methods, so the direction is known.
-        if (message.method === "session/prompt") handlers.promptAttempted();
+        // Only the client sends session/resume, so the direction is known.
+        // A line over the metadata limit skips this, which leaves the
+        // session unobserved: the permission is then `unknown` (design L8).
         if (message.method === "session/resume") this.#resumeRequestId = message.id;
         else if (
           message.method === undefined &&

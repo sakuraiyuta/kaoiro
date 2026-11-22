@@ -16,8 +16,8 @@ export interface StopRequest {
 
 /** What the host knows when a Stop hook request arrives. */
 export interface StopContext {
-  /** The engine-observed session ID of the generation; a request from any
-   *  other conversation comes from a subagent's own loop. */
+  /** The session ID the generation is attached to; a request from any other
+   *  conversation comes from a subagent's own loop. */
   sessionId: string | undefined;
   /** Whether the prompt's window is open. */
   windowOpen: boolean;
