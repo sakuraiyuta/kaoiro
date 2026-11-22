@@ -11,8 +11,7 @@ const table = {
   "scripts/test/fixtures/test-isolation-permit-probe.cjs": ["systemd"],
   "scripts/test/runner-pairing.test.mjs": ["docker"],
   "runner/test/grok_sessions.native.test.ts": ["network"],
-  "wrapper/antigravity/test/agy131_native.test.ts": ["network"],
-  "wrapper/antigravity/test/live_agy_stream_input.test.ts": ["network"],
+  "wrapper/antigravity/test/acp_native.test.ts": ["network"],
   "wrapper/claude-code/test/haiku55_native.test.ts": ["network"],
   ...Object.fromEntries(grok),
 };
