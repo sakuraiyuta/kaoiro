@@ -188,6 +188,7 @@ it.each([0, 1])("aborts only question %i", async (index) => {
   const calls = [new AbortController(), new AbortController()];
   const results = calls.map(({ signal }) => tool.handler({ questions }, { signal }));
   calls[index]!.abort();
+  expect(slots).toHaveBeenCalledTimes(3);
   const survivor = 1 - index;
   const id = `q-${survivor + 1}`;
   expect(slots.mock.lastCall?.[0]?.request_id).toBe(id);

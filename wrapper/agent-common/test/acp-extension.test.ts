@@ -17,7 +17,8 @@ function fakeChild() {
   const stdin = new PassThrough();
   stdin.resume();
   return {
-    child: { stdout, stdin } as unknown as ChildProcessWithoutNullStreams,
+    child: Object.assign(new EventEmitter(), { stdout, stdin }) as unknown as
+      ChildProcessWithoutNullStreams,
     emit: (message: unknown) =>
       stdout.write(JSON.stringify({ jsonrpc: "2.0", ...(message as object) }) + "\n"),
     end: () => {
