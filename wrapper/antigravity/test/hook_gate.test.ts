@@ -172,8 +172,17 @@ describe("HookGateServer: invalid requests", () => {
 });
 
 describe("HookGateServer: framing", () => {
-  it("answers one line per connection and ignores a second line", async () => {
-    const { server, seen } = await start();
+  it("answers one line per connection and ignores a second line, also one sent while the first waits", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const seen: string[] = [];
+    const { server } = await start({
+      preToolUse: async (request) => {
+        seen.push(request.callId);
+        await released;
+        return { decision: "allow" };
+      },
+    });
     const answer = await new Promise<string>((resolve, reject) => {
       const socket = createConnection(server.socketPath);
       let buffer = "";
@@ -183,14 +192,14 @@ describe("HookGateServer: framing", () => {
       socket.on("error", reject);
       socket.on("connect", () => {
         socket.write(`${JSON.stringify({ ...preToolUse("c1"), nonce: "nonce" })}\n${JSON.stringify({ ...preToolUse("c2"), nonce: "nonce" })}\n`);
-        // A later write on the same connection is ignored too.
         setTimeout(() => {
-          if (!socket.destroyed) socket.write(`${JSON.stringify({ ...preToolUse("c3"), nonce: "nonce" })}\n`);
-        }, 5);
+          socket.write(`${JSON.stringify({ ...preToolUse("c3"), nonce: "nonce" })}\n`);
+          setTimeout(release, 20);
+        }, 20);
       });
     });
     expect(answer.trim().split("\n")).toHaveLength(1);
-    expect(seen.map((request) => request.callId)).toEqual(["c1"]);
+    expect(seen).toEqual(["c1"]);
   });
 
   it("waits for the newline of a request split across writes", async () => {
