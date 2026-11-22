@@ -1104,7 +1104,9 @@ export class AntigravityHost implements EngineAdapter {
     }
     if (settlement.kind === "rpc_error") {
       const detail = isAuthRequired(settlement.error) ? AUTH_REQUIRED : `antigravity_api_error: ${boundErrorDetail(settlement.error.message)}`;
-      return { kind: "error", detail, classify: { detail } };
+      // No structural rate-limit field is measured on ACP, so the message
+      // text must not make a mention of 429 a rate limit (design 4.7).
+      return { kind: "error", detail, classify: { detail, reason: "api_error" } };
     }
     const stopReason = settlement.response.stopReason;
     if (stopReason === "end_turn") return { kind: "result" };

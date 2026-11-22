@@ -2,7 +2,7 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { classifyInterAgentError, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { nonInteractiveToolEnv } from "../src/tool_child_env.js";
 import { createTestHost, fakeHookList, hookGroups, type FakeAgy, type TestHost } from "./acp_fake.js";
 
@@ -482,7 +482,19 @@ describe("AntigravityHost over ACP: delivery ACK (L7)", () => {
     agy.fail(-32603, "boom");
     await waitFor(() => r.ends.length === 1);
     expect(r.acks).toEqual(["t1"]);
-    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_api_error: boom" });
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_api_error: boom", reason: "api_error" });
+  });
+
+  it("an error response that mentions 429 stays an API error (design 4.7)", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    (await prompted(r, 1)).fail(-32603, "upstream returned 429 Too Many Requests");
+    await waitFor(() => r.ends.length === 1);
+    const error = r.ends[0]!.error!;
+    expect(error).toEqual({ detail: "antigravity_api_error: upstream returned 429 Too Many Requests", reason: "api_error" });
+    expect(classifyInterAgentError(error).code).toBe("api_error");
+    // Without the reason, the shared classifier reads the text as a rate limit.
+    expect(classifyInterAgentError({ detail: error.detail! }).code).toBe("rate_limit");
   });
 
   it("a callback that returns after the pre-ACK bound settled the input changes nothing", async () => {
