@@ -131,7 +131,7 @@ describe("AntigravityHost over ACP: start", () => {
   });
 
   it("spawns the next process only after the previous one exited (L4)", async () => {
-    const r = setup();
+    const { r, clock, killed } = clocked();
     await r.test.host.send("one", undefined, undefined, "t1");
     const first = await prompted(r, 1);
     first.survivesTerm = true;
@@ -139,8 +139,10 @@ describe("AntigravityHost over ACP: start", () => {
     first.respond("end_turn");
     await waitFor(() => r.ends.length === 1);
     await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(killed(first)).toEqual(["SIGTERM"]);
     expect(r.test.agys).toHaveLength(1);
-    await waitFor(() => r.test.signals.some((s) => s.pid === first.pid && s.signal === "SIGKILL"));
+    await clock.advance(2_000);
+    expect(killed(first)).toEqual(["SIGTERM", "SIGKILL"]);
     await prompted(r, 2);
   });
 });
