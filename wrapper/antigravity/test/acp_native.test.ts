@@ -34,10 +34,12 @@ const MODEL = "gemini-3.1-flash-lite-preview";
 const PROMPT_BUDGET = 15;
 const WRITE_TOOLS = /^(write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content|sed_file|notebook_edit)$/;
 
+/** `conversation` is the tail of the request's conversation ID, for the
+ *  printed record. */
 type GateEntry =
   /** `args` is the request's arguments as JSON; it is never printed. */
-  | { kind: "pre"; tool: string; decision: "allow" | "deny"; sub: boolean; bypass: boolean; args: string }
-  | { kind: "stop"; decision: "continue" | "stop"; sub: boolean };
+  | { kind: "pre"; tool: string; decision: "allow" | "deny"; sub: boolean; bypass: boolean; args: string; conversation?: string }
+  | { kind: "stop"; decision: "continue" | "stop"; sub: boolean; conversation?: string };
 
 export interface CaseRecord {
   gate: GateEntry[];
@@ -50,6 +52,8 @@ export interface CaseRecord {
   alive: number;
   /** A random value the case placed in a workspace file and never in a prompt. */
   marker?: string;
+  /** Tails of the session IDs the host attached to. */
+  sessions?: string[];
 }
 
 export type Verdict = "pass" | "fail" | "undetermined";
@@ -370,12 +374,12 @@ async function runCase(spec: CaseSpec): Promise<CaseRecord> {
       handlers: {
         preToolUse: async (request, signal) => {
           const answer = await options.handlers.preToolUse(request, signal);
-          record.gate.push({ kind: "pre", tool: request.name, decision: answer.decision, sub: !sessions.has(request.conversationId), bypass: request.args.BypassSandbox === true, args: JSON.stringify(request.args) });
+          record.gate.push({ kind: "pre", tool: request.name, decision: answer.decision, sub: !sessions.has(request.conversationId), bypass: request.args.BypassSandbox === true, args: JSON.stringify(request.args), conversation: request.conversationId.slice(-8) });
           return answer;
         },
         stop: (request) => {
           const answer = options.handlers.stop(request);
-          record.gate.push({ kind: "stop", decision: answer.decision, sub: !sessions.has(request.conversationId) });
+          record.gate.push({ kind: "stop", decision: answer.decision, sub: !sessions.has(request.conversationId), conversation: request.conversationId.slice(-8) });
           return answer;
         },
       },
@@ -418,6 +422,7 @@ async function runCase(spec: CaseSpec): Promise<CaseRecord> {
     record.files = readdirSync(root);
     rmSync(root, { recursive: true, force: true });
     record.alive = pids.filter(alive).length;
+    record.sessions = [...sessions].map((id) => id.slice(-8));
   }
   return record;
 }
@@ -428,7 +433,12 @@ function summary(id: string, record: CaseRecord, judged: Verdict, attempts: numb
     case: id,
     verdict: judged,
     attempts,
-    gate: record.gate.map((e) => (e.kind === "pre" ? `${e.tool}:${e.decision}${e.sub ? ":sub" : ""}${e.bypass ? ":bypass" : ""}` : `stop:${e.decision}${e.sub ? ":sub" : ""}`)),
+    gate: record.gate.map((e) => `${e.kind === "pre" ? `${e.tool}:${e.decision}${e.sub ? ":sub" : ""}${e.bypass ? ":bypass" : ""}` : `stop:${e.decision}${e.sub ? ":sub" : ""}`}@${e.conversation ?? "?"}`),
+    sessions: record.sessions,
+    ...(record.marker === undefined ? {} : {
+      marker_file_calls: record.gate.filter((e) => e.kind === "pre" && e.args.includes(N7_FILE)).map((e) => `${(e as { tool: string }).tool}${e.sub ? ":sub" : ""}@${e.conversation ?? "?"}`),
+      marker_in_reply: text(record).includes(record.marker),
+    }),
     dialogs: record.dialogs.map((d) => `${d.tool}:${d.allow ? "allow" : "reject"}`),
     sandbox: record.argv.map((args) => args.includes("--sandbox")),
     results: record.results.map((r) => (r.is_error === true ? `error:${String(r.error_detail)}` : "ok")),
