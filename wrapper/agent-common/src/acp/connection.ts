@@ -40,6 +40,17 @@ export interface AcpWriteResult {
 }
 
 /**
+ * The form of one non-blank line from the child, without its payload. A
+ * request has a `method` and an `id`, a notification a `method` and no `id`,
+ * a response an `id` and no `method`. `named` is true when the `method` is a
+ * string; `method` is set only when that string is safe to log. Any JSON
+ * array is a `batch`; other input is `malformed`.
+ */
+export type InboundLineSummary =
+  | { kind: "request" | "notification"; method?: string; named: boolean }
+  | { kind: "response" | "batch" | "oversized" | "malformed" };
+
+/**
  * Everything an engine injects into the ACP client. The default (no
  * extension) registers ACP methods only and adds no vendor metadata.
  */
@@ -61,6 +72,12 @@ export interface AcpExtension<M extends WireMetadata = WireMetadata> {
    * throw drops that line's metadata and never interrupts the transport.
    */
   wireFields?: (message: Record<string, unknown>) => VendorFields<M>;
+  /**
+   * Summarises each non-blank line from the child, a final line without a
+   * newline included; a line over the metadata limit is summarised once as
+   * `oversized`. A throw is ignored.
+   */
+  onInboundLine?: (summary: InboundLineSummary) => void;
 }
 
 const observers = new Set<Observer>();
@@ -140,50 +157,95 @@ function observeMessage<M extends WireMetadata>(
   } as M);
 }
 
+function summarize(line: string): InboundLineSummary {
+  let msg: unknown;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return { kind: "malformed" };
+  }
+  if (Array.isArray(msg)) return { kind: "batch" };
+  if (!isRecord(msg)) return { kind: "malformed" };
+  if ("method" in msg) {
+    const method = safeName(msg.method);
+    return {
+      kind: "id" in msg ? "request" : "notification",
+      ...(method ? { method } : {}),
+      named: typeof msg.method === "string",
+    };
+  }
+  return { kind: "id" in msg ? "response" : "malformed" };
+}
+
 export function metadataTee<M extends WireMetadata = WireMetadata>(
   direction: "in" | "out",
   observer: (metadata: M) => void,
   wireFields?: AcpExtension<M>["wireFields"],
+  onLine?: AcpExtension<M>["onInboundLine"],
 ) {
   let buffer = "";
   let bytes = 0;
   let oversized = false;
   const decoder = new TextDecoder();
+  const report = (summary: () => InboundLineSummary | undefined) => {
+    if (!onLine) return;
+    try {
+      const value = summary();
+      if (value) onLine(value);
+    } catch {
+      /* Diagnostics must not interrupt the protocol transport. */
+    }
+  };
+  // The SDK skips a blank line too.
+  const reportLine = (line: string) =>
+    report(() => (line.trim() === "" ? undefined : summarize(line)));
+  const consume = (text: string, each: (line: string) => void) => {
+    let offset = 0;
+    while (offset < text.length) {
+      const newline = text.indexOf("\n", offset);
+      const end = newline < 0 ? text.length : newline;
+      if (!oversized) {
+        const part = text.slice(offset, end);
+        bytes += Buffer.byteLength(part);
+        if (bytes > metadataLimit) {
+          buffer = "";
+          oversized = true;
+          try {
+            observer({ direction, oversized_lines: 1 } as M);
+          } catch {
+            /* Diagnostics must not interrupt the protocol transport. */
+          }
+          report(() => ({ kind: "oversized" }));
+        } else buffer += part;
+      }
+      if (newline < 0) break;
+      const line = oversized ? undefined : buffer;
+      buffer = "";
+      bytes = 0;
+      oversized = false;
+      offset = newline + 1;
+      if (line !== undefined) each(line);
+    }
+  };
   return new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
-      const text = decoder.decode(chunk, { stream: true });
-      let offset = 0;
-      while (offset < text.length) {
-        const newline = text.indexOf("\n", offset);
-        const end = newline < 0 ? text.length : newline;
-        if (!oversized) {
-          const part = text.slice(offset, end);
-          bytes += Buffer.byteLength(part);
-          if (bytes > metadataLimit) {
-            buffer = "";
-            oversized = true;
-            try {
-              observer({ direction, oversized_lines: 1 } as M);
-            } catch {
-              /* Diagnostics must not interrupt the protocol transport. */
-            }
-          } else buffer += part;
-        }
-        if (newline < 0) break;
-        const line = oversized ? "" : buffer;
-        buffer = "";
-        bytes = 0;
-        oversized = false;
-        offset = newline + 1;
+      consume(decoder.decode(chunk, { stream: true }), (line) => {
+        reportLine(line);
         try {
           const msg: unknown = JSON.parse(line);
-          if (!isRecord(msg)) continue;
+          if (!isRecord(msg)) return;
           observeMessage(msg, direction, observer, wireFields);
         } catch {
           /* Invalid JSON is handled by the SDK, without body logging. */
         }
-      }
+      });
       controller.enqueue(chunk);
+    },
+    // The SDK dispatches a final line without a newline; only the summary
+    // sees it, so the metadata stays as it was.
+    flush() {
+      consume(decoder.decode(), reportLine);
+      if (!oversized) reportLine(buffer);
     },
   });
 }
@@ -304,7 +366,8 @@ export function connectAcp<M extends WireMetadata = WireMetadata>(
   const stream = acp.ndJsonStream(
     output,
     input.pipeThrough(
-      metadataTee("in", handlers.metadata, extension.wireFields),
+      metadataTee("in", handlers.metadata, extension.wireFields,
+        extension.onInboundLine),
     ),
   );
   const app = acp

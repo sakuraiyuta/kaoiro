@@ -8,6 +8,7 @@ import {
   metadataTee,
   notification,
   type AcpExtension,
+  type InboundLineSummary,
   type WireMetadata,
 } from "../src/acp/connection.js";
 import { AcpSession } from "../src/acp/session.js";
@@ -21,6 +22,9 @@ function fakeChild() {
       ChildProcessWithoutNullStreams,
     emit: (message: unknown) =>
       stdout.write(JSON.stringify({ jsonrpc: "2.0", ...(message as object) }) + "\n"),
+    raw: (text: string) => stdout.write(text),
+    finish: (text: string) => stdout.end(text),
+    stdin,
     end: () => {
       stdout.end();
       stdin.end();
@@ -115,6 +119,175 @@ describe("connectAcp with an extension", () => {
     });
     connection.close();
     end();
+  });
+});
+
+describe("connectAcp inbound line summary", () => {
+  const line = (message: object) =>
+    JSON.stringify({ jsonrpc: "2.0", ...message });
+  const sentinel = line(sessionUpdate) + "\n";
+  const sentinelSummary = {
+    kind: "notification", method: "session/update", named: true,
+  };
+
+  function open(options: { throwing?: boolean } = {}) {
+    const fake = fakeChild();
+    const h = handlers();
+    const summaries: InboundLineSummary[] = [];
+    const written: string[] = [];
+    fake.stdin.on("data", (data: Buffer) => written.push(data.toString()));
+    const connection = connectAcp(fake.child, h, {
+      onInboundLine: (summary) => {
+        summaries.push(summary);
+        if (options.throwing) throw new Error("observer failed");
+      },
+    });
+    return { ...fake, h, summaries, written, connection };
+  }
+
+  it.each([
+    ["a request", line({ id: 1, method: "x/other", params: {} }),
+      { kind: "request", method: "x/other", named: true }],
+    ["a notification", line({ method: "_x/other" }),
+      { kind: "notification", method: "_x/other", named: true }],
+    ["a response", line({ id: 99, result: {} }), { kind: "response" }],
+    ["text that is not JSON", "not json", { kind: "malformed" }],
+    ["a JSON number", "1", { kind: "malformed" }],
+    ["an object without method or id", line({}), { kind: "malformed" }],
+    ["an unsafe name", line({ method: "bad name!" }),
+      { kind: "notification", named: true }],
+    ["a method that is not a string", line({ id: 2, method: 5 }),
+      { kind: "request", named: false }],
+  ] as const)("summarises %s once, in wire order",
+    async (_label, text, expected) => {
+    const p = open();
+    p.raw(text + "\n" + sentinel);
+    await vi.waitFor(() => expect(p.h.update).toHaveBeenCalledTimes(1));
+    expect(p.summaries).toEqual([expected, sentinelSummary]);
+    p.connection.close();
+    p.end();
+  });
+
+  it("summarises a line over the limit once, when it crosses", async () => {
+    const p = open();
+    const big = line({ id: 3, method: "x/big", params: {
+      p: "x".repeat(4 * 1024 * 1024) } });
+    p.raw(big.slice(0, 3 * 1024 * 1024));
+    p.raw(big.slice(3 * 1024 * 1024) + "\n" + sentinel);
+    await vi.waitFor(() => expect(p.h.update).toHaveBeenCalledTimes(1));
+    expect(p.summaries).toEqual([{ kind: "oversized" }, sentinelSummary]);
+    p.connection.close();
+    p.end();
+  });
+
+  it("gives no summary for a blank line", async () => {
+    const p = open();
+    p.raw("\n   \r\n" + sentinel);
+    await vi.waitFor(() => expect(p.h.update).toHaveBeenCalledTimes(1));
+    expect(p.summaries).toEqual([sentinelSummary]);
+    p.connection.close();
+    p.end();
+  });
+
+  it("leaves the metadata unchanged with or without the option", async () => {
+    const input = line({ method: "_x/other" }) + "\nnot json\n" + sentinel;
+    const withOption = open();
+    const without = fakeChild();
+    const plain = handlers();
+    const connection = connectAcp(without.child, plain);
+    withOption.raw(input);
+    without.raw(input);
+    await vi.waitFor(() => expect(plain.update).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(withOption.h.update).toHaveBeenCalledTimes(1));
+    expect(withOption.h.metadata.mock.calls).toEqual(plain.metadata.mock.calls);
+    // The SDK answers the non-JSON line with a parse error (outbound).
+    expect(plain.metadata.mock.calls.map(([m]) => m)).toEqual([
+      { direction: "in", method: "_x/other" },
+      { direction: "in", method: "session/update",
+        variant: "agent_message_chunk" },
+      { direction: "out" },
+    ]);
+    withOption.connection.close();
+    connection.close();
+    withOption.end();
+    without.end();
+  });
+
+  it("keeps the dispatch when the callback throws", async () => {
+    const p = open({ throwing: true });
+    p.raw(line({ method: "_x/other" }) + "\n" + sentinel);
+    await vi.waitFor(() => expect(p.h.update).toHaveBeenCalledTimes(1));
+    expect(p.summaries).toHaveLength(2);
+    expect(p.h.metadata).toHaveBeenCalledTimes(2);
+    p.connection.close();
+    p.end();
+  });
+
+  // Pins the pinned SDK: its client closes on any array and dispatches no
+  // member. A later pin that dispatches batches turns these red.
+  it.each([
+    ["a valid mixed batch", JSON.stringify([
+      { jsonrpc: "2.0", ...sessionUpdate },
+      { jsonrpc: "2.0", id: 7, method: "x/other", params: {} },
+    ])],
+    ["[1]", "[1]"],
+  ])("records %s once and the SDK closes the connection", async (_l, text) => {
+    const p = open();
+    p.raw(text + "\n");
+    await p.connection.closed;
+    expect(p.connection.signal.reason).toMatchObject({
+      message: "JSON-RPC batches are not supported on this connection",
+    });
+    expect(p.summaries).toEqual([{ kind: "batch" }]);
+    expect(p.h.update).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(p.written).toEqual([]);
+    p.end();
+  });
+
+  it("summarises a final notification without a newline", async () => {
+    const p = open();
+    p.finish(line(sessionUpdate));
+    await p.connection.closed;
+    expect(p.summaries).toEqual([sentinelSummary]);
+    expect(p.h.update).toHaveBeenCalledTimes(1);
+    p.end();
+  });
+
+  it("summarises a final request without a newline", async () => {
+    const p = open();
+    p.finish(line({ id: 9, method: "x/other", params: {} }));
+    await p.connection.closed;
+    expect(p.summaries).toEqual([
+      { kind: "request", method: "x/other", named: true },
+    ]);
+    p.end();
+  });
+
+  it("gives no summary for a final blank line", async () => {
+    const p = open();
+    p.finish(sentinel + "  ");
+    await p.connection.closed;
+    expect(p.summaries).toEqual([sentinelSummary]);
+    p.end();
+  });
+
+  it("adds no metadata for a final line, with or without the option",
+    async () => {
+    const withOption = open();
+    const without = fakeChild();
+    const plain = handlers();
+    const connection = connectAcp(without.child, plain);
+    withOption.finish(line(sessionUpdate));
+    without.finish(line(sessionUpdate));
+    await connection.closed;
+    await withOption.connection.closed;
+    expect(plain.update).toHaveBeenCalledTimes(1);
+    expect(plain.metadata).not.toHaveBeenCalled();
+    expect(withOption.h.metadata).not.toHaveBeenCalled();
+    withOption.end();
+    without.end();
   });
 });
 
