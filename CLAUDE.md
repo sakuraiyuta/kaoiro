@@ -59,7 +59,6 @@ kaoiro — a system that visualizes the state of multiple CLI AI agents as chara
 
 ## Branch strategy
 
-Introduced in [issue #213](https://github.com/sakuraiyuta/kaoiro/issues/213).
 Use the integration branch `develop` because agents' permission gates
 block Git operations targeting `main`.
 
@@ -113,8 +112,8 @@ these to English).
 - Perform Git operations with user approval (operations on `develop` and
   its feature branches may be automated within the Branch strategy above).
 - When updating task tables or progress in docs/plans/, also update
-  `status` / `last_updated` in the frontmatter at the same time (to prevent
-  status drift and recurrence of the three inconsistencies found on 2026-07-03).
+  `status` / `last_updated` in the frontmatter at the same time, so the
+  frontmatter does not drift from the table.
 
 ## Multi-agent workflow
 
