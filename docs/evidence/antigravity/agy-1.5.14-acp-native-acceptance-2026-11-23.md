@@ -112,6 +112,29 @@ only on `pass`; an undetermined trial is not a pass. Before its first
 prompt the live suite runs the registered hook entry with an empty payload
 and stops unless it answers the documented deny.
 
+### New sample under the current judges (implementation round 3)
+
+N1, N3b, N4, N5, N6 and N8 were run again on commit `22433283` under the
+conditions above (the same `agy` copy, its sha256 unchanged after every run),
+one case per invocation, each in a fresh disposable HOME. The budget was 8
+prompts with one retry for N4 and N6; every case passed on its first attempt,
+and 6 prompts were used. Sequence numbers count within one trial; IDs are
+shown by their last 8 characters; N6's value is not printed.
+
+| Case | Record (in order) | Verdict |
+|---|---|---|
+| N1 | the dialog named the command and the operator stand-in rejected it; `run_command` denied by the gate; Stop `stop`; a result; no file | pass |
+| N3b | the dialog named the command and was approved; `run_command` allowed; Stop `stop`; the command's file was written; `agy` launched with `--sandbox` | pass |
+| N4 | `run_command` with `BypassSandbox: true` approved and allowed; Stop `stop`; the command's file was written | pass |
+| N5 | `mcp_kaoiro_whoami` allowed with no dialog, and the `whoami` handler ran once; Stop `stop`; a result | pass |
+| N6 | parent session `c9553ea9`: R allowed (seq 2), Stop `continue` (3), `manage_task` status query allowed (4), R's `tool_result` with one complete value (6), Stop `stop` (7), the successful result (8) holding that value; no gate fault. Rows P1-P7 all pass | pass |
+| N8 | parent `define_subagent` and `invoke_subagent` allowed, Stop `continue`; the subagent's `run_command` allowed under another conversation ID; the interrupt came once its file existed; the turn ended `interrupted`; no `agy` process was alive afterwards | pass |
+
+After each run the test found 1 file in the disposable HOME holding that run's
+tool-host bearer (`agy`'s own store); the harness's shape scan found no
+private key, access or refresh token, JWT or API key there. Each HOME was
+deleted after the scan.
+
 ## `edit_file` hook requests
 
 On 2026-11-23 the implementation review ran one `read-only` case through the
