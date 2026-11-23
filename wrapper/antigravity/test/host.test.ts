@@ -241,6 +241,8 @@ describe("AntigravityHost over ACP: settlement and terminal states (L2)", () => 
     expect(agy.count("session/prompt")).toBe(0);
     expect(agy.count("session/cancel")).toBe(0);
     expect(r.test.signals.filter((s) => s.pid === agy.pid).map((s) => s.signal)).toEqual(["SIGTERM"]);
+    // No prompt was handed, so the process's input stays open.
+    expect(agy.stdin.destroyed).toBe(false);
     await waitFor(() => r.test.signals.some((s) => s.pid === agy.pid && s.signal === "SIGKILL"));
   });
 });
@@ -1667,6 +1669,15 @@ describe("AntigravityHost over ACP: the window opens at the prompt write (C1)", 
     expect(agy.count("session/cancel")).toBe(1);
     expect(agy.stdin.destroyed).toBe(false);
     expect(r.ends[0]!.error).toEqual({ reason: "interrupted" });
+  });
+
+  it("a watchdog fail-stop after the prompt write began leaves the output open", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    expect(r.test.host.failStopTurnForWatchdog("t1")).toBe(true);
+    expect(agy.stdin.destroyed).toBe(false);
   });
 });
 
