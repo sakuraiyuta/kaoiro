@@ -11,16 +11,6 @@ function launchReason(reason: string): string {
 }
 
 export const app = {
-  quagmireRally: ({ names, turns, conversations, threshold }) =>
-    `The exchange between ${names} reached ${plural(turns, "message", "messages")} ` +
-    `(${plural(conversations, "conversation", "conversations")}, threshold ${threshold}). ` +
-    `Check on their progress.`,
-  quagmireDeliveryGap:
-    "Delivery confirmation may be delayed (processing completed within the period).",
-  quagmireStalled: "The exchange may be stalled.",
-  quagmireUnconfirmed: ({ label, undelivered, since, diagnosis }) =>
-    `Delivery of ${plural(undelivered, "message", "messages")} to ${label} is not confirmed (since ${since}). ${diagnosis}`,
-  timeUnknown: "unknown time",
   ceilingNarrow: ({ axis, ceiling, current }) =>
     `Narrow ${axis} to ${ceiling} before the reset (current: ${current})`,
   ceilingSandboxFixed: ({ ceiling }) =>

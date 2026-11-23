@@ -23,27 +23,7 @@ Moved to [Inter-agent delivery](../reference/inter-agent/delivery.md#negotiated-
 
 ## Review-quagmire detection (issue #273)
 
-Moved to [Design rationale](../architecture/coordination-monitoring.md#review-quagmire-detection-issue-273).
-
-### Rally
-
-Moved to [Exact contract](../reference/inter-agent/coordination-monitoring.md#rally).
-
-### Stall
-
-Moved to [Exact contract](../reference/inter-agent/coordination-monitoring.md#stall) and [Design rationale](../architecture/coordination-monitoring.md#stall-interpretation).
-
-### Wire
-
-Moved to [Exact contract](../reference/inter-agent/coordination-monitoring.md#wire).
-
-### Configuration
-
-Moved to [Exact contract](../reference/inter-agent/coordination-monitoring.md#configuration) and [Design rationale](../architecture/coordination-monitoring.md#provisional-defaults).
-
-### Deliberate omissions
-
-Moved to [Design rationale](../architecture/coordination-monitoring.md#deliberate-omissions).
+Removed in [issue #1249](https://github.com/sakuraiyuta/kaoiro/issues/1249).
 
 ## Definition
 
@@ -89,7 +69,7 @@ Moved to [Inter-agent conversation admission](../reference/inter-agent/conversat
 
 ### Observation path (dashboard display)
 
-Moved to [Exact contract](../reference/inter-agent/coordination-monitoring.md#observation-path-dashboard-display).
+Moved to [Inter-agent messaging](../architecture/inter-agent-messaging.md#observation-path-dashboard-display).
 
 ### IA sidecar and display restoration ([ADR-0051](../adr/0051-history-restart-resilience.md))
 

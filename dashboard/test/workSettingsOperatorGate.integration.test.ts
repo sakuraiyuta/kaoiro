@@ -1,7 +1,7 @@
 import "./isolation.setup";
 // @vitest-environment jsdom
-// issue #307: the rally-threshold control is operator-only, and App.svelte
-// owns that decision — `connection={isOperator ? (connection ?? undefined) :
+// The work admission settings are operator-only, and App.svelte owns that
+// decision — `connection={isOperator ? (connection ?? undefined) :
 // undefined}` is what SettingsDrawer's `{#if connection}` reads. Withholding
 // the prop by hand would measure the drawer's reaction, not App's decision,
 // so this mounts the real App and lets `onHosts` (the operator signal, #22)
@@ -37,7 +37,6 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         setPermission: async () => null,
         getWorkSettings: captured.getWorkSettings,
         setWorkSettings: captured.setWorkSettings,
-        setQuagmireSettings: async () => ({ rallyTurns: 16, source: "default" }),
         // SettingsDrawer fetches both lists as soon as it has a
         // connection; `listConversations` also carries `.incomplete`.
         listConversations: async () =>
@@ -90,8 +89,6 @@ async function openSettings(): Promise<void> {
   await tick();
 }
 
-const section = () => document.querySelector("section.quagmire");
-
 beforeEach(() => {
   captured.handlers = null;
   captured.getWorkSettings.mockReset();
@@ -122,39 +119,6 @@ afterEach(async () => {
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-});
-
-describe("App.svelte rally threshold operator gate (issue #307)", () => {
-  it("shows the control to an operator (onHosts received)", async () => {
-    const h = await mountApp();
-    h.onHosts?.([], false);
-    h.onStatus("connected");
-    h.onQuagmireSettings?.({ rallyTurns: 16, source: "default" });
-    await tick();
-    await openSettings();
-    expect(section()).not.toBeNull();
-  });
-
-  it("withholds it from a viewer (no onHosts, so no operator signal)", async () => {
-    const h = await mountApp();
-    h.onQuagmireSettings?.({ rallyTurns: 16, source: "default" });
-    await tick();
-    await openSettings();
-    expect(section()).toBeNull();
-  });
-
-  it("withdraws it when a rejoin downgrades the role (onJoined)", async () => {
-    const h = await mountApp();
-    h.onHosts?.([], false);
-    h.onStatus("connected");
-    h.onQuagmireSettings?.({ rallyTurns: 16, source: "default" });
-    await tick();
-    await openSettings();
-    expect(section()).not.toBeNull();
-    h.onJoined?.();
-    await tick();
-    expect(section()).toBeNull();
-  });
 });
 
 describe("App.svelte work admission settings", () => {

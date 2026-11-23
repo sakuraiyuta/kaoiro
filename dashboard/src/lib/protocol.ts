@@ -1966,7 +1966,7 @@ export function interAgentMessageOf(
  *  would corrupt the grid face — the boundary marker is a stateless
  *  cue, not a state_change). `log` / `result` are operator-only
  *  (ADR-0012); `inter_agent_message` is operator-only too
- *  (docs/reference/inter-agent/coordination-monitoring.md) and lands on both the sender and the
+ *  (docs/architecture/inter-agent-messaging.md) and lands on both the sender and the
  *  receiver's transcript. `session_boundary` (ADR-0036 F3, phase-17
  *  17-7) IS viewer-visible after server-side sanitize (mode-only
  *  payload); the transcript-vs-state routing decision is orthogonal
@@ -2764,51 +2764,9 @@ export interface ConversationSummary {
   tokens: number | null;
   status: "open" | "closed";
   startedAt: string | null;
-  /** Messages these participants have exchanged ACROSS conversations inside
-   *  the server's rally window (issue #273), not this row's own `turns`.
-   *  Absent when the server predates the field. */
-  rallyTurns?: number;
-  /** How many conversations that total came from. */
-  rallyConversations?: number;
-  /** The server's own verdict on `rallyTurns` against its configured
-   *  threshold. The comparison is not repeated here: one place owns what
-   *  "quagmire" means, and it is the side that holds the threshold. */
-  quagmire?: boolean;
 }
 
 export type ConversationList = ConversationSummary[] & { incomplete: boolean };
-
-/** Edge-triggered review-quagmire notice (issue #273). `rally` names the
- *  participants of a long cross-conversation exchange; `stall` names one
- *  recipient whose deliveries have gone unacknowledged. Operator-only. */
-/** Largest rally threshold the server accepts (issue #307,
- *  `QuagmireSettings.max_rally_turns/0`). Past it an operator wants ∞, not
- *  a number, so the control clamps here and offers the off switch instead. */
-export const MAX_RALLY_TURNS = 999;
-
-/** Rally threshold in force, and which layer supplied it (issue #307).
- *  `rallyTurns: null` is ∞ — rally detection off. Operator-only. */
-export type QuagmireSettings = {
-  rallyTurns: number | null;
-  source: "stored" | "env" | "default";
-};
-
-export type QuagmireNotice =
-  | {
-      kind: "rally";
-      participants: string[];
-      turns: number;
-      conversations: number;
-      threshold: number;
-    }
-  | {
-      kind: "stall";
-      agentId: string;
-      undelivered: number;
-      pendingSince: string | null;
-      thresholdMs: number;
-      reason?: "delivery_confirmation_gap";
-    };
 
 /** Operator-facing user-list entry (issue #207). Wire shape from
  *  `Users.all_with_role/1` (id/kind/display_name/role) — the server
@@ -2920,13 +2878,7 @@ export interface KaoiroHandlers {
   /** Whether the bounded delivery projection omitted watermarks on this join. */
   onDeliverySnapshotIncomplete?: (incomplete: boolean) => void;
   onDeliveryStatus?: (agentId: string, status: InterAgentDeliveryStatus | null) => void;
-  /** Review-quagmire notice (issue #273). Operator-only on the server side,
-   *  so a viewer session never sees this fire. */
-  onQuagmireNotice?: (notice: QuagmireNotice) => void;
-  /** Rally threshold in force (issue #307). Pushed on join and again on
-   *  every operator change, so several dashboards agree. Operator-only. */
   onWorkSettings?: (settings: WorkSettingsSnapshot) => void;
-  onQuagmireSettings?: (settings: QuagmireSettings) => void;
   /** Every agent's committed status line, pushed right after the join
    *  snapshot frames (issue 482). A viewer receives only agents in its own
    *  snapshot. `incomplete` means the server could not vouch for the whole
@@ -3209,14 +3161,8 @@ export interface KaoiroConnection {
    * (#58); the server also persists the pick so the wrapper restores it
    * on next start. `mode` must be a closed-enum PermissionMode value. */
   setPermissionMode: (agentId: string, mode: string) => Promise<void>;
-  /** Sets the rally threshold the whole deployment detects against
-   *  (issue #307). `null` is ∞. Operator-only; rejects with
-   *  `invalid_rally_turns` outside 1..MAX_RALLY_TURNS. The effective value
-   *  comes back as a `quagmire_settings` push rather than in the ack, so
-   *  every open dashboard agrees rather than only the one that asked. */
   getWorkSettings: () => Promise<WorkSettingsSnapshot>;
   setWorkSettings: (revision: number, changes: WorkCapacityPatch) => Promise<WorkSettingsSnapshot>;
-  setQuagmireSettings: (rallyTurns: number | null) => Promise<void>;
   /** An agent's status line change log, newest first, with the full texts
    *  (issue 482). Open to every role; the server answers `unknown_agent` for
    *  an agent the caller may not see, the same for a hidden and a nonexistent
@@ -4411,78 +4357,9 @@ function parseConversationList(raw: unknown): ConversationSummary[] {
       tokens: typeof p.tokens === "number" ? p.tokens : null,
       status: p.status,
       startedAt: typeof p.started_at === "string" ? p.started_at : null,
-      ...(typeof p.rally_turns === "number" ? { rallyTurns: p.rally_turns } : {}),
-      ...(typeof p.rally_conversations === "number"
-        ? { rallyConversations: p.rally_conversations }
-        : {}),
-      ...(typeof p.quagmire === "boolean" ? { quagmire: p.quagmire } : {}),
     });
   }
   return out;
-}
-
-/** Rejects a malformed notice entirely rather than rendering a half-filled
- *  banner: an operator acting on a quagmire needs the numbers to be real. */
-export function parseQuagmireNotice(raw: unknown): QuagmireNotice | null {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
-  const p = raw as Record<string, unknown>;
-  if (p.kind === "rally") {
-    if (
-      !Array.isArray(p.participants) ||
-      !p.participants.every((v) => typeof v === "string") ||
-      typeof p.turns !== "number" ||
-      typeof p.conversations !== "number" ||
-      typeof p.threshold !== "number"
-    ) {
-      return null;
-    }
-    return {
-      kind: "rally",
-      participants: p.participants as string[],
-      turns: p.turns,
-      conversations: p.conversations,
-      threshold: p.threshold,
-    };
-  }
-  if (p.kind === "stall") {
-    if (
-      typeof p.agent_id !== "string" ||
-      typeof p.undelivered !== "number" ||
-      typeof p.threshold_ms !== "number"
-    ) {
-      return null;
-    }
-    return {
-      kind: "stall",
-      agentId: p.agent_id,
-      undelivered: p.undelivered,
-      pendingSince: typeof p.pending_since === "string" ? p.pending_since : null,
-      thresholdMs: p.threshold_ms,
-      ...(p.reason === "delivery_confirmation_gap" ? { reason: p.reason } : {}),
-    };
-  }
-  return null;
-}
-
-/** Rejects a malformed payload rather than guessing: an absent or
- *  unparseable `rally_turns` is indistinguishable on the wire from the
- *  deliberate `null` that means ∞, and showing "off" for a threshold that
- *  is actually in force would mislead exactly when it matters. */
-export function parseQuagmireSettings(raw: unknown): QuagmireSettings | null {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
-  const p = raw as Record<string, unknown>;
-  if (p.source !== "stored" && p.source !== "env" && p.source !== "default") {
-    return null;
-  }
-  if (p.rally_turns === null) return { rallyTurns: null, source: p.source };
-  if (
-    typeof p.rally_turns !== "number" ||
-    !Number.isInteger(p.rally_turns) ||
-    p.rally_turns <= 0
-  ) {
-    return null;
-  }
-  return { rallyTurns: p.rally_turns, source: p.source };
 }
 
 // Same charset `AgentId.valid?/1` enforces server-side (`agent_id.ex`,
@@ -4605,8 +4482,6 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   history_replay_envelope: "checked",
   agent_deleted: "checked",
   delivery_status: "checked",
-  quagmire_notice: "checked",
-  quagmire_settings: "checked",
   work_settings: "checked",
   session_reset_started: "checked",
   session_reset_completed: "checked",
@@ -5060,17 +4935,9 @@ export function connectKaoiro(
       if (typeof raw.agent_id !== "string") return;
       handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
     });
-    bindServerEvent(c, "quagmire_notice", (payload: unknown) => {
-      const notice = parseQuagmireNotice(payload);
-      if (notice !== null) handlers.onQuagmireNotice?.(notice);
-    });
     bindServerEvent(c, "work_settings", (payload: unknown) => {
       const settings = parseWorkSettings(payload);
       if (settings !== null) handlers.onWorkSettings?.(settings);
-    });
-    bindServerEvent(c, "quagmire_settings", (payload: unknown) => {
-      const settings = parseQuagmireSettings(payload);
-      if (settings !== null) handlers.onQuagmireSettings?.(settings);
     });
     bindServerEvent(c, "status_line_snapshot", (payload: unknown) => {
       const snapshot = parseStatusLineSnapshot(payload);
@@ -5767,8 +5634,6 @@ export function connectKaoiro(
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
     getWorkSettings: () => pushWorkSettings(channel, "get_work_settings", {}),
     setWorkSettings: (expected_revision, changes) => pushWorkSettings(channel, "set_work_settings", { expected_revision, changes }),
-    setQuagmireSettings: (rallyTurns) =>
-      pushAsync(channel, "set_quagmire_settings", { rally_turns: rallyTurns }),
     fetchStatusLineHistory: async (agentId) => {
       const entries = parseStatusLineHistory(
         await pushAsyncReply(channel, "status_line_history", { agent_id: agentId }),

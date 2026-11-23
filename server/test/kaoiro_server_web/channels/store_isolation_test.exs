@@ -15,7 +15,6 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
     IngressOrder,
     PermissionModes,
     PermissionSettings,
-    QuagmireSettings,
     SessionLifecycleEvents,
     SessionPointers,
     SessionStarts,
@@ -50,7 +49,6 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
     assert PermissionModes.get(@agent) == nil
     assert PermissionSettings.get(@agent) == nil
     refute match?({:ok, _}, WorkStore.op_result(@principal, @operation_id))
-    assert QuagmireSettings.rally_turns() != 97
     refute Enum.any?(Map.values(Users.all()), &(Map.get(&1, :display_name) == "Iso"))
     refute Map.has_key?(WrapperBuildInfos.snapshot(), @agent)
     refute TokenDenylist.revoked?(@agent)
@@ -84,7 +82,6 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
     :ok = PermissionModes.record(@agent, "default")
     _ = PermissionSettings.record_observation(@agent, "codex", permission_control())
     assert {:ok, _} = WorkStore.apply(@principal, work_operation(), %{operator: true})
-    :ok = QuagmireSettings.put_rally_turns(97)
     {:ok, _user} = Users.get_or_create("github", "operator", "Iso")
 
     :ok =
@@ -114,7 +111,6 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
     assert AgentDirectory.get(@agent) != nil
     assert PermissionModes.get(@agent) != nil
     assert {:ok, _} = WorkStore.op_result(@principal, @operation_id)
-    assert QuagmireSettings.rally_turns() == 97
     assert Map.has_key?(WrapperBuildInfos.snapshot(), @agent)
     assert TokenDenylist.revoked?(@agent)
     assert ClearWatermarks.get(@agent) != nil

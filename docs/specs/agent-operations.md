@@ -195,19 +195,10 @@ For persona-name resolution and existing-peer routing, follow
 - Observe the deliverable's progress, not the volume of activity. A rising
   message count while the unit of result stands still is the best available
   signal of a review quagmire.
-- The round budget is a process rule, and this document is where it lives. The
-  server also detects a long rally structurally and shows the operator a
-  notice — counted per agent PAIR across conversations, because opening a
-  fresh `conversation_id` does not reset a review loop. That notice is
-  advisory: it never closes a conversation and never messages an agent. See
-  [coordination monitoring](../reference/inter-agent/coordination-monitoring.md).
-- The threshold that notice fires on is the operator's to set, from the
-  dashboard settings drawer, without a server restart. Director-style
-  operation holds several long review loops at once, so the shipped default
-  can put a permanent banner on every active pair. Raise it, or turn rally
-  detection off (∞), rather than reading past banners that never clear —
-  a notice nobody acts on is worth nothing. The threshold is
-  deployment-wide, not per director.
+- The round budget is a process rule, and this document is where it lives.
+  The server does not detect long rallies; count rounds per agent pair across
+  conversations, because opening a fresh `conversation_id` does not reset a
+  review loop.
 
 ## Review results as files
 

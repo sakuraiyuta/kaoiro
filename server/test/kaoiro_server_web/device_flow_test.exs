@@ -48,7 +48,7 @@ defmodule KaoiroServerWeb.DeviceFlowTest do
   end
 
   test "the application starts DeviceAuth bare" do
-    assert KaoiroServer.DeviceAuth in KaoiroServer.Application.children(false)
+    assert KaoiroServer.DeviceAuth in KaoiroServer.Application.children()
   end
 
   test "issue, approve, poll, then use and refresh the token", %{base: base, port: port} do

@@ -116,7 +116,7 @@ config :kaoiro_server,
        )
 
 # Per-run throwaway DETS file for the agent status lines (issue 482), for the
-# same reason as the rally threshold store above.
+# same reason as the stores above.
 config :kaoiro_server,
        :agent_status_lines_path,
        Path.join(
@@ -128,24 +128,6 @@ config :kaoiro_server,
 config :kaoiro_server,
        :rooms_path,
        Path.join(test_dets_dir, "kaoiro_test_rooms_#{run_nonce}.dets")
-
-# issue #320: the detector's 60-second sweep crosses test boundaries. A test
-# that closes a conversation past the rally threshold leaves it readable, and
-# a sweep firing during a LATER test broadcasts it to `agents:lobby`, failing
-# that test's `refute_push`. Tests that need the detector start their own.
-config :kaoiro_server, start_quagmire_watch: false
-
-# Per-run throwaway DETS file for the operator-picked rally threshold
-# (issue #307). Same isolation reason as the stores above: without it the
-# app-started singleton shares the default
-# $TMPDIR/kaoiro-dets/quagmire_settings.dets, so a threshold one test
-# stored would be the starting state of the next `mix test` invocation.
-config :kaoiro_server,
-       :quagmire_settings_path,
-       Path.join(
-         test_dets_dir,
-         "kaoiro_test_quagmire_settings_#{run_nonce}.dets"
-       )
 
 # Per-run throwaway DETS file for the IngressOrder allocator (ふじ
 # R5 must-fix, 2026-07-23) and its A4 advisory (2026-07-23, 3rd

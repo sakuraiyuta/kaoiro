@@ -112,7 +112,6 @@ Call `require_operator(socket)` first, both directly and inside
 - `session_reset`
 - `clear_history` / `delete_agent` / `revoke_wrapper_token`
 - `attach_open` / `attach_chunk` / `attach_close`
-- `set_quagmire_settings`
 - `set_status_line_retention`
 - `create_room` / `rename_room` / `delete_room` / `move_agent` /
   `preview_room_move` / `preview_room_delete`

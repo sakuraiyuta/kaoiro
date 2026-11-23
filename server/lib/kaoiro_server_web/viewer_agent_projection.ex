@@ -50,7 +50,7 @@ defmodule KaoiroServerWeb.ViewerAgentProjection do
      |> Map.delete("ext")}
   end
 
-  # inter_agent_message is operator-only by spec (docs/reference/inter-agent/coordination-monitoring.md);
+  # inter_agent_message is operator-only by spec (docs/architecture/inter-agent-messaging.md);
   # listed explicitly for symmetry with the other typed clauses, even though
   # the fail-closed catch-all below would already drop it.
   def sanitize(%{"type" => "inter_agent_message"}), do: :drop

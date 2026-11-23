@@ -28,7 +28,6 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         deleteAgent: async () => {},
         renameAgent: async () => {},
         setPermission: async () => null,
-        setQuagmireSettings: async () => {},
         fetchStatusLineHistory: async () => [],
         setStatusLineRetention: async () => {},
         listConversations: async () => Object.assign([], { incomplete: false }),

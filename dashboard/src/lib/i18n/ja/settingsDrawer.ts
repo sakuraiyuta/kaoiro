@@ -32,15 +32,6 @@ export const settingsDrawer = {
   showHistory: "履歴を表示",
   deletedAgentsHint:
     "削除済みのエージェントも、ID を入力して保持されている履歴を確認できます。",
-  quagmireTitle: "停滞検知のしきい値",
-  quagmireHint: (p: { source: string }) =>
-    `エージェント間のやり取りがこの通数に達すると警告バナーを出します (現在の設定元: ${p.source})。`,
-  neverDetect: "検知しない (∞)",
-  threshold: "しきい値",
-  turnsCount: (p: { n: number }) => `${p.n} 通`,
-  directInput: (p: { max: number }) => `直接入力 (1〜${p.max})`,
-  thresholdError: (p: { reason: string }) =>
-    `しきい値を変更できません: ${p.reason}`,
   retentionTitle: "状況表示の履歴件数",
   retentionHint: (p: { source: string }) =>
     `各エージェントの状況表示について、変更履歴を何件まで残すかを決めます。 減らすと、超えた古い履歴はすぐに消えます (現在の設定元: ${p.source})。`,

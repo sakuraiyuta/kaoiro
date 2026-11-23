@@ -125,8 +125,8 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/protocol-inter-agent.md (Dispatch-confirmation ledger; Negotiated gap recovery) | [reference/inter-agent/delivery.md](../reference/inter-agent/delivery.md) | U12 |
 | specs/protocol-inter-agent.md (Receiver-side behavior; Coalescing contract; Synchronous reply wait) | [reference/inter-agent/send-and-wait.md](../reference/inter-agent/send-and-wait.md) | U12 |
 | specs/protocol-inter-agent.md (Coalescing opening paragraph) | [architecture/inter-agent-messaging.md#dispatch-and-coalescing](../architecture/inter-agent-messaging.md#dispatch-and-coalescing) | U12; replaces v1 separate architecture/inter-agent-dispatch page |
-| specs/protocol-inter-agent.md (monitoring rationale; Stall interpretation; provisional defaults; deliberate omissions) | [architecture/coordination-monitoring.md](../architecture/coordination-monitoring.md) | U13 |
-| specs/protocol-inter-agent.md (Rally; Stall contract; Wire; Configuration; Observation path) | [reference/inter-agent/coordination-monitoring.md](../reference/inter-agent/coordination-monitoring.md) | U13 |
+| specs/protocol-inter-agent.md (monitoring rationale; Stall interpretation; provisional defaults; deliberate omissions) | `architecture/coordination-monitoring.md` (removed in [issue #1249](https://github.com/sakuraiyuta/kaoiro/issues/1249)) | U13 |
+| specs/protocol-inter-agent.md (Rally; Stall contract; Wire; Configuration; Observation path) | `reference/inter-agent/coordination-monitoring.md` (removed in [issue #1249](https://github.com/sakuraiyuta/kaoiro/issues/1249); the observation path moved to [inter-agent messaging](../architecture/inter-agent-messaging.md#observation-path-dashboard-display)) | U13 |
 
 | specs/protocol-inter-agent.md (Channel events; Peer-directory boundary; list_agents / whoami) | [reference/inter-agent/directory.md](../reference/inter-agent/directory.md) | U14 |
 | specs/protocol-inter-agent.md (send acceptance / rejection) | [reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection](../reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection) | U14 |

@@ -15,33 +15,6 @@ defmodule KaoiroServer.AgentActivityTest do
     %{store: start_supervised!({AgentActivity, name: name, pending_ttl_ms: 20})}
   end
 
-  test "completion uses live result receipt time and resets with the session", %{store: store} do
-    AgentActivity.record_envelope(Map.put(env("completion", "log"), "ts", ts(9)), self(), ts(1),
-      server: store
-    )
-
-    AgentActivity.record_envelope(env("completion"), self(), ts(2), server: store)
-    assert %{last_result_at: nil} = AgentActivity.get("completion", store)
-
-    AgentActivity.record_envelope(
-      Map.put(env("completion", "result"), "ts", ts(9)),
-      self(),
-      ts(3),
-      server: store
-    )
-
-    assert %{last_result_at: at} = AgentActivity.get("completion", store)
-    assert at == ts(3)
-    AgentActivity.record_envelope(env("completion", "log"), self(), ts(4), server: store)
-    assert %{last_result_at: ^at} = AgentActivity.get("completion", store)
-
-    AgentActivity.record_envelope(env("completion", "state_change", "new"), self(), ts(5),
-      server: store
-    )
-
-    assert %{last_result_at: nil} = AgentActivity.get("completion", store)
-  end
-
   test "replayed results touch activity without adopting or changing a live session", %{
     store: store
   } do
@@ -50,7 +23,7 @@ defmodule KaoiroServer.AgentActivityTest do
       replay: true
     )
 
-    assert %{session_id: nil, turns: 0, last_result_at: nil, last_activity_at: activity} =
+    assert %{session_id: nil, turns: 0, last_activity_at: activity} =
              AgentActivity.get("replay", store)
 
     assert activity == ts(1)
@@ -62,10 +35,9 @@ defmodule KaoiroServer.AgentActivityTest do
       replay: true
     )
 
-    assert %{session_id: "current", turns: 1, last_result_at: result, last_activity_at: activity} =
+    assert %{session_id: "current", turns: 1, last_activity_at: activity} =
              AgentActivity.get("live", store)
 
-    assert result == ts(2)
     assert activity == ts(3)
   end
 

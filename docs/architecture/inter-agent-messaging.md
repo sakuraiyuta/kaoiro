@@ -1,7 +1,7 @@
 ---
 title: Inter-agent messaging
 status: provisional
-last_updated: 2026-11-10
+last_updated: 2026-11-24
 description: Inter-agent messaging and its boundaries.
 ---
 
@@ -37,7 +37,7 @@ flowchart LR
   `wrapper:<to>` channel. The receiving wrapper injects it as input for the next
   SDK turn.
 - **observation path**: The server also includes the envelope in the normal
-  `agents:lobby` broadcast (operator-only delivery; see [observation path](../reference/inter-agent/coordination-monitoring.md#observation-path-dashboard-display)). The dashboard can
+  `agents:lobby` broadcast (operator-only delivery; see [observation path](#observation-path-dashboard-display)). The dashboard can
   display the inter-agent message in both A and B log panes.
 
 The server does not interpret the natural-language meaning of the body. It
@@ -45,6 +45,30 @@ validates the structured payload (including kind, meta, and owner shape), reads
 `to` for routing, and uses `conversation_id`, `turn_number`, `meta.done`,
 `new_conversation`, and body byte length for admission, lifecycle, and quotas.
 These mechanical checks do not decide whether an agent agrees with the body.
+
+### Observation path (dashboard display)
+
+The server also broadcasts each `inter_agent_message` envelope to
+`agents:lobby`, but, like `log` and `result`, delivery is **operator-only**
+([ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
+
+On receipt, the dashboard displays the message in the log panes of both
+`agent_id` (sender) and `payload.to` (recipient). The client defines the exact
+format, but it must at least provide:
+
+- sender log: `→ to <to>: <body>(kind, conversation_id excerpt)`
+- recipient log: `← from <agent_id>: <body>(kind, conversation_id excerpt)`
+- a visual grouping by conversation_id so one dialogue can be followed.
+
+Because this is a separate envelope type from `log`, existing log filters and
+read-state handling remain independent.
+
+The server retains display state as a **per-pane projection** (volatile sender
+and receiver panes). Live display, F5 restoration, and replay after restart
+all use the same upsert contract ([ADR-0051](../adr/0051-history-restart-resilience.md)
+D3-1). The cap is the newest 200 envelopes in the final projection after
+transcript rows and IA are merged chronologically per pane; IA no longer gets
+an exemption from the cap.
 
 ## Dispatch and coalescing
 
@@ -65,7 +89,6 @@ receiver, batching, and synchronous-wait contracts.
 - [Approval flow](../reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration), and [session-operation tools](../reference/inter-agent/session-tools.md).
 - [Delivery confirmation and recovery](../reference/inter-agent/delivery.md).
 - [Send and wait](../reference/inter-agent/send-and-wait.md).
-- [Coordination monitoring and display](../reference/inter-agent/coordination-monitoring.md).
 - [Peer directory and companion tools](../reference/inter-agent/directory.md).
 - [Rooms](../reference/inter-agent/rooms.md): sending is limited to agents in
   the same room ([ADR-0072](../adr/0072-rooms-single-membership-send-boundary.md)).
