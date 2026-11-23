@@ -150,7 +150,7 @@ type Item = {
   find: (root: HTMLElement) => Element[];
 };
 
-// The 13 items of the drawer, each located by something an operator reads or
+// The 12 items of the drawer, each located by something an operator reads or
 // a stable class. Logout is a global action and is checked separately.
 const ITEMS: Item[] = [
   { name: "language", tab: "display", find: (r) => Array.from(r.querySelectorAll(".language")) },
@@ -173,9 +173,9 @@ const OPERATOR_ONLY = [
 ];
 
 describe("SettingsDrawer tabs: membership (issue 1076)", () => {
-  it("membership: each of the 13 items is in exactly one panel, the expected one", async () => {
+  it("membership: each of the 12 items is in exactly one panel, the expected one", async () => {
     const { target } = await render(operatorProps());
-    expect(ITEMS).toHaveLength(13);
+    expect(ITEMS).toHaveLength(12);
     for (const item of ITEMS) {
       const found = item.find(target);
       expect(found, `${item.name} appears once`).toHaveLength(1);
