@@ -2078,3 +2078,21 @@ describe("AntigravityHost over ACP: inbound lines by form (C5)", () => {
     expect(r.ends[0]!.error).toEqual({ detail: "agy_exit_without_result" });
   });
 });
+
+describe("AntigravityHost over ACP: a call first seen after the stop latched (4.3)", () => {
+  it("is a gate fault when it is open at settlement with no hook", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.message("x");
+    await waitFor(() => r.acks.length === 1);
+    agy.hold.add("session/cancel");
+    await r.test.host.interrupt();
+    agy.toolCall("c1", "run_command", { CommandLine: "ls" });
+    await waitFor(() => r.logs.some((e) => e.type === "log" && (e.payload as { kind: string }).kind === "tool_use"));
+    agy.respond("cancelled");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.faults).toEqual([{ reason: "antigravity_gate_unobserved_tool", detail: "antigravity_gate_unobserved_tool:run_command" }]);
+    expect(r.ends[0]!.error).toEqual({ reason: "interrupted" });
+  });
+});
