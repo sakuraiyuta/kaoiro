@@ -304,6 +304,8 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("deny", { args: named("kaoiro-n1") })], dialogs: [{ tool: "run_command", allow: false, input: named("other") }] }),
       // ... of another command that names the same token.
       sample({ gate: [cmd("deny", { args: named("kaoiro-n1") })], dialogs: [{ tool: "run_command", allow: false, input: JSON.stringify({ CommandLine: "cat kaoiro-n1" }) }] }),
+      // The dialog for this input approved it.
+      sample({ gate: [cmd("deny", { args: named("kaoiro-n1") })], dialogs: [{ tool: "run_command", allow: true, input: named("kaoiro-n1") }] }),
       sample({ gate: [cmd("deny", { args: named("kaoiro-n1") })], dialogs: [{ tool: "run_command", allow: false, input: named("kaoiro-n1") }], results: [{ is_error: true }] }),
     ],
     undetermined: [sample(), sample({ gate: [cmd("deny", { args: named("other") })] })],
@@ -337,6 +339,9 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [{ tool: "run_command", allow: true, input: named("other") }], files: ["n3b.txt"] }),
       // ... of another command that names the same file.
       sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [{ tool: "run_command", allow: true, input: JSON.stringify({ CommandLine: "cat n3b.txt" }) }], files: ["n3b.txt"] }),
+      // The dialog for this input rejected it, or was for another tool.
+      sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [{ tool: "run_command", allow: false, input: named("n3b.txt") }], files: ["n3b.txt"] }),
+      sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [{ tool: "write_file", allow: true, input: named("n3b.txt") }], files: ["n3b.txt"] }),
       sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [{ tool: "run_command", allow: true, input: named("n3b.txt") }] }),
       // The file came from a write tool.
       sample({
@@ -527,6 +532,8 @@ describe("Antigravity ACP native acceptance: the judges (negative controls)", ()
     });
     const named = n6Trial((r) => {
       r.gate.push(parentPre(45, "read_file", "allow", { Path: "/tmp/task-r.log" }), parentPre(47, "view_file", "deny", { AbsolutePath: "/w/x" }));
+      // Neither a list nor a status without a TaskId gives an index.
+      r.gate.push(statusM(42, "allow", { Action: "list", TaskId: "task-z" }), statusM(43, "allow", { Action: "status" }));
       // A child's read and one after E are not the parent's record.
       r.gate.push({ ...parentPre(48, "read_file", "allow", { Path: "/tmp/task-r.log" }), conversation: N6_CHILD, sub: true } as GateEntry);
       r.gate.push(parentPre(65, "read_file", "allow", { Path: "/tmp/task-r.log" }));
@@ -535,6 +542,17 @@ describe("Antigravity ACP native acceptance: the judges (negative controls)", ()
       status: ["allow@40:t1"], reads: ["read_file:allow@45:t1", "view_file:deny@47:-"], read_count: 2,
     });
     expect(JSON.stringify(n6Correspondence(named))).not.toContain("task-r");
+  });
+
+  it("summary: each dialog names the call whose arguments its input equals; N6 adds its record", () => {
+    const dialogs = (record: CaseRecord) => JSON.parse(summary("N3b", record, "pass", 1)).dialogs;
+    expect(dialogs(CONTROLS.N3b!.pass)).toEqual(["run_command:allow:named=#call"]);
+    expect(dialogs(sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [
+      { tool: "run_command", allow: true, input: JSON.stringify({ CommandLine: "cat n3b.txt" }) },
+      { tool: "write_file", allow: true, input: named("n3b.txt") },
+    ] }))).toEqual(["run_command:allow:named=none", "write_file:allow:named=none"]);
+    expect(JSON.parse(summary("N6", n6Trial(), "pass", 1)).n6_record).toEqual({ status: ["allow@40:t1"], reads: [], read_count: 0 });
+    expect(JSON.parse(summary("N3b", CONTROLS.N3b!.pass, "pass", 1)).n6_record).toBeUndefined();
   });
 
   it("N6 values: only a complete value counts", () => {
