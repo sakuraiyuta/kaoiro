@@ -18,10 +18,10 @@ async function openTab(page: Page, index: number): Promise<void> {
   await page.getByRole("tab").nth(index).click();
 }
 
-// Specs that depend on the drawer overflowing open it here. workState=ready
-// adds the work-capacity block, so Operations overflows by far more than a
-// font-metrics difference; the margin is asserted so that a shrinking panel
-// turns the spec red instead of leaving it dependent on the font.
+// Specs that depend on the drawer overflowing open it here, at a viewport low
+// enough that Operations overflows by far more than a font-metrics
+// difference; the margin is asserted so that a shrinking panel turns the spec
+// red instead of leaving it dependent on the font.
 const OVERFLOWING_DRAWER = `${DRAWER}&workState=ready`;
 const MIN_OVERFLOW_PX = 100;
 async function openOverflowingOperations(
@@ -292,11 +292,12 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
   // all viewport heights.
   test.describe("垂直スクロールと下部コントロールの到達性 (issue #507)", () => {
     const VIEWPORTS = [
-      // With tabs one panel no longer fills a 768px drawer, so the desktop
-      // case uses a height at which the Operations panel overflows but that
-      // stays outside the short band (ADR-0052 F8).
-      { name: "Desktop 1024x560", width: 1024, height: 560 },
-      { name: "Phone (iPhone SE) 375x667", width: 375, height: 667 },
+      // The harness mounts the drawer alone, so the App's short band
+      // (ADR-0052 F8) does not reach it: measured, the Operations panel is
+      // 601px tall at both 560px and 440px. 440px leaves the overflow margin
+      // above MIN_OVERFLOW_PX.
+      { name: "Desktop 1024x440", width: 1024, height: 440 },
+      { name: "Phone 375x440", width: 375, height: 440 },
     ];
 
     for (const vp of VIEWPORTS) {
@@ -326,7 +327,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     test("mouse.wheel で drawer のみスクロールし背景は動かない (overscroll-behavior: contain)", async ({
       page,
     }) => {
-      await openOverflowingOperations(page, 1024, 560);
+      await openOverflowingOperations(page, 1024, 440);
 
       const drawer = page.locator(".settings-drawer-content");
       const box = (await drawer.boundingBox())!;
@@ -351,7 +352,7 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     test("Tab 移動で画面外の項目へ自動スクロールインし、循環後も先頭へスクロールバックする", async ({
       page,
     }) => {
-      const PHONE_H = 667;
+      const PHONE_H = 440;
       await openOverflowingOperations(page, 375, PHONE_H);
       await page.locator("dialog button.close").focus();
 
