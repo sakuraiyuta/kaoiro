@@ -87,15 +87,22 @@ kaoiro `whoami` handler. The printed record keeps ID tails, counts, order
 and match results, never a path, an output or N6's value.
 
 - N1, N3b and N4 tie the command, its dialog and its file together. The
-  gate hands a call's arguments to the dialog unchanged, so the dialog's
-  input must equal the arguments of the call it answered; a dialog for
-  another command that names the same file or token does not count. N3b and
-  N4 do not pass when a write tool wrote the file.
+  gate hands a call's arguments to the dialog unchanged, so a dialog with
+  the same tool, the call's full arguments as its input and the matching
+  answer must exist for the denied (N1) or allowed (N3b, N4) call; a dialog
+  for another command that names the same file or token does not count. A
+  dialog carries no call ID, so this shows that a compatible dialog exists,
+  not which call it answered. The printed record gives each dialog
+  `compatible_calls=<k>`, the number of gate records with the same tool,
+  its full input as the arguments and a decision that matches the answer
+  (`unknown` when the input was omitted); k names no call, even when it is
+  1. N3b and N4 do not pass when a write tool wrote the file.
 - N5 needs exactly one allowed call and exactly one run of the `whoami`
   handler.
-- N8 interrupts once the subagent's command has created its own file, and
-  claims only that the turn and every spawned `agy` end; the record counts
-  spawned `agy` processes, not every command.
+- N8 interrupts once `n8.started` exists (the subagent is asked to run a
+  command that creates it); the record does not show which call created
+  the file. N8 claims only that the turn and every spawned `agy` end; the
+  record counts spawned `agy` processes, not every command.
 - N6 is narrowed to what kaoiro and the wire show (operator decision,
   2026-11-23; criteria P1-P7 in
   [issue #1238](https://github.com/sakuraiyuta/kaoiro/issues/1238), comment
@@ -107,9 +114,14 @@ and match results, never a path, an output or N6's value.
   after the `continue` and before the result, and is in the parent's
   successful reply as a complete value (the rule that finds it in the
   output); no gate fault until the case closed. Beside the rows the record
-  keeps each parent status query's TaskId and each parent read by index,
-  with the gate's actual decision, and the read count; it decides nothing.
-  Not claimed: that
+  lists the parent's status queries before the result, numbered so that
+  only an identical TaskId shares a number, and the parent's reads by tool,
+  each with the gate's actual decision and sequence number, and counts the
+  reads. It links no read to a TaskId and decides nothing; when P1 cannot
+  fix the session and the result, both lists read `unknown_scope` instead
+  of a count (director's ruling, [issue #1238](https://github.com/sakuraiyuta/kaoiro/issues/1238), comment 7093772569, which replaced
+  the earlier requirement to record a read-to-TaskId correspondence). Not
+  claimed: that
   the parent took the value from the task it queried, or that a read
   retrieved it. `agy` 1.5.14's status and read completions carry no output,
   so the record cannot show which tool result gave the model the value.
@@ -136,7 +148,7 @@ shown by their last 8 characters; N6's value is not printed.
 | N4 | `run_command` with `BypassSandbox: true` approved and allowed; Stop `stop`; the command's file was written | pass |
 | N5 | `mcp_kaoiro_whoami` allowed with no dialog, and the `whoami` handler ran once; Stop `stop`; a result | pass |
 | N6 | parent session `c9553ea9`: R allowed (seq 2), Stop `continue` (3), `manage_task` status query allowed (4), R's `tool_result` with one complete value (6), Stop `stop` (7), the successful result (8) holding that value; no gate fault. Rows P1-P7 all pass | pass |
-| N8 | parent `define_subagent` and `invoke_subagent` allowed, Stop `continue`; the subagent's `run_command` allowed under another conversation ID; the interrupt came once its file existed; the turn ended `interrupted`; no `agy` process was alive afterwards | pass |
+| N8 | parent `define_subagent` and `invoke_subagent` allowed, Stop `continue`; the subagent's `run_command` naming `n8.started` allowed under another conversation ID, and the file existed; the interrupt came once it existed (the record does not show which call created it); the turn ended `interrupted`; no `agy` process was alive afterwards | pass |
 
 After each run the test found 1 file in the disposable HOME holding that run's
 tool-host bearer (`agy`'s own store); the harness's shape scan found no
@@ -145,25 +157,37 @@ deleted after the scan.
 
 ### Sample after the round-3 review (implementation round 4)
 
-The judges changed as described above for N1, N3b, N4 (the dialog bound to
-its call), N5 (exactly one), N6's P6 (a complete value) and N6's read
-record. N1, N3b, N4 and N6 were run again on commit `d01275b0` under the same
-conditions, one case per invocation. The budget was 6 prompts with one retry
-for N4 and N6; every case passed on its first attempt, and 4 prompts were
-used. In the printed dialogs, `=#<call>` names the gate call whose arguments
-equal the dialog's input.
+The judges changed as described above for N1, N3b, N4 (a compatible
+dialog for the call), N5 (exactly one) and N6's P6 (a complete value), and
+N6 gained its record. N1, N3b, N4 and N6 were run again on commit `d01275b0`
+under the same conditions, one case per invocation. The budget was 6
+prompts with one retry for N4 and N6; every case passed on its first
+attempt, and 4 prompts were used. These are the outputs of that version's
+display: each printed dialog ended in `=#<call>`, the tail of the first gate
+call whose arguments equal the dialog's input, and in each record exactly
+one gate call had those arguments. That display was replaced afterwards
+(below).
 
 | Case | Record (in order) | Verdict |
 |---|---|---|
-| N1 | `run_command` denied by the gate; its dialog rejected, bound to that call (`=#20731017`); Stop `stop`; a result; no file | pass |
-| N3b | `run_command` allowed; its dialog approved, bound to that call (`=#07446599`); Stop `stop`; the command's file was written; `agy` launched with `--sandbox` | pass |
-| N4 | `run_command` with `BypassSandbox: true` allowed; its dialog approved, bound to that call (`=#68880261`); Stop `stop`; the command's file was written | pass |
-| N6 | parent session `15a32390`: R allowed (seq 2), Stop `continue` (3), `manage_task` status query allowed (4), R's `tool_result` with one complete value (6), `read_file` allowed (7), Stop `stop` (9), the successful result (10) holding that value as a complete value; no gate fault. Rows P1-P7 all pass. Record: one status query (t1, allowed at 4), one read (allowed at 7) whose arguments hold no queried TaskId | pass |
+| N1 | `run_command` denied by the gate; a rejected dialog with that call's input (printed `=#20731017`, the only call with that input); Stop `stop`; a result; no file | pass |
+| N3b | `run_command` allowed; an approved dialog with that call's input (printed `=#07446599`, the only call with that input); Stop `stop`; the command's file was written; `agy` launched with `--sandbox` | pass |
+| N4 | `run_command` with `BypassSandbox: true` allowed; an approved dialog with that call's input (printed `=#68880261`, the only call with that input); Stop `stop`; the command's file was written | pass |
+| N6 | parent session `15a32390`: R allowed (seq 2), Stop `continue` (3), `manage_task` status query allowed (4), R's `tool_result` with one complete value (6), `read_file` allowed (7), Stop `stop` (9), the successful result (10) holding that value as a complete value; no gate fault. Rows P1-P7 all pass. That version's record printed `allow@4:t1` for the status query and `read_file:allow@7:-` for the read; in the current record's terms, one status query allowed at 4 and one read allowed at 7, with no link between them | pass |
 
 N5's round-3 record (one allowed `mcp_kaoiro_whoami`, one handler run, no
 dialog, a successful result) passes the exactly-one rule; N8's judge did not
 change. The bearer and shape scans after each run found the same as in
 round 3, and each HOME was deleted.
+
+### Display after implementation review round 4
+
+After review round 4 the director ruled ([issue #1238](https://github.com/sakuraiyuta/kaoiro/issues/1238), comment 7093772569) that
+the printed record states only what the records determine: per dialog the
+count of compatible gate records (`compatible_calls=<k>` or `unknown`), and
+N6's record as described above. P1-P7 and the case judges did not change,
+so no case was run again. The new display has not been run natively; the
+outputs saved above are those of the earlier versions.
 
 ## `edit_file` hook requests
 
