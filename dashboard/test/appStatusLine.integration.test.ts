@@ -5,7 +5,7 @@ import "./isolation.setup";
 // can open, and the two-layer gate on the retention control (the server's
 // forbidden is tested on the server; this is the client's half).
 //
-// Mirrors workSettingsOperatorGate.integration.test.ts: the connection is
+// Mirrors appPermissionOperatorGate.integration.test.ts: the connection is
 // a stub, the handlers App registers are captured, and the test drives them the
 // way the protocol layer would.
 import { mount, tick, unmount } from "svelte";

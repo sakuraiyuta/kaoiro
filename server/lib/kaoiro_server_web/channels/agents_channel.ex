@@ -163,7 +163,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # Recipient dispatch watermarks are an operator diagnostic (issue #237).
     # Keep live updates behind the same role gate as their join-time snapshot.
     "delivery_status",
-    "work_settings",
     # Connected wrapper artifact identity is operator-only, like host build
     # identity; viewers do not receive package provenance.
     "wrapper_build_info",
@@ -196,7 +195,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @client_event_policy MapSet.new(~w(
     snapshot task_snapshot delivery_snapshot history hosts directory
     history_cleared history_reset history_replay_complete
-    history_replay_envelope agent_deleted delivery_status work_settings
+    history_replay_envelope agent_deleted delivery_status
     session_reset_started session_reset_completed session_reset_failed
     work_changed work_scope_overlap
     envelope spawn_result runner_sessions catalog_result wrapper_build_info
@@ -242,8 +241,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    agent_busy agent_not_owned unsupported_session_reset
                    session_reset_pending reserved_session_command
                    invalid_mode missing_user_id invalid_user_id
-                   unknown_user revision_exhausted revision_conflict invalid_work_settings
-                   work_settings_unknown work_settings_corrupt
+                   unknown_user revision_exhausted revision_conflict
                    missing_conversation_id conversation_closed
                    unknown_conversation_id invalid_approval
                    invalid_payload agent_unavailable
@@ -441,21 +439,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
         wrapper_build_info_payload(KaoiroServer.WrapperBuildInfos.snapshot())
       )
 
-      case WorkStore.get_settings(fn -> work_settings_actor(socket) end) do
-        {:ok, settings} ->
-          push_versioned(socket, "work_settings", work_settings_payload(settings))
-
-        {:error, reason} when reason in [:work_settings_corrupt, :work_settings_unknown] ->
-          push_versioned(
-            socket,
-            "work_settings",
-            work_settings_payload(Map.merge(work_error(reason), %{state: "unavailable"}))
-          )
-
-        _ ->
-          :ok
-      end
-
       # The retention pick behind the change log. A settings call that cannot
       # be answered (the store is restarting) skips the push; the store
       # announces its settings once it is up.
@@ -468,14 +451,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   @impl true
-  def handle_out("work_settings", payload, socket) do
-    if socket.assigns[:role] in @operator_capable_roles do
-      push_versioned(socket, "work_settings", work_settings_payload(payload))
-    end
-
-    {:noreply, socket}
-  end
-
   def handle_out("envelope", envelope, socket) do
     case sanitize_envelope_for(socket.assigns[:role], envelope) do
       :drop -> :ok
@@ -711,29 +686,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
-    end
-  end
-
-  def handle_in("get_work_settings", payload, socket) do
-    with :ok <- require_operator(socket, payload, "get_work_settings"),
-         {:ok, settings} <- WorkStore.get_settings(fn -> work_settings_actor(socket) end) do
-      {:reply, {:ok, settings}, socket}
-    else
-      {:error, reason} -> {:reply, {:error, work_error(reason)}, socket}
-    end
-  end
-
-  def handle_in("set_work_settings", payload, socket) do
-    with :ok <- require_operator(socket, payload, "set_work_settings"),
-         {:ok, settings} <-
-           WorkStore.set_settings(
-             fn -> work_settings_actor(socket) end,
-             payload["expected_revision"],
-             payload["changes"]
-           ) do
-      {:reply, {:ok, settings}, socket}
-    else
-      {:error, reason} -> {:reply, {:error, work_error(reason)}, socket}
     end
   end
 
@@ -3473,23 +3425,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
       else: {:error, :unknown_agent}
   end
 
-  defp work_settings_payload(payload),
-    do: Map.new(payload, fn {key, value} -> {to_string(key), value} end)
-
   defp work_error({:work_capacity, capacity}),
     do: %{reason: safe_reason(:work_capacity), details: %{capacity: capacity}}
 
-  defp work_error({:revision_conflict, revision}),
-    do: %{reason: safe_reason(:revision_conflict), revision: revision}
-
-  defp work_error(reason) when reason in [:work_settings_corrupt, :work_settings_unknown],
-    do: %{reason: safe_reason(reason), message: KaoiroServer.WorkSettings.message(reason)}
-
   defp work_error(reason), do: %{reason: safe_reason(reason)}
-
-  defp work_settings_actor(socket) do
-    with :ok <- require_operator_role(socket), do: resolve_permission_actor(socket)
-  end
 
   @doc """
   Pure join/selection core of `launch_defaults` (issue #88), split out from

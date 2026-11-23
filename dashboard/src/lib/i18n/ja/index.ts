@@ -21,7 +21,6 @@ import { taskRing } from "./taskRing";
 import { tasklistFloat } from "./tasklistFloat";
 import { time } from "./time";
 import { untrustedMarkdown } from "./untrustedMarkdown";
-import { workCapacitySettings } from "./workCapacitySettings";
 
 export const ja = {
   agentCard,
@@ -47,7 +46,6 @@ export const ja = {
   tasklistFloat,
   time,
   untrustedMarkdown,
-  workCapacitySettings,
 };
 
 export type Messages = typeof ja;

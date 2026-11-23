@@ -311,7 +311,7 @@ defmodule KaoiroServer.WorkStoreTest do
     end)
   end
 
-  test "V36a and V36b nomination cap and expiry" do
+  test "V36a and V36b: nominations are not capped per director and still expire" do
     with_store("nomination_bounds", fn name ->
       director = %{"kind" => "agent", "id" => "nomination-director"}
 
@@ -337,7 +337,7 @@ defmodule KaoiroServer.WorkStoreTest do
           work
         end
 
-      assert {:error, {:work_capacity, _}} =
+      assert {:ok, %{work: %{state: "nominated"}}} =
                WorkStore.apply(
                  director,
                  %{
@@ -354,7 +354,7 @@ defmodule KaoiroServer.WorkStoreTest do
                  name
                )
 
-      assert map_size(WorkStore.all(name)) == 16
+      assert map_size(WorkStore.all(name)) == 17
 
       first = hd(nominations)
 
@@ -487,53 +487,25 @@ defmodule KaoiroServer.WorkStoreTest do
     end)
   end
 
-  test "accepting a nomination respects the active assignee capacity" do
-    previous = Application.fetch_env!(:kaoiro_server, :work_store)
+  test "accepting a nomination is not limited by the assignee's active work" do
+    with_store("active_unlimited", fn name ->
+      recipient = %{"kind" => "agent", "id" => "active-unlimited-assignee"}
 
-    Application.put_env(
-      :kaoiro_server,
-      :work_store,
-      Keyword.put(previous, :work_active_per_assignee, 1)
-    )
+      for i <- 1..16 do
+        active_work(name, "active-unlimited-director-#{i}", recipient, "active-unlimited-#{i}")
+      end
 
-    on_exit(fn -> Application.put_env(:kaoiro_server, :work_store, previous) end)
+      seventeenth =
+        active_work(name, "active-unlimited-director-17", recipient, "active-unlimited-17")
 
-    with_store("active_cap", fn name ->
-      recipient = %{"kind" => "agent", "id" => "active-cap-assignee"}
-      _first = active_work(name, "active-cap-first-director", recipient, "active-cap-first")
-      director = %{"kind" => "agent", "id" => "active-cap-second-director"}
+      assert seventeenth.state == "active"
 
-      assert {:ok, %{work: nomination}} =
-               WorkStore.apply(
-                 director,
-                 %{"op" => "assign", "operation_id" => operation_id(), "title" => "second"},
-                 %{
-                   recipient: recipient["id"],
-                   conversation_id: "active-cap-second",
-                   turn_number: 1,
-                   new_conversation?: true
-                 },
-                 name
-               )
+      active =
+        Enum.count(WorkStore.all(name), fn {_, work} ->
+          work.state == "active" and work.assignee == recipient
+        end)
 
-      assert {:error, {:work_capacity, _}} =
-               WorkStore.apply(
-                 recipient,
-                 %{
-                   "op" => "accept_assignment",
-                   "operation_id" => operation_id(),
-                   "work_id" => nomination.work_id
-                 },
-                 %{
-                   recipient: director["id"],
-                   conversation_id: "active-cap-second",
-                   turn_number: 2
-                 },
-                 name
-               )
-
-      assert {:ok, %{work: %{state: "nominated"}}} =
-               WorkStore.status(recipient, nomination.work_id, name)
+      assert active == 17
     end)
   end
 

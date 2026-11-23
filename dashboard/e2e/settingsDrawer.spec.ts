@@ -388,23 +388,10 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
   });
 });
 
-test("operator controls follow the dashboard baseline and grid sort fits", async ({ page }) => {
+test("grid sort fits", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto(`${DRAWER}&workState=ready`);
   await page.locator("#drawer-trigger").click();
-  await openTab(page, TAB.operations);
-  const work = page.locator('section[aria-label="Work admission settings"]');
-  const input = work.locator("input").first();
-  const button = work.locator("button").first();
-  const link = work.locator("a").first();
-  await expect(input).toHaveValue("16");
-  await expect(input).toBeEnabled();
-  await expect(button).toBeEnabled();
-  await expect(link).toBeVisible();
-  expect(await input.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe("rgb(20, 20, 29)");
-  expect(await button.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe("rgb(27, 27, 39)");
-  expect(await link.evaluate((e) => getComputedStyle(e).color)).toBe("rgb(127, 212, 232)");
-  expect(await link.evaluate((e) => getComputedStyle(e).fontSize)).toBe("12px");
   await page.getByRole("tab").nth(0).click();
   const layout = await page.locator("label").filter({ hasText: "グリッドの並び順" }).evaluate((label) => {
     const select = label.querySelector("select")!;

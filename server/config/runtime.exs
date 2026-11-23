@@ -155,25 +155,6 @@ for store <- KaoiroServer.PersistencePaths.stores() do
   end
 end
 
-work_capacity_keys = [
-  {"KAOIRO_WORK_NOMINATED_PER_PRINCIPAL", :work_nominated_per_principal},
-  {"KAOIRO_WORK_ACTIVE_PER_ASSIGNEE", :work_active_per_assignee}
-]
-
-configured_work_capacity =
-  for {name, key} <- work_capacity_keys, raw = System.get_env(name), raw != nil do
-    value =
-      case {Regex.match?(~r/\A[0-9]+\z/, raw), Integer.parse(raw)} do
-        {true, {value, ""}} when value >= 0 and value <= 2_147_483_647 -> value
-        _ -> raise "#{name} must be an integer from 0 to 2147483647"
-      end
-
-    config :kaoiro_server, :work_store, [{key, value}]
-    Atom.to_string(key)
-  end
-
-config :kaoiro_server, :work_capacity_configured, configured_work_capacity
-
 # Agent status line retention (issue 482). An out-of-range or non-numeric
 # value raises at boot rather than reverting to the default: a change log
 # sized by a value nobody chose is worse than a server that refuses to start.

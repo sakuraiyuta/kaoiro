@@ -1018,305 +1018,50 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     refute_push "delivery_status", %{}
   end
 
-  describe "work admission settings" do
-    setup do
-      before = :sys.get_state(WorkStore)
-      saved = :dets.lookup(before.table, KaoiroServer.WorkSettings.key())
-      :ok = :dets.delete(before.table, KaoiroServer.WorkSettings.key())
-      :ok = :dets.sync(before.table)
-      :sys.replace_state(WorkStore, &%{&1 | settings: nil, settings_status: :ready})
+  test "real operator refusal retains the store-wide capacity detail" do
+    previous = Application.fetch_env!(:kaoiro_server, :work_store)
+    maximum = map_size(WorkStore.all()) + 1
 
-      on_exit(fn ->
-        :dets.delete(before.table, KaoiroServer.WorkSettings.key())
-        :dets.insert(before.table, saved)
-        :dets.sync(before.table)
+    Application.put_env(
+      :kaoiro_server,
+      :work_store,
+      Keyword.put(previous, :work_max_records, maximum)
+    )
 
-        :sys.replace_state(
-          WorkStore,
-          &%{&1 | settings: before.settings, settings_status: before.settings_status}
-        )
-      end)
+    on_exit(fn -> Application.put_env(:kaoiro_server, :work_store, previous) end)
+    operator = join_as(:operator)
+    target = "capacity-target-#{System.unique_integer([:positive])}"
 
-      :ok
-    end
+    operation = %{
+      "op" => "assign",
+      "operation_id" => work_operation_id(),
+      "title" => "Capacity",
+      "assignee" => target,
+      "director" => %{"kind" => "user", "id" => "operator"}
+    }
 
-    test "operator commit is delivered once; viewer cannot read, write or receive broadcasts" do
-      operator = join_as(:operator)
-      assert_push("work_settings", %{"state" => "ready", "revision" => 0})
-      viewer = join_as(:viewer)
+    assert_reply(
+      push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
+      :ok,
+      %{}
+    )
 
-      assert_reply(push(viewer, "get_work_settings", %{"version" => "0"}), :error, %{
-        reason: "forbidden"
-      })
+    operation = %{operation | "operation_id" => work_operation_id()}
 
-      refute_push("work_settings", %{})
-
-      patch = %{
-        "version" => "0",
-        "expected_revision" => 0,
-        "changes" => %{"work_nominated_per_principal" => 0}
-      }
-
-      assert_reply(push(viewer, "set_work_settings", patch), :error, %{reason: "forbidden"})
-      assert_reply(push(operator, "set_work_settings", patch), :ok, %{revision: 1})
-
-      assert_push("work_settings", %{
-        "state" => "ready",
-        "revision" => 1,
-        "effective" => %{"work_nominated_per_principal" => 0}
-      })
-
-      refute_push("work_settings", %{})
-
-      assert_reply(push(operator, "get_work_settings", %{"version" => "0"}), :ok, %{
-        changes: [%{actor: %{"kind" => "user"}}]
-      })
-    end
-
-    test "admin and operator error replies preserve each exact ordinary reason" do
-      operator = join_as(:admin)
-
-      assert_reply(
-        push(operator, "set_work_settings", %{
-          "version" => "0",
-          "expected_revision" => 0,
-          "changes" => %{"work_active_per_assignee" => 1}
-        }),
-        :ok,
-        %{revision: 1}
-      )
-
-      assert_reply(
-        push(operator, "set_work_settings", %{
-          "version" => "0",
-          "expected_revision" => 0,
-          "changes" => %{"work_active_per_assignee" => 2}
-        }),
-        :error,
-        %{reason: "revision_conflict", revision: 1}
-      )
-
-      assert_reply(
-        push(operator, "set_work_settings", %{
-          "version" => "0",
-          "expected_revision" => 1,
-          "changes" => %{"unknown" => 0}
-        }),
-        :error,
-        %{reason: "invalid_work_settings"}
-      )
-    end
-
-    test "settings revision exhaustion is preserved at the channel reply boundary" do
-      operator = join_as(:operator)
-      assert_push("work_settings", %{"revision" => 0})
-      alias KaoiroServer.WorkSettings
-      state = :sys.get_state(WorkStore)
-      fallback = state.settings_fallbacks
-      actor = %{"kind" => "user", "id" => "ceiling-operator"}
-
-      saved =
-        Enum.reduce(0..99, WorkSettings.empty(), fn revision, object ->
-          {:ok, next} =
-            WorkSettings.update(
-              object,
-              revision,
-              %{"work_active_per_assignee" => rem(revision, 2)},
-              actor,
-              fallback
-            )
-
-          next
-        end)
-
-      ceiling = 9_007_199_254_740_991
-
-      saved = %{
-        saved
-        | revision: ceiling,
-          changes: Enum.map(saved.changes, &%{&1 | revision: &1.revision + ceiling - 100})
-      }
-
-      assert :ok = WorkSettings.validate(saved)
-      :ok = :dets.insert(state.table, {WorkSettings.key(), saved})
-      :ok = :dets.sync(state.table)
-      :sys.replace_state(WorkStore, &%{&1 | settings: saved})
-
-      assert_reply(
-        push(operator, "set_work_settings", %{
-          "version" => "0",
-          "expected_revision" => ceiling,
-          "changes" => %{"work_active_per_assignee" => 2}
-        }),
-        :error,
-        %{reason: "revision_exhausted"}
-      )
-
-      assert :dets.lookup(state.table, WorkSettings.key()) == [{WorkSettings.key(), saved}]
-      refute_push("work_settings", %{})
-    end
-
-    test "queued settings update rechecks the actual token before writing" do
-      for token_config <- [
-            "tok-operator:viewer,tok-viewer:viewer",
-            "tok-other:operator,tok-viewer:viewer"
-          ] do
-        Application.put_env(
-          :kaoiro_server,
-          :client_tokens,
-          "tok-operator:operator,tok-viewer:viewer"
-        )
-
-        operator = join_as(:operator)
-        assert_push "work_settings", %{"state" => "ready", "revision" => 0}
-        :sys.suspend(WorkStore)
-
-        try do
-          ref =
-            push(operator, "set_work_settings", %{
-              "version" => "0",
-              "expected_revision" => 0,
-              "changes" => %{"work_nominated_per_principal" => 0}
-            })
-
-          queued = fn ->
-            {:messages, messages} = Process.info(Process.whereis(WorkStore), :messages)
-
-            Enum.any?(messages, fn
-              {:"$gen_call", _, {:set_settings, _, _, _}} -> true
-              _ -> false
-            end)
-          end
-
-          Enum.reduce_while(1..100, nil, fn _, _ ->
-            if queued.(),
-              do: {:halt, :queued},
-              else:
-                (
-                  Process.sleep(5)
-                  {:cont, nil}
-                )
-          end)
-
-          assert queued.(), "the real channel update must be queued at WorkStore"
-          Application.put_env(:kaoiro_server, :client_tokens, token_config)
-          :sys.resume(WorkStore)
-          assert_reply ref, :error, %{reason: "forbidden"}
-          assert [] == :dets.lookup(WorkStore, KaoiroServer.WorkSettings.key())
-          refute_push "work_settings", %{}
-        after
-          :sys.resume(WorkStore)
-          Process.unlink(operator.channel_pid)
-          if Process.alive?(operator.channel_pid), do: GenServer.stop(operator.channel_pid)
-        end
-      end
-    end
-
-    test "real operator refusal retains active-capacity detail" do
-      operator = join_as(:operator)
-
-      assert_reply(
-        push(operator, "set_work_settings", %{
-          "version" => "0",
-          "expected_revision" => 0,
-          "changes" => %{"work_active_per_assignee" => 1}
-        }),
-        :ok,
-        %{revision: 1}
-      )
-
-      target = "capacity-target-#{System.unique_integer([:positive])}"
-
-      operation = %{
-        "op" => "assign",
-        "operation_id" => work_operation_id(),
-        "title" => "Capacity",
-        "assignee" => target,
-        "director" => %{"kind" => "user", "id" => "operator"}
-      }
-
-      assert_reply(
-        push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
-        :ok,
-        %{}
-      )
-
-      operation = %{operation | "operation_id" => work_operation_id()}
-
-      assert_reply(
-        push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
-        :error,
-        %{
-          reason: "work_capacity",
-          details: %{
-            capacity: %{
-              limit: "work_active_per_assignee",
-              scope: "assignee",
-              maximum: 1
-            }
+    assert_reply(
+      push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
+      :error,
+      %{
+        reason: "work_capacity",
+        details: %{
+          capacity: %{
+            limit: "work_max_records",
+            scope: "store",
+            maximum: ^maximum
           }
         }
-      )
-    end
-
-    test "invalid and unknown transitions are distinct, stable, operator-only diagnoses" do
-      for {stored, reason} <- [
-            {:bad, "work_settings_corrupt"},
-            {KaoiroServer.WorkSettings.empty(), "work_settings_unknown"}
-          ] do
-        :dets.delete(WorkStore, KaoiroServer.WorkSettings.key())
-        :sys.replace_state(WorkStore, &%{&1 | settings: nil, settings_status: :ready})
-        operator = join_as(:operator)
-        assert_push("work_settings", %{"state" => "ready"})
-        viewer = join_as(:viewer)
-
-        assert_reply(push(viewer, "get_work_settings", %{"version" => "0"}), :error, %{
-          reason: "forbidden"
-        })
-
-        refute_push("work_settings", %{})
-        :ok = :dets.insert(WorkStore, {KaoiroServer.WorkSettings.key(), stored})
-        :ok = :dets.sync(WorkStore)
-        pid = Process.whereis(WorkStore)
-        message = KaoiroServer.WorkSettings.message(String.to_existing_atom(reason))
-
-        assert_reply(
-          push(operator, "set_work_settings", %{
-            "version" => "0",
-            "expected_revision" => 0,
-            "changes" => %{"work_nominated_per_principal" => 0}
-          }),
-          :error,
-          %{reason: ^reason, message: ^message}
-        )
-
-        assert_push("work_settings", %{
-          "state" => "unavailable",
-          "reason" => ^reason,
-          "message" => ^message
-        })
-
-        refute_push("work_settings", %{})
-
-        assert_reply(push(operator, "get_work_settings", %{"version" => "0"}), :error, %{
-          reason: ^reason,
-          message: ^message
-        })
-
-        assert_reply(
-          push(operator, "work_control", %{"version" => "0", "work_control" => %{}}),
-          :error,
-          %{reason: ^reason, message: ^message}
-        )
-
-        assert Process.whereis(WorkStore) == pid
-        # The next iteration must not keep an extra operator subscriber.
-        Process.unlink(operator.channel_pid)
-        Process.unlink(viewer.channel_pid)
-        GenServer.stop(operator.channel_pid)
-        GenServer.stop(viewer.channel_pid)
-      end
-    end
+      }
+    )
   end
 
   test "list_conversations rows carry no rally annotation" do
@@ -9949,7 +9694,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "T4-7: policy は28種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      assert MapSet.size(policy) == 28
+      assert MapSet.size(policy) == 27
       refute MapSet.member?(policy, "quagmire_notice")
       refute MapSet.member?(policy, "quagmire_settings")
 
