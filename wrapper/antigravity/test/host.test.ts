@@ -1530,6 +1530,192 @@ const REVISION_3 = { revision: 3, requested: { sandbox: "danger-full-access", ne
 const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
 const ext = (r: Recorded) => r.states.at(-1)!.ext as Record<string, any>;
 
+/** The prompt of the first process queues behind its held `session/new`
+ *  write. `handed` records each preparation, done right before the handoff. */
+function heldNew(overrides: Partial<WrapperConfig> = {}, options: Record<string, unknown> = {}) {
+  const handed: string[] = [];
+  const atEnd: { destroyed: boolean; alive: boolean }[] = [];
+  const held = {} as { r: Recorded };
+  held.r = setup(overrides, {
+    prepareInput: (token: string) => { handed.push(token); return undefined; },
+    onTurnEnd: (info: Recorded["ends"][number]) => {
+      held.r.ends.push(info);
+      const agy = held.r.test.agys[0];
+      if (agy !== undefined) atEnd.push({ destroyed: agy.stdin.destroyed, alive: agy.exitCode === null && agy.signalCode === null });
+    },
+    ...options,
+  });
+  held.r.test.onSpawn = (agy) => {
+    if (held.r.test.agys.length !== 1) return;
+    agy.holdWrite = "session/new";
+    agy.survivesTerm = true;
+  };
+  return { r: held.r, handed, atEnd };
+}
+
+/** Waits until the prompt was handed and returns the process and the count of
+ *  chunks it was written so far. */
+async function queued(r: Recorded, handed: string[]): Promise<{ agy: FakeAgy; skip: number }> {
+  await waitFor(() => handed.length === 1);
+  await tick(10);
+  const agy = r.test.agys[0]!;
+  return { agy, skip: agy.written.length };
+}
+
+describe("AntigravityHost over ACP: the window opens at the prompt write (C1)", () => {
+  it("a prompt queued behind an earlier write is written once on release, and its first activity ACKs", async () => {
+    const { r, handed } = heldNew();
+    await r.test.host.send("queued text", undefined, undefined, "t1");
+    const { agy, skip } = await queued(r, handed);
+    agy.holdPromptWrite = true;
+    agy.releaseWrite();
+    await prompted(r, 1);
+    const lines = agy.writtenAfter(skip).split("\n").filter((line) => line.includes('"session/prompt"'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("queued text");
+    expect(r.acks).toEqual([]);
+    agy.message("first");
+    await waitFor(() => r.acks.length === 1);
+    agy.releasePromptWrite();
+    await tick(10);
+    expect(r.acks).toEqual(["t1"]);
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toBeUndefined();
+  });
+
+  it("activity before the prompt write begins is out of turn: no ACK and no projection; a hook is denied and a Stop answered stop", async () => {
+    const { r, handed } = heldNew();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const { agy } = await queued(r, handed);
+    const logs = r.logs.length;
+    agy.message("early");
+    await waitFor(() => r.outOfTurn.length === 1, () => r.outOfTurn, 2_000);
+    expect(r.outOfTurn).toEqual([{ eventKind: "agent_message_chunk" }]);
+    await expect(agy.preToolUse("c1", "read_file", { Path: "a" })).resolves.toEqual({ decision: "deny", reason: NO_TURN });
+    await expect(agy.stop(false)).resolves.toEqual({ decision: "stop" });
+    expect(r.acks).toEqual([]);
+    expect(r.logs.length).toBe(logs);
+    agy.releaseWrite();
+    await prompted(r, 1);
+  });
+
+  it("an interrupt while the prompt is queued closes the output first: no byte of it reaches agy, no ACK, no cancel; the next input runs", async () => {
+    const { r, handed, atEnd } = heldNew();
+    await r.test.host.send("queued text", undefined, undefined, "t1");
+    const { agy, skip } = await queued(r, handed);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1, () => r.ends, 2_000);
+    expect(r.ends[0]).toMatchObject({ turnToken: "t1", error: { reason: "interrupted" } });
+    expect(atEnd[0]).toEqual({ destroyed: true, alive: true });
+    agy.releaseWrite();
+    await tick();
+    expect(agy.writtenAfter(skip)).not.toContain("session/prompt");
+    expect(agy.writtenAfter(skip)).not.toContain("queued text");
+    expect(r.acks).toEqual([]);
+    expect(agy.count("session/cancel")).toBe(0);
+    const second = await prompted(r, 2);
+    second.respond("end_turn");
+    await waitFor(() => r.ends.length === 2);
+    expect(r.ends[1]).toMatchObject({ turnToken: "t2", terminal: true });
+  });
+
+  it("close while the prompt is queued closes the output before the input settles once; no byte of it reaches agy and no process follows", async () => {
+    const { r, handed, atEnd } = heldNew();
+    await r.test.host.send("queued text", undefined, undefined, "t1");
+    const { agy, skip } = await queued(r, handed);
+    await r.test.host.send("two", undefined, undefined, "t2");
+    void r.test.host.close();
+    await waitFor(() => r.ends.length === 1);
+    expect(atEnd).toEqual([{ destroyed: true, alive: true }]);
+    agy.releaseWrite();
+    await tick();
+    expect(agy.writtenAfter(skip)).not.toContain("session/prompt");
+    expect(r.rejected).toEqual([{ turnToken: "t2", reason: "closed" }]);
+    expect(r.test.agys).toHaveLength(1);
+  });
+
+  it("a watchdog fail-stop while the prompt is queued closes the output before the input settles", async () => {
+    const destroyed: boolean[] = [];
+    const held = {} as { r: Recorded };
+    const made = heldNew({}, { onWatchdogFailStop: () => destroyed.push(held.r.test.agys[0]!.stdin.destroyed) });
+    held.r = made.r;
+    await made.r.test.host.send("queued text", undefined, undefined, "t1");
+    const { agy, skip } = await queued(made.r, made.handed);
+    expect(made.r.test.host.failStopTurnForWatchdog("t1")).toBe(true);
+    expect(destroyed).toEqual([true]);
+    agy.releaseWrite();
+    await tick();
+    expect(agy.writtenAfter(skip)).not.toContain("session/prompt");
+  });
+
+  it("an interrupt after the prompt write began cancels and leaves the output open", async () => {
+    const r = setup();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await r.test.host.interrupt();
+    expect(agy.stdin.destroyed).toBe(false);
+    agy.releasePromptWrite();
+    await waitFor(() => r.ends.length === 1);
+    expect(agy.count("session/cancel")).toBe(1);
+    expect(agy.stdin.destroyed).toBe(false);
+    expect(r.ends[0]!.error).toEqual({ reason: "interrupted" });
+  });
+});
+
+/** A permission-switching host on the manual clock. */
+function clockedSwitching(options: Record<string, unknown> = {}) {
+  const clock = new ManualClock();
+  const made = switching({}, { setTimer: clock.set, clearTimer: clock.clear, nowMs: clock.nowMs, abortGraceMs: 60_000, closeGraceMs: 2_000, preAckBoundMs: 1_800_000, ...options });
+  const killed = (agy: FakeAgy) => made.r.test.signals.filter((s) => s.pid === agy.pid).map((s) => s.signal);
+  return { ...made, clock, killed };
+}
+
+describe("AntigravityHost over ACP: the pre-ACK bound by write state (ruling of turn 15)", () => {
+  it("a queued prompt: SIGTERM, SIGKILL at the close grace, unacknowledged and unread, permission failed, and no byte of it later", async () => {
+    const handed: string[] = [];
+    const { r, control, clock, killed } = clockedSwitching({ prepareInput: (token: string) => { handed.push(token); return undefined; } });
+    r.test.onSpawn = (agy) => { agy.holdWrite = "session/new"; agy.survivesTerm = true; };
+    await r.test.host.setPermission(REVISION_3);
+    await r.test.host.send("queued text", undefined, undefined, "t1");
+    const { agy, skip } = await queued(r, handed);
+    await clock.advance(1_800_000);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual({ detail: UNCONFIRMED });
+    expect(r.acks).toEqual([]);
+    expect(control()).toMatchObject({ revision: 3, status: "failed", reason: "restart_failed" });
+    expect(agy.stdin.destroyed).toBe(true);
+    agy.releaseWrite();
+    await tick();
+    expect(agy.writtenAfter(skip)).not.toContain("session/prompt");
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(1_999);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(1);
+    expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("a prompt whose write began: SIGKILL at the close grace, receipt unknown, permission unknown, output left open", async () => {
+    const { r, control, clock, killed } = clockedSwitching();
+    r.test.onSpawn = (agy) => { agy.holdPromptWrite = true; agy.survivesTerm = true; };
+    await r.test.host.setPermission(REVISION_3);
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    await clock.advance(1_800_000);
+    await waitFor(() => r.ends.length === 1);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    expect(agy.stdin.destroyed).toBe(false);
+    expect(r.ends[0]!.error).toEqual({ detail: UNCONFIRMED, reason: "receipt_unknown" });
+    expect(control()).toMatchObject({ revision: 3, status: "unknown", reason: "delivery_unconfirmed" });
+    await clock.advance(1_999);
+    expect(killed(agy)).toEqual(["SIGTERM"]);
+    await clock.advance(1);
+    expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+});
+
 describe("AntigravityHost over ACP: causes through the start (C4)", () => {
   const rpc = { code: -32603, message: "restore refused" };
   const auth = { code: -32000, message: "Authentication required" };

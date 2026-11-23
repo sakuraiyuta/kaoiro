@@ -140,6 +140,12 @@ export class Generation {
     return this.#exit;
   }
 
+  /** Ends this process's input at once: no write still queued in the SDK
+   *  reaches `agy` afterwards. */
+  closeOutput(): void {
+    this.child.stdin.destroy();
+  }
+
   async attach(options: AttachOptions): Promise<Attached> {
     await this.session.initialize();
     if (options.resumeSessionId !== undefined) {

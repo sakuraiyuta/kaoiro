@@ -770,8 +770,11 @@ export class AntigravityHost implements EngineAdapter {
       write: (result) => {
         if (result.method === "session/prompt") this.#promptWritten(active, result.ok);
       },
+      // P's window opens with its write (design Terms), never after P settled.
       promptAttempted: () => {
-        if (!active.acked && !active.resolved) active.delivery = "attempted";
+        if (active.resolved) return;
+        active.window = new AbortController();
+        active.delivery = "attempted";
       },
       error: (error) => {
         active.processError ??= `antigravity_cli_process_error: ${boundErrorDetail(error.message)}`;
@@ -823,10 +826,10 @@ export class AntigravityHost implements EngineAdapter {
     return "ready";
   }
 
-  /** Opens the window, writes the one prompt and waits until it settles. */
+  /** Hands the one prompt to the SDK and waits until it settles; the window
+   *  opens when its write begins. */
   #prompt(active: Active): Promise<Settlement> {
     const generation = active.generation!;
-    active.window = new AbortController();
     return new Promise<Settlement>((resolve) => {
       active.settle = (settlement) => {
         if (active.resolved) return;
@@ -1002,9 +1005,13 @@ export class AntigravityHost implements EngineAdapter {
       active.stopped.abort();
     }
     const generation = active.generation;
+    // One grace per route, before and after the write (L3); the watchdog's
+    // own grace governs its cancel.
+    const grace = route === "close" || route === "pre_ack" ? this.#closeGraceMs : this.#abortGraceMs;
     if (route === "fail_stop") {
       // The watchdog's own grace already elapsed.
       active.probe?.stop();
+      if (active.window === null) this.#closeHandedPrompt(active);
       if (generation !== null) signalSubtree(generation.child, "SIGKILL", this.#signalTarget);
       active.settle?.({ kind: "stopped" });
       return false;
@@ -1013,18 +1020,27 @@ export class AntigravityHost implements EngineAdapter {
       // Before the prompt is written: no cancel; end the child on the
       // route's grace and settle now.
       active.probe?.stop();
-      if (generation !== null) this.#terminate(active, route === "close" ? this.#closeGraceMs : this.#abortGraceMs);
+      this.#closeHandedPrompt(active);
+      if (generation !== null) this.#terminate(active, grace);
+      active.settle?.({ kind: "stopped" });
       return false;
     }
     if (route === "close" || route === "pre_ack") {
-      this.#terminate(active, this.#closeGraceMs);
+      this.#terminate(active, grace);
       active.settle?.({ kind: "stopped" });
       return false;
     }
     if (!first) return false;
     void generation?.session.cancel().catch(() => {});
-    if (route !== "watchdog") this.#armAbortDeadline(active, this.#abortGraceMs);
+    if (route !== "watchdog") this.#armAbortDeadline(active, grace);
     return true;
+  }
+
+  /** A prompt handed to the SDK whose write has not begun must never reach
+   *  `agy` once its input stops: the process's input closes first, so no
+   *  later callback can let the queued write through (design L5, L7). */
+  #closeHandedPrompt(active: Active): void {
+    if (active.settle !== null) active.generation?.closeOutput();
   }
 
   /** Armed once, by the first stop route that cancels (L3). */

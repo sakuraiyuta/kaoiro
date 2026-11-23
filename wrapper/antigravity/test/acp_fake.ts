@@ -39,6 +39,11 @@ export class FakeAgy extends EventEmitter {
   echoResume = true;
   /** Hold the write callback of the session/prompt line until released. */
   holdPromptWrite = false;
+  /** Hold the write callback of the first line of this method until
+   *  released; the request is still answered. */
+  holdWrite: string | undefined;
+  /** Every chunk written to this process's stdin, in order. */
+  readonly written: string[] = [];
   /** Per-call answers to `session/set_config_option`, used in order before
    *  the default: apply, acknowledge without applying, or fail. */
   readonly configScript: ("apply" | "ack" | { code: number; message: string })[] = [];
@@ -63,6 +68,7 @@ export class FakeAgy extends EventEmitter {
           callback(new Error("EPIPE"));
           return;
         }
+        this.written.push(chunk.toString("utf8"));
         this.#buffer += chunk.toString("utf8");
         let held = false;
         let newline = this.#buffer.indexOf("\n");
@@ -71,6 +77,10 @@ export class FakeAgy extends EventEmitter {
           this.#buffer = this.#buffer.slice(newline + 1);
           const message = JSON.parse(line) as Record<string, unknown>;
           if (message.method === "session/prompt" && this.holdPromptWrite) held = true;
+          if (message.method !== undefined && message.method === this.holdWrite) {
+            this.holdWrite = undefined;
+            held = true;
+          }
           void this.#receive(message);
           newline = this.#buffer.indexOf("\n");
         }
@@ -80,11 +90,16 @@ export class FakeAgy extends EventEmitter {
     });
   }
 
-  /** Completes the held prompt write, with an error when given one. */
+  /** Completes the held write, with an error when given one. */
   releasePromptWrite(error?: Error): void {
     const callback = this.#promptWrite;
     this.#promptWrite = undefined;
     callback?.(error ?? null);
+  }
+
+  /** Completes the write held by `holdWrite`. */
+  releaseWrite(error?: Error): void {
+    this.releasePromptWrite(error);
   }
 
   get sandboxed(): boolean {
@@ -217,6 +232,11 @@ export class FakeAgy extends EventEmitter {
   line(text: string): void {
     if (this.exitCode !== null || this.signalCode !== null) return;
     this.stdout.write(`${text}\n`);
+  }
+
+  /** The stdin chunks written after the first `skip` ones. */
+  writtenAfter(skip: number): string {
+    return this.written.slice(skip).join("");
   }
 
   /** A request of a method the host does not serve. */
