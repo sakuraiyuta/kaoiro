@@ -262,8 +262,6 @@ export type WorkErrorCode =
   | "operation_id_expired"
   | "unknown_operation"
   | "work_capacity"
-  | "work_settings_corrupt"
-  | "work_settings_unknown"
   | "work_outcome_unknown"
   | "work_applied_message_rejected"
   | "invalid_delivery_stage"

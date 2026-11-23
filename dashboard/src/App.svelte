@@ -1,6 +1,5 @@
 <script lang="ts">
   import { SessionEnumeration } from "./lib/sessionEnumeration";
-  import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { disposeMarkdownWorker } from "./lib/markdownWorker";
   import AgentCard from "./lib/AgentCard.svelte";
@@ -515,11 +514,6 @@
       currentRoomId: ref?.kind === "room" ? ref.id : null,
     };
   }
-  let workSettings = $state<WorkSettingsSnapshot | null>(null);
-  function applyWorkSettings(next: WorkSettingsSnapshot): void {
-    if (next.state === "ready" && workSettings?.state === "ready" && next.revision < workSettings.revision) return;
-    workSettings = next;
-  }
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   // spawn の immediate reply は新 agent が state_change を出す前に届くため、
@@ -1017,11 +1011,10 @@
     connection = connectKaoiro(
       defaultSocketUrl(location),
       {
-        onStatus: (next) => { status = next; if (next !== "connected") { policyStore.disconnect(); workSettings = null; } },
+        onStatus: (next) => { status = next; if (next !== "connected") policyStore.disconnect(); },
         onDeliveryPolicyControl: (available) => { policyStore.available = available; if (!available) policyStore.disconnect(); },
         onDeliveryPolicyChanged: (id, view) => policyStore.event(id, view),
         onJoined: () => {
-          workSettings = null;
           sessionLifecycleAgentId = null;
           sessionLifecycleRefreshSeq = 0;
           policyStore.reset();
@@ -1091,7 +1084,6 @@
         },
         onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
-        onWorkSettings: applyWorkSettings,
         onStatusLineSnapshot: (rows, incomplete) => statusLines.applySnapshot(rows, incomplete),
         onStatusLine: (agentId, row) => statusLines.applyLive(agentId, row),
         onStatusLineSettings: (next) => (statusLineSettings = next),
@@ -1740,7 +1732,6 @@
     // onTaskSnapshot repopulates for operators, and a viewer never had
     // any entries to begin with (ADR-0021).
     tasks = {};
-    workSettings = null;
     statusLines.reset();
     statusLineSettings = null;
     statusHistoryAgentId = null;
@@ -2248,9 +2239,6 @@
     onBulkResetSummary={showNotice}
     {agents}
     {directory}
-    {isOperator}
-    {workSettings}
-    onWorkSettings={applyWorkSettings}
     {statusLineSettings}
   />
 {/if}

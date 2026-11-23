@@ -51,8 +51,6 @@ config :kaoiro_server,
     delivery_stage_retention_ms: 3_600_000
   ],
   work_store: [
-    work_active_per_assignee: 16,
-    work_nominated_per_principal: 16,
     work_nomination_ttl_ms: 86_400_000,
     work_max_records: 4_096,
     work_terminal_retention_ms: 2_592_000_000,

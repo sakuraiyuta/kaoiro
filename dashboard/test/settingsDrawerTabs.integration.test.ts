@@ -2,11 +2,10 @@ import "./isolation.setup";
 // @vitest-environment jsdom
 // issue 1076: the settings drawer groups its items into tabs. Every item sits
 // in exactly one panel, a tab exists only while one of its items passes its
-// own gate (isOperator / connection), and panels stay mounted so child state
-// survives a tab switch.
+// own gate (connection), and panels stay mounted so child state survives a
+// tab switch.
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
 import SettingsDrawer from "../src/lib/SettingsDrawer.svelte";
 import { DEFAULT_SETTINGS, updateSettings } from "../src/lib/settings.svelte";
 import type { Envelope, KaoiroConnection } from "../src/lib/protocol";
@@ -42,17 +41,6 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-const ready: WorkSettingsSnapshot = {
-  version: "0",
-  state: "ready",
-  revision: 42,
-  overrides: {},
-  effective: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
-  fallbacks: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
-  sources: { work_nominated_per_principal: "default", work_active_per_assignee: "default" },
-  last_change: null,
-};
-
 function makeConnection(): KaoiroConnection {
   return {
     listConversations: vi.fn(async () =>
@@ -71,16 +59,12 @@ function makeConnection(): KaoiroConnection {
       ),
     ),
     listUsers: vi.fn(async () => []),
-    getWorkSettings: vi.fn(),
-    setWorkSettings: vi.fn(),
   } as unknown as KaoiroConnection;
 }
 
 type Props = {
   onClose: () => void;
-  isOperator: boolean;
   connection: KaoiroConnection | undefined;
-  workSettings: WorkSettingsSnapshot | null;
   onOpenSessionLifecycle: ((agentId: string) => void) | undefined;
   onLogout?: () => void;
   agentSnapshotComplete: boolean;
@@ -93,9 +77,7 @@ async function render(overrides: Partial<Props> = {}) {
   document.body.append(target);
   const props = reactiveProps<Props>({
     onClose: vi.fn(),
-    isOperator: false,
     connection: undefined,
-    workSettings: null,
     onOpenSessionLifecycle: undefined,
     agentSnapshotComplete: true,
     agents: {},
@@ -108,9 +90,7 @@ async function render(overrides: Partial<Props> = {}) {
 }
 
 const operatorProps = (): Partial<Props> => ({
-  isOperator: true,
   connection: makeConnection(),
-  workSettings: ready,
   onOpenSessionLifecycle: vi.fn(),
   onLogout: vi.fn(),
 });
@@ -139,10 +119,6 @@ const labelsWith = (root: HTMLElement, text: string) =>
   Array.from(root.querySelectorAll("label")).filter((l) =>
     l.textContent?.includes(text),
   );
-const headingsWith = (root: HTMLElement, text: string) =>
-  Array.from(root.querySelectorAll("h3")).filter((h) =>
-    h.textContent?.includes(text),
-  );
 
 type Item = {
   name: string;
@@ -150,7 +126,7 @@ type Item = {
   find: (root: HTMLElement) => Element[];
 };
 
-// The 12 items of the drawer, each located by something an operator reads or
+// The 11 items of the drawer, each located by something an operator reads or
 // a stable class. Logout is a global action and is checked separately.
 const ITEMS: Item[] = [
   { name: "language", tab: "display", find: (r) => Array.from(r.querySelectorAll(".language")) },
@@ -159,7 +135,6 @@ const ITEMS: Item[] = [
   { name: "gridSort", tab: "display", find: (r) => Array.from(r.querySelectorAll("label.grid-sort")) },
   { name: "notificationSound", tab: "notifications", find: (r) => labelsWith(r, t.notificationSound) },
   { name: "volume", tab: "notifications", find: (r) => labelsWith(r, t.volume) },
-  { name: "workCapacity", tab: "operations", find: (r) => headingsWith(r, ja.workCapacitySettings.title) },
   { name: "sessionHistory", tab: "operations", find: (r) => Array.from(r.querySelectorAll("section.session-lifecycle")) },
   { name: "retention", tab: "operations", find: (r) => Array.from(r.querySelectorAll("section.status-retention")) },
   { name: "bulkCleanup", tab: "operations", find: (r) => Array.from(r.querySelectorAll("section.bulk-reset")) },
@@ -168,14 +143,14 @@ const ITEMS: Item[] = [
 ];
 const byName = (name: string) => ITEMS.find((i) => i.name === name)!;
 const OPERATOR_ONLY = [
-  "workCapacity", "sessionHistory", "retention", "bulkCleanup",
+  "sessionHistory", "retention", "bulkCleanup",
   "conversations", "users",
 ];
 
 describe("SettingsDrawer tabs: membership (issue 1076)", () => {
-  it("membership: each of the 12 items is in exactly one panel, the expected one", async () => {
+  it("membership: each of the 11 items is in exactly one panel, the expected one", async () => {
     const { target } = await render(operatorProps());
-    expect(ITEMS).toHaveLength(12);
+    expect(ITEMS).toHaveLength(11);
     for (const item of ITEMS) {
       const found = item.find(target);
       expect(found, `${item.name} appears once`).toHaveLength(1);
@@ -214,17 +189,7 @@ describe("SettingsDrawer tabs: operator gates (issue 1076)", () => {
     }
   });
 
-  it("operator-without-connection: Operations holds work capacity only; no Administration", async () => {
-    const { target } = await render({ isOperator: true, workSettings: ready });
-    expect(tabNames(target)).toEqual([t.tabDisplay, t.tabNotifications, t.tabOperations]);
-    expect(byName("workCapacity").find(target)).toHaveLength(1);
-    for (const name of OPERATOR_ONLY.filter((n) => n !== "workCapacity")) {
-      expect(byName(name).find(target), `${name} absent`).toHaveLength(0);
-    }
-    expect(panel(target, "administration")).toBeNull();
-  });
-
-  it("connection-without-isOperator: Operations has the connection items but no work capacity", async () => {
+  it("connection: Operations has the connection items", async () => {
     const { target } = await render({
       connection: makeConnection(),
       onOpenSessionLifecycle: vi.fn(),
@@ -232,7 +197,6 @@ describe("SettingsDrawer tabs: operator gates (issue 1076)", () => {
     expect(tabNames(target)).toEqual([
       t.tabDisplay, t.tabNotifications, t.tabOperations, t.tabAdministration,
     ]);
-    expect(byName("workCapacity").find(target)).toHaveLength(0);
     for (const name of ["sessionHistory", "retention", "bulkCleanup"]) {
       expect(byName(name).find(target), `${name} present`).toHaveLength(1);
     }
@@ -240,10 +204,9 @@ describe("SettingsDrawer tabs: operator gates (issue 1076)", () => {
 });
 
 describe("SettingsDrawer tabs: fallback of the active tab (issue 1076)", () => {
-  it("revoked: on Operations, losing operator and connection lands on Display", async () => {
+  it("revoked: on Operations, losing the connection lands on Display", async () => {
     const { target, props } = await render(operatorProps());
     await select(target, t.tabOperations);
-    props.isOperator = false;
     props.connection = undefined;
     await tick();
     expect(tabNames(target)).toEqual([t.tabDisplay, t.tabNotifications]);
@@ -251,23 +214,12 @@ describe("SettingsDrawer tabs: fallback of the active tab (issue 1076)", () => {
     expect(panel(target, "display")?.hidden).toBe(false);
   });
 
-  it("connection-lost-keeps-operations: isOperator stays true, Operations stays selected with work capacity", async () => {
-    const { target, props } = await render(operatorProps());
-    await select(target, t.tabOperations);
-    props.connection = undefined;
-    await tick();
-    expect(tab(target, t.tabOperations).getAttribute("aria-selected")).toBe("true");
-    expect(panel(target, "operations")?.hidden).toBe(false);
-    expect(byName("workCapacity").find(target)).toHaveLength(1);
-    expect(panel(target, "administration")).toBeNull();
-  });
-
   it("administration-disappears: on Administration, losing the connection lands on Display", async () => {
     const { target, props } = await render(operatorProps());
     await select(target, t.tabAdministration);
     props.connection = undefined;
     await tick();
-    expect(tabNames(target)).toEqual([t.tabDisplay, t.tabNotifications, t.tabOperations]);
+    expect(tabNames(target)).toEqual([t.tabDisplay, t.tabNotifications]);
     expect(tab(target, t.tabDisplay).getAttribute("aria-selected")).toBe("true");
   });
 });
@@ -288,22 +240,20 @@ describe("SettingsDrawer tabs: fallback is not undone (issue 1076)", () => {
 });
 
 describe("SettingsDrawer tabs: state and structure (issue 1076)", () => {
-  it("child-state-survives-tab-switch: an unsaved work-capacity edit survives leaving and returning", async () => {
+  it("child-state-survives-tab-switch: an unsent session-history agent id survives leaving and returning", async () => {
     const { target } = await render(operatorProps());
     await select(target, t.tabOperations);
-    const input = () =>
-      target.querySelector<HTMLInputElement>('#settings-panel-operations input[aria-label]')!;
-    const save = () =>
-      Array.from(target.querySelectorAll<HTMLButtonElement>("#settings-panel-operations button"))
-        .find((b) => b.textContent === ja.workCapacitySettings.save)!;
-    input().value = "7";
+    const input = () => target.querySelector<HTMLInputElement>("#lifecycle-agent-id")!;
+    const show = () =>
+      target.querySelector<HTMLButtonElement>('#settings-panel-operations form button[type="submit"]')!;
+    input().value = "host-a.agent-7";
     input().dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
-    expect(save().disabled).toBe(false);
+    expect(show().disabled).toBe(false);
     await select(target, t.tabDisplay);
     await select(target, t.tabOperations);
-    expect(input().value).toBe("7");
-    expect(save().disabled).toBe(false);
+    expect(input().value).toBe("host-a.agent-7");
+    expect(show().disabled).toBe(false);
   });
 
   it("inactive-panels-hidden: only the active panel is visible", async () => {

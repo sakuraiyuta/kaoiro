@@ -21,7 +21,6 @@ import { taskRing } from "./taskRing";
 import { tasklistFloat } from "./tasklistFloat";
 import { time } from "./time";
 import { untrustedMarkdown } from "./untrustedMarkdown";
-import { workCapacitySettings } from "./workCapacitySettings";
 import { ja, type Messages } from "../ja";
 
 const table = {
@@ -48,7 +47,6 @@ const table = {
   tasklistFloat,
   time,
   untrustedMarkdown,
-  workCapacitySettings,
 };
 
 // Missing keys and argument mismatches fail here.

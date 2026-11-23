@@ -5,7 +5,6 @@ import "./isolation.setup";
 // reads them again; the expected text is the table value, with a few literals.
 import { mount, tick, unmount, type Component } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
 import type { KaoiroConnection } from "../src/lib/protocol";
 import DeliveryPolicyControl from "../src/lib/DeliveryPolicyControl.svelte";
 import DeviceApproval from "../src/lib/DeviceApproval.svelte";
@@ -13,7 +12,6 @@ import LaunchDialog from "../src/lib/LaunchDialog.svelte";
 import SessionLifecycleDialog from "../src/lib/SessionLifecycleDialog.svelte";
 import SettingsDrawer from "../src/lib/SettingsDrawer.svelte";
 import StatusLineHistoryDialog from "../src/lib/StatusLineHistoryDialog.svelte";
-import WorkCapacitySettings from "../src/lib/WorkCapacitySettings.svelte";
 import { unknownDeliveryPolicy } from "../src/lib/deliveryPolicy";
 import { deliveryPolicyLabel } from "../src/lib/deliveryPolicyLabel";
 import { formatRemaining } from "../src/lib/deviceApproval";
@@ -127,43 +125,6 @@ describe("dialogs and settings repaint on setLocale", () => {
     setLocale("en");
     await tick();
     expect(text(body, '[role="alert"]')).toBe("This server does not provide device approval.");
-  });
-
-  it("WorkCapacitySettings: heading, intro and the unavailable note", async () => {
-    const body = await render(WorkCapacitySettings, {
-      generation: 0,
-      snapshot: null,
-      onSnapshot: () => {},
-    });
-    expect(text(body, "h3")).toBe(ja.workCapacitySettings.title);
-    expect(body.textContent).toContain(ja.workCapacitySettings.unavailable);
-    setLocale("en");
-    await tick();
-    expect(text(body, "h3")).toBe("Work admission limits");
-    expect(body.textContent).toContain(en.workCapacitySettings.unavailable);
-    expect(body.textContent).toContain(en.workCapacitySettings.nominatedLimit);
-  });
-
-  it("WorkCapacitySettings: the source and unlimited text of a ready snapshot", async () => {
-    const ready: WorkSettingsSnapshot = {
-      version: "0", state: "ready", revision: 3, overrides: {},
-      effective: { work_nominated_per_principal: 0, work_active_per_assignee: 16 },
-      fallbacks: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
-      sources: { work_nominated_per_principal: "dashboard", work_active_per_assignee: "config" },
-      last_change: null,
-    };
-    const body = await render(WorkCapacitySettings, { generation: 0, snapshot: ready, onSnapshot: () => {} });
-    const lines = () => [...body.querySelectorAll("p")].map((p) => p.textContent?.trim() ?? "");
-    expect(lines()).toContain(
-      `適用値: ${ja.workCapacitySettings.unlimited} / 設定元: ${ja.workCapacitySettings.sourceDashboard} / サーバー設定: 16`,
-    );
-    expect(lines()).toContain(
-      `適用値: 16 / 設定元: ${ja.workCapacitySettings.sourceConfig} / サーバー設定: 16`,
-    );
-    setLocale("en");
-    await tick();
-    expect(lines()).toContain("Effective: unlimited (0) / Source: Dashboard / Server setting: 16");
-    expect(lines()).toContain("Effective: 16 / Source: Server configuration / Server setting: 16");
   });
 
   it("SettingsDrawer: the source of the history size", async () => {

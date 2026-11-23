@@ -392,7 +392,7 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
     end
   end
 
-  test "link authority state conflict and settings checks preserve the record" do
+  test "link authority and state conflict checks preserve the record" do
     director = peer("director")
     stranger = peer("stranger")
     _ = peer("assignee")
@@ -427,18 +427,6 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
 
     {ref, _} = message(director, "director", "assignee", grant(), %{"conversation_id" => linked})
     assert_reply ref, :error, %{reason: "work_carriage_invalid"}
-
-    for status <- [:blocked_invalid, :blocked_unknown] do
-      :sys.replace_state(WorkStore, &%{&1 | settings_status: status})
-      {ref, _} = message(director, "director", "assignee", work)
-
-      expected =
-        if status == :blocked_invalid, do: "work_settings_corrupt", else: "work_settings_unknown"
-
-      assert_reply ref, :error, %{reason: ^expected}
-    end
-
-    :sys.replace_state(WorkStore, &%{&1 | settings_status: :ready})
 
     {ref, _} =
       message(director, "director", "assignee", work, %{
@@ -564,23 +552,6 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
       reason: "work_operation_deduplicated",
       details: %{work_control_result: %{op: "submit", deduplicated: true}}
     }
-  end
-
-  test "active capacity admits the sixteenth and rejects the seventeenth until disabled" do
-    for _ <- 1..15, do: grant()
-    sixteenth = nominate()
-    assert {:ok, _} = apply_op(agent("assignee"), sixteenth, "accept_assignment")
-    seventeenth = nominate()
-
-    assert {:error, {:work_capacity, %{limit: "work_active_per_assignee"}}} =
-             apply_op(agent("assignee"), seventeenth, "accept_assignment")
-
-    assert {:ok, _} =
-             WorkStore.set_settings(fn -> {:ok, @operator} end, 0, %{
-               "work_active_per_assignee" => 0
-             })
-
-    assert {:ok, _} = apply_op(agent("assignee"), seventeenth, "accept_assignment")
   end
 
   test "epoch-two grants preserve reset and yield authorization through completion" do

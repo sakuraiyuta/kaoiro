@@ -1,5 +1,4 @@
-import type { EngineCatalogEntry, WorkSettingsSnapshot, WorkCapacityPatch } from "@kaoiro/protocol";
-import { parseWorkSettings } from "./workSettings";
+import type { EngineCatalogEntry } from "@kaoiro/protocol";
 import { hasValidBuildBranch, isLandingBuildVersion, isValidBuildVersion } from "./buildIdentityDomain";
 import { agentDisplayName } from "./personaName";
 // kaoiro public-protocol client — plain TS, no Svelte dependency
@@ -2870,7 +2869,6 @@ export interface KaoiroHandlers {
   /** Whether the bounded delivery projection omitted watermarks on this join. */
   onDeliverySnapshotIncomplete?: (incomplete: boolean) => void;
   onDeliveryStatus?: (agentId: string, status: InterAgentDeliveryStatus | null) => void;
-  onWorkSettings?: (settings: WorkSettingsSnapshot) => void;
   /** Every agent's committed status line, pushed right after the join
    *  snapshot frames (issue 482). A viewer receives only agents in its own
    *  snapshot. `incomplete` means the server could not vouch for the whole
@@ -3153,8 +3151,6 @@ export interface KaoiroConnection {
    * (#58); the server also persists the pick so the wrapper restores it
    * on next start. `mode` must be a closed-enum PermissionMode value. */
   setPermissionMode: (agentId: string, mode: string) => Promise<void>;
-  getWorkSettings: () => Promise<WorkSettingsSnapshot>;
-  setWorkSettings: (revision: number, changes: WorkCapacityPatch) => Promise<WorkSettingsSnapshot>;
   /** An agent's status line change log, newest first, with the full texts
    *  (issue 482). Open to every role; the server answers `unknown_agent` for
    *  an agent the caller may not see, the same for a hidden and a nonexistent
@@ -4474,7 +4470,6 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   history_replay_envelope: "checked",
   agent_deleted: "checked",
   delivery_status: "checked",
-  work_settings: "checked",
   session_reset_started: "checked",
   session_reset_completed: "checked",
   session_reset_failed: "checked",
@@ -4578,23 +4573,6 @@ async function pushRoomReply<T>(
   const parsed = parse(await pushAsyncReply(channel, event, payload));
   if (parsed === null) throw new Error("invalid_reply");
   return parsed;
-}
-
-function pushWorkSettings(channel: Channel, event: string, payload: Record<string, unknown>): Promise<WorkSettingsSnapshot> {
-  return new Promise((resolve, reject) => {
-    const accept = (reply: unknown): void => {
-      const settings = parseWorkSettings(reply);
-      if (settings) resolve(settings); else reject(new Error("invalid_reply"));
-    };
-    pushVersioned(channel, event, payload)
-      .receive("ok", accept)
-      .receive("error", (reply: { reason?: string; message?: string } | undefined) => {
-        if (reply?.reason === "work_settings_corrupt" || reply?.reason === "work_settings_unknown") {
-          accept({ ...reply, state: "unavailable" });
-        } else reject(new Error(reply?.reason ?? "error"));
-      })
-      .receive("timeout", () => reject(new Error("timeout")));
-  });
 }
 
 /** Wake-guard threshold for the tab-visibility rebuild path (issue #119).
@@ -4926,10 +4904,6 @@ export function connectKaoiro(
       const raw = payload as Record<string, unknown>;
       if (typeof raw.agent_id !== "string") return;
       handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
-    });
-    bindServerEvent(c, "work_settings", (payload: unknown) => {
-      const settings = parseWorkSettings(payload);
-      if (settings !== null) handlers.onWorkSettings?.(settings);
     });
     bindServerEvent(c, "status_line_snapshot", (payload: unknown) => {
       const snapshot = parseStatusLineSnapshot(payload);
@@ -5624,8 +5598,6 @@ export function connectKaoiro(
     },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
-    getWorkSettings: () => pushWorkSettings(channel, "get_work_settings", {}),
-    setWorkSettings: (expected_revision, changes) => pushWorkSettings(channel, "set_work_settings", { expected_revision, changes }),
     fetchStatusLineHistory: async (agentId) => {
       const entries = parseStatusLineHistory(
         await pushAsyncReply(channel, "status_line_history", { agent_id: agentId }),

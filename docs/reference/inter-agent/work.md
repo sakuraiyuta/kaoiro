@@ -1,7 +1,7 @@
 ---
 title: Work authority and operations
 status: provisional
-last_updated: 2026-11-05
+last_updated: 2026-11-24
 description: Basic work authority, durable receipts, and conversation links.
 ---
 
@@ -24,8 +24,8 @@ U1 and U2 are released together, using the coordinated
 
 | Operation | Actor | Required state | Result |
 |---|---|---|---|
-| `assign` | Agent, or operator with explicit director and assignee | Capacity and unclaimed conversation link | `nominated`; operator assignments are immediately `active` |
-| `accept_assignment` | Assignee | `nominated`, active capacity available | `active`, revision advances |
+| `assign` | Agent, or operator with explicit director and assignee | Store capacity and unclaimed conversation link | `nominated`; operator assignments are immediately `active` |
+| `accept_assignment` | Assignee | `nominated` | `active`, revision advances |
 | `decline` | Assignee | `nominated` | `declined` |
 | `complete` | Director or operator | `active` | `completed`, revision advances |
 | `cancel` | Director or operator | Non-terminal | `cancelled`, revision advances |
@@ -78,7 +78,6 @@ serialized work/link update, delivery-intent admission, then conversation
 recording. Links do not advance the revision or create receipts. The recipient
 receives the current work stamp. A race after preview may reject delivery even
 though the link or operation was committed; those changes are not rolled back.
-Unavailable or corrupt saved capacity settings also refuse link mutations.
 
 If the work store exits or times out during ordinary-message linking, the
 reply is `work_outcome_unknown` with `send_not_attempted: true` and
@@ -135,24 +134,21 @@ without transfer there is no operation that advances it. Reset failures remain
 `reset_not_authorized`. See [delivery](delivery.md) for yield claims and
 [channel contracts](../protocol/channels.md) for request and reply shapes.
 
-## Admission capacity and saved settings
+## Capacity
 
-Operators can configure nomination and active-work admission limits; 0 disables
-only the selected check. Defaults remain 16 and the nomination TTL remains 24
-hours. Closing a conversation does not decline its nominated work. Storage,
-receipt and subordinate collection caps remain finite. Lowering a cap preserves
-existing work and healthy idempotent receipts.
+Nominations and active work have no per-director or per-assignee limit. The
+nomination TTL remains 24 hours. Closing a conversation does not decline its
+nominated work. Storage, receipt and subordinate collection caps remain finite.
+Lowering a cap preserves existing work and healthy idempotent receipts.
 
 `work_capacity` retains its wire meaning. An optional `details.capacity` has
 `limit`, `scope` and positive integer `maximum`, without identities or occupancy.
-The first failing check is reported: records before admission before global
-receipts, outgoing nominations before incoming, per-work receipts before total.
+The first failing check is reported: records before global receipts, and
+per-work receipts before total.
 
 | limit | scope |
 |---|---|
 | `work_max_records` | `store` |
-| `work_nominated_per_principal` | `director` or `assignee` |
-| `work_active_per_assignee` | `assignee` |
 | `work_receipts_per_work_principal` | `work_principal` |
 | `work_receipts_per_principal` | `principal` |
 | `work_pending_transfers` | `holds` (twice its configured value) or `transfers` |
@@ -162,10 +158,7 @@ receipts, outgoing nominations before incoming, per-work receipts before total.
 
 Unknown/malformed diagnostics are ignored without changing the refusal; old
 servers may omit them. Assigning an already-linked conversation still returns
-`work_link_conflict`, without capacity details. Invalid/uncertain saved settings
-instead return `work_settings_corrupt`/`work_settings_unknown`, never a fabricated
-capacity refusal. They close mutation and authority grants while the store stays
-alive. See [configuration and recovery](../configuration/server.md#unavailable-settings).
+`work_link_conflict`, without capacity details.
 
 The four limits for transfer, verdict and check collections
 (`work_pending_transfers`, `work_verdicts_per_work`,

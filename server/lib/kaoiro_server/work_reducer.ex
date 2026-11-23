@@ -20,7 +20,7 @@ defmodule KaoiroServer.WorkReducer do
          :ok <- valid_scopes(scopes),
          :ok <- valid_agent(assignee),
          :ok <- valid_principal(director),
-         :ok <- check_capacity(works, principal, assignee, config, operator?),
+         :ok <- check_capacity(works, config),
          :ok <- assign_link_available(works, context),
          :ok <- global_receipt_capacity(works, principal, config) do
       id = random_id("wrk_")
@@ -131,15 +131,8 @@ defmodule KaoiroServer.WorkReducer do
     end
   end
 
-  defp apply_op(works, work, _principal, %{"op" => "accept_assignment"}, config) do
-    active =
-      Enum.count(works, fn {_, candidate} ->
-        candidate.state == "active" and candidate.assignee == work.assignee
-      end)
-
-    if limited?(active, config[:work_active_per_assignee]),
-      do: capacity(:work_active_per_assignee, :assignee, config[:work_active_per_assignee]),
-      else: updated(work, works, %{state: "active", revision: 1})
+  defp apply_op(works, work, _principal, %{"op" => "accept_assignment"}, _config) do
+    updated(work, works, %{state: "active", revision: 1})
   end
 
   defp apply_op(works, work, _principal, %{"op" => "decline"}, _config) do
@@ -267,35 +260,11 @@ defmodule KaoiroServer.WorkReducer do
       else: :ok
   end
 
-  defp check_capacity(works, principal, assignee, config, operator?) do
-    active =
-      Enum.count(works, fn {_, w} -> w.state == "active" and w.assignee["id"] == assignee end)
-
-    nominated_by =
-      Enum.count(works, fn {_, w} -> w.state == "nominated" and w.director == principal end)
-
-    nominated_to =
-      Enum.count(works, fn {_, w} -> w.state == "nominated" and w.assignee["id"] == assignee end)
-
-    cond do
-      map_size(works) >= config[:work_max_records] ->
-        capacity(:work_max_records, :store, config[:work_max_records])
-
-      operator? and limited?(active, config[:work_active_per_assignee]) ->
-        capacity(:work_active_per_assignee, :assignee, config[:work_active_per_assignee])
-
-      not operator? and limited?(nominated_by, config[:work_nominated_per_principal]) ->
-        capacity(:work_nominated_per_principal, :director, config[:work_nominated_per_principal])
-
-      not operator? and limited?(nominated_to, config[:work_nominated_per_principal]) ->
-        capacity(:work_nominated_per_principal, :assignee, config[:work_nominated_per_principal])
-
-      true ->
-        :ok
-    end
+  defp check_capacity(works, config) do
+    if map_size(works) >= config[:work_max_records],
+      do: capacity(:work_max_records, :store, config[:work_max_records]),
+      else: :ok
   end
-
-  defp limited?(count, maximum), do: maximum != 0 and count >= maximum
 
   defp capacity(limit, scope, maximum),
     do:
