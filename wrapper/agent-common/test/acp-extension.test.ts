@@ -23,7 +23,7 @@ function fakeChild() {
     emit: (message: unknown) =>
       stdout.write(JSON.stringify({ jsonrpc: "2.0", ...(message as object) }) + "\n"),
     raw: (text: string) => stdout.write(text),
-    finish: (text: string) => stdout.end(text),
+    finish: (text: string | Buffer) => stdout.end(text),
     stdin,
     end: () => {
       stdout.end();
@@ -286,6 +286,31 @@ describe("connectAcp inbound line summary", () => {
     expect(plain.update).toHaveBeenCalledTimes(1);
     expect(plain.metadata).not.toHaveBeenCalled();
     expect(withOption.h.metadata).not.toHaveBeenCalled();
+    withOption.end();
+    without.end();
+  });
+
+  it("reports a final line crossing the limit at the end to the summary only",
+    async () => {
+    // The last byte starts a three-byte sequence; at the end the decoder
+    // turns it into U+FFFD, and the line then crosses the limit.
+    const bytes = Buffer.alloc(4 * 1024 * 1024, "x");
+    bytes[bytes.length - 1] = 0xe0;
+    const withOption = open();
+    const without = fakeChild();
+    const plain = handlers();
+    const connection = connectAcp(without.child, plain);
+    withOption.finish(bytes);
+    without.finish(bytes);
+    await connection.closed;
+    await withOption.connection.closed;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(withOption.summaries).toEqual([{ kind: "oversized" }]);
+    const oversized = (calls: unknown[][]) =>
+      calls.filter(([m]) => (m as WireMetadata).oversized_lines !== undefined);
+    expect(oversized(plain.metadata.mock.calls)).toEqual([]);
+    expect(oversized(withOption.h.metadata.mock.calls)).toEqual([]);
+    expect(withOption.h.metadata.mock.calls).toEqual(plain.metadata.mock.calls);
     withOption.end();
     without.end();
   });

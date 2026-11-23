@@ -199,7 +199,13 @@ export function metadataTee<M extends WireMetadata = WireMetadata>(
   // The SDK skips a blank line too.
   const reportLine = (line: string) =>
     report(() => (line.trim() === "" ? undefined : summarize(line)));
-  const consume = (text: string, each: (line: string) => void) => {
+  // `observe` is false at the end of the stream: the tail decoded there is
+  // reported to the summary alone, so the metadata stays as it was.
+  const consume = (
+    text: string,
+    each: (line: string) => void,
+    observe = true,
+  ) => {
     let offset = 0;
     while (offset < text.length) {
       const newline = text.indexOf("\n", offset);
@@ -210,10 +216,12 @@ export function metadataTee<M extends WireMetadata = WireMetadata>(
         if (bytes > metadataLimit) {
           buffer = "";
           oversized = true;
-          try {
-            observer({ direction, oversized_lines: 1 } as M);
-          } catch {
-            /* Diagnostics must not interrupt the protocol transport. */
+          if (observe) {
+            try {
+              observer({ direction, oversized_lines: 1 } as M);
+            } catch {
+              /* Diagnostics must not interrupt the protocol transport. */
+            }
           }
           report(() => ({ kind: "oversized" }));
         } else buffer += part;
@@ -242,9 +250,9 @@ export function metadataTee<M extends WireMetadata = WireMetadata>(
       controller.enqueue(chunk);
     },
     // The SDK dispatches a final line without a newline; only the summary
-    // sees it, so the metadata stays as it was.
+    // sees it.
     flush() {
-      consume(decoder.decode(), reportLine);
+      consume(decoder.decode(), reportLine, false);
       if (!oversized) reportLine(buffer);
     },
   });
