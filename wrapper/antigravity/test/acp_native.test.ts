@@ -533,7 +533,7 @@ describe("Antigravity ACP native acceptance: the judges (negative controls)", ()
     const named = n6Trial((r) => {
       r.gate.push(parentPre(45, "read_file", "allow", { Path: "/tmp/task-r.log" }), parentPre(47, "view_file", "deny", { AbsolutePath: "/w/x" }));
       // Neither a list nor a status without a TaskId gives an index.
-      r.gate.push(statusM(42, "allow", { Action: "list", TaskId: "task-z" }), statusM(43, "allow", { Action: "status" }));
+      r.gate.push(statusM(42, "allow", { Action: "list", TaskId: "task-z" }), statusM(43, "allow", { Action: "status" }), statusM(44, "allow", { Action: "status", TaskId: " " }));
       // A child's read and one after E are not the parent's record.
       r.gate.push({ ...parentPre(48, "read_file", "allow", { Path: "/tmp/task-r.log" }), conversation: N6_CHILD, sub: true } as GateEntry);
       r.gate.push(parentPre(65, "read_file", "allow", { Path: "/tmp/task-r.log" }));
