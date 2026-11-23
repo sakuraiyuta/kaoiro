@@ -52,18 +52,28 @@ agy acp --add-dir <customization dir> [--sandbox] --dangerously-skip-permissions
      `session/resume` with the session ID, the cwd and the MCP server;
   5. apply the model and level ([models](#models-effort-usage-rate-limits));
   6. wait for an authenticated `tools/list` from `agy` until 15 s after the
-     attach response (one already received counts; the model step counts
-     against the 15 s), else the start fails;
+     attach response (one already received counts), else the start fails,
+     also while the model step is still pending;
   7. run the inter-agent `prepareInput` check, which may skip the input
      (no prompt, no result);
-  8. open the prompt's window and send one `session/prompt` with the input
-     text, unchanged.
+  8. hand one `session/prompt` with the input text, unchanged, to the ACP
+     client; the prompt's window opens when its line's write begins.
 - **One prompt at a time.** Inputs are drained in order; the next prompt is
   written only after the previous input settled. A `send()` with
   attachments is rejected (`attachments_unsupported`).
-- **The window** of a prompt runs from just before its `session/prompt` line
-  is written until the input settles. Before it (the start) and after it
-  (retirement), activity is not projected onto a turn.
+- **Start ownership.** An input owns its start until its first stop, the
+  readiness bound above, or its settlement. Afterwards no further start step
+  begins, no further `initialize`, `session/new`, `session/resume` or
+  `session/set_config_option` is sent, and a step that completes late writes
+  nothing: no permission capture, session ID, recovery record or model
+  outcome; a listener it opened is closed. Steps 7 and 8 run in one block:
+  ownership is checked before `prepareInput` and again after it returns,
+  so a stop during the check settles the input by that stop's route (an
+  interrupt gives `interrupted`), even when the check skipped the input.
+- **The window** of a prompt runs from the start of its `session/prompt`
+  line's write until the input settles. Before it (the start, and a prompt
+  still queued behind an earlier write) and after it (retirement), activity
+  is not projected onto a turn.
 
 ### ACP updates and their classes
 
@@ -83,9 +93,15 @@ agy acp --add-dir <customization dir> [--sandbox] --dangerously-skip-permissions
   input (route `permission`) and the input fails with
   `antigravity_unexpected_permission_request`; outside the window it is only
   recorded. Any other request from `agy` has no handler, and the ACP SDK
-  answers it with a JSON-RPC error. Each incoming message of another method,
-  in and outside the window, leaves an `out_of_turn_event` record
-  `other:<method>` with the method name only; it is never projected.
+  answers it with a JSON-RPC error. Every other incoming line, in and
+  outside the window, leaves one `out_of_turn_event` record by its form
+  only, and is never projected: `other:<method>` for a request or
+  notification (`other:unnamed` without a usable method name; a request
+  named `session/update` or a notification named `session/request_permission`
+  is recorded too), `unknown:batch` for any JSON array, after which the
+  client closes the connection, `unknown:oversized` for a line over 4 MiB,
+  and `unknown:malformed` for anything else. A last line without a newline
+  counts as a line.
 
 ### State derivation
 
@@ -123,6 +139,9 @@ stdout.
   a connection that closed before any confirmation also fails the input.
   These inputs fail as `antigravity_delivery_unconfirmed`, with
   `receipt_unknown` when the prompt line was attempted; nothing is resent.
+  A prompt still queued behind an earlier write at the pre-ACK bound was
+  never attempted: it settles unread, without `receipt_unknown`, and a
+  captured permission switch fails with `restart_failed`.
 - A confirmation after the input settled has no effect. A write failure
   after the ACK does not withdraw it; the ACK does not promise a result.
 
@@ -150,8 +169,12 @@ it.
 
 A waiting inter-agent sender gets `interrupted` for row 3, `receipt_unknown`
 for row 5 when the line's write began (whatever its size), `timeout` for row
-7, and `api_error` for row 11 and for a row 4 `antigravity_api_error`
-whatever the message says. Every other detail goes through the shared
+7, and `api_error` for row 11 and for a row 4 failure caused by a JSON-RPC
+error, whatever the message says. A start failure keeps the errors it wraps
+(a model switch keeps its own and its restore's, a refused resume its
+response), and those decide: the captured "Authentication required" error
+among them gives `antigravity_auth_required`, any other JSON-RPC error keeps
+the detail and gives `api_error`. Every other detail goes through the shared
 classifier: `api_error`, unless the text names a rate limit or a context
 overflow ([peer error codes](../inter-agent/errors.md)).
 
@@ -160,14 +183,14 @@ overflow ([peer error codes](../inter-agent/errors.md)).
 | `antigravity_cli_unavailable:<reason>` | No usable `agy` executable |
 | `antigravity_hooks_refused:<reason>` | The hook list check failed: `registration_mismatch`, `foreign_stop_hook:<file>`, `timeout`, `stopped`, `nonzero_exit`, `invalid_json` or `spawn_failure:<detail>` |
 | `antigravity_cli_spawn_failure: <detail>` | The spawn threw |
-| `antigravity_auth_required` | Attach was answered with the captured "Authentication required" error |
+| `antigravity_auth_required` | Attach or a model step was answered with the captured "Authentication required" error |
 | `antigravity_api_error: <message>` | Another JSON-RPC error answered `initialize`, `session/new` or `session/resume`; a waiting peer gets `api_error`, also when the message mentions 429 |
 | `antigravity_cli_process_error: <detail>` | The child process failed during the start, for example a spawn that found no executable (no process, so the queue goes on at once) |
-| `antigravity_resume_failed` | `session/resume` was answered `-32603`; the recovery checkpoint refuses the launch |
+| `antigravity_resume_failed` | `session/resume` was answered `-32603`; the recovery checkpoint refuses the launch while the input owns its start |
 | `antigravity_resume_echoed_another_session` | The resume response echoed another session ID |
-| `antigravity_model_not_applied:<slug>` | The committed model could not be applied |
+| `antigravity_model_not_applied:<slug>` | The committed model could not be applied; `api_error` when a JSON-RPC error refused it |
 | `antigravity_model_restore_failed: <reason>` | A model switch failed and the previous pair could not be restored |
-| `kaoiro MCP server did not connect` | No authenticated `tools/list` within 15 s |
+| `kaoiro MCP server did not connect` | No authenticated `tools/list` within 15 s of the attach response, whichever start step is then pending |
 | `permission_sync_timeout` | Permission synchronization did not settle |
 
 A start failure fails only its own input; the next queued input starts a new
@@ -182,14 +205,18 @@ and writes no record.
 
 | Route | Trigger | With the prompt open | Before the prompt is written |
 |---|---|---|---|
-| `interrupt` | Operator interrupt | `session/cancel`; SIGKILL to the process group if the prompt has not settled when the abort grace ends | SIGTERM, SIGKILL after the abort grace; no cancel |
+| `interrupt` | Operator interrupt | `session/cancel`; SIGKILL to the process group if the prompt has not settled when the abort grace ends | SIGTERM, SIGKILL after the abort grace; no cancel; a handed prompt settles at once |
 | `watchdog` | Inactivity timeout or per-tool deadline | `session/cancel`; the watchdog owns the grace and fail-stops when it ends | Not reachable: the watchdog starts at the ACK |
 | `gate_fault` | A gate fault | As `interrupt` | As `interrupt` |
 | `permission` | `session/request_permission` in the window | As `interrupt` | Not reachable |
-| `close` | Host close, including the wrapper's SIGTERM | SIGTERM, SIGKILL after the close grace; the input settles at once | SIGTERM, SIGKILL after the close grace |
-| `pre_ack` | The pre-ACK bound | As `close` | Not reachable |
+| `close` | Host close, including the wrapper's SIGTERM | SIGTERM, SIGKILL after the close grace; the input settles at once | SIGTERM, SIGKILL after the close grace; a handed prompt settles at once |
+| `pre_ack` | The pre-ACK bound | As `close` | As `close`, for a prompt queued behind an earlier write |
 | `fail_stop` | The watchdog's abort grace ended | SIGKILL to the process group; the input settles at once | Same |
 
+- Before its write begins, a prompt already handed to the ACP client never
+  reaches `agy` once its input stops: the process's stdin is closed before
+  the input settles, so a queued line cannot follow an earlier write that
+  completes later. A prompt whose write began is not affected.
 - Only the first route of an input sends `session/cancel` and arms a
   deadline. A later route sends no second cancel and never restarts or
   lengthens it; neither a late response nor progress clears it. `close` and

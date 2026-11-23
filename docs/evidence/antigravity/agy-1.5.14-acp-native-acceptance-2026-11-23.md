@@ -76,12 +76,52 @@ N7). They include an N7 record whose reply holds the marker with no subagent rep
 (undetermined) and N6 records without a parent read after the `continue`
 (undetermined).
 
+### Judges tied to their claims (implementation review round 2)
+
+The second implementation review found judges whose witnesses did not show
+their case's claim. The records now carry one sequence number per trial, the
+full session, conversation and call IDs, the dialogs' tool input, the host's
+projected `tool_result` logs and results as the server link received them,
+the host's gate faults counted until the case closed, and the calls of the
+kaoiro `whoami` handler. The printed record keeps ID tails, counts, order
+and match results, never a path, an output or N6's value.
+
+- N1, N3b and N4 tie the command, its dialog and its file together; N3b and
+  N4 do not pass when a write tool wrote the file.
+- N5 needs the `whoami` handler to run for each allowed call.
+- N8 interrupts once the subagent's command has created its own file, and
+  claims only that the turn and every spawned `agy` end; the record counts
+  spawned `agy` processes, not every command.
+- N6 is narrowed to what kaoiro and the wire show (operator decision,
+  2026-11-23; criteria P1-P7 in
+  [issue #1238](https://github.com/sakuraiyuta/kaoiro/issues/1238), comment
+  7091356206). With the real gate and Stop hook: the gate allowed the fixed
+  background command R (`WaitMsBeforeAsync` 5000), the only allowed parent
+  command, with no parent subagent call; the parent's prompt was held by a
+  Stop `continue` after R, and a parent `manage_task` status query with a
+  task ID passed the gate after that; R's random value reached the host
+  after the `continue` and before the result, and is in the parent's
+  successful reply; no gate fault until the case closed. Not claimed: that
+  the parent took the value from the task it queried, or that a read
+  retrieved it. `agy` 1.5.14's status and read completions carry no output,
+  so the record cannot show which tool result gave the model the value.
+
+The earlier N1, N3b, N4, N5, N6 and N8 records lack these fields, so they
+need a new sample; N2, N3a, N7, N9 and N10 keep theirs. A case is accepted
+only on `pass`; an undetermined trial is not a pass. Before its first
+prompt the live suite runs the registered hook entry with an empty payload
+and stops unless it answers the documented deny.
+
 ## `edit_file` hook requests
 
 On 2026-11-23 the implementation review ran one `read-only` case through the
 N2 harness: a single `edit_file` call on an existing file. ACP showed the
 call, the gate recorded no hook request for it, and the generation ended in
-a gate fault. Whether the hook ran, and what it sent, were not recorded.
+a gate fault. The reviewer later traced this to the harness: the runner
+entry that the managed hook command starts had not been built, so the hook
+could not run and no request reached the gate. It is a harness failure,
+not a finding about `agy` or the host; the live suite now checks the hook
+entry before its first prompt.
 
 Four further prompts, on commit `4efbd56a` under the conditions above, each
 asked for one `edit_file` call on a seeded file. The test recorded every
@@ -97,10 +137,7 @@ answer) and every ACP tool update, then was restored.
 
 - Observed: every `edit_file` call reached the PreToolUse hook (4 of 4),
   with the session's conversation ID, before `agy` ran it, and none ended
-  in a gate fault. The first review run was not reproduced; its cause is
-  unknown.
-- Inferred, not measured: a hook request the gate refused as malformed would
-  leave no H record, and so would a hook that never ran.
+  in a gate fault.
 
 ## Transcript path
 

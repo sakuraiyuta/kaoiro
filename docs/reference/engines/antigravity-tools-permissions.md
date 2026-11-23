@@ -203,7 +203,8 @@ shows (C) to the PreToolUse request with the same key (H), per generation.
   and `rawInput` of its first update. Its first terminal status settles it;
   repeats are ignored, and the first repeat leaves an `out_of_turn_event`
   record `repeated_terminal` with the call ID. When a stop route latches or the connection closes,
-  every C still open is marked as stopped while open.
+  every C still open is marked as stopped while open. A C first seen after
+  that is not marked: still open at settlement with no H, it is a fault.
 - **Check**, when a C reaches `completed` or `failed` (also after the input
   settled, while the generation's updates still arrive), and for each C
   still open when the input settles, before its result is published:
@@ -394,13 +395,6 @@ turn.
   - A call that neither goes through the hook nor appears in ACP cannot be
     found by call verification, which joins a hook to an ACP call. Calls
     inside a subagent have no ACP call to join.
-- **An unexplained `edit_file` gate fault.** In one run an `edit_file` call
-  that ACP showed had no matching hook request, and the generation ended in
-  a gate fault. Four later runs did not reproduce it: each `edit_file` call
-  reached the hook. The cause is not known. A hook request the gate refuses
-  as malformed (`kaoiro: invalid gate request`) leaves no H record, and
-  neither does a hook that never ran; the record cannot tell the two
-  apart. Either way the fault fails closed, like any other gate fault.
 
 ## Constraints
 
