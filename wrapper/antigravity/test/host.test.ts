@@ -1735,7 +1735,7 @@ describe("AntigravityHost over ACP: the pre-ACK bound by write state (ruling of 
 describe("AntigravityHost over ACP: start ownership (C2, C3)", () => {
   /** Counts, for revision 3 and input t1, the capture, the stop, tool host
    *  listen calls (at invocation) and spawns, in order. */
-  async function permissionStep(placement: "after the host's handler" | "none" | "before the resolution") {
+  async function permissionStep(placement: "after the host's handler" | "none" | "before the resolution" | "inside the callback") {
     const events: string[] = [];
     const captures = new Set<unknown>();
     let release!: () => void;
@@ -1755,6 +1755,11 @@ describe("AntigravityHost over ACP: start ownership (C2, C3)", () => {
       },
       waitForPermissionSync: () => {
         called = true;
+        if (placement === "inside the callback") {
+          // The callback ends ownership before it returns its pending promise.
+          events.push("stop");
+          void box.r.test.host.interrupt();
+        }
         if (placement === "after the host's handler") {
           // Registered a turn after this call, so after the host's handler.
           void Promise.resolve().then(() => held.then(() => {
@@ -1779,8 +1784,8 @@ describe("AntigravityHost over ACP: start ownership (C2, C3)", () => {
       events.push("stop");
       await r.test.host.interrupt();
     }
-    release();
-    return { r, events };
+    if (placement !== "inside the callback") release();
+    return { r, events, release };
   }
 
   it("1a. a stop after the host's handler on the permission-sync step: the capture once before it, then nothing", async () => {
@@ -1807,6 +1812,17 @@ describe("AntigravityHost over ACP: start ownership (C2, C3)", () => {
     await tick(30);
     expect(events).toEqual(["stop"]);
     expect(r.ends).toEqual([expect.objectContaining({ turnToken: "t1", error: { reason: "interrupted" } })]);
+  });
+
+  it("1d. a stop inside the step's callback: settles while the promise is held; its late resolution publishes nothing", async () => {
+    const { r, events, release } = await permissionStep("inside the callback");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends).toEqual([expect.objectContaining({ turnToken: "t1", error: { reason: "interrupted" } })]);
+    release();
+    await tick(30);
+    expect(events).toEqual(["stop"]);
+    expect(r.test.agys).toHaveLength(0);
+    expect(r.acks).toEqual([]);
   });
 
   it.each(["applied", "refused"] as const)("2. a model step held across an interrupt publishes nothing when it is %s later", async (how) => {

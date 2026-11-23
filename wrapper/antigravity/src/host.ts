@@ -689,6 +689,8 @@ export class AntigravityHost implements EngineAdapter {
     return new Promise<T>((resolve, reject) => {
       const lost = (): void => reject(signal.reason);
       signal.addEventListener("abort", lost, { once: true });
+      // `start` itself may end ownership before it returns.
+      if (signal.aborted) lost();
       promise.then(
         (value) => {
           signal.removeEventListener("abort", lost);
