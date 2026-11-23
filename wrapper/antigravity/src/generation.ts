@@ -6,6 +6,7 @@ import {
   type InboundLineSummary,
 } from "@kaoiro/agent-common/dist/acp/connection.js";
 import { AcpSession } from "@kaoiro/agent-common/dist/acp/session.js";
+import type { ModelSession } from "./model_selection.js";
 
 /** The `agy acp` child as the host needs it. */
 export type AcpAgyChild = Pick<
@@ -27,6 +28,14 @@ export interface GenerationHandlers {
    *  `other:<method>`, `other:unnamed`, or `unknown:<batch|oversized|malformed>`.
    *  The SDK answers a request of another method with an error. */
   inbound: (eventKind: string) => void;
+}
+
+/** The RPCs a start sends. The host passes a view that sends each only while
+ *  the input owns its start; `configOptions` is the session's current value. */
+export interface StartSession extends ModelSession {
+  initialize(): Promise<unknown>;
+  newSession(cwd: string, mcpServers: acp.McpServer[], meta?: Record<string, unknown>): Promise<{ sessionId: string }>;
+  resume(sessionId: string, cwd: string, mcpServers: acp.McpServer[]): Promise<unknown>;
 }
 
 export interface AttachOptions {
@@ -146,13 +155,13 @@ export class Generation {
     this.child.stdin.destroy();
   }
 
-  async attach(options: AttachOptions): Promise<Attached> {
-    await this.session.initialize();
+  async attach(options: AttachOptions, session: StartSession): Promise<Attached> {
+    await session.initialize();
     if (options.resumeSessionId !== undefined) {
-      await this.session.resume(options.resumeSessionId, options.cwd, options.mcpServers);
+      await session.resume(options.resumeSessionId, options.cwd, options.mcpServers);
       return { sessionId: options.resumeSessionId, observedSessionId: this.#echoedSessionId };
     }
-    const response = await this.session.newSession(options.cwd, options.mcpServers, {
+    const response = await session.newSession(options.cwd, options.mcpServers, {
       antigravity: { systemPrompt: { append: options.systemPromptAppend } },
     });
     return { sessionId: response.sessionId, observedSessionId: response.sessionId };

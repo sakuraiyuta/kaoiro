@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { classifyInterAgentError, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
+import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
 import { nonInteractiveToolEnv } from "../src/tool_child_env.js";
 import { createTestHost, fakeHookList, hookGroups, type FakeAgy, type TestHost } from "./acp_fake.js";
 
@@ -1017,12 +1018,16 @@ describe("AntigravityHost over ACP: kaoiro tools (L9, D13)", () => {
       await waitFor(() => r.test.agys[0]?.count("session/set_config_option") === 1);
       const agy = r.test.agys[0]!;
       await new Promise((resolve) => setTimeout(resolve, 100));
-      if (listed === "late") expect(await agy.listTools()).toBe(200);
+      if (listed === "late") {
+        // The bound ended the start while the model step was still held.
+        expect(r.ends.map((end) => end.error)).toEqual([{ detail: "kaoiro MCP server did not connect" }]);
+        expect(await agy.listTools()).not.toBe(200);
+      }
       agy.hold.delete("session/set_config_option");
       agy.release("session/set_config_option");
       if (listed === "late") {
-        await waitFor(() => r.ends.length === 1);
-        expect(r.ends[0]!.error).toEqual({ detail: "kaoiro MCP server did not connect" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(r.ends).toHaveLength(1);
         expect(agy.count("session/prompt")).toBe(0);
       } else {
         expect((await prompted(r, 1)).count("session/prompt")).toBe(1);
@@ -1713,6 +1718,268 @@ describe("AntigravityHost over ACP: the pre-ACK bound by write state (ruling of 
     expect(killed(agy)).toEqual(["SIGTERM"]);
     await clock.advance(1);
     expect(killed(agy)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+});
+
+describe("AntigravityHost over ACP: start ownership (C2, C3)", () => {
+  /** Counts, for revision 3 and input t1, the capture, the stop, tool host
+   *  listen calls (at invocation) and spawns, in order. */
+  async function permissionStep(placement: "after the host's handler" | "none" | "before the resolution") {
+    const events: string[] = [];
+    const captures = new Set<unknown>();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let called = false;
+    const box = {} as { r: Recorded };
+    const made = switching({}, {
+      onState: (envelope: Envelope) => {
+        box.r?.states.push(envelope);
+        // Each capture publishes a new control object; later state snapshots
+        // repeat that same object.
+        const control = (envelope.ext as Record<string, any>).permission_control;
+        if (control?.status === "applying" && control.revision === 3 && control.submitted?.execution_id === "t1" && !captures.has(control)) {
+          captures.add(control);
+          events.push("capture");
+        }
+      },
+      waitForPermissionSync: () => {
+        called = true;
+        if (placement === "after the host's handler") {
+          // Registered a turn after this call, so after the host's handler.
+          void Promise.resolve().then(() => held.then(() => {
+            events.push("stop");
+            void box.r.test.host.interrupt();
+          }));
+        }
+        return held;
+      },
+      toolHostListen: (descriptors: never, options: never) => {
+        events.push("listen");
+        return ToolHost.listen(descriptors, options);
+      },
+    });
+    box.r = made.r;
+    const r = made.r;
+    r.test.onSpawn = () => events.push("spawn");
+    await r.test.host.setPermission(REVISION_3);
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => called);
+    if (placement === "before the resolution") {
+      events.push("stop");
+      await r.test.host.interrupt();
+    }
+    release();
+    return { r, events };
+  }
+
+  it("1a. a stop after the host's handler on the permission-sync step: the capture once before it, then nothing", async () => {
+    const { r, events } = await permissionStep("after the host's handler");
+    await waitFor(() => r.ends.length === 1);
+    await tick(30);
+    expect(events).toEqual(["capture", "stop"]);
+    expect(r.test.agys.reduce((n, agy) => n + agy.count("session/prompt"), 0)).toBe(0);
+    expect(r.acks).toEqual([]);
+    expect(r.ends).toEqual([expect.objectContaining({ turnToken: "t1", error: { reason: "interrupted" } })]);
+  });
+
+  it("1b. control: the same staged input without a stop captures once, listens once and spawns once", async () => {
+    const { r, events } = await permissionStep("none");
+    const agy = await prompted(r, 1);
+    expect(events).toEqual(["capture", "listen", "spawn"]);
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+  });
+
+  it("1c. a stop before the step resolves: no capture, listen or spawn", async () => {
+    const { r, events } = await permissionStep("before the resolution");
+    await waitFor(() => r.ends.length === 1);
+    await tick(30);
+    expect(events).toEqual(["stop"]);
+    expect(r.ends).toEqual([expect.objectContaining({ turnToken: "t1", error: { reason: "interrupted" } })]);
+  });
+
+  it.each(["applied", "refused"] as const)("2. a model step held across an interrupt publishes nothing when it is %s later", async (how) => {
+    const { r } = clocked();
+    await r.test.host.setModel("gemini-4-neon");
+    r.test.onSpawn = (agy) => {
+      agy.hold.add("session/set_config_option");
+      agy.survivesTerm = true;
+      if (how === "refused") agy.rejectValue = "gemini-4-neon";
+    };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.count("session/set_config_option") === 1);
+    const agy = r.test.agys[0]!;
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1);
+    agy.hold.delete("session/set_config_option");
+    agy.release("session/set_config_option");
+    await tick(30);
+    expect(agy.exitCode).toBeNull();
+    expect(ext(r)).toMatchObject({ model: "", pending_model: "gemini-4-neon" });
+    expect(r.states.some((s) => (s.ext as Record<string, any>).switch_error !== undefined)).toBe(false);
+  });
+
+  it("3. a <model>-<level> slug held on its model step sends no level after an interrupt", async () => {
+    const { r } = clocked();
+    await r.test.host.setModel("gemini-4-neon-high");
+    r.test.onSpawn = (agy) => { agy.hold.add("session/set_config_option"); agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.count("session/set_config_option") === 1);
+    const agy = r.test.agys[0]!;
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1);
+    agy.hold.delete("session/set_config_option");
+    agy.release("session/set_config_option");
+    await tick(30);
+    expect(agy.requests.filter((q) => q.method === "session/set_config_option").map((q) => q.params.configId)).toEqual(["model"]);
+  });
+
+  // A plain slug would publish on release; a <model>-<level> slug would send
+  // its level.
+  it.each(["gemini-4-neon", "gemini-4-neon-high"])("4. the readiness bound settles the input while the model step for %s is held; the step sends and publishes nothing after its release (C3)", async (slug) => {
+    const { r } = clocked({}, { mcpReadyTimeoutMs: 25 });
+    await r.test.host.setModel(slug);
+    r.test.onSpawn = (agy) => { agy.listOnAttach = false; agy.hold.add("session/set_config_option"); agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.count("session/set_config_option") === 1);
+    const agy = r.test.agys[0]!;
+    await waitFor(() => r.ends.length === 1, () => r.ends, 1_000);
+    expect(r.ends[0]!.error).toEqual({ detail: "kaoiro MCP server did not connect" });
+    agy.hold.delete("session/set_config_option");
+    agy.release("session/set_config_option");
+    await tick(30);
+    expect(agy.exitCode).toBeNull();
+    expect(agy.count("session/set_config_option")).toBe(1);
+    expect(ext(r)).toMatchObject({ model: "", pending_model: slug });
+    expect(r.states.some((s) => (s.ext as Record<string, any>).switch_error !== undefined)).toBe(false);
+  });
+
+  it.each([
+    ["6. a fresh attach", "session/new", {}],
+    ["7. a resume attach", "session/resume", { resumeSessionId: "stored" }],
+  ] as const)("%s sends nothing more after an interrupt while initialize is held", async (_label, method, options) => {
+    const { r } = clocked({}, options);
+    r.test.onSpawn = (agy) => { agy.hold.add("initialize"); agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.count("initialize") === 1);
+    const agy = r.test.agys[0]!;
+    await r.test.host.interrupt();
+    await waitFor(() => r.ends.length === 1);
+    agy.hold.delete("initialize");
+    agy.release("initialize");
+    await tick(30);
+    expect(agy.exitCode).toBeNull();
+    expect(agy.count(method)).toBe(0);
+    expect(r.ends).toEqual([expect.objectContaining({ turnToken: "t1", error: { reason: "interrupted" } })]);
+  });
+
+  it.each([true, false])("8. a resume refusal released after an interrupt=%s refuses the launch only while owned", async (interrupted) => {
+    const refused: string[] = [];
+    const { r } = clocked({}, {
+      resumeSessionId: "stored",
+      recovery: { accept: () => true, confirm: () => true, observe: () => true, refuseLaunch: () => refused.push("refused"), failure: undefined },
+    });
+    r.test.onSpawn = (agy) => { agy.rejectResume = true; agy.hold.add("session/resume"); agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.test.agys[0]?.count("session/resume") === 1);
+    const agy = r.test.agys[0]!;
+    if (interrupted) {
+      await r.test.host.interrupt();
+      await waitFor(() => r.ends.length === 1);
+    }
+    agy.hold.delete("session/resume");
+    agy.release("session/resume");
+    await waitFor(() => r.ends.length === 1);
+    await tick(30);
+    expect(r.ends).toHaveLength(1);
+    if (interrupted) {
+      expect(refused).toEqual([]);
+      expect(r.ends[0]!.error).toEqual({ reason: "interrupted" });
+    } else {
+      expect(refused).toEqual(["refused"]);
+      expect(r.ends[0]!.error).toEqual({ detail: "antigravity_resume_failed", reason: "api_error" });
+    }
+  });
+
+  it("9. readiness to hand-off: preparation never runs after a stop, and when it ran the prompt was handed in the same turn", async () => {
+    const outcomes: { k: number; prepared: boolean; handed: boolean }[] = [];
+    for (let k = 0; k <= 12; k += 1) {
+      const events: string[] = [];
+      let ready!: () => void;
+      const readiness = new Promise<void>((resolve) => { ready = resolve; });
+      const { r } = clocked({ model: "gemini-4-neon" }, {
+        toolHostListen: async (descriptors: never, options: never) => {
+          const host = await ToolHost.listen(descriptors, options);
+          host.listed = () => readiness;
+          return host;
+        },
+        prepareInput: () => { events.push("prepare"); return undefined; },
+      });
+      r.test.onSpawn = (agy) => { agy.hold.add("session/set_config_option"); agy.survivesTerm = true; };
+      await r.test.host.send("one", undefined, undefined, "t1");
+      await waitFor(() => r.test.agys[0]?.count("session/set_config_option") === 1);
+      const agy = r.test.agys[0]!;
+      agy.hold.delete("session/set_config_option");
+      agy.release("session/set_config_option");
+      // The model step completes; the host then waits on readiness alone.
+      await tick();
+      ready();
+      await new Promise<void>((done) => {
+        let left = k;
+        const step = (): void => {
+          if (left > 0) {
+            left -= 1;
+            queueMicrotask(step);
+            return;
+          }
+          events.push("stop");
+          void r.test.host.interrupt();
+          done();
+        };
+        step();
+      });
+      await waitFor(() => r.ends.length === 1, () => ({ k, events }), 2_000);
+      await tick();
+      const prepared = events.includes("prepare");
+      const handed = agy.stdin.destroyed || agy.count("session/prompt") > 0;
+      outcomes.push({ k, prepared, handed });
+      if (prepared) expect(events.indexOf("prepare"), `k=${k}`).toBeLessThan(events.indexOf("stop"));
+      if (prepared) expect(handed, `k=${k}`).toBe(true);
+      expect(r.ends[0]!.error, `k=${k}`).toEqual({ reason: "interrupted" });
+    }
+    expect(outcomes.some((o) => o.prepared)).toBe(true);
+    expect(outcomes.some((o) => !o.prepared)).toBe(true);
+  });
+
+  it.each([
+    ["10a. text", { text: "prepared", conversationIds: [] }],
+    ["10b. null", null],
+  ] as const)("%s: a stop inside preparation settles the input as interrupted and writes nothing", async (_label, value) => {
+    const box = {} as { r: Recorded };
+    const { r } = clocked({}, { prepareInput: () => { void box.r.test.host.interrupt(); return value; } });
+    box.r = r;
+    r.test.onSpawn = (agy) => { agy.survivesTerm = true; };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.ends.length === 1, () => r.ends, 2_000);
+    await tick(30);
+    const agy = r.test.agys[0]!;
+    expect(r.ends).toEqual([expect.objectContaining({ turnToken: "t1", error: { reason: "interrupted" } })]);
+    expect(agy.count("session/prompt")).toBe(0);
+    expect(r.acks).toEqual([]);
+    expect(agy.exitCode).toBeNull();
+    expect(agy.signalCode).toBeNull();
+  });
+
+  it("10. control: an owned preparation's text is written once and ACKed once", async () => {
+    const r = setup({}, { prepareInput: () => ({ text: "prepared", conversationIds: ["c1"] }) });
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    expect(agy.count("session/prompt")).toBe(1);
+    expect(JSON.stringify(agy.requests.find((q) => q.method === "session/prompt")!.params)).toContain("prepared");
+    agy.message("x");
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.acks).toEqual(["t1"]);
   });
 });
 

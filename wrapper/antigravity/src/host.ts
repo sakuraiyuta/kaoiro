@@ -31,6 +31,7 @@ import {
   type ToolDescriptor,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
+import type { AcpSession } from "@kaoiro/agent-common/dist/acp/session.js";
 import { MCP_NOT_CONNECTED, ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
 import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import type {
@@ -54,7 +55,7 @@ import {
   sweepStaleCustomizationDirs,
 } from "./customization.js";
 import { AcpToolPolicy, type AntigravityLaunchConfig } from "./gate.js";
-import { Generation, type AcpAgyChild } from "./generation.js";
+import { Generation, type AcpAgyChild, type StartSession } from "./generation.js";
 import { HookGateServer, type HookGateServerOptions, type PreToolUseRequest } from "./hook_gate.js";
 import { reportedPair, splitSlug, switchModel } from "./model_selection.js";
 import { effectiveNetworkAccess } from "./network_access.js";
@@ -102,11 +103,27 @@ type Settlement =
   | { kind: "skipped" }
   | { kind: "start_failed"; detail: string; permissionSyncTimeout?: boolean; apiError?: boolean };
 
+interface StepHandlers<T> {
+  /** Writes what the step's value means for the host, while owned. */
+  publish?: (value: T) => void;
+  /** Takes a value that arrived after ownership ended. */
+  release?: (value: T) => void;
+  /** Maps an error while owned; a throw replaces it. */
+  refuse?: (error: unknown) => void;
+}
+
+type ModelOutcome =
+  | { kind: "none" }
+  | { kind: "commit"; value: string }
+  | { kind: "switch_error"; requested: string; reason: string; rolledBackTo?: string };
+
 interface Active {
   token: string;
   conversationIds: readonly string[];
-  /** Aborts when a stop latches; a start step waiting on it gives up. */
-  readonly stopped: AbortController;
+  /** The input's ownership of its start (design 4.4). Aborted, with its
+   *  reason, by the first stop, by the readiness bound and by settlement; a
+   *  start step, its continuation and the hand-off act only before that. */
+  readonly owner: AbortController;
   stop: StopRoute | null;
   interruptedAt: string | null;
   generation: Generation | null;
@@ -612,7 +629,7 @@ export class AntigravityHost implements EngineAdapter {
     const active: Active = {
       token: input.turnToken ?? randomUUID(),
       conversationIds: input.conversationIds ?? [],
-      stopped: new AbortController(),
+      owner: new AbortController(),
       stop: null,
       interruptedAt: null,
       generation: null,
@@ -647,7 +664,8 @@ export class AntigravityHost implements EngineAdapter {
     this.#active = active;
     let settlement: Settlement;
     try {
-      settlement = (await this.#start(active)) === "skipped" ? { kind: "skipped" } : await this.#prompt(active);
+      await this.#start(active);
+      settlement = await this.#prompt(active);
     } catch (error) {
       settlement = this.#startFailure(active, error);
     }
@@ -656,33 +674,69 @@ export class AntigravityHost implements EngineAdapter {
     await this.#previousExit;
   }
 
-  /** Races a start step with a stop of the input. A value that arrives after
-   *  the stop is handed to `release`, since nothing else owns it. */
-  #until<T>(active: Active, promise: Promise<T>, release?: (value: T) => void): Promise<T> {
-    const abandon = (): void => {
-      promise.then((value) => release?.(value), () => {});
-    };
-    if (active.stop !== null) {
-      abandon();
-      return Promise.reject(new Stopped());
-    }
+  #owns(active: Active): boolean {
+    return !active.owner.signal.aborted;
+  }
+
+  /** One start step. `start` runs only while the input owns its start; the
+   *  step's own resolution then publishes a value or refuses an error while
+   *  it still does. Otherwise a value is released, since nothing else owns
+   *  it, and the step rejects with the reason ownership ended. */
+  #step<T>(active: Active, start: () => Promise<T>, handlers: StepHandlers<T> = {}): Promise<T> {
+    const signal = active.owner.signal;
+    if (signal.aborted) return Promise.reject(signal.reason);
+    const promise = start();
     return new Promise<T>((resolve, reject) => {
-      const onStop = (): void => {
-        abandon();
-        reject(new Stopped());
-      };
-      active.stopped.signal.addEventListener("abort", onStop, { once: true });
+      const lost = (): void => reject(signal.reason);
+      signal.addEventListener("abort", lost, { once: true });
       promise.then(
         (value) => {
-          active.stopped.signal.removeEventListener("abort", onStop);
+          signal.removeEventListener("abort", lost);
+          if (signal.aborted) {
+            handlers.release?.(value);
+            reject(signal.reason);
+            return;
+          }
+          try {
+            handlers.publish?.(value);
+          } catch (error) {
+            reject(error);
+            return;
+          }
           resolve(value);
         },
         (error: unknown) => {
-          active.stopped.signal.removeEventListener("abort", onStop);
+          signal.removeEventListener("abort", lost);
+          if (signal.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          try {
+            handlers.refuse?.(error);
+          } catch (mapped) {
+            reject(mapped);
+            return;
+          }
           reject(error);
         },
       );
     });
+  }
+
+  /** The start's RPCs, each sent only while the input owns its start; the
+   *  options are the session's current ones. */
+  #startSession(active: Active, session: AcpSession): StartSession {
+    const owned = <T>(send: () => Promise<T>): Promise<T> =>
+      this.#owns(active) ? send() : Promise.reject(active.owner.signal.reason);
+    return {
+      get configOptions() {
+        return session.configOptions;
+      },
+      initialize: () => owned(() => session.initialize()),
+      newSession: (cwd, mcpServers, meta) => owned(() => session.newSession(cwd, mcpServers, meta)),
+      resume: (sessionId, cwd, mcpServers) => owned(() => session.resume(sessionId, cwd, mcpServers)),
+      setConfigOption: (configId, value) => owned(() => session.setConfigOption(configId, value)),
+    };
   }
 
   #startFailure(active: Active, error: unknown): Settlement {
@@ -704,21 +758,24 @@ export class AntigravityHost implements EngineAdapter {
     return { kind: "start_failed", detail };
   }
 
-  async #start(active: Active): Promise<"ready" | "skipped"> {
-    await this.#until(active, this.#previousExit);
-    await this.#until(active, this.#options.waitForPermissionSync?.() ?? Promise.resolve());
-    this.#capturePermission(active);
+  /** Starts the input's process up to readiness. Each step and the host-wide
+   *  state it writes act only while the input owns its start (design 4.4). */
+  async #start(active: Active): Promise<void> {
+    await this.#step(active, () => this.#previousExit);
+    await this.#step(active, () => this.#options.waitForPermissionSync?.() ?? Promise.resolve(), {
+      publish: () => this.#capturePermission(active),
+    });
     if (!this.#agyExecutable.ok) throw new StartFailure(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
     const executable = this.#agyExecutable.path;
-    const entry = this.#entryCommand();
-    this.#customization ??= CustomizationDir.create(entry);
-    const customization = this.#customization;
-    customization.rewrite();
-    const toolHost = await this.#until(active, (this.#options.toolHostListen ?? ((descriptors, options) => ToolHost.listen(descriptors, options)))(
-      this.#options.toolDescriptors ?? [],
-      { turnSignal: () => active.window?.signal ?? null },
-    ), (late) => late.close());
-    active.toolHost = toolHost;
+    let customization!: CustomizationDir;
+    const toolHost = await this.#step(active, () => {
+      customization = this.#customization ??= CustomizationDir.create(this.#entryCommand());
+      customization.rewrite();
+      return (this.#options.toolHostListen ?? ((descriptors, options) => ToolHost.listen(descriptors, options)))(
+        this.#options.toolDescriptors ?? [],
+        { turnSignal: () => active.window?.signal ?? null },
+      );
+    }, { publish: (host) => { active.toolHost = host; }, release: (late) => late.close() });
     const verifier = new CallVerifier({
       sessionId: () => active.sessionId,
       onFault: (fault) => this.#verificationFault(active, fault),
@@ -739,22 +796,69 @@ export class AntigravityHost implements EngineAdapter {
         if (lease !== undefined && lease !== null) this.endPermissionWaitLease(lease);
       },
     });
-    active.gateServer = await this.#until(active, (this.#options.gateServerListen ?? HookGateServer.listen)({
+    const gateServer = await this.#step(active, () => (this.#options.gateServerListen ?? HookGateServer.listen)({
       verifier,
       handlers: {
         preToolUse: (request, signal) => this.#preToolUse(active, policy, request, signal),
         stop: (request) => this.#answerStop(active, request),
       },
-    }), (late) => late.close());
-    const listed = await this.#until(active, this.#hookList(active, executable, customization));
+    }), { publish: (server) => { active.gateServer = server; }, release: (late) => late.close() });
+    const listed = await this.#step(active, () => this.#hookList(active, executable, customization));
     if (!listed.ok) throw new StartFailure(`antigravity_hooks_refused:${listed.reason}`);
+    const requested = this.#sessionId ?? undefined;
+    let session!: StartSession;
+    let ready!: Promise<boolean>;
+    await this.#step(active, () => {
+      const generation = this.#spawnGeneration(active, executable, customization, gateServer);
+      session = this.#startSession(active, generation.session);
+      return generation.attach({
+        cwd: this.#options.cwd,
+        mcpServers: [toolHost.mcpServer()],
+        resumeSessionId: requested,
+        systemPromptAppend: this.#options.appendSystemPrompt,
+      }, session);
+    }, {
+      publish: (attached) => {
+        if (attached.observedSessionId !== undefined && attached.observedSessionId !== attached.sessionId) {
+          throw new StartFailure("antigravity_resume_echoed_another_session");
+        }
+        // The readiness bound counts from the attach response and ends the
+        // start's ownership whichever step is then pending (design 4.4).
+        ready = toolHost.listed(this.#options.mcpReadyTimeoutMs ?? DEFAULT_MCP_READY_TIMEOUT_MS).then(() => true, () => {
+          active.owner.abort(new StartFailure(MCP_NOT_CONNECTED));
+          return false;
+        });
+        active.sessionId = attached.sessionId;
+        active.observedSessionId = attached.observedSessionId;
+        if (this.#options.recovery?.accept(attached.sessionId, requested) === false) {
+          void this.close();
+          throw new Stopped();
+        }
+        if (this.#announcedSessionId !== attached.sessionId) {
+          this.#sessionId = attached.sessionId;
+          this.#announcedSessionId = attached.sessionId;
+          this.#options.onSessionId?.(attached.sessionId);
+        }
+      },
+      refuse: (error) => {
+        if (requested !== undefined && error instanceof RequestError && error.code === -32603) {
+          this.#options.recovery?.refuseLaunch();
+          throw new StartFailure("antigravity_resume_failed", { cause: error });
+        }
+      },
+    });
+    await this.#step(active, () => this.#modelOutcome(session), { publish: (outcome) => this.#publishModel(outcome) });
+    if (!(await this.#step(active, () => ready))) throw new StartFailure(MCP_NOT_CONNECTED);
+  }
+
+  #spawnGeneration(active: Active, executable: string, customization: CustomizationDir, gateServer: HookGateServer): Generation {
     const sandboxed = (this.#config.sandbox ?? "workspace-write") !== "danger-full-access";
     const args = ["acp", "--add-dir", customization.path, ...(sandboxed ? ["--sandbox"] : []), "--dangerously-skip-permissions"];
     const env: NodeJS.ProcessEnv = {
       ...withAgentMarker(process.env),
       ...nonInteractiveToolEnv(process.env).additions,
-      KAOIRO_GATE_SOCKET: active.gateServer.socketPath,
-      KAOIRO_GATE_NONCE: active.gateServer.nonce,
+      KAOIRO_GATE_SOCKET: gateServer.socketPath,
+      KAOIRO_GATE_NONCE: gateServer.nonce,
       KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
     };
     delete env.CODEX_HOME;
@@ -783,52 +887,22 @@ export class AntigravityHost implements EngineAdapter {
     });
     active.generation = generation;
     void generation.connection.closed.then(() => this.#connectionClosed(active), () => this.#connectionClosed(active));
-    const requested = this.#sessionId ?? undefined;
-    let attached;
-    try {
-      attached = await this.#until(active, generation.attach({
-        cwd: this.#options.cwd,
-        mcpServers: [toolHost.mcpServer()],
-        resumeSessionId: requested,
-        systemPromptAppend: this.#options.appendSystemPrompt,
-      }));
-    } catch (error) {
-      if (requested !== undefined && error instanceof RequestError && error.code === -32603) {
-        this.#options.recovery?.refuseLaunch();
-        throw new StartFailure("antigravity_resume_failed", { cause: error });
-      }
-      throw error;
-    }
-    if (attached.observedSessionId !== undefined && attached.observedSessionId !== attached.sessionId) {
-      throw new StartFailure("antigravity_resume_echoed_another_session");
-    }
-    // The readiness bound counts from the attach response (design 4.4).
-    const ready = toolHost.listed(this.#options.mcpReadyTimeoutMs ?? DEFAULT_MCP_READY_TIMEOUT_MS).then(() => true, () => false);
-    active.sessionId = attached.sessionId;
-    active.observedSessionId = attached.observedSessionId;
-    if (this.#options.recovery?.accept(attached.sessionId, requested) === false) {
-      void this.close();
-      throw new Stopped();
-    }
-    if (this.#announcedSessionId !== attached.sessionId) {
-      this.#sessionId = attached.sessionId;
-      this.#announcedSessionId = attached.sessionId;
-      this.#options.onSessionId?.(attached.sessionId);
-    }
-    await this.#until(active, this.#applyModel(generation));
-    if (!(await this.#until(active, ready))) throw new StartFailure(MCP_NOT_CONNECTED);
+    return generation;
+  }
+
+  /** Prepares the input and hands its one prompt to the SDK, then waits
+   *  until it settles; the window opens when its write begins. From the
+   *  ownership check to the hand-off nothing awaits, and the preparation,
+   *  which may stop the input itself, is checked again after it returns. */
+  #prompt(active: Active): Promise<Settlement> {
+    if (!this.#owns(active)) throw active.owner.signal.reason;
     const prepared = this.#options.prepareInput?.(active.token);
-    if (prepared === null) return "skipped";
+    if (!this.#owns(active)) throw active.owner.signal.reason;
+    if (prepared === null) return Promise.resolve({ kind: "skipped" });
     if (prepared !== undefined) {
       active.text = prepared.text;
       active.conversationIds = prepared.conversationIds;
     }
-    return "ready";
-  }
-
-  /** Hands the one prompt to the SDK and waits until it settles; the window
-   *  opens when its write begins. */
-  #prompt(active: Active): Promise<Settlement> {
     const generation = active.generation!;
     return new Promise<Settlement>((resolve) => {
       active.settle = (settlement) => {
@@ -1002,7 +1076,7 @@ export class AntigravityHost implements EngineAdapter {
     if (first) {
       active.stop = route;
       active.verifier?.stopLatched();
-      active.stopped.abort();
+      active.owner.abort(new Stopped());
     }
     const generation = active.generation;
     // One grace per route, before and after the write (L3); the watchdog's
@@ -1119,6 +1193,7 @@ export class AntigravityHost implements EngineAdapter {
 
   /** Decides the input's one outcome (design L2) and publishes it. */
   #finish(active: Active, settlement: Settlement): void {
+    active.owner.abort(new Stopped());
     active.resolved = true;
     if (active.preAckTimer !== null) this.#clearTimer(active.preAckTimer);
     // The checks due at settlement finish before the result is published.
@@ -1395,14 +1470,10 @@ export class AntigravityHost implements EngineAdapter {
 
   /** Applies the committed slug, then a pending switch as one switch with
    *  rollback (design 4.8). Attach resets the pair, so this runs at every
-   *  start. */
-  async #applyModel(generation: Generation): Promise<void> {
-    const session = generation.session;
+   *  start. It writes no host state: its step publishes the outcome. */
+  async #modelOutcome(session: StartSession): Promise<ModelOutcome> {
     // The account default is the pair attach reports; nothing is sent for it.
-    if (this.#pendingModel === "") {
-      this.#commitModel("");
-      return;
-    }
+    if (this.#pendingModel === "") return { kind: "commit", value: "" };
     const committed = this.#config.model ?? "";
     if (committed !== "") {
       const result = await switchModel(session, splitSlug(committed, session), reportedPair(session));
@@ -1416,26 +1487,34 @@ export class AntigravityHost implements EngineAdapter {
     // An account default staged while the committed slug was being applied
     // waits for the next start: this G no longer has the attach pair.
     const pending = this.#pendingModel;
-    if (pending === null || pending === "") return;
-    if (pending === committed) {
-      this.#commitModel(pending);
-      return;
-    }
+    if (pending === null || pending === "") return { kind: "none" };
+    if (pending === committed) return { kind: "commit", value: pending };
     const result = await switchModel(session, splitSlug(pending, session), reportedPair(session));
-    if (result.kind === "applied") {
-      this.#commitModel(pending);
-      return;
-    }
+    if (result.kind === "applied") return { kind: "commit", value: pending };
     if (result.kind === "failed") {
       throw new StartFailure(result.detail, { cause: result.cause, restoreCause: result.restoreCause });
     }
-    if (this.#pendingModel !== pending) return;
+    return {
+      kind: "switch_error",
+      requested: pending,
+      reason: result.reason,
+      ...(result.kind === "rolled_back" ? { rolledBackTo: committed } : {}),
+    };
+  }
+
+  #publishModel(outcome: ModelOutcome): void {
+    if (outcome.kind === "commit") {
+      this.#commitModel(outcome.value);
+      return;
+    }
+    // A selection staged during the switch supersedes the attempted one.
+    if (outcome.kind === "none" || this.#pendingModel !== outcome.requested) return;
     this.#pendingModel = null;
     this.#switchError = {
       kind: "model",
-      requested: pending,
-      reason: result.reason,
-      ...(result.kind === "rolled_back" ? { rolled_back_to: committed } : {}),
+      requested: outcome.requested,
+      reason: outcome.reason,
+      ...(outcome.rolledBackTo === undefined ? {} : { rolled_back_to: outcome.rolledBackTo }),
     };
     this.#emitState(this.#machine.state);
   }
