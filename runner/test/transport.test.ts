@@ -73,9 +73,8 @@ describe("受信 version の不一致検査 (ADR-0015 / issue #171)", () => {
 describe("CONTROL_EVENT_BY_CALLBACK", () => {
   // issue #171 の要求は「runner が受け取る全メッセージ」。checkが漏れる
   // 経路が生まれないよう、対応表そのものを固定する。
-  it("maps all eight server-to-runner control events", () => {
+  it("maps all seven server-to-runner control events", () => {
     expect(CONTROL_EVENT_BY_CALLBACK).toEqual({
-      onObserveCodexWork: "observe_codex_work",
       onSpawn: "spawn",
       onStop: "stop",
       onRestart: "restart",

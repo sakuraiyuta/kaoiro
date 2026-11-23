@@ -125,48 +125,6 @@ must check for remaining owned work. Guarantees exclude `tsx watch`, host
 power loss and restoration after runner restart; the last belongs to
 [issue #530](https://github.com/sakuraiyuta/kaoiro/issues/530).
 
-### Read-only Codex Supervisor observation
-
-The release RPC `CodexBackendCompatibility.observe_runner/1` alone initiates
-`observe_codex_work`; it is not exposed through the lobby or agent MCP.
-Requests contain `{version: "0", schema: 1, request_id}`. The request ID is
-32 URL-safe base64 characters. The current channel owner receives a direct
-push, never a topic broadcast. There is one outstanding request per channel;
-a second caller receives `runner_observation_busy`. Timeout is five seconds;
-disconnect and caller death release the pending request.
-
-`codex_work_observed` echoes version, schema and request ID, and adds `host`,
-`build_revision` (40 lowercase hex characters), positive Node `pid`,
-process-lifetime `instance_id`, `applied_backend` (`exec` or `app-server`;
-`exec` remains accepted from old runners although current config readers reject it),
-`children: [{agent_id, stopping, restarting, reset_pending}]`,
-`pending_spawns: [agent_id]`, and `pending_switches: [agent_id]`.
-Unknown work engines replace the backend and three lists with
-`unavailable: true`; the server refuses that response. No session IDs, cwd,
-prompts, or credentials are included. Observation requests and responses
-require version `"0"` and schema `1`; they do not use best-effort version acceptance.
-
-The server rejects the whole response on a malformed element, duplicate ID
-within a list, foreign-host ID, wrong request/owner, or payload whose
-`:erlang.external_size` exceeds 65,536 bytes. This is not a JSON byte limit.
-An agent may appear in both children and pending switches. Entries are not
-dropped to fit the limit. The RPC returns only allowlisted fields and stamps
-the server channel `owner` identity; responses are never broadcast to clients.
-
-Every authenticated successful runner join registers its channel process in
-a duplicate-key Registry, including old runners and pre-register channels.
-Observation requires exactly one joined channel matching HostRegistry's
-owner before request, before push, on response and before RPC return.
-Registry/partition identity is frozen before Endpoint starts; replacement
-latches refusal for the current application generation. Supported manual
-recovery stops and starts the entire server release/BEAM VM, then requires
-runner registration and a fresh successful observation. An in-VM application
-restart can reset the baseline without restoring runner registration and is
-not sufficient recovery. An abnormal partition exit terminates runner
-channels; channel rejoin alone does not resend host registration. The
-partition failure itself does not terminate wrapper channels or agents. See the
-[manual recovery procedure](../../operations/codex-backend-switch.md#read-only-supervisor-observation).
-
 Runner transport recovery is local to the runner, not the wrapper adapter.
 A wire `phx_error` on the current runner topic followed by socket close 1000
 allows one delayed socket replacement. A successful channel join, socket

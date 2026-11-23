@@ -24,9 +24,8 @@ issues #218 / #219 / #220.
 
 Codex exec retirement is a coordinated release of all approved units; the test
 transfer and refusal units must not be released separately. Retain and identify
-the exact last pre-retirement artifact before updating. Preparation, the
-origin/pointer inventory, state-aware rollback and fresh exec recovery are
-operator steps in the [retirement runbook](../operations/codex-backend-switch.md#exec-retirement).
+the exact last pre-retirement artifact before updating; see the
+[retirement note](../operations/codex-backend-switch.md).
 The release author records these prerequisites in its production release note.
 Develop landing does not authorize production reflection.
 

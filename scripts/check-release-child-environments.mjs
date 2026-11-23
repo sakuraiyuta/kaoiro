@@ -12,7 +12,6 @@ const nativeCalls = /\b(?:execFileSync|execFile|execSync|spawnSync|spawn|fork)\s
 
 export const CHILD_ENVIRONMENT_SCOPE = [
   "scripts/build-identity.mjs", "scripts/with-build-identity.mjs",
-  "scripts/codex-backend-compatibility.mjs",
   "server/deploy/kaoiro-server-deploy.mjs", "runner/deploy/kaoiro-runner-codex-state.mjs",
   "runner/deploy/codex-snapshot.mjs",
 ];

@@ -15,8 +15,7 @@ a runner setting and needs no entry in `runner.config.json` or `runner.env`.
 This page covers the connection fields in `runner.config.json` (`host_id` /
 `server_url` / `cwd_allowlist` / `capabilities` / tokens, below), the Codex
 and Antigravity engine-specific blocks, and the Codex backend selector.
-Operator steps are in the
-[backend switching runbook](../../operations/codex-backend-switch.md). The
+See [Codex backend retirement](../../operations/codex-backend-switch.md). The
 per-spawn config fields the runner relays to the wrapper process itself
 are in [Wrapper configuration](wrapper.md).
 
@@ -273,18 +272,9 @@ variables, command-line backend flags, dashboard selectors, spawn payloads and
 resume snapshots cannot select a backend. New wrapper lifetimes use the valid
 local setting; a reload never rewrites a running child's selection.
 
-Prepare existing exec sessions using the retained **last pre-retirement
-release** before installing this code. If app-server fails, the operator can
-roll code back to that release and use its `pin-exec-fresh` and fresh restore
-procedure. **Context is lost.** Keep the release artifact and verify its exact
-native/state compatibility. Before moving forward again, remove its exec pin
-using that release's `remove-pin` procedure. See the
-[retirement and rollback runbook](../../operations/codex-backend-switch.md#exec-retirement).
-
-The current maintenance script refuses `prepare`, `pin-exec-fresh`,
-`restore-fresh --backend exec` and their exec observation targets before
-creating adapters or writing configuration. App-server observation and fresh
-restore remain; `remove-pin` retains its old-backend compatibility preconditions.
+To restart a Codex peer in a new session, use the dashboard reset or launch
+controls; no backend-switching CLI remains. See
+[Codex backend retirement](../../operations/codex-backend-switch.md).
 
 ### Codex backend selection
 

@@ -72,7 +72,7 @@ test("build children retain the exact selected toolchain PATH without ambient cr
 
 test("coverage check rejects separate existing and new bypasses and its own disabled guard", () => {
   const green = checkReleaseChildEnvironments(root);
-  assert.equal(green.files, 6); assert.equal(green.calls, 15);
+  assert.equal(green.files, 5); assert.equal(green.calls, 14);
   assert.equal(green.unchanged_legacy_calls, 4);
   for (const target of CHILD_ENVIRONMENT_SCOPE) {
     assert.throws(() => checkReleaseChildEnvironments(root, (path, encoding) => {
@@ -123,7 +123,7 @@ test("the checker enumerates every source directory and follows new relative dep
       const path = relative(dirname(join(fixture, file)), join(fixture, "runner/deploy/child-process-environment.mjs"));
       writeFileSync(join(fixture, file), `import { execChildSync } from ${JSON.stringify(path.startsWith(".") ? path : "./" + path)};\nexecChildSync('authority', 'utility', []);\n`);
     }
-    assert.equal(checkReleaseChildEnvironments(fixture).files, 6);
+    assert.equal(checkReleaseChildEnvironments(fixture).files, 5);
     for (const dir of ["scripts", "scripts/lib", "server/deploy", "runner/deploy"]) {
       const added = join(fixture, dir, "unchecked.mjs");
       writeFileSync(added, "import cp from 'node:child_process';\n");
@@ -136,7 +136,7 @@ test("the checker enumerates every source directory and follows new relative dep
     writeFileSync(dependency, "spawn('unsafe', []);\n");
     assert.throws(() => checkReleaseChildEnvironments(fixture), /unmanaged/);
     writeFileSync(dependency, "export const valid = true;\n");
-    assert.equal(checkReleaseChildEnvironments(fixture).calls, 6);
+    assert.equal(checkReleaseChildEnvironments(fixture).calls, 5);
     rmSync(dependency);
     symlinkSync(join(fixture, "runner/deploy/child-process-environment.mjs"), dependency);
     assert.throws(() => checkReleaseChildEnvironments(fixture), /regular unlinked file/);

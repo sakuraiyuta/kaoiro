@@ -9,7 +9,6 @@
 import type { Channel, Socket } from "phoenix";
 import { clipUtf16Head, createPhoenixSocket } from "@kaoiro/wrapper-core";
 import type {
-  CodexWorkObserved,
   EngineCatalogResult,
   RunnerRegister,
   RunnerSessions,
@@ -35,7 +34,6 @@ export interface RunnerLinkOptions {
   logHeartbeats?: () => boolean;
   /** Operator lifecycle control relayed by the server (ADR-0023). Payloads are
    *  opaque here — the supervisor validates them. */
-  onObserveCodexWork?: (payload: unknown) => void;
   onSpawn?: (payload: unknown) => void;
   onStop?: (payload: unknown) => void;
   onRestart?: (payload: unknown) => void;
@@ -56,7 +54,6 @@ export interface RunnerLinkOptions {
 // 値は関数 or undefined" が意図なので、明示的に `| undefined` を含める。
 type ChannelCallback = (payload: unknown) => void;
 interface ChannelCallbacks {
-  onObserveCodexWork: ChannelCallback | undefined;
   onSpawn: ChannelCallback | undefined;
   onStop: ChannelCallback | undefined;
   onRestart: ChannelCallback | undefined;
@@ -73,7 +70,6 @@ interface ChannelCallbacks {
  *  (issue #171: "各ハンドラに散らすと漏れる"). */
 export const CONTROL_EVENT_BY_CALLBACK: Record<keyof ChannelCallbacks, string> =
   {
-    onObserveCodexWork: "observe_codex_work",
     onSpawn: "spawn",
     onStop: "stop",
     onRestart: "restart",
@@ -340,7 +336,6 @@ export class RunnerLink {
     this.#logHeartbeats =
       options.logHeartbeats ?? (() => isPhoenixHeartbeatLoggingEnabled());
     this.#callbacks = {
-      onObserveCodexWork: options.onObserveCodexWork,
       onSpawn: options.onSpawn,
       onStop: options.onStop,
       onRestart: options.onRestart,
@@ -479,10 +474,6 @@ export class RunnerLink {
       active = false;
       cancelRecovery();
     } };
-  }
-
-  sendCodexWorkObserved(result: CodexWorkObserved): void {
-    this.#channel.push("codex_work_observed", result);
   }
 
   /** Reports a spawn outcome back to the operators (via the server). */

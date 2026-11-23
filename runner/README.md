@@ -39,10 +39,8 @@ node dist/kaoiro.js --version --json
 
 The version command reports the built artifact's full `revision` and boolean
 `dirty` state. A running instance logs `runner: host=<host_id> rev=<sha>
-connecting to ...`; compatibility preparation checks that startup record in
-the complete active invocation and stops if it is absent, ambiguous, malformed,
-over the read cap, or marked dirty. See the [runner configuration reference](../docs/reference/configuration/runner.md)
-and [backend switching procedure](../docs/operations/codex-backend-switch.md#preparation-before-a-default-change).
+connecting to ...`. See the [runner configuration reference](../docs/reference/configuration/runner.md)
+and [Codex backend retirement](../docs/operations/codex-backend-switch.md).
 
 認証トークンは設定ファイルに置かず、環境変数 `KAOIRO_RUNNER_TOKEN` から渡す。
 サーバ側 `KAOIRO_RUNNER_TOKENS` が未設定のとき、runner 認証が無効になるのは
@@ -103,7 +101,7 @@ Moved to [Runner install and distribution](../docs/operations/runner-install.md#
 ## Codex backend selection
 
 Omitting `codex.backend` or setting `app-server` selects app-server; explicit `exec` is rejected.
-Prepare existing exec sessions on the retained pre-retirement release; follow the [retirement procedure](../docs/operations/codex-backend-switch.md#exec-retirement).
+See [Codex backend retirement](../docs/operations/codex-backend-switch.md).
 
 Moved to [Runner configuration](../docs/reference/configuration/runner.md#codex-backend-selection).
 

@@ -803,7 +803,7 @@ const RUNNER_JOB_STEP = "- run: node scripts/test-isolation/run-node-tests.mjs";
 function connectedRepository() {
   const root = fixtureRepository();
   for (const path of ["scripts/test/test-isolation.test.mjs", "scripts/test/check-test-isolation.test.mjs",
-    "scripts/test/child-process-environment.test.mjs", "scripts/test/codex-backend-compatibility.test.mjs"]) write(root, path, entry(path));
+    "scripts/test/child-process-environment.test.mjs"]) write(root, path, entry(path));
   write(root, ".github/workflows/ci.yml", JOB(CLI_JOB_STEP, RUNNER_JOB_STEP));
   return root;
 }
@@ -816,7 +816,7 @@ test("checkRepository reports a connected repository without problems", () => {
 });
 
 for (const path of ["scripts/test/test-isolation.test.mjs", "scripts/test/check-test-isolation.test.mjs",
-  "scripts/test/child-process-environment.test.mjs", "scripts/test/codex-backend-compatibility.test.mjs"]) {
+  "scripts/test/child-process-environment.test.mjs"]) {
   test(`the checker rejects a missing required Node entry: ${path}`, () => {
     const root = connectedRepository();
     try {

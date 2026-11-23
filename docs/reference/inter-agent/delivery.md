@@ -330,8 +330,8 @@ the recipient ledger's lifetime and resets when that ledger is deleted.
 tool-boundary cut. An omitted Codex backend selects app-server; the runner's
 `codex.backend: "exec"` is rejected by current configuration readers. Old exec
 wrappers advertise no in-flight input; their wire values remain accepted.
-Existing hosts follow the [guarded fresh backend transition](../../operations/codex-backend-switch.md#fresh-backend-migration)
-before changing backends. The default change is tracked by
+Codex runs on `app-server` only ([Codex backend retirement](../../operations/codex-backend-switch.md)).
+The default change was tracked by
 [issue 564](https://github.com/sakuraiyuta/kaoiro/issues/564), and the dated
 observation is in the
 [C0 baseline record](../../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md). Live per-agent policy

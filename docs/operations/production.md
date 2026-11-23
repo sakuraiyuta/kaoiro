@@ -159,8 +159,8 @@ update with `--dry-run`. Detail: [Server update and rollback § 4.2](server-upda
   `mix kaoiro.env` and `kaoiro-runner-setup.sh` ask and why
 - [Runner install and distribution](runner-install.md) — full runner install /
   service / troubleshooting reference
-- [Codex backend switching and rollback](codex-backend-switch.md) — backend
-  selection, verification, and rollback (release note in
+- [Codex backend retirement](codex-backend-switch.md) — app-server-only status
+  after exec retirement (historical Stage 6 record in
   [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118))
 - [Codex home for production](codex-home.md) — the dedicated `CODEX_HOME`,
   its operator login, cutover and rollback

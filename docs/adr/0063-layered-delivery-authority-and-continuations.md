@@ -194,7 +194,7 @@ Operator decision on 2026-10-01. Tracking:
 - **Codex backend.** The default Codex backend becomes app-server just
   before this work merges into `develop`; explicit exec remains available,
   with no in-flight input. Existing hosts use the
-  [guarded fresh transition](../operations/codex-backend-switch.md#fresh-backend-migration)
+  [guarded fresh transition](../operations/codex-backend-switch.md)
   before changing backends; old IDs are not cross-backend resume targets (ADR-0058).
 - **Unchanged.** The phasing order, the canary before the Claude default
   flip (issue #441), D2 (hard cancellation stays operator-only) and D9. Each

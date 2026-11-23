@@ -7,7 +7,6 @@ import { runRunnerCli } from "../../src/runner-cli.js";
 
 const link = {
   sendSpawnResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {},
-  sendCodexWorkObserved() {},
   sendCatalogResult() {}, updateRegister() {}, reconnect() {}, close() {},
 };
 await runRunnerCli({

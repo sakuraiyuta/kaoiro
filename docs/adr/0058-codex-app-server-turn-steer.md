@@ -31,7 +31,7 @@ backend changes from exec to app-server just before the default-on
 in-flight delivery work
 ([issue #463](https://github.com/sakuraiyuta/kaoiro/issues/463)) merges into
 `develop`. An explicit setting keeps exec selectable. Existing hosts require
-the [fresh-session transition](../operations/codex-backend-switch.md#fresh-backend-migration);
+the [fresh-session transition](../operations/codex-backend-switch.md);
 a backend setting does not authorize cross-backend resume. The
 measurements this ADR requires before a default-adapter switch still apply
 to that change.

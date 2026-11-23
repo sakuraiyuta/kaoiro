@@ -55,7 +55,7 @@ cannot itself establish a clean start. A deliberate W1 rollback after input
 removal requires restoring the inventoried old settings as well.
 
 A C4C-only rollback restores W1 wrapper/runner code atop C4B U2. Reverting U2
-as well is a separate rollback requiring its [Codex backend preparation](codex-backend-switch.md#backend-selection-and-code-rollback).
+as well is a separate rollback; see [Codex backend retirement](codex-backend-switch.md).
 An old server cannot supply new policy revisions: a same-process last off
 survives rejoin, but a wrapper restart loses that memory. These are compatibility
 limits, not authorization for production rollback or deployment.
@@ -70,18 +70,8 @@ limits, not authorization for production rollback or deployment.
    record; a `-dirty` revision is not an accepted release identity.
 3. Confirm the host list in the dashboard contains the `host_id`.
 
-Issue 564's backend preparation reads the active runner invocation for its
-`runner: host=<host_id> rev=<40-hex-sha> connecting to ...` startup record. If
-the complete invocation has no unique, well-formed record, or its journal
-output exceeds 8 MiB, preparation stops with
-`runner-start-record-unavailable`. A `-dirty` revision stops with
-`runner-identity-dirty`. The command never restarts the service. A controlled
-restart creates a new startup record but stops supervised wrappers and
-interrupts active turns; defer preparation if that impact is not acceptable.
-See the [backend switching procedure](codex-backend-switch.md#preparation-before-a-default-change).
-The synchronous `execFileSync` capture reports this overflow as `ENOBUFS`;
-U1 preserves that error through the command boundary and maps it to
-`runner-start-record-unavailable` when reading the startup record.
+Codex uses only `app-server` ([Codex backend retirement](codex-backend-switch.md));
+the `exec` backend-switching and compatibility tool has been removed.
 
 ### Update-related resolved limits
 
@@ -110,16 +100,8 @@ they complete the 4.6 migration.
 
 Satisfy all of the following before starting.
 
-If the target release includes the Codex omitted-backend default change, complete
-the preparation command introduced for
-[issue 564](https://github.com/sakuraiyuta/kaoiro/issues/564) on the affected
-host before deploying that runner release. The observation helper is read-only
-and adds no DETS schema or rollback state; use the [Codex backend preparation
-runbook](codex-backend-switch.md#preparation-before-a-default-change) for the
-applied-selection and origin checks. A server update alone does not complete
-runner preparation. Hosts retaining an observed, applied explicit backend do
-not need omitted-setting preparation; keep that setting during deployment.
-Backend changes require the [guarded fresh boundary](codex-backend-switch.md#fresh-backend-migration).
+Codex runs on `app-server` only; hosts retaining `codex.backend` must omit it or
+set `"app-server"` (see [Codex backend retirement](codex-backend-switch.md)).
 For code rollback preserving app-server, verify explicit app-server before
 activating old code, with the same native hash and compatible state. Unknown
 creation origin alone does not prevent that same-backend rollback; unknown or

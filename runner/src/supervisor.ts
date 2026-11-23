@@ -9,7 +9,6 @@ import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 // logic is testable without real processes (default launcher: spawn.ts).
 
 import type {
-  CodexWorkSnapshot,
   EngineCatalogEntry,
   EngineKind,
   EngineModelInfo,
@@ -773,23 +772,6 @@ export class Supervisor {
     this.#behaviourRelay = options.behaviourRelay;
     this.#contextWorkBudgetPercent = options.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
-  }
-
-  observeCodexWork(): CodexWorkSnapshot | null {
-    const known = (engine: string) => ["claude-code", "codex", "antigravity", "grok"].includes(engine);
-    const children = [...this.#children];
-    const spawns = [...this.#pendingSpawns];
-    const switches = [...this.#pendingSwitches];
-    if (children.some(([, entry]) => !known(entry.parsed.engine))
-      || [...spawns, ...switches].some(([, entry]) => !known(entry.engine))) return null;
-    return {
-      applied_backend: this.#codexBackend ?? DEFAULT_CODEX_BACKEND,
-      children: children.filter(([, entry]) => entry.parsed.engine === "codex").map(([agent_id, entry]) => ({
-        agent_id, stopping: entry.stopping, restarting: entry.restarting, reset_pending: entry.pendingReset !== undefined,
-      })),
-      pending_spawns: spawns.filter(([, entry]) => entry.engine === "codex").map(([id]) => id),
-      pending_switches: switches.filter(([, entry]) => entry.engine === "codex").map(([id]) => id),
-    };
   }
 
   /** Hot-swap runtime config on a config-file reload. Full replacement per

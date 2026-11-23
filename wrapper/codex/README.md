@@ -2,7 +2,7 @@
 
 The public Codex engine uses `app-server`; explicit exec configuration is rejected. Select the backend through
 `runner.config.json` → `codex.backend`; see the [configuration contract](../../docs/reference/configuration/runner.md#codex-backend)
-and [switching and rollback runbook](../../docs/operations/codex-backend-switch.md).
+and [Codex backend retirement](../../docs/operations/codex-backend-switch.md).
 
 Implementation contracts are in the [backend architecture](../../docs/architecture/codex-backends.md) and its
 transport, session, events, settings and history references. Dated verification
@@ -33,7 +33,7 @@ Native checks use isolated homes and a loopback provider,
 including `runCodexCli` with its production app-server factories. Historical exec checks belong to pre-retirement releases.
 See [the 0.170.0 evidence](../../docs/evidence/codex-app-server/pin-0.170.0-adoption-gates-2026-11-19.md)
 for fixture provenance, negative controls and remaining limits. The
-[U2 acceptance limits](../../docs/operations/codex-backend-switch.md#accepted-measurement-limits)
+[U2 acceptance limits](https://github.com/sakuraiyuta/kaoiro/issues/564#issuecomment-6435984343)
 separate controlled native checks from authenticated behavior and API-key defaults.
 
 ## Moderation display instructions

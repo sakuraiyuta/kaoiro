@@ -31,8 +31,6 @@ defmodule KaoiroServerWeb.RunnerChannel do
   alias KaoiroServer.ExternalEngine
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
-  alias KaoiroServer.RunnerConnections
-  alias KaoiroServer.CodexBackendCompatibility
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.PeerConnectivity
 
@@ -50,8 +48,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
   @impl true
   def join("runner:" <> host_id, _params, socket) do
     with :ok <- validate_host_id(host_id),
-         :ok <- Auth.authorize_runner(host_id, socket.assigns[:runner_token]),
-         :ok <- RunnerConnections.register(host_id) do
+         :ok <- Auth.authorize_runner(host_id, socket.assigns[:runner_token]) do
       # Drop the raw token once verified so it cannot leak via crash logs
       # / socket inspection.
       {:ok,
@@ -71,73 +68,9 @@ defmodule KaoiroServerWeb.RunnerChannel do
   end
 
   @impl true
-  def handle_call({:observe_codex_work, request_id}, from, socket) do
-    with :ok <- RunnerConnections.check_owner(socket.assigns.host_id, self()),
-         nil <- socket.assigns[:codex_observation] do
-      monitor = Process.monitor(elem(from, 0))
-      timer = Process.send_after(self(), {:codex_observation_timeout, request_id}, 5_000)
-
-      pending = %{
-        from: from,
-        request_id: request_id,
-        monitor: monitor,
-        timer: timer,
-        deadline: System.monotonic_time(:millisecond) + 5_000
-      }
-
-      push(socket, "observe_codex_work", %{version: "0", schema: 1, request_id: request_id})
-      {:noreply, assign(socket, :codex_observation, pending)}
-    else
-      {:error, _} = error -> {:reply, error, socket}
-      _ -> {:reply, {:error, :runner_observation_busy}, socket}
-    end
-  end
-
-  @impl true
-  def handle_info({:codex_observation_timeout, request_id}, socket) do
-    case socket.assigns[:codex_observation] do
-      %{request_id: ^request_id} ->
-        {:noreply, finish_observation(socket, {:error, :runner_observation_timeout})}
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_info({:DOWN, ref, :process, _, _}, socket) do
-    case socket.assigns[:codex_observation] do
-      %{monitor: ^ref} -> {:noreply, clear_observation(socket)}
-      _ -> {:noreply, socket}
-    end
-  end
-
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_in("codex_work_observed", payload, socket) do
-    case socket.assigns[:codex_observation] do
-      nil ->
-        {:reply, :ok, socket}
-
-      pending ->
-        result =
-          with :ok <- check_size(payload),
-               :ok <- RunnerConnections.check_owner(socket.assigns.host_id, self()),
-               true <- System.monotonic_time(:millisecond) < pending.deadline do
-            CodexBackendCompatibility.validate_runner(
-              payload,
-              socket.assigns.host_id,
-              pending.request_id
-            )
-          else
-            false -> {:error, :runner_observation_timeout}
-            error -> error
-          end
-
-        {:reply, :ok, finish_observation(socket, result)}
-    end
-  end
-
   def handle_in("register", payload, socket) do
     with :ok <- check_size(payload),
          {:ok, attrs} <- parse_register(payload),
@@ -295,10 +228,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
   end
 
   @impl true
-  def terminate(_reason, %{assigns: %{host_id: host_id}} = socket) do
-    if socket.assigns[:codex_observation],
-      do: finish_observation(socket, {:error, :runner_observation_disconnected})
-
+  def terminate(_reason, %{assigns: %{host_id: host_id}}) do
     # Drop only while this channel still owns the host entry, so a stale
     # terminate after a reconnect cannot drop the new runner's entry.
     case HostRegistry.drop(host_id, self()) do
@@ -308,18 +238,6 @@ defmodule KaoiroServerWeb.RunnerChannel do
   end
 
   def terminate(_reason, _socket), do: :ok
-
-  defp finish_observation(socket, result) do
-    GenServer.reply(socket.assigns.codex_observation.from, result)
-    clear_observation(socket)
-  end
-
-  defp clear_observation(socket) do
-    pending = socket.assigns.codex_observation
-    Process.cancel_timer(pending.timer)
-    Process.demonitor(pending.monitor, [:flush])
-    assign(socket, :codex_observation, nil)
-  end
 
   # register carries the persona trust policy and the selectable cwd
   # allow-list (#22, ADR-0031). capabilities is optional. Any type breach
