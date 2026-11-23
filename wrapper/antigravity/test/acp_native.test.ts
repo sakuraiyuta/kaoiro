@@ -98,12 +98,18 @@ const WAITING_TOOLS = new Set(["manage_task", "command_status", "wait", "wait_5_
 const parentCouldRead = (e: GateEntry) =>
   e.kind === "pre" && !e.sub && e.decision === "allow" && !e.tool.startsWith("mcp_kaoiro_") &&
   !WAITING_TOOLS.has(e.tool) && TOOL_CLASS_BY_NAME.get(e.tool) !== "subagent";
-/** N3b and N4: an approved command named the file, and no write tool did. */
+/** A dialog answered `allow` for this very call: the gate hands the call's
+ *  arguments to the dialog unchanged, so its input equals the recorded
+ *  arguments. */
+const answered = (r: CaseRecord, call: Pre, allow: boolean) =>
+  r.dialogs.some((d) => d.tool === call.tool && d.allow === allow && d.input === call.args);
+/** N3b and N4: an allowed command named the file, the operator approved that
+ *  command's own input, and no write tool named the file. */
 const commandWrote = (r: CaseRecord, file: string, bypass: boolean): Verdict => {
   const calls = pre(r, /^run_command$/).filter((c) => c.args.includes(file) && (!bypass || c.bypass));
-  const approved = r.dialogs.some((d) => d.tool === "run_command" && d.allow && d.input.includes(file));
+  const approved = calls.some((c) => c.decision === "allow" && answered(r, c, true));
   const written = r.gate.some((e) => e.kind === "pre" && e.decision === "allow" && TOOL_CLASS_BY_NAME.get(e.tool) === "write" && e.args.includes(file));
-  return verdict(calls.length > 0, calls.some((c) => c.decision === "allow") && approved && r.files.includes(file) && !written && r.argv.length > 0 && r.argv.every(sandboxed));
+  return verdict(calls.length > 0, approved && r.files.includes(file) && !written && r.argv.length > 0 && r.argv.every(sandboxed));
 };
 
 /** The fixed N6 command. Its output is random, so only this run made it. */
@@ -188,11 +194,34 @@ export function judgeN6(r: CaseRecord): N6Judgement {
   rows.P5 = "pass";
   const value = [...values][0]!;
   const reply = r.results[0];
-  ids.reply_has_value = String(reply?.text ?? "").includes(value);
+  ids.reply_has_value = n6Values(String(reply?.text ?? "")).includes(value);
   if (!succeeded(reply) || ids.reply_has_value !== true) return decide("P6", "fail", "the reply is an error or lacks R's value");
   rows.P6 = "pass";
   if (r.faults === undefined) return decide("P7", "undetermined", "gate faults were not counted");
   return decide("P7", "pass", "every row holds");
+}
+
+/** The record v7 6.2 keeps beside the rows; it decides nothing. Each parent
+ *  status query before E gives its TaskId an index (t1, t2, ...); each parent
+ *  read that reaches a file names the index of a queried TaskId its
+ *  arguments hold, or "-". Both carry the gate's actual decision and seq.
+ *  No TaskId or path is printed. */
+export function n6Correspondence(r: CaseRecord): { status: string[]; reads: string[]; read_count: number } {
+  const session = r.sessions[0];
+  const end = r.resultSeqs[0] ?? Number.POSITIVE_INFINITY;
+  const parent = r.gate.filter((e): e is Pre => e.kind === "pre" && e.conversation === session && e.seq < end);
+  const tasks: string[] = [];
+  const status = parent.filter((e) => e.tool === "manage_task").flatMap((e) => {
+    const query = argsOf(e);
+    if (query.Action !== "status" || typeof query.TaskId !== "string" || query.TaskId.trim() === "") return [];
+    if (!tasks.includes(query.TaskId)) tasks.push(query.TaskId);
+    return [`${e.decision}@${e.seq}:t${tasks.indexOf(query.TaskId) + 1}`];
+  });
+  const reads = parent.filter((e) => TOOL_CLASS_BY_NAME.get(e.tool) === "read" && !WAITING_TOOLS.has(e.tool)).map((e) => {
+    const index = tasks.findIndex((task) => e.args.includes(task));
+    return `${e.tool}:${e.decision}@${e.seq}:${index < 0 ? "-" : `t${index + 1}`}`;
+  });
+  return { status, reads, read_count: reads.length };
 }
 
 /** One judge per case: undetermined when the model never made the call the
@@ -201,7 +230,7 @@ export const JUDGES: Record<string, (r: CaseRecord) => Verdict> = {
   // An operator rejection of this command is a hook deny; the turn goes on.
   N1: (r) => {
     const calls = pre(r, /^run_command$/).filter((c) => c.args.includes("kaoiro-n1"));
-    const rejected = r.dialogs.some((d) => d.tool === "run_command" && !d.allow && d.input.includes("kaoiro-n1"));
+    const rejected = calls.some((c) => answered(r, c, false));
     return verdict(calls.length > 0, rejected && calls.every((c) => c.decision === "deny") && succeeded(r.results.at(-1)));
   },
   // read-only: every write is denied and nothing is written.
@@ -222,7 +251,8 @@ export const JUDGES: Record<string, (r: CaseRecord) => Verdict> = {
   // A kaoiro tool is allowed by the gate with no operator dialog and runs.
   N5: (r) => {
     const calls = pre(r, /^mcp_kaoiro_whoami$/);
-    return verdict(calls.length > 0, calls.every((c) => c.decision === "allow") && r.dialogs.length === 0 && r.whoami === calls.length && succeeded(r.results.at(-1)));
+    // One allowed call and exactly one dispatch of its handler.
+    return verdict(calls.length > 0, calls.length === 1 && calls[0]!.decision === "allow" && r.dialogs.length === 0 && r.whoami === 1 && succeeded(r.results.at(-1)));
   },
   N6: (r) => judgeN6(r).verdict,
   // A subagent's report reaches the reply while the prompt is held: the
@@ -272,6 +302,8 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("deny", { args: named("kaoiro-n1") })], dialogs: [] }),
       // The rejection was of another command.
       sample({ gate: [cmd("deny", { args: named("kaoiro-n1") })], dialogs: [{ tool: "run_command", allow: false, input: named("other") }] }),
+      // ... of another command that names the same token.
+      sample({ gate: [cmd("deny", { args: named("kaoiro-n1") })], dialogs: [{ tool: "run_command", allow: false, input: JSON.stringify({ CommandLine: "cat kaoiro-n1" }) }] }),
       sample({ gate: [cmd("deny", { args: named("kaoiro-n1") })], dialogs: [{ tool: "run_command", allow: false, input: named("kaoiro-n1") }], results: [{ is_error: true }] }),
     ],
     undetermined: [sample(), sample({ gate: [cmd("deny", { args: named("other") })] })],
@@ -303,6 +335,8 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [], files: ["n3b.txt"] }),
       // The approval was of another command.
       sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [{ tool: "run_command", allow: true, input: named("other") }], files: ["n3b.txt"] }),
+      // ... of another command that names the same file.
+      sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [{ tool: "run_command", allow: true, input: JSON.stringify({ CommandLine: "cat n3b.txt" }) }], files: ["n3b.txt"] }),
       sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [{ tool: "run_command", allow: true, input: named("n3b.txt") }] }),
       // The file came from a write tool.
       sample({
@@ -324,6 +358,8 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [cmd("deny", { bypass: true, args: named("n4.txt", { BypassSandbox: true }) })], dialogs: [{ tool: "run_command", allow: true, input: named("n4.txt", { BypassSandbox: true }) }], files: ["n4.txt"] }),
       sample({ gate: [cmd("allow", { bypass: true, args: named("n4.txt", { BypassSandbox: true }) })], dialogs: [{ tool: "run_command", allow: true, input: named("n4.txt", { BypassSandbox: true }) }] }),
       sample({ gate: [cmd("allow", { bypass: true, args: named("n4.txt", { BypassSandbox: true }) })], dialogs: [{ tool: "run_command", allow: true, input: named("other") }], files: ["n4.txt"] }),
+      // The approval was of another command that names the same file.
+      sample({ gate: [cmd("allow", { bypass: true, args: named("n4.txt", { BypassSandbox: true }) })], dialogs: [{ tool: "run_command", allow: true, input: JSON.stringify({ CommandLine: "cat n4.txt", BypassSandbox: true }) }], files: ["n4.txt"] }),
       sample({
         gate: [cmd("allow", { bypass: true, args: named("n4.txt", { BypassSandbox: true }) }), call("write_file", "allow", { args: JSON.stringify({ Path: "/w/n4.txt" }) })],
         dialogs: [{ tool: "run_command", allow: true, input: named("n4.txt", { BypassSandbox: true }) }],
@@ -339,6 +375,10 @@ const CONTROLS: Record<string, { pass: CaseRecord; fail: CaseRecord[]; undetermi
       sample({ gate: [call("mcp_kaoiro_whoami", "deny")] }),
       // The gate allowed it, but the tool never ran.
       sample({ gate: [call("mcp_kaoiro_whoami", "allow")], whoami: 0 }),
+      // Not exactly one dispatch.
+      sample({ gate: [call("mcp_kaoiro_whoami", "allow")], whoami: 2 }),
+      sample({ gate: [call("mcp_kaoiro_whoami", "allow"), call("mcp_kaoiro_whoami", "allow")], whoami: 2 }),
+      sample({ gate: [call("mcp_kaoiro_whoami", "allow"), call("mcp_kaoiro_whoami", "allow")], whoami: 1 }),
     ],
     undetermined: [sample()],
   },
@@ -453,6 +493,7 @@ const N6_CONTROLS: [string, Verdict, CaseRecord][] = [
   ["P5: two values for R", "undetermined", n6Trial((r) => { r.toolResults = [projectV(50, [N6_V, "kaoiro-n6-fedcba9876543210"])]; })],
   ["P6: E is an error", "fail", n6Trial((r) => { r.results = [{ is_error: true, error_detail: "x", text: N6_V }]; })],
   ["P6: the reply has another value", "fail", n6Trial((r) => { r.results = [{ text: "kaoiro-n6-fedcba9876543210" }]; })],
+  ["P6: the reply has the value only inside a longer hex token", "fail", n6Trial((r) => { r.results = [{ text: `${N6_V}0` }]; })],
   ["P7: a fault during retirement after a successful E", "fail", n6Trial((r) => { r.faults = 1; })],
   ["P7: faults not counted", "undetermined", n6Trial((r) => { r.faults = undefined; })],
 ];
@@ -476,6 +517,24 @@ describe("Antigravity ACP native acceptance: the judges (negative controls)", ()
     expect(judged.verdict, judged.reason).toBe(expected);
     expect(JUDGES.N6!(record)).toBe(expected);
     expect(JSON.stringify(judged)).not.toContain(N6_V);
+  });
+
+  it("N6 record: each status TaskId and each read, by index, with the actual decision; no read is 0", () => {
+    expect(n6Correspondence(n6Trial())).toEqual({ status: ["allow@40:t1"], reads: [], read_count: 0 });
+    const second = N6_CONTROLS.find(([label]) => label.startsWith("positive 2"))![2];
+    expect(n6Correspondence(second)).toEqual({
+      status: ["deny@55:t1", "allow@57:t2"], reads: ["read_file:deny@45:-"], read_count: 1,
+    });
+    const named = n6Trial((r) => {
+      r.gate.push(parentPre(45, "read_file", "allow", { Path: "/tmp/task-r.log" }), parentPre(47, "view_file", "deny", { AbsolutePath: "/w/x" }));
+      // A child's read and one after E are not the parent's record.
+      r.gate.push({ ...parentPre(48, "read_file", "allow", { Path: "/tmp/task-r.log" }), conversation: N6_CHILD, sub: true } as GateEntry);
+      r.gate.push(parentPre(65, "read_file", "allow", { Path: "/tmp/task-r.log" }));
+    });
+    expect(n6Correspondence(named)).toEqual({
+      status: ["allow@40:t1"], reads: ["read_file:allow@45:t1", "view_file:deny@47:-"], read_count: 2,
+    });
+    expect(JSON.stringify(n6Correspondence(named))).not.toContain("task-r");
   });
 
   it("N6 values: only a complete value counts", () => {
@@ -691,12 +750,16 @@ function summary(id: string, record: CaseRecord, judged: Verdict, attempts: numb
     sessions: record.sessions.map(tail),
     tool_results: record.toolResults.map((t) => `${tail(t.toolUseId)}:${t.values.length}${t.truncated ? ":truncated" : ""}^${t.seq}`),
     result_seqs: record.resultSeqs,
-    ...(id === "N6" ? { n6: judgeN6(record) } : {}),
+    ...(id === "N6" ? { n6: judgeN6(record), n6_record: n6Correspondence(record) } : {}),
     ...(record.marker === undefined ? {} : {
       marker_file_calls: record.gate.filter((e) => e.kind === "pre" && e.args.includes(N7_FILE)).map((e) => `${(e as { tool: string }).tool}${e.sub ? ":sub" : ""}@${tail(e.conversation)}`),
       marker_in_reply: text(record).includes(record.marker),
     }),
-    dialogs: record.dialogs.map((d) => `${d.tool}:${d.allow ? "allow" : "reject"}${named(d.input)}`),
+    // `=#<call>` names the gate call whose arguments equal the dialog's input.
+    dialogs: record.dialogs.map((d) => {
+      const call = record.gate.find((e): e is Pre => e.kind === "pre" && e.tool === d.tool && e.args === d.input);
+      return `${d.tool}:${d.allow ? "allow" : "reject"}${named(d.input)}=${call === undefined ? "none" : `#${tail(call.callId)}`}`;
+    }),
     whoami: record.whoami,
     faults: record.faults,
     sandbox: record.argv.map((args) => args.includes("--sandbox")),
