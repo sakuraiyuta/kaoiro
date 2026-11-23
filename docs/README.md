@@ -191,13 +191,6 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Open questions carried from the former protocol spec: [inter-agent messaging](architecture/inter-agent-messaging.md#open-questions).
 - Provisional: external human messaging (Discord) — [protocol entry](specs/protocol-external-human.md).
 
-## Coordination monitoring documentation
-
-- Design: [notification boundaries and rationale](architecture/coordination-monitoring.md).
-- Operational updates: [monitoring configuration](reference/inter-agent/coordination-monitoring.md#configuration).
-- Permission recovery: [operator-only wire and display contracts](reference/inter-agent/coordination-monitoring.md#wire) and [authentication and authorization](reference/security/authentication-authorization.md).
-- Adapter and dashboard implementation: [detection and display contract](reference/inter-agent/coordination-monitoring.md).
-
 ## Peer directory and routing documentation
 
 - Operational lookup and destination resolution: [peer-routing rules](contributing/peer-routing.md).

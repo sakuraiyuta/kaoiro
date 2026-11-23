@@ -14,7 +14,6 @@ import type {
   DirectoryEntry,
   Envelope,
   KaoiroConnection,
-  QuagmireSettings,
   UserSummary,
 } from "../src/lib/protocol";
 import { makeReactiveSettingsDrawerProps } from "./reactiveProps.svelte";
@@ -120,138 +119,6 @@ function checkboxByLabel(
   }
   return checkbox;
 }
-
-// issue #307: the runtime rally threshold. The value in force is the prop
-// App.svelte owns, so these cases pin what the control SENDS and what it
-// renders for a given effective value.
-describe("SettingsDrawer の停滞検知しきい値 (issue #307)", () => {
-  function quagmireConnection(
-    setQuagmireSettings: (turns: number | null) => Promise<void> = async () => {},
-  ) {
-    return {
-      listConversations: vi.fn(async () => []),
-      listUsers: vi.fn(async () => []),
-      setQuagmireSettings: vi.fn(setQuagmireSettings),
-    } as unknown as KaoiroConnection;
-  }
-
-  async function renderQuagmire(
-    quagmireSettings: QuagmireSettings | null,
-    connection: KaoiroConnection,
-  ) {
-    const target = document.createElement("div");
-    document.body.append(target);
-    const component = mount(SettingsDrawer, {
-      target,
-      props: { onClose: vi.fn(), connection, quagmireSettings },
-    });
-    mounted.push(component);
-    await tick();
-    return target;
-  }
-
-  function rangeInput(target: HTMLElement): HTMLInputElement {
-    const input = target.querySelector<HTMLInputElement>(
-      '.quagmire input[type="range"]',
-    );
-    if (!input) throw new Error("threshold slider not found");
-    return input;
-  }
-
-  function numberInput(target: HTMLElement): HTMLInputElement {
-    const input = target.querySelector<HTMLInputElement>(
-      '.quagmire input[type="number"]',
-    );
-    if (!input) throw new Error("threshold number input not found");
-    return input;
-  }
-
-  it("しきい値と設定元を表示する", async () => {
-    const target = await renderQuagmire(
-      { rallyTurns: 24, source: "stored" },
-      quagmireConnection(),
-    );
-
-    expect(rangeInput(target).value).toBe("24");
-    expect(numberInput(target).value).toBe("24");
-    expect(target.querySelector(".quagmire")?.textContent).toContain("設定済み");
-  });
-
-  it("スライダーを離した値を送る", async () => {
-    const connection = quagmireConnection();
-    const target = await renderQuagmire(
-      { rallyTurns: 24, source: "stored" },
-      connection,
-    );
-
-    const slider = rangeInput(target);
-    slider.value = "32";
-    slider.dispatchEvent(new Event("change", { bubbles: true }));
-    await tick();
-
-    expect(connection.setQuagmireSettings).toHaveBeenCalledWith(32);
-  });
-
-  it("∞ を選ぶと null を送り、解除すると数値に戻す", async () => {
-    const connection = quagmireConnection();
-    const target = await renderQuagmire(
-      { rallyTurns: 24, source: "stored" },
-      connection,
-    );
-
-    const off = checkboxByLabel(target, "検知しない");
-    off.checked = true;
-    off.dispatchEvent(new Event("change", { bubbles: true }));
-    await tick();
-    expect(connection.setQuagmireSettings).toHaveBeenCalledWith(null);
-
-    off.checked = false;
-    off.dispatchEvent(new Event("change", { bubbles: true }));
-    await tick();
-    expect(connection.setQuagmireSettings).toHaveBeenLastCalledWith(24);
-  });
-
-  // The server rejects out-of-range rather than clamping, so a value the
-  // browser lets through must be clamped here or the operator only learns
-  // they guessed wrong.
-  it("直接入力は 1〜999 にクランプして送る", async () => {
-    const connection = quagmireConnection();
-    const target = await renderQuagmire(
-      { rallyTurns: 24, source: "stored" },
-      connection,
-    );
-
-    const input = numberInput(target);
-    input.value = "5000";
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    await tick();
-    expect(connection.setQuagmireSettings).toHaveBeenCalledWith(999);
-
-    input.value = "0";
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    await tick();
-    expect(connection.setQuagmireSettings).toHaveBeenLastCalledWith(1);
-  });
-
-  it("server が拒否したら理由を表示する", async () => {
-    const connection = quagmireConnection(async () => {
-      throw new Error("forbidden");
-    });
-    const target = await renderQuagmire(
-      { rallyTurns: 24, source: "stored" },
-      connection,
-    );
-
-    const slider = rangeInput(target);
-    slider.value = "32";
-    slider.dispatchEvent(new Event("change", { bubbles: true }));
-    await vi.waitFor(() => {
-      expect(target.querySelector(".quagmire .error")?.textContent).toContain(
-        "forbidden",
-      );
-    });
-  });
-});
 
 describe("SettingsDrawer", () => {
   it("現在の設定値を反映して表示する", async () => {
@@ -862,45 +729,6 @@ describe("SettingsDrawer", () => {
       items = target.querySelectorAll(".conv-list li");
       expect(items).toHaveLength(2);
       expect(items[1]!.querySelector(".conv-close")).toBeNull();
-    });
-
-    it("marks only the rows the server called a quagmire (issue #273)", async () => {
-      // The badge follows the SERVER's verdict, not a threshold this
-      // component keeps its own copy of.
-      const conn = makeConnection(async () => [
-        {
-          conversationId: "loop",
-          participants: ["a", "b"],
-          turns: 3,
-          tokens: 10,
-          status: "open",
-          startedAt: null,
-          rallyTurns: 18,
-          rallyConversations: 2,
-          quagmire: true,
-        },
-        {
-          conversationId: "quiet",
-          participants: ["a", "c"],
-          turns: 3,
-          tokens: 10,
-          status: "open",
-          startedAt: null,
-          rallyTurns: 3,
-          rallyConversations: 1,
-          quagmire: false,
-        },
-      ]);
-      const { target } = await renderDrawer(vi.fn(), conn);
-      await Promise.resolve();
-      await tick();
-
-      const items = target.querySelectorAll(".conv-list li");
-      const badge = items[0]!.querySelector(".conv-rally");
-      expect(badge).not.toBeNull();
-      // The pair total, not the row's own 3 turns.
-      expect(badge!.textContent).toContain("18");
-      expect(items[1]!.querySelector(".conv-rally")).toBeNull();
     });
 
     it("閉じるボタン → 確認ダイアログ表示、キャンセルでは closeConversation を呼ばない", async () => {

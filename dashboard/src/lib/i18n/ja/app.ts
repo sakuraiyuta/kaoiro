@@ -8,23 +8,6 @@ function launchReason(reason: string): string {
 }
 
 export const app = {
-  quagmireRally: (p: {
-    names: string;
-    turns: number;
-    conversations: number;
-    threshold: number;
-  }) =>
-    `${p.names} のやり取りが ${p.turns} 通 (${p.conversations} 会話、閾値 ${p.threshold}) に達しました。進捗を確認してください。`,
-  quagmireDeliveryGap: "配送確認の遅延が疑われます (期間内に処理完了あり)。",
-  quagmireStalled: "停滞の疑いがあります。",
-  quagmireUnconfirmed: (p: {
-    label: string;
-    undelivered: number;
-    since: string;
-    diagnosis: string;
-  }) =>
-    `${p.label} 宛のメッセージ ${p.undelivered} 件の配送確認が未完了です (${p.since} から)。${p.diagnosis}`,
-  timeUnknown: "時刻不明",
   ceilingNarrow: (p: { axis: string; ceiling: string; current: string }) =>
     `${p.axis} を ${p.ceiling} に狭めてから reset (現在: ${p.current})`,
   ceilingSandboxFixed: (p: { ceiling: string }) =>

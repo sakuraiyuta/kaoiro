@@ -36,7 +36,6 @@ defmodule KaoiroServer.TestStores do
     KaoiroServer.SessionLifecycleEvents,
     KaoiroServer.DeliveryStates,
     KaoiroServer.WorkStore,
-    KaoiroServer.QuagmireSettings,
     KaoiroServer.Users,
     KaoiroServer.TokenDenylist,
     KaoiroServer.DeliveryPolicies,

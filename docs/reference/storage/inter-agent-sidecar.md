@@ -140,6 +140,6 @@ host**, not the server (`InterAgentHistory` DETS is retired).
 - [Inter-agent conversation admission](../inter-agent/conversation-admission.md).
 - [Delivery confirmation and recovery](../inter-agent/delivery.md).
 - [Send and wait](../inter-agent/send-and-wait.md).
-- [Coordination monitoring and display](../inter-agent/coordination-monitoring.md).
+- [Dashboard observation path](../../architecture/inter-agent-messaging.md#observation-path-dashboard-display).
 - [Peer directory and companion tools](../inter-agent/directory.md).
 - [Session lifecycle](../protocol/session-lifecycle.md).

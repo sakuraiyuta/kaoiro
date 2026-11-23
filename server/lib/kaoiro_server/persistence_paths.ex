@@ -132,16 +132,6 @@ defmodule KaoiroServer.PersistencePaths do
       env: "KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH",
       default_file: "session_lifecycle_events.dets"
     },
-    # Operator-picked rally threshold (issue #307). A threshold tuned
-    # mid-session would not survive a container recreation;
-    # KAOIRO_QUAGMIRE_RALLY_TURNS remains the boot default for a deployment
-    # that has never stored a pick.
-    %{
-      store: "quagmire_settings",
-      config_key: :quagmire_settings_path,
-      env: "KAOIRO_QUAGMIRE_SETTINGS_PATH",
-      default_file: "quagmire_settings.dets"
-    },
     # Agent status lines and their change log (issue 482). The operator reads
     # this history from the dashboard, and the latest line is what every
     # peer's `list_agents` shows, so a container recreation must not reset it.

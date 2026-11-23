@@ -166,7 +166,7 @@ describe("dialogs and settings repaint on setLocale", () => {
     expect(lines()).toContain("Effective: 16 / Source: Server configuration / Server setting: 16");
   });
 
-  it("SettingsDrawer: the source of the stall threshold and of the history size", async () => {
+  it("SettingsDrawer: the source of the history size", async () => {
     const connection = {
       listConversations: async () => Object.assign([], { incomplete: false }),
       listUsers: async () => [],
@@ -174,15 +174,12 @@ describe("dialogs and settings repaint on setLocale", () => {
     const body = await render(SettingsDrawer, {
       onClose: () => {},
       connection,
-      quagmireSettings: { rallyTurns: 16, source: "env" },
       statusLineSettings: { retention: 20, source: "stored", min: 1, max: 100 },
     });
     const hints = () => [...body.querySelectorAll("p.hint")].map((p) => p.textContent?.trim() ?? "");
-    expect(hints()).toContain(ja.settingsDrawer.quagmireHint({ source: ja.settingsDrawer.sourceEnv }));
     expect(hints()).toContain(ja.settingsDrawer.retentionHint({ source: ja.settingsDrawer.sourceStored }));
     setLocale("en");
     await tick();
-    expect(hints().join("|")).toContain("(current source: environment variable)");
     expect(hints().join("|")).toContain("(current source: stored)");
   });
 

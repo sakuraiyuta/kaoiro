@@ -41,7 +41,7 @@ original claim is warned before normalization.
 
 | Status | Message |
 |---|---|
-| Stamped | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `set_permission` / `set_quagmire_settings` / `status_line_history` / `set_status_line_retention` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
+| Stamped | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `set_permission` / `status_line_history` / `set_status_line_retention` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
 | ADR-0063 phase 1, v0 contract | `work_control` (operator-only) |
 | Permanent carve-out | `attach_chunk` (below) |
 | Producer not implemented | `restart` (no dashboard push call; implementation will use `pushVersioned` and stamp automatically) |
@@ -91,10 +91,10 @@ existing `delivery_status_request` accepts an optional message key.
 
 #### Server → client (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-`envelope` is stamped by its frame key. The remaining 24 events
+`envelope` is stamped by its frame key. The remaining 22 events
 (`history_replay_envelope` / `snapshot` / `task_snapshot` / `delivery_snapshot` / `history` /
 `hosts` / `directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
-`agent_deleted` / `delivery_status` / `quagmire_notice` / `quagmire_settings` /
+`agent_deleted` / `delivery_status` /
 `session_reset_started` / `session_reset_completed` /
 `session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result` /
 `wrapper_build_info` / `status_line_snapshot` / `status_line` / `status_line_settings`) receive flat

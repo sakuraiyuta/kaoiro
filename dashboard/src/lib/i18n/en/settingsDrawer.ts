@@ -30,14 +30,6 @@ export const settingsDrawer = {
   showHistory: "Show history",
   deletedAgentsHint:
     "For a deleted agent too, enter its ID to see the history that is kept.",
-  quagmireTitle: "Stall detection threshold",
-  quagmireHint: ({ source }) =>
-    `A warning banner appears when the exchange between agents reaches this number of messages (current source: ${source}).`,
-  neverDetect: "Never detect (∞)",
-  threshold: "Threshold",
-  turnsCount: ({ n }) => plural(n, "message", "messages"),
-  directInput: ({ max }) => `Type a value (1 to ${max})`,
-  thresholdError: ({ reason }) => `Cannot change the threshold: ${reason}`,
   retentionTitle: "Status line history size",
   retentionHint: ({ source }) =>
     `Sets how many history entries are kept for each agent's status line. Lowering it removes older entries at once (current source: ${source}).`,

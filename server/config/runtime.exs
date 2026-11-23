@@ -174,37 +174,8 @@ configured_work_capacity =
 
 config :kaoiro_server, :work_capacity_configured, configured_work_capacity
 
-# Review-quagmire thresholds (issue #273). The defaults in config.exs are
-# provisional and meant to be retuned against real traffic, so expose the two
-# an operator would actually turn without a rebuild. An invalid value raises
-# at boot rather than silently reverting to the default: a detector running
-# on a threshold nobody chose is worse than one that refuses to start.
-quagmire_int = fn name ->
-  case Integer.parse(System.get_env(name) || "") do
-    {value, ""} when value > 0 ->
-      value
-
-    _ ->
-      raise "#{name} must be a positive integer, got #{inspect(System.get_env(name))}"
-  end
-end
-
-# Only the overridden key is written: Config deep-merges keyword values, so
-# the remaining config.exs entries survive. Reading the current value first
-# would look load-bearing while doing nothing under a release, where the
-# Config.Provider runs before applications are loaded.
-if System.get_env("KAOIRO_QUAGMIRE_RALLY_TURNS") do
-  config :kaoiro_server,
-    quagmire: [rally_turns: quagmire_int.("KAOIRO_QUAGMIRE_RALLY_TURNS")]
-end
-
-if System.get_env("KAOIRO_QUAGMIRE_STALL_MS") do
-  config :kaoiro_server,
-    quagmire: [stall_ms: quagmire_int.("KAOIRO_QUAGMIRE_STALL_MS")]
-end
-
 # Agent status line retention (issue 482). An out-of-range or non-numeric
-# value raises at boot, like the quagmire thresholds above: a change log
+# value raises at boot rather than reverting to the default: a change log
 # sized by a value nobody chose is worse than a server that refuses to start.
 if raw = System.get_env("KAOIRO_STATUS_LINE_RETENTION") do
   case Integer.parse(raw) do

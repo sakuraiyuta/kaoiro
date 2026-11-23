@@ -765,8 +765,8 @@ defmodule KaoiroServer.AgentStatusLines do
   defp valid_retention?(value),
     do: is_integer(value) and value >= @min_retention and value <= @max_retention
 
-  # Resolved once at init, like QuagmireSettings: the environment is not read
-  # per call, so the reported source cannot change under a running node.
+  # Resolved once at init: the environment is not read per call, so the
+  # reported source cannot change under a running node.
   defp boot_fallback do
     source = if System.get_env("KAOIRO_STATUS_LINE_RETENTION"), do: :env, else: :default
 

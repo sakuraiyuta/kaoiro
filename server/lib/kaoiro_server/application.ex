@@ -23,12 +23,10 @@ defmodule KaoiroServer.Application do
   end
 
   @doc """
-  The supervision tree, as a value.
-
-  Split out so the QuagmireWatch flag below can be checked without starting
-  the application a second time (issue #320).
+  The supervision tree, as a value, so tests can check its order without
+  starting the application a second time.
   """
-  def children(quagmire_watch? \\ quagmire_watch_enabled?()) do
+  def children do
     [
       KaoiroServerWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:kaoiro_server, :dns_cluster_query) || :ignore},
@@ -137,9 +135,6 @@ defmodule KaoiroServer.Application do
       # timeout returns through the web boundary so authoritative reachability
       # selects terminal disconnected or neutral reconnected for its targets.
       {KaoiroServer.PlannedDisconnects, on_timeout: &KaoiroServerWeb.PeerConnectivity.timeout/3},
-      # Operator-picked rally threshold (issue #307). Starts before the
-      # detector and before the Endpoint, both of which read it.
-      KaoiroServer.QuagmireSettings,
       # Agent status lines and their change log (issue 482). Reads
       # TokenDenylist at start, so it follows it and AgentDirectory, and it
       # must be up before the Endpoint: no channel reads its table before it
@@ -148,12 +143,6 @@ defmodule KaoiroServer.Application do
       # :on_auto_closed above.
       {KaoiroServer.AgentStatusLines,
        broadcast: &KaoiroServerWeb.StatusLineBroadcast.broadcast/2},
-      # Review-quagmire detection (issue #273). Reads ConversationStates and
-      # DeliveryStates, so it starts after both. `:on_notice` is the one
-      # place its data crosses into KaoiroServerWeb, same boundary reason as
-      # ConversationStates' `:on_auto_closed` above. Conditional since issue
-      # #320 — see quagmire_watch_children/1.
-      quagmire_watch_children(quagmire_watch?),
       # Single owner of the common-footer snapshot + last-known-good
       # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
       # and the Endpoint, whose WrapperChannel reads the snapshot.
@@ -196,40 +185,6 @@ defmodule KaoiroServer.Application do
       KaoiroServerWeb.Endpoint,
       KaoiroServerWeb.DeliveryLossDispatcher
     ]
-    |> List.flatten()
-  end
-
-  @doc """
-  Whether this node runs the review-quagmire detector. Defaults to ON: only
-  `config/test.exs` turns it off, so a default of `false` here would take
-  the detector out of production silently.
-  """
-  def quagmire_watch_enabled?,
-    do: Application.get_env(:kaoiro_server, :start_quagmire_watch, true)
-
-  @doc """
-  The detector's child spec, or nothing.
-
-  It sweeps on a 60-second timer and broadcasts to `agents:lobby`, which is
-  the only path by which a `quagmire_notice` reaches that topic. Under
-  `mix test` that timer crosses test boundaries: one test closes a
-  conversation past the rally threshold, and a sweep firing during a LATER
-  test broadcasts it into whatever socket that test has joined — measured
-  as a `refute_push` failure in roughly 1 run in 30 (issue #320). Tests that
-  want the detector start their own with this same spec, so the production
-  `on_notice` wiring stays on the path they exercise.
-  """
-  def quagmire_watch_children(false), do: []
-
-  def quagmire_watch_children(true),
-    do: [{KaoiroServer.QuagmireWatch, on_notice: &__MODULE__.broadcast_quagmire_notice/1}]
-
-  @doc """
-  The detector's one crossing into KaoiroServerWeb. Named rather than
-  inline so a test can assert the tree carries THIS function.
-  """
-  def broadcast_quagmire_notice(payload) do
-    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "quagmire_notice", payload)
   end
 
   # Tell Phoenix to update the endpoint configuration

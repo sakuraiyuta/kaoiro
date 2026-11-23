@@ -220,7 +220,6 @@ defmodule KaoiroServer.AgentActivity do
       awaiting_sid: false,
       turns: 0,
       last_activity_at: nil,
-      last_result_at: nil,
       projection_suppressed: false
     }
   end
@@ -257,15 +256,9 @@ defmodule KaoiroServer.AgentActivity do
   defp count_and_touch(entry, envelope, received_at) do
     turns = if Map.get(envelope, "type") == "result", do: entry.turns + 1, else: entry.turns
 
-    last_result_at =
-      if Map.get(envelope, "type") == "result",
-        do: latest_time(entry.last_result_at, received_at),
-        else: entry.last_result_at
-
     %{
       entry
       | turns: turns,
-        last_result_at: last_result_at,
         last_activity_at: latest_time(entry.last_activity_at, received_at)
     }
   end
@@ -281,7 +274,6 @@ defmodule KaoiroServer.AgentActivity do
       awaiting_sid: true,
       turns: 0,
       last_activity_at: nil,
-      last_result_at: nil,
       projection_suppressed: false
     })
   end

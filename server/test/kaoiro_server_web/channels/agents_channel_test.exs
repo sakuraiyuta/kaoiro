@@ -12,7 +12,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PlannedDisconnects
-  alias KaoiroServer.QuagmireSettings
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
@@ -779,11 +778,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     socket
   end
 
-  # Three participant ids no other test in the run shares, for the rally
-  # aggregate (issue #273).
-  defp rally_pair do
+  # Participant ids no other test in the run shares.
+  defp unique_pair do
     n = System.unique_integer([:positive])
-    {"test.rally#{n}a", "test.rally#{n}b", "test.rally#{n}c"}
+    {"test.pair#{n}a", "test.pair#{n}b"}
   end
 
   defp encoded_frame_bytes(message) do
@@ -1018,31 +1016,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     }
 
     refute_push "delivery_status", %{}
-  end
-
-  test "quagmire_notice reaches the operator only (issue #273)" do
-    _operator_socket = join_as(:operator)
-    assert_push "snapshot", %{"agents" => _}
-
-    _viewer_socket = join_as(:viewer)
-    assert_push "snapshot", %{"agents" => _}
-
-    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "quagmire_notice", %{
-      "kind" => "rally",
-      "participants" => ["test.a", "test.b"],
-      "turns" => 18,
-      "conversations" => 2,
-      "threshold" => 16,
-      "window_ms" => 86_400_000
-    })
-
-    assert_push "quagmire_notice", %{
-      "kind" => "rally",
-      "participants" => ["test.a", "test.b"],
-      "turns" => 18
-    }
-
-    refute_push "quagmire_notice", %{}
   end
 
   describe "work admission settings" do
@@ -1346,169 +1319,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  describe "set_quagmire_settings (issue #307)" do
-    setup do
-      on_exit(fn -> QuagmireSettings.clear() end)
-      :ok
-    end
-
-    test "an operator's pick is acknowledged and pushed to operators only" do
-      operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      # Drain the operator's own join push; both sockets feed one mailbox, so
-      # leaving it there would satisfy the refute below on its own.
-      assert_push "quagmire_settings", %{"source" => "default"}
-
-      _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
-
-      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 40})
-
-      assert_reply ref, :ok, %{"rally_turns" => 40, "source" => "stored"}
-      assert_push "quagmire_settings", %{"rally_turns" => 40, "source" => "stored"}
-      refute_push "quagmire_settings", %{}
-    end
-
-    test "null is the off switch and survives the round trip" do
-      operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-
-      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => nil})
-
-      assert_reply ref, :ok, %{"rally_turns" => nil, "source" => "stored"}
-      assert QuagmireSettings.rally_turns() == :off
-    end
-
-    test "a viewer cannot change the threshold" do
-      viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
-
-      ref = push(viewer, "set_quagmire_settings", %{"rally_turns" => 40})
-
-      assert_reply ref, :error, %{reason: "forbidden"}
-      assert %{source: :default} = QuagmireSettings.effective()
-    end
-
-    # A missing key reads as nil exactly like JSON null, and only one of the
-    # two means "turn rally detection off".
-    test "an absent, out-of-range or non-integer value is rejected" do
-      operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-
-      for payload <- [
-            %{},
-            %{"rally_turns" => 0},
-            %{"rally_turns" => -1},
-            %{"rally_turns" => QuagmireSettings.max_rally_turns() + 1},
-            %{"rally_turns" => 16.0},
-            %{"rally_turns" => "16"}
-          ] do
-        ref = push(operator, "set_quagmire_settings", payload)
-        assert_reply ref, :error, %{reason: "invalid_rally_turns"}
-      end
-
-      assert %{source: :default} = QuagmireSettings.effective()
-    end
-
-    test "the list_conversations verdict follows the new threshold" do
-      {a, b, _c} = rally_pair()
-      operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-
-      ConversationStates.record_message("qs1", a, b, "x", 1, false, true)
-      ConversationStates.record_message("qs2", a, b, "x", 1, false, true)
-
-      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 2})
-      assert_reply ref, :ok, %{"rally_turns" => 2}
-
-      assert verdicts(operator, ["qs1", "qs2"]) == %{"qs1" => true, "qs2" => true}
-
-      # ∞ is not "a very large threshold": the verdict must go false, not
-      # merely become harder to reach.
-      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => nil})
-      assert_reply ref, :ok, %{"rally_turns" => nil}
-
-      assert verdicts(operator, ["qs1", "qs2"]) == %{"qs1" => false, "qs2" => false}
-    end
-
-    # Pins the resweep wiring: without the cast the detector would not notice
-    # the lowered threshold until its own 60-second tick.
-    test "lowering the threshold makes the detector announce without waiting for a tick" do
-      # issue #320: this node runs no detector — its 60-second sweep fired
-      # inside whatever test happened to be running and broadcast a
-      # conversation an earlier test had left behind. Start the PRODUCTION
-      # spec here, so the on_notice wiring this test depends on is still the
-      # one the release uses.
-      start_supervised!(hd(KaoiroServer.Application.quagmire_watch_children(true)))
-
-      {a, b, _c} = rally_pair()
-      operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-
-      ConversationStates.record_message("qr1", a, b, "x", 1, false, true)
-      ConversationStates.record_message("qr2", a, b, "x", 1, false, true)
-
-      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 2})
-      assert_reply ref, :ok, %{"rally_turns" => 2}
-
-      assert_push "quagmire_notice", %{
-        "kind" => "rally",
-        "participants" => [^a, ^b],
-        "turns" => 2,
-        "threshold" => 2
-      }
-    end
-
-    # クロエ review M-1: the store is a separate process, and this RPC is
-    # not advisory. Asserting the WARNING as well as the reply is what
-    # distinguishes "fell back" from "the store happened to answer".
-    test "list_conversations survives a stopped settings store" do
-      operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-
-      :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, QuagmireSettings)
-
-      on_exit(fn ->
-        {:ok, _} = Supervisor.restart_child(KaoiroServer.Supervisor, QuagmireSettings)
-      end)
-
-      log =
-        capture_log(fn ->
-          ref = push(operator, "list_conversations", %{})
-          assert_reply ref, :ok, %{"conversations" => _}
-        end)
-
-      assert log =~ "quagmire settings unavailable"
-      assert Process.alive?(operator.channel_pid)
-    end
-
-    test "a joining operator is told the threshold in force" do
-      :ok = QuagmireSettings.put_rally_turns(33)
-
-      _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "quagmire_settings", %{"rally_turns" => 33, "source" => "stored"}
-
-      _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
-      refute_push "quagmire_settings", %{}
-    end
-  end
-
-  defp verdicts(socket, ids) do
-    ref = push(socket, "list_conversations", %{})
-    assert_reply ref, :ok, %{"conversations" => conversations}
-
-    conversations
-    |> Enum.filter(&(Map.fetch!(&1, "conversation_id") in ids))
-    |> Map.new(&{Map.fetch!(&1, "conversation_id"), Map.fetch!(&1, "quagmire")})
-  end
-
-  test "list_conversations carries the cross-conversation rally and verdict (issue #273)" do
-    # ConversationStates is shared by the whole case and the rally is a PAIR
-    # aggregate, so a participant name reused by another test adds to this
-    # one's count. Every rally test therefore owns its own pair.
-    {a, b, _c} = rally_pair()
+  test "list_conversations rows carry no rally annotation" do
+    {a, b} = unique_pair()
     socket = join_as(:operator)
     assert_push "snapshot", %{"agents" => _}
 
@@ -1521,43 +1333,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     rows = Enum.filter(conversations, &(Map.fetch!(&1, "conversation_id") in ["qc1", "qc2"]))
     assert length(rows) == 2
-
-    # Both rows report the PAIR's total, not their own single turn — the
-    # distinction the detector rests on.
-    assert Enum.all?(rows, &(Map.fetch!(&1, "rally_turns") == 2))
-    assert Enum.all?(rows, &(Map.fetch!(&1, "rally_conversations") == 2))
     assert Enum.all?(rows, &(Map.fetch!(&1, "turns") == 1))
-    # Below the configured threshold, so the server's own verdict is false.
-    assert Enum.all?(rows, &(Map.fetch!(&1, "quagmire") == false))
-  end
 
-  test "list_conversations marks a pair whose rally crosses the threshold (issue #273)" do
-    # The verdict is computed server-side precisely so one place owns the
-    # threshold; asserting only the false branch leaves that comparison
-    # unpinned in the direction an operator actually acts on.
-    {a, b, c} = rally_pair()
-    # issue #307: the threshold is the operator's stored pick now, so config
-    # is no longer what moves this verdict. Cleared afterwards so the rest of
-    # the run reads the boot value again.
-    :ok = QuagmireSettings.put_rally_turns(2)
-    on_exit(fn -> QuagmireSettings.clear() end)
-
-    socket = join_as(:operator)
-    assert_push "snapshot", %{"agents" => _}
-
-    ConversationStates.record_message("qt1", a, b, "x", 1, false, true)
-    ConversationStates.record_message("qt2", a, b, "x", 1, false, true)
-    ConversationStates.record_message("qt3", a, c, "x", 1, false, true)
-
-    ref = push(socket, "list_conversations", %{})
-    assert_reply ref, :ok, %{"conversations" => conversations}
-
-    verdicts =
-      conversations
-      |> Enum.filter(&(Map.fetch!(&1, "conversation_id") in ["qt1", "qt2", "qt3"]))
-      |> Map.new(&{Map.fetch!(&1, "conversation_id"), Map.fetch!(&1, "quagmire")})
-
-    assert %{"qt1" => true, "qt2" => true, "qt3" => false} = verdicts
+    for row <- rows, key <- ["rally_turns", "rally_conversations", "quagmire"] do
+      refute Map.has_key?(row, key)
+    end
   end
 
   # connect 時の role は snapshot にすぎない (#148)。許可リスト/トークン
@@ -10169,9 +9949,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "T4-7: policy は28種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      assert MapSet.size(policy) == 30
-      assert MapSet.member?(policy, "quagmire_notice")
-      assert MapSet.member?(policy, "quagmire_settings")
+      assert MapSet.size(policy) == 28
+      refute MapSet.member?(policy, "quagmire_notice")
+      refute MapSet.member?(policy, "quagmire_settings")
 
       for event <-
             ~w(status_line_snapshot status_line status_line_settings delivery_policy_changed

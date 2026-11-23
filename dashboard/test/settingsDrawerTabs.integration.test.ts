@@ -161,7 +161,6 @@ const ITEMS: Item[] = [
   { name: "volume", tab: "notifications", find: (r) => labelsWith(r, t.volume) },
   { name: "workCapacity", tab: "operations", find: (r) => headingsWith(r, ja.workCapacitySettings.title) },
   { name: "sessionHistory", tab: "operations", find: (r) => Array.from(r.querySelectorAll("section.session-lifecycle")) },
-  { name: "quagmire", tab: "operations", find: (r) => Array.from(r.querySelectorAll("section.quagmire")) },
   { name: "retention", tab: "operations", find: (r) => Array.from(r.querySelectorAll("section.status-retention")) },
   { name: "bulkCleanup", tab: "operations", find: (r) => Array.from(r.querySelectorAll("section.bulk-reset")) },
   { name: "conversations", tab: "administration", find: (r) => Array.from(r.querySelectorAll("section.conversations")) },
@@ -169,7 +168,7 @@ const ITEMS: Item[] = [
 ];
 const byName = (name: string) => ITEMS.find((i) => i.name === name)!;
 const OPERATOR_ONLY = [
-  "workCapacity", "sessionHistory", "quagmire", "retention", "bulkCleanup",
+  "workCapacity", "sessionHistory", "retention", "bulkCleanup",
   "conversations", "users",
 ];
 
@@ -234,7 +233,7 @@ describe("SettingsDrawer tabs: operator gates (issue 1076)", () => {
       t.tabDisplay, t.tabNotifications, t.tabOperations, t.tabAdministration,
     ]);
     expect(byName("workCapacity").find(target)).toHaveLength(0);
-    for (const name of ["sessionHistory", "quagmire", "retention", "bulkCleanup"]) {
+    for (const name of ["sessionHistory", "retention", "bulkCleanup"]) {
       expect(byName(name).find(target), `${name} present`).toHaveLength(1);
     }
   });
@@ -260,7 +259,6 @@ describe("SettingsDrawer tabs: fallback of the active tab (issue 1076)", () => {
     expect(tab(target, t.tabOperations).getAttribute("aria-selected")).toBe("true");
     expect(panel(target, "operations")?.hidden).toBe(false);
     expect(byName("workCapacity").find(target)).toHaveLength(1);
-    expect(byName("quagmire").find(target)).toHaveLength(0);
     expect(panel(target, "administration")).toBeNull();
   });
 

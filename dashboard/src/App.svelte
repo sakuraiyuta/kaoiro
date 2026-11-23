@@ -67,8 +67,6 @@
     PermissionCeilingConflictAxis,
     PersonaManifest,
     RunnerSessions,
-    QuagmireNotice,
-    QuagmireSettings,
     ServerHealth,
     SpawnResult,
     TaskTable,
@@ -525,82 +523,10 @@
       currentRoomId: ref?.kind === "room" ? ref.id : null,
     };
   }
-  // issue #273: review-quagmire notices. Deliberately NOT the 6-second
-  // spawn-notice toast — the whole point is that nobody was watching, so a
-  // notice that expires on its own reproduces the problem it reports. One
-  // banner per subject, dismissed by the operator or explicit delivery resolution. The server only sends
-  // these to operators; the render gates on isOperator too, so a role
-  // downgrade mid-session stops showing them without waiting for a rejoin.
-  let quagmireNotices = $state<QuagmireNotice[]>([]);
-
-  function quagmireKey(notice: QuagmireNotice): string {
-    return notice.kind === "rally"
-      ? `rally:${notice.participants.join("|")}`
-      : `stall:${notice.agentId}`;
-  }
-
-  function recordQuagmire(notice: QuagmireNotice): void {
-    const key = quagmireKey(notice);
-    quagmireNotices = [
-      ...quagmireNotices.filter((n) => quagmireKey(n) !== key),
-      notice,
-    ];
-  }
-
-  function resolveDeliveryNotices(next: Record<string, InterAgentDeliveryStatus>): void {
-    quagmireNotices = quagmireNotices.filter((notice) => {
-      if (notice.kind !== "stall" || !Object.hasOwn(next, notice.agentId)) return true;
-      const status = next[notice.agentId];
-      return status.issued_seq !== status.acked_seq;
-    });
-  }
-
-  // issue #307: the threshold in force. Held here rather than in the drawer
-  // so a change from another dashboard also clears banners the operator is
-  // looking at right now, whether or not the drawer is open.
   let workSettings = $state<WorkSettingsSnapshot | null>(null);
   function applyWorkSettings(next: WorkSettingsSnapshot): void {
     if (next.state === "ready" && workSettings?.state === "ready" && next.revision < workSettings.revision) return;
     workSettings = next;
-  }
-  let quagmireSettings = $state<QuagmireSettings | null>(null);
-
-  // A raised threshold has to take the banners with it. The server only
-  // announces edges, so it cannot retract a notice it already sent, and the
-  // notice carries the `turns` that were counted — enough to decide here.
-  function applyQuagmireSettings(next: QuagmireSettings): void {
-    quagmireSettings = next;
-    quagmireNotices = quagmireNotices.filter(
-      (n) =>
-        n.kind !== "rally" ||
-        (next.rallyTurns !== null && n.turns >= next.rallyTurns),
-    );
-  }
-
-  function quagmireText(notice: QuagmireNotice): string {
-    if (notice.kind === "rally") {
-      const names = notice.participants
-        .map((id) => formatAgentLabel(agents, id))
-        .join(" ⇔ ");
-      return msg().app.quagmireRally({
-        names,
-        turns: notice.turns,
-        conversations: notice.conversations,
-        threshold: notice.threshold,
-      });
-    }
-    // Not asserted: an unacknowledged delivery also looks like this while the
-    // recipient is simply mid-turn (director addendum).
-    const label = formatAgentLabel(agents, notice.agentId);
-    const diagnosis = notice.reason === "delivery_confirmation_gap"
-      ? msg().app.quagmireDeliveryGap
-      : msg().app.quagmireStalled;
-    return msg().app.quagmireUnconfirmed({
-      label,
-      undelivered: notice.undelivered,
-      since: notice.pendingSince ?? msg().app.timeUnknown,
-      diagnosis,
-    });
   }
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1173,14 +1099,12 @@
         },
         onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
-        onQuagmireNotice: recordQuagmire,
-        onQuagmireSettings: applyQuagmireSettings,
         onWorkSettings: applyWorkSettings,
         onStatusLineSnapshot: (rows, incomplete) => statusLines.applySnapshot(rows, incomplete),
         onStatusLine: (agentId, row) => statusLines.applyLive(agentId, row),
         onStatusLineSettings: (next) => (statusLineSettings = next),
         onRoomsSnapshot: (snapshot) => rooms.apply(snapshot),
-        onDeliverySnapshot: (next) => { deliveries = next; resolveDeliveryNotices(next); },
+        onDeliverySnapshot: (next) => (deliveries = next),
         onDeliverySnapshotIncomplete: (incomplete) => (deliverySnapshotIncomplete = incomplete),
         onDeliveryStatus: (agentId, delivery) => {
           if (delivery === null) {
@@ -1188,7 +1112,6 @@
             deliveries = remaining;
           } else {
             deliveries = { ...deliveries, [agentId]: delivery };
-            resolveDeliveryNotices({ [agentId]: delivery });
           }
         },
         onWrapperBuildInfoSnapshot: (next, incomplete) => {
@@ -1825,11 +1748,6 @@
     // onTaskSnapshot repopulates for operators, and a viewer never had
     // any entries to begin with (ADR-0021).
     tasks = {};
-    // Advisory banners deliberately survive a reconnect (the condition is
-    // still standing), but not the end of a session: whoever logs in next on
-    // this tab has not seen them, and the detector re-announces on its own.
-    quagmireNotices = [];
-    quagmireSettings = null;
     workSettings = null;
     statusLines.reset();
     statusLineSettings = null;
@@ -2276,24 +2194,6 @@
   </div>
 </header>
 
-{#if isOperator}
-  {#each quagmireNotices as notice (quagmireKey(notice))}
-    <p class="quagmire-notice" role="status">
-      <span>{quagmireText(notice)}</span>
-      <button
-        type="button"
-        class="quagmire-dismiss"
-        onclick={() =>
-          (quagmireNotices = quagmireNotices.filter(
-            (n) => quagmireKey(n) !== quagmireKey(notice),
-          ))}
-      >
-        {msg().common.close}
-      </button>
-    </p>
-  {/each}
-{/if}
-
 {#if spawnNoticeText}
   <p class="spawn-notice" role="status">{spawnNoticeText}</p>
 {/if}
@@ -2364,7 +2264,6 @@
     onBulkResetSummary={showNotice}
     {agents}
     {directory}
-    {quagmireSettings}
     {isOperator}
     {workSettings}
     onWorkSettings={applyWorkSettings}
@@ -3275,30 +3174,6 @@
   .settings-toggle:hover {
     color: var(--fg);
     border-color: var(--fg-dim);
-  }
-
-  .quagmire-notice {
-    display: flex;
-    flex: 0 0 auto;
-    gap: 0.75rem;
-    align-items: center;
-    justify-content: space-between;
-    margin: 0;
-    padding: 0.4rem max(2rem, env(safe-area-inset-right)) 0.4rem
-      max(2rem, env(safe-area-inset-left));
-    font-size: var(--fs-body-sm);
-    color: var(--c-tool_running);
-    background: color-mix(in srgb, var(--c-tool_running) 22%, var(--bg-card));
-    border-bottom: 1px solid var(--line);
-  }
-
-  .quagmire-dismiss {
-    flex: 0 0 auto;
-    color: inherit;
-    background: transparent;
-    border: 1px solid currentcolor;
-    border-radius: 0.25em;
-    cursor: pointer;
   }
 
   .spawn-notice {

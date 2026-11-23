@@ -103,5 +103,5 @@ now fails fast and visibly.
 - [Approval](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration) and [session-operation tools](session-tools.md).
 - [Delivery confirmation and recovery](delivery.md).
 - [Send and wait](send-and-wait.md).
-- [Coordination monitoring and display](coordination-monitoring.md).
+- [Dashboard observation path](../../architecture/inter-agent-messaging.md#observation-path-dashboard-display).
 - [Peer directory and companion tools](directory.md).

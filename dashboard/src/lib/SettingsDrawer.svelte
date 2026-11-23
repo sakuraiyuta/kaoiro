@@ -10,13 +10,11 @@
     visibleConversationSummaries,
   } from "./conversationList";
   import { agentDisplayName } from "./personaName";
-  import { MAX_RALLY_TURNS } from "./protocol";
   import type {
     ConversationSummary,
     DirectoryEntry,
     Envelope,
     KaoiroConnection,
-    QuagmireSettings,
     UserSummary,
   } from "./protocol";
   import type { StatusLineSettings } from "./statusLine";
@@ -31,7 +29,6 @@
     onLogout = undefined,
     onOpenSessionLifecycle = undefined,
     connection = undefined,
-    quagmireSettings = null,
     workSettings = null,
     isOperator = false,
     onWorkSettings = () => {},
@@ -71,12 +68,9 @@
     tryBeginBulkReset?: () => number | null;
     endBulkReset?: (token: number) => void;
     onBulkResetSummary?: (message: string) => void;
-    /** Rally threshold in force (issue #307), or null before the first
+    /** Change-log retention in force (issue 482), or null before the first
      *  push. Owned by App.svelte so a change made elsewhere is reflected
      *  here without the drawer holding its own copy. */
-    quagmireSettings?: QuagmireSettings | null;
-    /** Change-log retention in force (issue 482), or null before the first
-     *  push. Owned by App.svelte for the same reason as quagmireSettings. */
     statusLineSettings?: StatusLineSettings | null;
   } = $props();
 
@@ -169,43 +163,6 @@
     connection.setStatusLineRetention(value).catch((err: unknown) => {
       retentionError = err instanceof Error ? err.message : "error";
     });
-  }
-
-  let quagmireError = $state<string | null>(null);
-
-  // Seed for the undo path only — what an unchecked "∞" sends when no
-  // numeric threshold has been seen this session. The value IN FORCE is
-  // always the one the server reports, never this.
-  let lastNumericRallyTurns = $state(16);
-
-  $effect(() => {
-    const turns = quagmireSettings?.rallyTurns;
-    if (typeof turns === "number") lastNumericRallyTurns = turns;
-  });
-
-  const rallyOff = $derived(quagmireSettings?.rallyTurns === null);
-
-  const rallySourceLabel = $derived(
-    quagmireSettings === null
-      ? msg().settingsDrawer.sourceFetching
-      : sourceText(quagmireSettings.source),
-  );
-
-  function commitRallyTurns(value: number | null): void {
-    if (!connection) return;
-    quagmireError = null;
-    connection.setQuagmireSettings(value).catch((err: unknown) => {
-      quagmireError = err instanceof Error ? err.message : "error";
-    });
-  }
-
-  // The number input accepts anything the browser lets through, so clamp
-  // before sending: the server rejects out-of-range rather than clamping,
-  // and a rejection here would only tell the operator they guessed wrong.
-  function commitTypedRallyTurns(raw: string): void {
-    const parsed = Number(raw);
-    if (!Number.isInteger(parsed)) return;
-    commitRallyTurns(Math.min(Math.max(parsed, 1), MAX_RALLY_TURNS));
   }
 
   // issue #276: fetched once per drawer open (no live push — mirrors
@@ -836,59 +793,6 @@
           </section>
         {/if}
 
-        <section class="quagmire">
-          <h3>{msg().settingsDrawer.quagmireTitle}</h3>
-          <p class="hint">
-            {msg().settingsDrawer.quagmireHint({ source: rallySourceLabel })}
-          </p>
-
-          <label class="row">
-            <input
-              type="checkbox"
-              checked={rallyOff}
-              onchange={(e) =>
-                commitRallyTurns(
-                  e.currentTarget.checked ? null : lastNumericRallyTurns,
-                )}
-            />
-            {msg().settingsDrawer.neverDetect}
-          </label>
-
-          <label>
-            {msg().settingsDrawer.threshold}
-            <input
-              type="range"
-              min="4"
-              max="64"
-              step="1"
-              value={quagmireSettings?.rallyTurns ?? lastNumericRallyTurns}
-              disabled={rallyOff}
-              onchange={(e) => commitRallyTurns(Number(e.currentTarget.value))}
-            />
-            <span class="value"
-              >{rallyOff
-                ? "∞"
-                : msg().settingsDrawer.turnsCount({ n: quagmireSettings?.rallyTurns ?? lastNumericRallyTurns })}</span
-            >
-          </label>
-
-          <label>
-            {msg().settingsDrawer.directInput({ max: MAX_RALLY_TURNS })}
-            <input
-              type="number"
-              min="1"
-              max={MAX_RALLY_TURNS}
-              value={quagmireSettings?.rallyTurns ?? lastNumericRallyTurns}
-              disabled={rallyOff}
-              onchange={(e) => commitTypedRallyTurns(e.currentTarget.value)}
-            />
-          </label>
-
-          {#if quagmireError}
-            <p class="error">{msg().settingsDrawer.thresholdError({ reason: quagmireError })}</p>
-          {/if}
-        </section>
-
         <section class="status-retention">
           <h3>{msg().settingsDrawer.retentionTitle}</h3>
           <p class="hint">
@@ -990,13 +894,6 @@
                     / {formatStartedAt(conv.startedAt)}
                   {/if}
                 </span>
-                {#if conv.quagmire}
-                  <span
-                    class="conv-rally"
-                    title="{conv.rallyTurns} messages across {conv.rallyConversations} conversations between these participants (issue #273)"
-                    >rally {conv.rallyTurns}</span
-                  >
-                {/if}
                 {#if conv.status === "open"}
                   <button
                     type="button"
@@ -1483,22 +1380,19 @@
      CSS. */
   .conv-status,
   .user-status,
-  .status-retention .hint,
-  .quagmire .hint {
+  .status-retention .hint {
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
   }
 
-  .status-retention .error,
-  .quagmire .error {
+  .status-retention .error {
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--c-error);
   }
 
-  .status-retention input[type="number"],
-  .quagmire input[type="number"] {
+  .status-retention input[type="number"] {
     width: 6rem;
   }
 
@@ -1540,14 +1434,6 @@
   .conv-meta,
   .user-meta {
     color: var(--fg-dim);
-  }
-
-  .conv-rally {
-    padding: 0 0.35em;
-    border-radius: 0.25em;
-    background: color-mix(in srgb, var(--c-tool_running) 22%, var(--bg-card));
-    color: var(--c-tool_running);
-    white-space: nowrap;
   }
 
   .conv-close,
