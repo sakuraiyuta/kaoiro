@@ -57,7 +57,8 @@ export interface CaseRecord {
   /** The seq of each prompt sent. */
   inputs: number[];
   gate: GateEntry[];
-  /** `input` is the dialog's tool input as JSON; it is never printed. */
+  /** `input` is the dialog's tool input as JSON, `null` when the broker
+   *  omitted it; it is never printed. */
   dialogs: { tool: string; allow: boolean; input: string }[];
   results: Record<string, unknown>[];
   /** The seq of each result, in the order of `results`. */
@@ -98,13 +99,14 @@ const WAITING_TOOLS = new Set(["manage_task", "command_status", "wait", "wait_5_
 const parentCouldRead = (e: GateEntry) =>
   e.kind === "pre" && !e.sub && e.decision === "allow" && !e.tool.startsWith("mcp_kaoiro_") &&
   !WAITING_TOOLS.has(e.tool) && TOOL_CLASS_BY_NAME.get(e.tool) !== "subagent";
-/** A dialog answered `allow` for this very call: the gate hands the call's
- *  arguments to the dialog unchanged, so its input equals the recorded
- *  arguments. */
+/** Whether a dialog compatible with this call exists: the same tool, the
+ *  call's full arguments as its input (the gate hands them to the dialog
+ *  unchanged) and this answer. A dialog carries no call ID, so this shows a
+ *  compatible dialog, not which call it answered. */
 const answered = (r: CaseRecord, call: Pre, allow: boolean) =>
   r.dialogs.some((d) => d.tool === call.tool && d.allow === allow && d.input === call.args);
-/** N3b and N4: an allowed command named the file, the operator approved that
- *  command's own input, and no write tool named the file. */
+/** N3b and N4: an allowed command named the file, an approval with that
+ *  command's input exists, and no write tool named the file. */
 const commandWrote = (r: CaseRecord, file: string, bypass: boolean): Verdict => {
   const calls = pre(r, /^run_command$/).filter((c) => c.args.includes(file) && (!bypass || c.bypass));
   const approved = calls.some((c) => c.decision === "allow" && answered(r, c, true));
@@ -137,6 +139,13 @@ const argsOf = (entry: Pre): Record<string, unknown> => {
   }
 };
 
+/** P1's condition: one input, one process, one attached session and one
+ *  result. Only then are the parent session S and the result E fixed. */
+const n6Scope = (r: CaseRecord): { session: string; end: number } | undefined =>
+  r.inputs.length === 1 && r.argv.length === 1 && r.sessions.length === 1 && r.results.length === 1
+    ? { session: r.sessions[0]!, end: r.resultSeqs[0]! }
+    : undefined;
+
 /** N6 by the confirmed criteria (n6-criteria.md; issue 1238 comment
  *  7091356206): an observed gate fault first (P7), then the trial's input
  *  and its one source R (P1, P2), then P3-P6 in order. Every bound is
@@ -149,12 +158,12 @@ export function judgeN6(r: CaseRecord): N6Judgement {
     return { verdict, rows, reason, ids };
   };
   if (r.faults !== undefined && r.faults > 0) return decide("P7", "fail", `gate faults ${r.faults}`);
-  if (r.inputs.length !== 1 || r.argv.length !== 1 || r.sessions.length !== 1 || r.results.length !== 1) {
+  const scope = n6Scope(r);
+  if (scope === undefined) {
     return decide("P1", "undetermined", `inputs ${r.inputs.length}, processes ${r.argv.length}, sessions ${r.sessions.length}, results ${r.results.length}`);
   }
   rows.P1 = "pass";
-  const session = r.sessions[0]!;
-  const end = r.resultSeqs[0]!;
+  const { session, end } = scope;
   ids.s = session.slice(-8);
   ids.e = end;
   const parent = r.gate.filter((e) => e.conversation === session && e.seq < end);
@@ -201,15 +210,19 @@ export function judgeN6(r: CaseRecord): N6Judgement {
   return decide("P7", "pass", "every row holds");
 }
 
-/** The record v7 6.2 keeps beside the rows; it decides nothing. Each parent
- *  status query before E gives its TaskId an index (t1, t2, ...); each parent
- *  read that reaches a file names the index of a queried TaskId its
- *  arguments hold, or "-". Both carry the gate's actual decision and seq.
- *  No TaskId or path is printed. */
-export function n6Correspondence(r: CaseRecord): { status: string[]; reads: string[]; read_count: number } {
-  const session = r.sessions[0];
-  const end = r.resultSeqs[0] ?? Number.POSITIVE_INFINITY;
-  const parent = r.gate.filter((e): e is Pre => e.kind === "pre" && e.conversation === session && e.seq < end);
+/** The record kept beside the rows; it decides nothing and links nothing
+ *  (issue 1238 comment 7093772569). Within the parent S before E: each
+ *  status query with a TaskId, numbered so that only an identical TaskId
+ *  shares a number, with the gate's actual decision and seq; each read that
+ *  reaches a file, by tool, actual decision and seq; and the read count.
+ *  When P1 cannot fix S and E, both columns are unknown. No TaskId, path or
+ *  argument is printed. */
+export function n6Record(r: CaseRecord):
+  | { status: string[]; reads: string[]; read_count: number }
+  | { status: "unknown_scope"; reads: "unknown_scope" } {
+  const scope = n6Scope(r);
+  if (scope === undefined) return { status: "unknown_scope", reads: "unknown_scope" };
+  const parent = r.gate.filter((e): e is Pre => e.kind === "pre" && e.conversation === scope.session && e.seq < scope.end);
   const tasks: string[] = [];
   const status = parent.filter((e) => e.tool === "manage_task").flatMap((e) => {
     const query = argsOf(e);
@@ -217,10 +230,9 @@ export function n6Correspondence(r: CaseRecord): { status: string[]; reads: stri
     if (!tasks.includes(query.TaskId)) tasks.push(query.TaskId);
     return [`${e.decision}@${e.seq}:t${tasks.indexOf(query.TaskId) + 1}`];
   });
-  const reads = parent.filter((e) => TOOL_CLASS_BY_NAME.get(e.tool) === "read" && !WAITING_TOOLS.has(e.tool)).map((e) => {
-    const index = tasks.findIndex((task) => e.args.includes(task));
-    return `${e.tool}:${e.decision}@${e.seq}:${index < 0 ? "-" : `t${index + 1}`}`;
-  });
+  const reads = parent
+    .filter((e) => TOOL_CLASS_BY_NAME.get(e.tool) === "read" && !WAITING_TOOLS.has(e.tool))
+    .map((e) => `${e.tool}:${e.decision}@${e.seq}`);
   return { status, reads, read_count: reads.length };
 }
 
@@ -265,8 +277,9 @@ export const JUDGES: Record<string, (r: CaseRecord) => Verdict> = {
     return verdict(seen, marker !== undefined && continued(r) && succeeded(r.results.at(-1)) && text(r).includes(marker));
   },
   // An interrupt while a subagent's command runs ends the turn and every
-  // spawned agy. The command creates its file before it sleeps, and the
-  // interrupt waits for that file.
+  // spawned agy. The subagent is asked to run a command that creates the
+  // file before it sleeps, and the interrupt waits for that file; the record
+  // does not show which call created it.
   N8: (r) => verdict(
     r.files.includes(N8_STARTED) && r.gate.some((e) => e.kind === "pre" && e.sub && e.tool === "run_command" && e.decision === "allow"),
     interrupted(r) && r.alive === 0,
@@ -524,35 +537,82 @@ describe("Antigravity ACP native acceptance: the judges (negative controls)", ()
     expect(JSON.stringify(judged)).not.toContain(N6_V);
   });
 
-  it("N6 record: each status TaskId and each read, by index, with the actual decision; no read is 0", () => {
-    expect(n6Correspondence(n6Trial())).toEqual({ status: ["allow@40:t1"], reads: [], read_count: 0 });
+  it("N6 record: status queries numbered by exact TaskId, reads by tool, decision and seq, with no link", () => {
+    expect(n6Record(n6Trial())).toEqual({ status: ["allow@40:t1"], reads: [], read_count: 0 });
     const second = N6_CONTROLS.find(([label]) => label.startsWith("positive 2"))![2];
-    expect(n6Correspondence(second)).toEqual({
-      status: ["deny@55:t1", "allow@57:t2"], reads: ["read_file:deny@45:-"], read_count: 1,
+    expect(n6Record(second)).toEqual({
+      status: ["deny@55:t1", "allow@57:t2"], reads: ["read_file:deny@45"], read_count: 1,
     });
     const named = n6Trial((r) => {
       r.gate.push(parentPre(45, "read_file", "allow", { Path: "/tmp/task-r.log" }), parentPre(47, "view_file", "deny", { AbsolutePath: "/w/x" }));
-      // Neither a list nor a status without a TaskId gives an index.
+      // Neither a list nor a status without a TaskId gets a number.
       r.gate.push(statusM(42, "allow", { Action: "list", TaskId: "task-z" }), statusM(43, "allow", { Action: "status" }), statusM(44, "allow", { Action: "status", TaskId: " " }));
       // A child's read and one after E are not the parent's record.
       r.gate.push({ ...parentPre(48, "read_file", "allow", { Path: "/tmp/task-r.log" }), conversation: N6_CHILD, sub: true } as GateEntry);
       r.gate.push(parentPre(65, "read_file", "allow", { Path: "/tmp/task-r.log" }));
     });
-    expect(n6Correspondence(named)).toEqual({
-      status: ["allow@40:t1"], reads: ["read_file:allow@45:t1", "view_file:deny@47:-"], read_count: 2,
+    expect(n6Record(named)).toEqual({
+      status: ["allow@40:t1"], reads: ["read_file:allow@45", "view_file:deny@47"], read_count: 2,
     });
-    expect(JSON.stringify(n6Correspondence(named))).not.toContain("task-r");
+    expect(JSON.stringify(n6Record(named))).not.toContain("task-r");
+    // Numbers follow exact TaskId equality: "1" and "10" differ, "1" repeats.
+    const exact = n6Trial((r) => {
+      r.gate.push(statusM(42, "deny", { Action: "status", TaskId: "1" }), statusM(44, "allow", { Action: "status", TaskId: "10" }), statusM(46, "allow", { Action: "status", TaskId: "1" }));
+    });
+    expect(n6Record(exact).status).toEqual(["allow@40:t1", "deny@42:t2", "allow@44:t3", "allow@46:t2"]);
   });
 
-  it("summary: each dialog names the call whose arguments its input equals; N6 adds its record", () => {
+  it("N6 record, round-4 counterexample: TaskId \"1\" and a read of lines 1-2 make no link", () => {
+    const lines = n6Trial((r) => {
+      replace(r, 2, statusM(40, "allow", { Action: "status", TaskId: "1" }));
+      r.gate.push(parentPre(45, "read_file", "allow", { Path: "/w/notes.txt", StartLine: 1, EndLine: 2 }));
+    });
+    expect(n6Record(lines).reads).toEqual(["read_file:allow@45"]);
+  });
+
+  it("N6 record: a trial whose S and E P1 cannot fix has an unknown scope, not zero reads", () => {
+    const two = N6_CONTROLS.find(([label]) => label === "P1: two sessions")![2];
+    expect(judgeN6(two).rows.P1).toBe("undetermined");
+    expect(n6Record(two)).toEqual({ status: "unknown_scope", reads: "unknown_scope" });
+    const noResult = n6Trial((r) => { r.results = []; r.resultSeqs = []; });
+    expect(judgeN6(noResult).rows.P1).toBe("undetermined");
+    expect(n6Record(noResult)).toEqual({ status: "unknown_scope", reads: "unknown_scope" });
+  });
+
+  it("summary: each dialog prints how many gate records it is compatible with, never a call ID", () => {
     const dialogs = (record: CaseRecord) => JSON.parse(summary("N3b", record, "pass", 1)).dialogs;
-    expect(dialogs(CONTROLS.N3b!.pass)).toEqual(["run_command:allow:named=#call"]);
+    const approve = (input: string, tool = "run_command") => ({ tool, allow: true, input });
+    expect(dialogs(CONTROLS.N3b!.pass)).toEqual(["run_command:allow:named:compatible_calls=1"]);
+    // None: another command, another tool, or the other answer.
     expect(dialogs(sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [
-      { tool: "run_command", allow: true, input: JSON.stringify({ CommandLine: "cat n3b.txt" }) },
-      { tool: "write_file", allow: true, input: named("n3b.txt") },
-    ] }))).toEqual(["run_command:allow:named=none", "write_file:allow:named=none"]);
+      approve(JSON.stringify({ CommandLine: "cat n3b.txt" })),
+      approve(named("n3b.txt"), "write_file"),
+      { tool: "run_command", allow: false, input: named("n3b.txt") },
+    ] }))).toEqual([
+      "run_command:allow:named:compatible_calls=0",
+      "write_file:allow:named:compatible_calls=0",
+      "run_command:reject:named:compatible_calls=0",
+    ]);
+    // A rejection is compatible with a denied call only.
+    expect(dialogs(sample({ gate: [cmd("deny", { args: named("n3b.txt") })], dialogs: [{ tool: "run_command", allow: false, input: named("n3b.txt") }] })))
+      .toEqual(["run_command:reject:named:compatible_calls=1"]);
+    // An omitted input cannot be compared.
+    expect(dialogs(sample({ gate: [cmd("allow", { args: named("n3b.txt") })], dialogs: [approve("null")] })))
+      .toEqual(["run_command:allow:compatible_calls=unknown"]);
     expect(JSON.parse(summary("N6", n6Trial(), "pass", 1)).n6_record).toEqual({ status: ["allow@40:t1"], reads: [], read_count: 0 });
     expect(JSON.parse(summary("N3b", CONTROLS.N3b!.pass, "pass", 1)).n6_record).toBeUndefined();
+  });
+
+  it("summary, round-4 counterexample: two calls with the same input and two approvals are 2 each, with no call ID", () => {
+    // A denied call with that input does not add a candidate for an approval.
+    const approval = { tool: "run_command", allow: true, input: named("n3b.txt") };
+    const twice = sample({
+      gate: [cmd("allow", { args: named("n3b.txt"), callId: "first" }), cmd("allow", { args: named("n3b.txt"), callId: "second" }), cmd("deny", { args: named("n3b.txt"), callId: "third" })],
+      dialogs: [approval, approval],
+    });
+    const printed = JSON.parse(summary("N3b", twice, "pass", 1)).dialogs;
+    expect(printed).toEqual(["run_command:allow:named:compatible_calls=2", "run_command:allow:named:compatible_calls=2"]);
+    expect(JSON.stringify(printed)).not.toMatch(/first|second|third|#/);
   });
 
   it("N6 values: only a complete value counts", () => {
@@ -749,7 +809,8 @@ async function runCase(spec: CaseSpec): Promise<CaseRecord> {
   return record;
 }
 
-/** The text that ties a case's calls and dialogs to its own command. */
+/** The text whose presence in a call's arguments or a dialog's input the
+ *  summary marks `:named`; it shows presence only. */
 const CASE_TOKENS: Record<string, string> = { N1: "kaoiro-n1", N3b: "n3b.txt", N4: "n4.txt", N8: N8_STARTED };
 
 /** ID tails, counts, order and match results; no path, output or value. */
@@ -768,15 +829,19 @@ function summary(id: string, record: CaseRecord, judged: Verdict, attempts: numb
     sessions: record.sessions.map(tail),
     tool_results: record.toolResults.map((t) => `${tail(t.toolUseId)}:${t.values.length}${t.truncated ? ":truncated" : ""}^${t.seq}`),
     result_seqs: record.resultSeqs,
-    ...(id === "N6" ? { n6: judgeN6(record), n6_record: n6Correspondence(record) } : {}),
+    ...(id === "N6" ? { n6: judgeN6(record), n6_record: n6Record(record) } : {}),
     ...(record.marker === undefined ? {} : {
       marker_file_calls: record.gate.filter((e) => e.kind === "pre" && e.args.includes(N7_FILE)).map((e) => `${(e as { tool: string }).tool}${e.sub ? ":sub" : ""}@${tail(e.conversation)}`),
       marker_in_reply: text(record).includes(record.marker),
     }),
-    // `=#<call>` names the gate call whose arguments equal the dialog's input.
+    // Per dialog, the number of gate records compatible with it: the same
+    // tool, its full input as the arguments, and a decision that matches the
+    // answer. A dialog carries no call ID, so the count names no call; an
+    // omitted input cannot be compared.
     dialogs: record.dialogs.map((d) => {
-      const call = record.gate.find((e): e is Pre => e.kind === "pre" && e.tool === d.tool && e.args === d.input);
-      return `${d.tool}:${d.allow ? "allow" : "reject"}${named(d.input)}=${call === undefined ? "none" : `#${tail(call.callId)}`}`;
+      const compatible = d.input === "null" ? "unknown" : record.gate.filter((e) =>
+        e.kind === "pre" && e.tool === d.tool && e.args === d.input && (e.decision === "allow") === d.allow).length;
+      return `${d.tool}:${d.allow ? "allow" : "reject"}${named(d.input)}:compatible_calls=${compatible}`;
     }),
     whoami: record.whoami,
     faults: record.faults,
