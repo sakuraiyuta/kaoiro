@@ -1,6 +1,10 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type * as acp from "@agentclientprotocol/sdk";
-import { connectAcp, type AcpWriteResult } from "@kaoiro/agent-common/dist/acp/connection.js";
+import {
+  connectAcp,
+  type AcpWriteResult,
+  type InboundLineSummary,
+} from "@kaoiro/agent-common/dist/acp/connection.js";
 import { AcpSession } from "@kaoiro/agent-common/dist/acp/session.js";
 
 /** The `agy acp` child as the host needs it. */
@@ -19,9 +23,10 @@ export interface GenerationHandlers {
   promptAttempted: () => void;
   /** The child process failed (spawn or signal error). */
   error: (error: Error) => void;
-  /** An incoming JSON-RPC message of a method the host does not serve; the
-   *  SDK answers a request with an error. Only the method name is passed. */
-  other: (method: string) => void;
+  /** An incoming line the host does not serve, by its form only:
+   *  `other:<method>`, `other:unnamed`, or `unknown:<batch|oversized|malformed>`.
+   *  The SDK answers a request of another method with an error. */
+  inbound: (eventKind: string) => void;
 }
 
 export interface AttachOptions {
@@ -44,7 +49,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const SERVED_METHODS = new Set(["session/update", "session/request_permission"]);
+/** The record of an inbound line, or undefined for what the client serves:
+ *  `session/update` notifications, `session/request_permission` requests and
+ *  responses. */
+function inboundRecord(line: InboundLineSummary): string | undefined {
+  switch (line.kind) {
+    case "response":
+      return undefined;
+    case "notification":
+    case "request": {
+      const served = line.kind === "notification" ? "session/update" : "session/request_permission";
+      return line.method === served ? undefined : `other:${line.method ?? "unnamed"}`;
+    }
+    default:
+      return `unknown:${line.kind}`;
+  }
+}
 
 /** One `agy acp` process with its ACP connection. It serves one prompt and is
  *  never reused. */
@@ -83,12 +103,12 @@ export class Generation {
         handlers.permissionRequest();
         return { outcome: { outcome: "cancelled" } };
       },
-      metadata: (metadata) => {
-        if (metadata.direction === "in" && metadata.method !== undefined && !SERVED_METHODS.has(metadata.method)) {
-          handlers.other(metadata.method);
-        }
-      },
+      metadata: () => {},
     }, {
+      onInboundLine: (line) => {
+        const record = inboundRecord(line);
+        if (record !== undefined) handlers.inbound(record);
+      },
       onWrite: handlers.write,
       // Independent of the metadata size limit, unlike `wireFields`.
       onWriteStart: (identity) => {

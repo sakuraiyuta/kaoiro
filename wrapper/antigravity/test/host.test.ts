@@ -1579,3 +1579,49 @@ describe("AntigravityHost over ACP: causes through the start (C4)", () => {
     expect(r.ends[0]!.error).toBeUndefined();
   });
 });
+
+describe("AntigravityHost over ACP: inbound lines by form (C5)", () => {
+  it("served forms and replies add no record; crossed names, an oversized line and a malformed line are recorded once each", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.survivesTerm = true;
+    agy.message("served");
+    agy.request("q1", "session/update", { sessionId: agy.sessionId });
+    agy.line(JSON.stringify({ jsonrpc: "2.0", method: "session/request_permission", params: {} }));
+    agy.request("q2", "x/big", { pad: "x".repeat(4 * 1024 * 1024) });
+    agy.line("not json");
+    await waitFor(() => agy.responses.some((m) => m.id === "q1") && agy.responses.some((m) => m.id === "q2"));
+    await tick();
+    expect(agy.responses.find((m) => m.id === "q1")).toMatchObject({ error: { code: -32601 } });
+    expect(agy.responses.find((m) => m.id === "q2")).toMatchObject({ error: { code: -32601 } });
+    expect(r.outOfTurn).toEqual([
+      { eventKind: "other:session/update" },
+      { eventKind: "other:session/request_permission" },
+      { eventKind: "unknown:oversized" },
+      { eventKind: "unknown:malformed" },
+    ]);
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]).toMatchObject({ terminal: true });
+    expect(r.ends[0]!.error).toBeUndefined();
+    agy.requestPermission();
+    await waitFor(() => r.outOfTurn.length === 5);
+    expect(r.outOfTurn[4]).toEqual({ eventKind: "session/request_permission" });
+  });
+
+  it("a batch is recorded once and closes the connection; the input settles by the closed-connection route", async () => {
+    const r = setup();
+    await r.test.host.send("one", undefined, undefined, "t1");
+    const agy = await prompted(r, 1);
+    agy.message("hi");
+    await waitFor(() => r.acks.length === 1);
+    agy.line(JSON.stringify([
+      { jsonrpc: "2.0", method: "session/update", params: { sessionId: agy.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "b" } } } },
+      { jsonrpc: "2.0", id: "b1", method: "x/other", params: {} },
+    ]));
+    await waitFor(() => r.ends.length === 1);
+    expect(r.outOfTurn).toEqual([{ eventKind: "unknown:batch" }]);
+    expect(r.ends[0]!.error).toEqual({ detail: "agy_exit_without_result" });
+  });
+});

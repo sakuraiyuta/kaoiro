@@ -776,7 +776,7 @@ export class AntigravityHost implements EngineAdapter {
       error: (error) => {
         active.processError ??= `antigravity_cli_process_error: ${boundErrorDetail(error.message)}`;
       },
-      other: (method) => this.#options.onOutOfTurnEvent?.({ eventKind: `other:${method}` }),
+      inbound: (eventKind) => this.#options.onOutOfTurnEvent?.({ eventKind }),
     });
     active.generation = generation;
     void generation.connection.closed.then(() => this.#connectionClosed(active), () => this.#connectionClosed(active));

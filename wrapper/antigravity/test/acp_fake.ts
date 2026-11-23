@@ -213,6 +213,12 @@ export class FakeAgy extends EventEmitter {
     this.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
   }
 
+  /** One raw line on stdout, newline added. */
+  line(text: string): void {
+    if (this.exitCode !== null || this.signalCode !== null) return;
+    this.stdout.write(`${text}\n`);
+  }
+
   /** A request of a method the host does not serve. */
   request(id: string, method: string, params: Record<string, unknown> = {}): void {
     this.#send({ id, method, params });
