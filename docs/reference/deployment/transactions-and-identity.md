@@ -2,7 +2,7 @@
 title: Transactions and identity
 description: Build-identity provenance verification for a completed server/runner update -- what proves the running code matches the target commit.
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
