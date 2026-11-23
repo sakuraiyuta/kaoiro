@@ -147,7 +147,32 @@ class Stopped extends Error {
   }
 }
 
-class StartFailure extends Error {}
+/** A failed start step. `cause` and `restoreCause` keep the errors it wraps,
+ *  which classification reads (design 4.5). */
+class StartFailure extends Error {
+  readonly restoreCause: unknown;
+  constructor(detail: string, causes: { cause?: unknown; restoreCause?: unknown } = {}) {
+    super(detail, causes.cause === undefined ? undefined : { cause: causes.cause });
+    this.restoreCause = causes.restoreCause;
+  }
+}
+
+/** The RPC errors a start failure carries: the error itself, its `cause` and
+ *  its `restoreCause`, each followed down `.cause` to depth 4. */
+function wrappedRpcErrors(error: unknown): RequestError[] {
+  const roots = error instanceof Error
+    ? [error, error.cause, (error as { restoreCause?: unknown }).restoreCause]
+    : [error];
+  const found: RequestError[] = [];
+  for (const root of roots) {
+    let node: unknown = root;
+    for (let depth = 0; depth <= 4 && node !== undefined; depth += 1) {
+      if (node instanceof RequestError) found.push(node);
+      node = node instanceof Error ? node.cause : undefined;
+    }
+  }
+  return found;
+}
 
 export interface SpawnedAgy extends AcpAgyChild {}
 
@@ -671,7 +696,12 @@ export class AntigravityHost implements EngineAdapter {
       if (isAuthRequired(error)) return { kind: "start_failed", detail: AUTH_REQUIRED };
       return { kind: "start_failed", detail: `antigravity_api_error: ${boundErrorDetail(error.message)}`, apiError: true };
     }
-    return { kind: "start_failed", detail: error instanceof Error ? error.message : String(error) };
+    const detail = error instanceof Error ? error.message : String(error);
+    // A wrapper keeps its own text; the errors it carries decide the class.
+    const rpc = wrappedRpcErrors(error);
+    if (rpc.some(isAuthRequired)) return { kind: "start_failed", detail: AUTH_REQUIRED };
+    if (rpc.length > 0) return { kind: "start_failed", detail, apiError: true };
+    return { kind: "start_failed", detail };
   }
 
   async #start(active: Active): Promise<"ready" | "skipped"> {
@@ -762,7 +792,7 @@ export class AntigravityHost implements EngineAdapter {
     } catch (error) {
       if (requested !== undefined && error instanceof RequestError && error.code === -32603) {
         this.#options.recovery?.refuseLaunch();
-        throw new StartFailure("antigravity_resume_failed");
+        throw new StartFailure("antigravity_resume_failed", { cause: error });
       }
       throw error;
     }
@@ -1360,7 +1390,12 @@ export class AntigravityHost implements EngineAdapter {
     const committed = this.#config.model ?? "";
     if (committed !== "") {
       const result = await switchModel(session, splitSlug(committed, session), reportedPair(session));
-      if (result.kind !== "applied") throw new StartFailure(`antigravity_model_not_applied:${committed}`);
+      if (result.kind !== "applied") {
+        throw new StartFailure(`antigravity_model_not_applied:${committed}`, {
+          cause: result.cause,
+          restoreCause: result.kind === "failed" ? result.restoreCause : undefined,
+        });
+      }
     }
     // An account default staged while the committed slug was being applied
     // waits for the next start: this G no longer has the attach pair.
@@ -1375,7 +1410,9 @@ export class AntigravityHost implements EngineAdapter {
       this.#commitModel(pending);
       return;
     }
-    if (result.kind === "failed") throw new StartFailure(result.detail);
+    if (result.kind === "failed") {
+      throw new StartFailure(result.detail, { cause: result.cause, restoreCause: result.restoreCause });
+    }
     if (this.#pendingModel !== pending) return;
     this.#pendingModel = null;
     this.#switchError = {

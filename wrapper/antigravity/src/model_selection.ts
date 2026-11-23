@@ -15,14 +15,16 @@ export interface ModelPair {
   level?: string;
 }
 
+/** `cause` is the error that ended the switch; `restoreCause` is the
+ *  restore's own error, when the restore threw. */
 export type ModelSwitchResult =
   | { kind: "applied" }
   /** `agy` refused the first step; nothing was applied. */
-  | { kind: "rejected"; reason: "control_rejected" }
+  | { kind: "rejected"; reason: "control_rejected"; cause: unknown }
   /** A later step failed; the previous pair was restored and verified. */
-  | { kind: "rolled_back"; reason: string }
+  | { kind: "rolled_back"; reason: string; cause: unknown }
   /** The previous pair could not be restored or verified. */
-  | { kind: "failed"; detail: string };
+  | { kind: "failed"; detail: string; cause: unknown; restoreCause?: unknown };
 
 function option(session: ModelSession, id: string): SessionConfigOption | undefined {
   return session.configOptions?.find((candidate) => candidate.id === id);
@@ -99,14 +101,20 @@ export async function switchModel(
   } catch (error) {
     // Refused before the model changed: nothing was applied.
     if (current(session, MODEL_OPTION) !== target.model && error instanceof RequestError && error.code === -32602) {
-      return { kind: "rejected", reason: "control_rejected" };
+      return { kind: "rejected", reason: "control_rejected", cause: error };
     }
     const reason = error instanceof Error ? error.message : "switch failed";
+    let restoreCause: unknown;
     try {
-      if (await apply(session, previous)) return { kind: "rolled_back", reason };
-    } catch {
-      // Falls through: the restore failed.
+      if (await apply(session, previous)) return { kind: "rolled_back", reason, cause: error };
+    } catch (caught) {
+      restoreCause = caught;
     }
-    return { kind: "failed", detail: `antigravity_model_restore_failed: ${reason}` };
+    return {
+      kind: "failed",
+      detail: `antigravity_model_restore_failed: ${reason}`,
+      cause: error,
+      ...(restoreCause === undefined ? {} : { restoreCause }),
+    };
   }
 }

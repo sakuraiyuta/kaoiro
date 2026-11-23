@@ -39,6 +39,9 @@ export class FakeAgy extends EventEmitter {
   echoResume = true;
   /** Hold the write callback of the session/prompt line until released. */
   holdPromptWrite = false;
+  /** Per-call answers to `session/set_config_option`, used in order before
+   *  the default: apply, acknowledge without applying, or fail. */
+  readonly configScript: ("apply" | "ack" | { code: number; message: string })[] = [];
   /** Skip the eager tools/list after attach. */
   listOnAttach = true;
   /** Answer session/resume with -32603, as for an unknown session. */
@@ -155,6 +158,12 @@ export class FakeAgy extends EventEmitter {
       case "session/set_config_option": {
         const configId = String(params.configId);
         const value = String(params.value);
+        const scripted = this.configScript.shift();
+        if (scripted !== undefined && scripted !== "apply") {
+          if (scripted === "ack") this.#send({ id, result: { configOptions: this.#options() } });
+          else this.#send({ id, error: scripted });
+          return;
+        }
         if (value === this.rejectValue || (configId === "model" && !this.models.includes(value)) || (configId === "thought_level" && !this.levels.includes(value))) {
           this.#send({ id, error: { code: -32602, message: "Invalid params" } });
           return;

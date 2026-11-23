@@ -1183,7 +1183,7 @@ describe("AntigravityHost over ACP: model and level (4.8)", () => {
     const { r } = modelSetup("gone-model");
     await r.test.host.send("one", undefined, undefined, "t1");
     await waitFor(() => r.ends.length === 1);
-    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_model_not_applied:gone-model" });
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_model_not_applied:gone-model", reason: "api_error" });
   });
 });
 
@@ -1197,7 +1197,7 @@ describe("AntigravityHost over ACP: start failures", () => {
     r.test.onSpawn = (agy) => { agy.rejectResume = true; };
     await r.test.host.send("one", undefined, undefined, "t1");
     await waitFor(() => r.ends.length === 1);
-    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_resume_failed" });
+    expect(r.ends[0]!.error).toEqual({ detail: "antigravity_resume_failed", reason: "api_error" });
     expect(refused).toEqual(["refused"]);
   });
 
@@ -1521,5 +1521,61 @@ describe("AntigravityHost over ACP: single confirmations and late input", () => 
     await waitFor(() => r.ends.length === 1);
     expect(r.ends[0]!.error).toBeUndefined();
     expect(opened.count("session/cancel")).toBe(0);
+  });
+});
+
+const NO_TURN = "kaoiro: no turn is open for this tool call";
+const UNCONFIRMED = "antigravity_delivery_unconfirmed";
+const REVISION_3 = { revision: 3, requested: { sandbox: "danger-full-access", network_access: true, approval: "never" } } as const;
+const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
+const ext = (r: Recorded) => r.states.at(-1)!.ext as Record<string, any>;
+
+describe("AntigravityHost over ACP: causes through the start (C4)", () => {
+  const rpc = { code: -32603, message: "restore refused" };
+  const auth = { code: -32000, message: "Authentication required" };
+
+  async function started(model: string | undefined, pending: string | undefined, script: FakeAgy["configScript"]): Promise<Recorded> {
+    const r = setup(model === undefined ? {} : { model });
+    if (pending !== undefined) await r.test.host.setModel(pending);
+    r.test.onSpawn = (agy) => { agy.configScript.push(...script); };
+    await r.test.host.send("one", undefined, undefined, "t1");
+    await waitFor(() => r.ends.length === 1 || r.test.agys[0]?.promptOpen === true);
+    return r;
+  }
+
+  it.each([
+    ["1. a pending step fails with an RPC error mentioning 429, its restore refused", undefined, "gemini-4-neon",
+      [{ code: -32000, message: "upstream returned 429" }, rpc], { detail: "antigravity_model_restore_failed: upstream returned 429", reason: "api_error" }],
+    ["2. a pending step fails with the auth error, its restore refused with another RPC error", undefined, "gemini-4-neon",
+      [auth, rpc], { detail: "antigravity_auth_required" }],
+    ["3. a pending step acknowledged without applying, its restore refused", undefined, "gemini-4-neon",
+      ["ack", rpc], { detail: "antigravity_model_restore_failed: model not verified", reason: "api_error" }],
+    ["4. the committed step refused with an RPC error", "gemini-4-neon", undefined,
+      [rpc], { detail: "antigravity_model_not_applied:gemini-4-neon", reason: "api_error" }],
+    ["5. the committed step refused with the auth error", "gemini-4-neon", undefined,
+      [auth], { detail: "antigravity_auth_required" }],
+    ["7b. control: a plain mismatch whose restore is acknowledged without applying", undefined, "gemini-4-neon-ultra",
+      ["apply", "ack"], { detail: "antigravity_model_restore_failed: level not offered" }],
+  ] as const)("%s", async (_label, model, pending, script, expected) => {
+    const r = await started(model, pending, [...script]);
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toEqual(expected);
+    expect(r.test.agys[0]!.count("session/prompt")).toBe(0);
+  });
+
+  it("1. the text alone would read as a rate limit; the reason keeps it an API error", () => {
+    const detail = "antigravity_model_restore_failed: upstream returned 429";
+    expect(classifyInterAgentError({ detail }).code).toBe("rate_limit");
+    expect(classifyInterAgentError({ detail, reason: "api_error" }).code).toBe("api_error");
+  });
+
+  it("7a. control: a plain mismatch whose restore succeeds reports switch_error and the input runs", async () => {
+    const r = await started(undefined, "gemini-4-neon", ["ack"]);
+    const agy = await prompted(r, 1);
+    const errors = r.states.map((s) => (s.ext as Record<string, any>).switch_error).filter(Boolean);
+    expect(errors.at(-1)).toEqual({ kind: "model", requested: "gemini-4-neon", reason: "model not verified", rolled_back_to: "" });
+    agy.respond("end_turn");
+    await waitFor(() => r.ends.length === 1);
+    expect(r.ends[0]!.error).toBeUndefined();
   });
 });
