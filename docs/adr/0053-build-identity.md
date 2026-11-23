@@ -196,45 +196,23 @@ present**; presenting only one rejects the entire register (same handling as a
 type/domain violation — this rejection enforces structure, not the SHA value
 itself).
 
-### Dashboard: warn operators about both mismatch and unknown
+### Dashboard: show build identity, do not judge it
 
-Compare the connected runner's `build_revision` (through the register
-payload) with the server's `build_revision` (from `GET /api/health`),
-and warn not only on mismatch but also when **runner unknown / server unknown**
-(`LaunchDialog` directly below host selection). This is observability
-only; do not block startup.
+The dashboard header shows the server's identity (from `GET /api/health`) and
+the client's own, and the launch dialog labels each runner host with its
+identity (from the `register` payload). The dashboard does not compare the
+two and does not warn about a mismatch, an unknown revision, or a dirty
+build; checking a running build belongs to `/api/health`, the runner's
+startup line and `--version --json`.
 
-**Round 2 expanded the state transitions (ふじ's rejection, MF-4).** Round 1
-silently gave no warning for the two states “runner `build_revision` is
-absent” and “server health fetch failed” — they were indistinguishable from a
-match, contrary to #218's purpose of honestly exposing the absence of a signal.
-Round 2 displays absent / runner unknown / server fetch failure / server unknown /
-mismatch / dirty as separate messages, and warns only when it is **matching and
-clean**.
+Health is fetched at mount and when the channel (re)joins (including
+reconnection after server redeploy), with `cache: "no-store"`. The two
+triggers can race asynchronously, so a monotonically increasing generation
+counter prevents an older response from rolling back state.
 
-**Round 3 found a gap on the dirty side (ふじ's rejection, MF-1).** Round 2's
-dirty check looked only at runner `host.build_dirty` and did not pass
-the server's own dirty
-(`GET /api/health`'s `build_dirty`) to the dashboard. The
-combination “server dirty, runner clean, matching revision” could therefore be
-silent, contradicting the rule above. The dashboard receives server
-`build_dirty` too and displays wording that distinguishes runner dirty
-from server dirty.
-
-**Round 3 also found a broken pair invariant on the dashboard side (ふじ's
-rejection, MF-2).** The server rejects anything other than “both omitted or both
-present”, while dashboard `parseHosts` copied `build_revision` and
-`build_dirty` **independently** — leaving dirty by itself when revision was
-out of range (or vice versa). A malformed revision with `dirty: false`
-could be silent as “matching and clean” when it happened to match the server's
-revision, a fail-open spoofing path. The dashboard narrows the pair as one unit
-at its trust boundary and retains both only when both are valid.
-
-Health is fetched not only once at mount but also when the channel (re)joins
-(including reconnection after server redeploy) and immediately before opening
-LaunchDialog (`cache: "no-store"`). Multiple fetch triggers can race
-asynchronously, so a monotonically increasing generation counter prevents an
-older response from rolling back state.
+The server rejects anything other than "both omitted or both present" for
+`build_revision` / `build_dirty`, so dashboard `parseHosts` narrows the two as
+one pair at its trust boundary and retains both only when both are valid.
 
 ### Runner launch shim: forward `--version` before config checks
 
@@ -289,11 +267,10 @@ environment.
   to an image-baked file (MF-1); the degradation scope when dirty calculation
   fails (MF-2); repository-level unification of revision/dirty calculation
   (MF-2); value-domain validation unified across three languages (MF-3);
-  dashboard warnings expanded from two silent states to six explicit states and
   health refetched on multiple triggers (MF-4); and the forwarding order of
   `--version` in the launch shim (MF-5).
 - Round 3 (ふじ's rejection) fixed the following: server dirty was made an OCI
-  label (`com.kaoiro.build-dirty`) and delivered to the dashboard
+  label (`com.kaoiro.build-dirty`) and reported by `/api/health`
   (MF-1); the dashboard `parseHosts` revision/dirty pair invariant was
   repaired (MF-2, preserving the server rule of “both omitted or both present”
   at the dashboard trust boundary too); the value-domain validation bypass in
