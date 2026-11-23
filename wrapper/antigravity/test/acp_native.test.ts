@@ -439,6 +439,7 @@ const N6_CONTROLS: [string, Verdict, CaseRecord][] = [
   ["P3: the only K before R", "fail", n6Trial((r) => replace(r, 1, resumeK(15)))],
   ["P3: K is a child's continue", "fail", n6Trial((r) => replace(r, 1, resumeK(30, N6_CHILD)))],
   ["P4: M is a list", "undetermined", n6Trial((r) => replace(r, 2, statusM(40, "allow", { Action: "list" })))],
+  ["P4: M is a list with a TaskId", "undetermined", n6Trial((r) => replace(r, 2, statusM(40, "allow", { Action: "list", TaskId: "task-r" })))],
   ["P4: M without a TaskId", "undetermined", n6Trial((r) => replace(r, 2, statusM(40, "allow", { Action: "status" })))],
   ["P4: M is a child's status", "undetermined", n6Trial((r) => replace(r, 2, { ...statusM(), conversation: N6_CHILD, sub: true } as GateEntry))],
   ["P4: M denied", "fail", n6Trial((r) => replace(r, 2, statusM(40, "deny")))],
