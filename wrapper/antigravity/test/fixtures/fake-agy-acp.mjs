@@ -11,8 +11,10 @@
 //   HOLDSTOP         ask the Stop hook while a background task runs
 //   HANGTOOL <name> <json> a hooked tool that never ends, with a message
 //                    chunk every 100 ms until the prompt is cancelled
-//   RELEASED         a hooked manage_task that ends at 100 ms; chunks every
-//                    100 ms; the reply "finished after the deadline" at 1.6 s
+//   RELEASED         a hooked manage_task that ends 100 ms after its hook;
+//                    chunks every 100 ms; the reply "finished after the
+//                    deadline" KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS (default
+//                    1000) + 600 ms after the tool call
 //   SUBTREE          start FAKE_AGY_GRANDCHILD (a node script) as a child,
 //                    publish its pid to FAKE_AGY_GRANDCHILD_PID_FILE, show a
 //                    run_command that never ends, and stream chunks
@@ -142,17 +144,23 @@ function acp() {
       const input = word === "RELEASED" ? { Action: "status" } : JSON.parse(rest ?? "{}");
       calls += 1;
       const callId = `call-${calls}`;
-      update({ sessionUpdate: "tool_call", toolCallId: callId, name, title: name, kind: "other", status: "in_progress", rawInput: input });
-      await runHook("PreToolUse", { conversationId: sessionId, stepIdx: calls, toolCall: { id: callId, name, args: input } });
-      const ticker = setInterval(() => update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "." } }), 100);
-      cancelled.push(() => clearInterval(ticker));
+      let ticker;
       if (word === "RELEASED") {
-        setTimeout(() => update({ sessionUpdate: "tool_call_update", toolCallId: callId, name, status: "completed", rawInput: input }), 100);
+        // Counted from the tool call, like the host's deadline, so the hook
+        // command's start does not move the answer relative to it.
+        const deadline = Number(process.env.KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS ?? "1000");
         setTimeout(() => {
           clearInterval(ticker);
           update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "finished after the deadline" } });
           answer("end_turn");
-        }, 1_600);
+        }, deadline + 600);
+      }
+      update({ sessionUpdate: "tool_call", toolCallId: callId, name, title: name, kind: "other", status: "in_progress", rawInput: input });
+      await runHook("PreToolUse", { conversationId: sessionId, stepIdx: calls, toolCall: { id: callId, name, args: input } });
+      ticker = setInterval(() => update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "." } }), 100);
+      cancelled.push(() => clearInterval(ticker));
+      if (word === "RELEASED") {
+        setTimeout(() => update({ sessionUpdate: "tool_call_update", toolCallId: callId, name, status: "completed", rawInput: input }), 100);
       }
       return;
     }

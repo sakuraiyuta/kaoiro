@@ -46,9 +46,10 @@ async function waitFor(predicate: () => boolean, diagnostic: () => unknown, time
   throw new Error(`timed out after ${timeoutMs}ms: ${JSON.stringify(diagnostic())}`);
 }
 
-/** `blocked`: the hooked tool never ends. `released`: it ends at 100 ms and
- *  the turn keeps streaming past the 1 s deadline. Either way agy sends a
- *  message chunk every 100 ms (fixtures/fake-agy-acp.mjs). */
+/** `blocked`: the hooked tool never ends. `released`: it ends 100 ms after
+ *  its hook and the turn keeps streaming until 600 ms past the deadline,
+ *  counted from the tool call. Either way agy sends a message chunk every
+ *  100 ms (fixtures/fake-agy-acp.mjs). */
 const PROMPTS = {
   blocked: `HANGTOOL manage_task ${JSON.stringify({ Action: "status", Secret: "git fetch origin" })}`,
   released: "RELEASED",
@@ -174,21 +175,27 @@ describe("Antigravity tool deadline through the production default CLI (issue #3
   it("releases the deadline on DONE so a turn that outlives it completes normally", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-tool-released-"));
     const { configPath } = writeFixture(root);
-    vi.stubEnv("KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS", "1000");
+    // Well above the hook command's start, which counts against it.
+    vi.stubEnv("KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS", "4000");
     let launched: Awaited<ReturnType<typeof launch>> | undefined;
     try {
       launched = await launch(configPath, "inbound", PROMPTS.released);
       const { sent, stderr } = launched;
       const resultOf = () => sent.find((envelope) => envelope.type === "result");
-      await waitFor(() => resultOf() !== undefined, () => ({ sent: sent.map((e) => e.type), stderr }), 8_000);
-      expect((resultOf()?.payload as { text?: string; is_error?: boolean }).text).toMatch(/finished after the deadline$/);
-      expect((resultOf()?.payload as { is_error?: boolean }).is_error).not.toBe(true);
-      expect(stderr.join("")).not.toContain("tool timeout");
+      await waitFor(() => resultOf() !== undefined, () => ({ sent: sent.map((e) => e.type), stderr }), 12_000);
+      const payload = resultOf()?.payload as { text?: string; is_error?: boolean; error_detail?: string };
+      const diagnostics = JSON.stringify({
+        payload,
+        lifecycle: stderr.filter((line) => line.startsWith("[kaoiro][antigravity-lifecycle] ")),
+      });
+      expect(payload.text, diagnostics).toMatch(/finished after the deadline$/);
+      expect(payload.is_error, diagnostics).not.toBe(true);
+      expect(stderr.join(""), diagnostics).not.toContain("tool timeout");
     } finally {
       await launched?.finish();
       rmSync(root, { force: true, recursive: true });
     }
-  }, 15_000);
+  }, 20_000);
 
   it("bounds an operator instruction turn the same way without inter-agent bookkeeping", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-tool-timeout-operator-"));
