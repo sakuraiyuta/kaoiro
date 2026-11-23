@@ -2580,16 +2580,10 @@ export interface ServerHealth {
 /**
  * Fetches the server's build identity; null on any failure (including a
  * pre-#218 server with no /api/health route, or a malformed field outside
- * BuildInfo's value domain). null does NOT mean "no warning" — LaunchDialog
- * (issue #218 round 2 MF-4) surfaces null as its own explicit "server の
- * build revision を取得できません" warning rather than staying silent
- * (round 3 advisory 1, ふじ 差し戻し: this comment previously said null
- * meant "no mismatch warning", which stopped being true once MF-4 shipped
- * — stale documentation, not stale behavior). `cache: "no-store"` (issue
- * #218 round 2 MF-4): the caller re-fetches this on every LaunchDialog
- * open / reconnect, and a cached response would keep reporting a
- * pre-redeploy server identity after the operator's own /api/health would
- * answer differently.
+ * BuildInfo's value domain). `cache: "no-store"` (issue #218 round 2 MF-4):
+ * the caller re-fetches this on mount and on every channel (re)join, and a
+ * cached response would keep reporting a pre-redeploy server identity after
+ * the operator's own /api/health would answer differently.
  */
 export async function fetchServerHealth(base = ""): Promise<ServerHealth | null> {
   try {
@@ -2678,9 +2672,7 @@ export interface HostInfo {
    *  whether that build had uncommitted changes. Absent = a pre-#218
    *  runner (no signal, not a claim of "unknown"). DISTINCT from ADR-0015's
    *  wire protocol `version` — this changes on every commit regardless of
-   *  wire-shape compatibility, and is compared against the server's own
-   *  build_revision (ServerHealth, fetchServerHealth) ONLY to warn the
-   *  operator of a mismatch, never to block anything. */
+   *  wire-shape compatibility. */
   build_revision?: string;
   build_dirty?: boolean;
   /** CalVer project version and channel from issue #288's runner register.

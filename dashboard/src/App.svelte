@@ -349,27 +349,19 @@
     });
   }
 
-  // issue #218: server's own build identity, so LaunchDialog can warn on a
-  // mismatch against a connected runner's build_revision (from the `hosts`
-  // push). null on a pre-#218 server / fetch failure — LaunchDialog still
-  // surfaces THAT as its own distinct warning (issue #218 round 2 MF-4,
-  // ふじ 差し戻し: round 1 silently showed nothing here, indistinguishable
-  // from an operator's point of view from "revisions match").
+  // issue #218: server's own build identity, shown in the header. null on a
+  // pre-#218 server / fetch failure.
   let serverHealth = $state<ServerHealth | null>(null);
-  // Monotonic generation guard (MF-4): refreshServerHealth is now called
-  // from three independent triggers (mount / channel join / launch button)
-  // whose fetches can resolve out of order — without this a slow EARLIER
-  // request could resolve after a faster LATER one and clobber it with
-  // stale data.
+  // Monotonic generation guard (MF-4): refreshServerHealth is called from two
+  // independent triggers (mount / channel join) whose fetches can resolve
+  // out of order — without this a slow EARLIER request could resolve after a
+  // faster LATER one and clobber it with stale data.
   let serverHealthFetchGeneration = 0;
   let connection = $state<KaoiroConnection | null>(null);
 
   // (Re)fetches the server's own build identity (issue #218 round 2 MF-4).
-  // Called on mount, on every channel (re)join (`onJoined` below — this IS
-  // "server reconnect": a fresh join can follow a server redeploy), and
-  // right before opening LaunchDialog, so the operator never launches
-  // against a health snapshot that predates the server they are actually
-  // about to talk to.
+  // Called on mount and on every channel (re)join (`onJoined` below — this IS
+  // "server reconnect": a fresh join can follow a server redeploy).
   function refreshServerHealth(): void {
     const gen = ++serverHealthFetchGeneration;
     fetchServerHealth().then((next) => {
@@ -2258,13 +2250,7 @@
       <button
         type="button"
         class="launch"
-        onclick={() => {
-          // issue #218 round 2 MF-4: refresh right before opening rather
-          // than relying on whatever onMount/onJoined last fetched — the
-          // operator must not launch against a stale health snapshot.
-          refreshServerHealth();
-          showLaunch = true;
-        }}
+        onclick={() => (showLaunch = true)}
       >
         {msg().app.launch}
       </button>
@@ -2338,8 +2324,6 @@
     {enumeration}
     sessions={runnerSessions}
     rooms={roomList}
-    serverBuildRevision={serverHealth?.build_revision ?? null}
-    serverBuildDirty={serverHealth?.build_dirty ?? null}
     onClose={() => (showLaunch = false)}
   />
 {/if}

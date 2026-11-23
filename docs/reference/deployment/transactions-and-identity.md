@@ -19,7 +19,7 @@ registration information.
 | Server `build_revision` equals target SHA | `build_revision` from `curl <server-url>/api/health` |
 | Server `build_dirty` is intentional | `build_dirty` from `curl <server-url>/api/health` (`false` for a clean build at target SHA) |
 | Server OCI label equals target SHA | `docker inspect kaoiro-server:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` |
-| Runner `build_revision` equals target SHA | Dashboard host list (LaunchDialog), or the `rev=<full SHA>` line in runner startup logs |
+| Runner `build_revision` equals target SHA | The `rev=<full SHA>` line in runner startup logs |
 | Runner `--version` returns target identity | Release profile: `<install-root>/current/deploy/kaoiro-runner-launch.sh --version` (same path the unit starts, so missed `current` switches surface). Checkout-direct: `<repo-path>/runner/dist/cli.js --version`. Both work without config. Add `--json` and compare the returned 40-character `revision`; the label is `v{version} / {branch} / <short-hash>` (or `untagged / {branch} / <short-hash>`) |
 
 **mtime is still not evidence of success.** A `dist` directory mtime does not

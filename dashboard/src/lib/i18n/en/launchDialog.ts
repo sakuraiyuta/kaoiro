@@ -4,21 +4,6 @@ export const launchDialog = {
   noOperations: "No operations available",
   selectAgain: "Select again",
   retryEnumeration: "Reconnect to retry if the session list does not arrive.",
-  runnerNoRevision:
-    "This host does not report build revision information (old runner).",
-  runnerRevisionUnknown:
-    "The build revision of this host is unknown (built without git information, or without going through pnpm build).",
-  serverRevisionUnavailable:
-    "Cannot get the build revision of the server (old server, or /api/health failed).",
-  serverRevisionUnknown: "The build revision of the server itself is unknown.",
-  revisionMismatch: ({ runner, server }) =>
-    `The build revision of this host (${runner}…) does not match the server (${server}…).`,
-  dirtyBoth: ({ runner }) =>
-    `The build of this host (${runner}…) contains uncommitted changes in both the runner and the server (dirty).`,
-  dirtyRunner: ({ runner }) =>
-    `The build of this host (${runner}…) contains uncommitted changes on the runner side (dirty).`,
-  dirtyServer: ({ runner }) =>
-    `The build of this host (${runner}…) contains uncommitted changes on the server side (dirty).`,
   launchFailed: "Could not launch.",
   dialogTitle: "Launch an agent",
   heading: "Launch an agent",

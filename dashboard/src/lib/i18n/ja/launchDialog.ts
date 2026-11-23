@@ -2,21 +2,6 @@ export const launchDialog = {
   noOperations: "利用できる操作なし",
   selectAgain: "選び直してください",
   retryEnumeration: "一覧が届かない場合は、再接続して照会してください。",
-  runnerNoRevision:
-    "この host は build revision 情報を報告していません(古い runner)。",
-  runnerRevisionUnknown:
-    "この host の build revision が unknown です(git 情報なしでビルドされたか、pnpm build を経ていません)。",
-  serverRevisionUnavailable:
-    "server の build revision を取得できません(古い server、または /api/health の取得に失敗)。",
-  serverRevisionUnknown: "server 自身の build revision が unknown です。",
-  revisionMismatch: (p: { runner: string; server: string }) =>
-    `この host の build revision (${p.runner}…) が server (${p.server}…) と一致しません。`,
-  dirtyBoth: (p: { runner: string }) =>
-    `この host の build (${p.runner}…) は runner・server の両方でコミットされていない変更を含んでいます(dirty)。`,
-  dirtyRunner: (p: { runner: string }) =>
-    `この host の build (${p.runner}…) は runner 側でコミットされていない変更を含んでいます(dirty)。`,
-  dirtyServer: (p: { runner: string }) =>
-    `この host の build (${p.runner}…) は server 側でコミットされていない変更を含んでいます(dirty)。`,
   launchFailed: "起動に失敗しました。",
   dialogTitle: "エージェント起動",
   heading: "エージェントを起動",
