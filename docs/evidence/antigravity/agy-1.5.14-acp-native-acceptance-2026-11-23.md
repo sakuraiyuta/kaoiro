@@ -86,9 +86,13 @@ the host's gate faults counted until the case closed, and the calls of the
 kaoiro `whoami` handler. The printed record keeps ID tails, counts, order
 and match results, never a path, an output or N6's value.
 
-- N1, N3b and N4 tie the command, its dialog and its file together; N3b and
+- N1, N3b and N4 tie the command, its dialog and its file together. The
+  gate hands a call's arguments to the dialog unchanged, so the dialog's
+  input must equal the arguments of the call it answered; a dialog for
+  another command that names the same file or token does not count. N3b and
   N4 do not pass when a write tool wrote the file.
-- N5 needs the `whoami` handler to run for each allowed call.
+- N5 needs exactly one allowed call and exactly one run of the `whoami`
+  handler.
 - N8 interrupts once the subagent's command has created its own file, and
   claims only that the turn and every spawned `agy` end; the record counts
   spawned `agy` processes, not every command.
@@ -101,7 +105,11 @@ and match results, never a path, an output or N6's value.
   Stop `continue` after R, and a parent `manage_task` status query with a
   task ID passed the gate after that; R's random value reached the host
   after the `continue` and before the result, and is in the parent's
-  successful reply; no gate fault until the case closed. Not claimed: that
+  successful reply as a complete value (the rule that finds it in the
+  output); no gate fault until the case closed. Beside the rows the record
+  keeps each parent status query's TaskId and each parent read by index,
+  with the gate's actual decision, and the read count; it decides nothing.
+  Not claimed: that
   the parent took the value from the task it queried, or that a read
   retrieved it. `agy` 1.5.14's status and read completions carry no output,
   so the record cannot show which tool result gave the model the value.
@@ -134,6 +142,28 @@ After each run the test found 1 file in the disposable HOME holding that run's
 tool-host bearer (`agy`'s own store); the harness's shape scan found no
 private key, access or refresh token, JWT or API key there. Each HOME was
 deleted after the scan.
+
+### Sample after the round-3 review (implementation round 4)
+
+The judges changed as described above for N1, N3b, N4 (the dialog bound to
+its call), N5 (exactly one), N6's P6 (a complete value) and N6's read
+record. N1, N3b, N4 and N6 were run again on commit `d01275b0` under the same
+conditions, one case per invocation. The budget was 6 prompts with one retry
+for N4 and N6; every case passed on its first attempt, and 4 prompts were
+used. In the printed dialogs, `=#<call>` names the gate call whose arguments
+equal the dialog's input.
+
+| Case | Record (in order) | Verdict |
+|---|---|---|
+| N1 | `run_command` denied by the gate; its dialog rejected, bound to that call (`=#20731017`); Stop `stop`; a result; no file | pass |
+| N3b | `run_command` allowed; its dialog approved, bound to that call (`=#07446599`); Stop `stop`; the command's file was written; `agy` launched with `--sandbox` | pass |
+| N4 | `run_command` with `BypassSandbox: true` allowed; its dialog approved, bound to that call (`=#68880261`); Stop `stop`; the command's file was written | pass |
+| N6 | parent session `15a32390`: R allowed (seq 2), Stop `continue` (3), `manage_task` status query allowed (4), R's `tool_result` with one complete value (6), `read_file` allowed (7), Stop `stop` (9), the successful result (10) holding that value as a complete value; no gate fault. Rows P1-P7 all pass. Record: one status query (t1, allowed at 4), one read (allowed at 7) whose arguments hold no queried TaskId | pass |
+
+N5's round-3 record (one allowed `mcp_kaoiro_whoami`, one handler run, no
+dialog, a successful result) passes the exactly-one rule; N8's judge did not
+change. The bearer and shape scans after each run found the same as in
+round 3, and each HOME was deleted.
 
 ## `edit_file` hook requests
 
