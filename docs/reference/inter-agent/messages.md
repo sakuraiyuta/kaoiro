@@ -195,8 +195,6 @@ Covered cases:
   [conversation lifecycle](conversations.md#conversation-lifecycle-and-post-close-handling-issue-167)
   and [reply basis](reply-basis.md#negotiation-and-comparison). The server also
   synthesizes reachability notices for peers.
-- SHOULD: Truncate `body` at 16 KB on the wrapper like other protocol fields and
-  set `meta.truncated=true`.
 
 ### Reserved `envelope.type` and version
 
