@@ -9,8 +9,9 @@ related: [protocol]
 # Wrapper configuration
 
 The optional launch file field `engine_executable` supplies the executable
-path for Claude or Codex. When omitted, the wrapper uses the engine in the
-release tree.
+path for Claude or Codex. The runner writes it when the shared-store
+binary exists. When the field is absent, Codex resolves the binary in the
+installed package, and Claude passes no path to the SDK.
 
 ## Managed engine environment
 

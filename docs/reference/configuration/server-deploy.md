@@ -2,7 +2,7 @@
 title: Server deploy configuration
 description: The kaoiro-server-deploy.mjs CLI's --config keys, the status command's output, and the transaction phase / branch-classification state machines.
 status: accepted
-last_updated: 2026-11-14
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
@@ -42,9 +42,10 @@ object:
 |---|---|
 | `command` | Always `"status"` |
 | `docker` | `"docker"` or `"fake"` — the same override-visibility field every subcommand returns, so a gated test run (`KAOIRO_DEPLOY_DOCKER_BIN` + `--config allow_docker_override: true`) can never be mistaken for a production one when reading output back |
-| `container` | `{running: true, container}`, or `{running: false, branch, reason, container}` (the A/B/D branch table below), or `{running: false, error}` when docker itself is unreachable |
-| `health` | The target's own `GET /api/health` body when a container is running, `null` otherwise, or `{error}` if the request itself failed |
-| `unfinishedTransaction` | `null`, `{id, phase, envConsistency}` for an in-progress transaction, or `{error, directory}` if its journal itself is unreadable/inconsistent |
+| `container` | `{running: true, container}`, or `{running: false, branch, reason, container}` (the A/B/C/D branch table below), or `{running: false, error}` when docker itself is unreachable |
+| `locks` | Held deploy locks, each `{kind, path, next, note}`, or `[]` when none are held |
+| `health` | `null` when nothing is running. A successful `GET /api/health` is `{url, ...body}`; a failed fetch is `{url, error}`; a failure before the request is `{error}` |
+| `unfinishedTransaction` | `null`, or `{id, phase, envConsistency, legacyGuardWarning, recovery}` while a transaction is in progress (`legacyGuardWarning` is `null` or a string; `recovery` is the next-command list), or `{error, directory}` when the journal is unreadable or inconsistent |
 | `doneTransactions` | Every completed transaction: `{id, sourceSha, targetSha, envConsistency, doneAt}` |
 | `scopeNote` | States exactly what this command reads and does not (runner-side signals, the 5-b judgment, and a runner build failure's own cause are all out of scope) |
 
