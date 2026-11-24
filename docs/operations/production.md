@@ -97,6 +97,8 @@ install_root="${KAOIRO_RUNNER_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/
 "$install_root/current/deploy/kaoiro-runner-update.sh" --from-repo <repo-path> --target <os-arch>
 # or, from a pre-built tarball:
 "$install_root/current/deploy/kaoiro-runner-update.sh" --tarball <path>
+# or, from a published release (Linux x64):
+"$install_root/current/deploy/kaoiro-runner-update.sh" --from-release <tag>
 ```
 
 Detail: [Runner update and rollback § 4.6.2](runner-update-and-rollback.md#462-subsequent-updates).

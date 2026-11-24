@@ -2,7 +2,7 @@
 title: Session pointer cwd recovery
 description: Audit launch directories and explicitly repair a confirmed session pointer without replacing its session or settings.
 status: accepted
-last_updated: 2026-10-02
+last_updated: 2026-11-24
 related: [ADR-0014, issue-480]
 ---
 
@@ -75,14 +75,17 @@ or maintenance overlaps the audit.
    is a candidate check: a Claude directory named like a JSONL can be listed,
    and a listed file can disappear before restore.
 3. On the owning runner host, using its service user and environment, run the
-   actual built `sessionExists` query from the same runner release. Replace all
-   four arguments below. Use the runner's own module, including its default
+   `sessionExists` query built from the running release's commit. A bundled
+   release ships only `dist/kaoiro.mjs`, so check out the `revision` recorded in
+   `<install-root>/current/dist/build-info.json`, run `pnpm install
+   --frozen-lockfile`, then `pnpm build` in `wrapper/` and then in `runner/`;
+   this produces `runner/dist/sessions.js`. Replace all four arguments below. Use the runner's own module, including its default
    engine-specific storage paths and `CODEX_HOME`; do not check an unrelated
    workstation or reconstruct the storage-path encoding by hand.
 
 ```sh
 node --input-type=module - \
-  /absolute/runner-install/dist/sessions.js \
+  /absolute/source-checkout/runner/dist/sessions.js \
   '<confirmed-launch-cwd>' '<exact-stored-session-id>' '<engine>' <<'JS'
 import { pathToFileURL } from 'node:url';
 const [modulePath, cwd, sessionId, engine] = process.argv.slice(2);

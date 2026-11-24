@@ -59,9 +59,6 @@ Re-saving `runner.config.json` — even without changing its contents — trigge
 If a Codex wrapper rejects `codex_tool_home`, inspect its local runner config:
 the path must exist, be absolute, and resolve to a directory distinct from
 the Codex state home. Restarting the wrapper creates a new private directory.
-Before deploying the isolation change, verify the pinned native CLI applies
-the policy to both new and resumed app-server threads; the RPC payload by
-itself is insufficient evidence.
 
 ## See Also
 

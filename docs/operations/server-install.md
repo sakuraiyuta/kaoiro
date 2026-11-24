@@ -49,7 +49,7 @@ cd <repo-path>
 git checkout <target-sha>
 ```
 
-### 1.1 Issue authentication tokens (three required)
+### 1.1 Issue authentication tokens
 
 A production server accepts nobody without `KAOIRO_CLIENT_TOKENS` (or OAuth
 login) and `KAOIRO_RUNNER_TOKENS`. `KAOIRO_WRAPPER_TOKENS` is needed only for

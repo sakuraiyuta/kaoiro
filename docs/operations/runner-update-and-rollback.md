@@ -214,29 +214,6 @@ Confirm (7)'s `--version` matches the value recorded in (1) and `status` is
 **After migration, the repo's `dist` is no longer the live path.** The repo is a
 build source; `pnpm -C runner build` does not affect the running runner.
 
-### First update from the old layout to the bundle
-
-Use this path from the source identified in the release card. The source
-and candidate must carry the same Codex native SHA-256. Check the approved
-archive digest before extracting it privately. Invoke the candidate's
-physical `deploy/kaoiro-runner-update.sh` with `--tarball`, the explicit
-install root and service, and `--detach`. Keep the approved archive and
-digest for recovery. Old tools reject the bundle during verification.
-On an existing installation, bootstrap can switch `current` without
-restarting an active runner; use the updater for this transition.
-
-For a same-pin return, recheck the saved digest and extract a fresh copy
-before stopping. Use that extraction's physical `kaoiro-runner-switch.sh
---rollback` in the existing stop/switch/start sequence. Confirm that
-`previous` is the verified source. Recheck the running identity after return.
-To update again after rollback, repeat the boundary update with the same
-candidate tools after rechecking the source and the approved archive digest.
-
-The updater shipped with the bundle prunes after activation under the link
-lock. It keeps `current`, `previous` and the newest `--keep` valid release
-directories (default 3). Re-read the retained set after the update. Name only
-measured rollback targets in the card.
-
 ### 4.6.2 Subsequent updates
 
 Advance the repo to the target SHA, then run the update as **one command**.
@@ -255,6 +232,11 @@ It performs build → install → acquire → stop → switch → start → iden
 order. **Stopping happens only immediately before switching**; build and expansion
 never touch the active release. If build or expansion fails, it **never reaches
 stop** and the old runner keeps running.
+
+The updater prunes after activation under the link lock. It keeps `current`,
+`previous` and the newest `--keep` valid release directories (default 3).
+Re-read the retained set after the update. Name only measured rollback targets
+in the card.
 
 Exit 75 after the start step means activation and startup already happened,
 but release pruning was skipped: either `.lock.links` was busy or `current`

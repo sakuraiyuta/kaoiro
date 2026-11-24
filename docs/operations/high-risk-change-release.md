@@ -12,7 +12,8 @@ related: [deployment]
 ([issue #240](https://github.com/sakuraiyuta/kaoiro/issues/240#issuecomment-6063195371),
 [answers Q1–Q5](https://github.com/sakuraiyuta/kaoiro/issues/240#issuecomment-6064701974)).
 The start gate in section 3 was measured on 2026-10-09
-([evidence](../evidence/deployment/high-risk-change-start-gate.md)).
+([evidence](../evidence/deployment/high-risk-change-start-gate.md)), before the
+Grok variables were added to its `blind` list.
 The operator removed the staged turn check from this procedure
 ([decision](https://github.com/sakuraiyuta/kaoiro/issues/709#issuecomment-6648103777)).
 
@@ -91,13 +92,15 @@ git diff --name-only <base>..<head> -- \
   wrapper/agent-common/src/acp/connection.ts wrapper/agent-common/src/acp/session.ts \
   wrapper/agent-common/src/toolhost.ts wrapper/agent-common/src/question.ts \
   wrapper/grok/src/acp/connection.ts wrapper/grok/src/acp/session.ts \
-  wrapper/grok/src/grok/process.ts
+  wrapper/grok/src/grok/process.ts \
+  wrapper/antigravity/src/generation.ts wrapper/antigravity/src/customization.ts \
+  wrapper/antigravity/src/hook_gate.ts wrapper/antigravity/src/gate.ts \
+  wrapper/antigravity/src/call_verification.ts wrapper/antigravity/src/stop_answer.ts
 ```
 
-Changes to the tagging workflows, allocator or central tag-domain definition
-are FS changes. Before landing, require operator approval and V6/V9 evidence
-for the exact candidate commit. Allocation also requires V9/V10 before it is
-enabled; see [Build identity and release tags](build-identity-and-release-tags.md).
+Changes to the central tag-domain definition (`scripts/build-identity.mjs`,
+`runner/src/build_identity_domain.ts`, `wrapper/core/src/build_identity_domain.ts`)
+are FS changes; see [Build identity and release tags](build-identity-and-release-tags.md).
 
 No path rule catches a change to the pinned version of an engine SDK, CLI or
 native binary (`package.json` and the lockfile). Treat it as high risk for
@@ -116,6 +119,7 @@ under a different runner; it is never a substitute for the operator's plan.
 | `wrapper/claude-code/**` | claude-code | codex or antigravity on another runner |
 | `wrapper/codex/**` | codex | claude-code or antigravity on another runner |
 | `wrapper/antigravity/**` | antigravity | claude-code or codex on another runner |
+| `wrapper/grok/**` | grok | claude-code, codex or antigravity on another runner |
 | `wrapper/core/**`, `wrapper/agent-common/**`, `runner/**`, a pin change | all | None; plain shell only |
 
 An agent under the same runner stops when the runner stops, so it is never a
@@ -168,8 +172,9 @@ production ran from a repo checkout.
 
    The install prints the release id on stdout, and the switch prints the id
    that `current` now names. That id is the `<expected-release-id>` below.
-   For the first bundle rollout, use the candidate's own verified tools
-   for this installation and the boundary update. When rehearsing wrapper
+   The candidate must carry a landing or release tag: the switch refuses an
+   untagged build with exit 78. To rehearse before the tag exists, pass
+   `--allow-dirty` to the switch in the throwaway root only. When rehearsing wrapper
    operations, acquire the fixture's pins in its isolated engine store.
    This start check exercises the runner and shim through connection setup.
 3. Save the block below as a file (`gate.sh`) and run it with `sh gate.sh
