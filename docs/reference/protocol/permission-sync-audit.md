@@ -1,7 +1,7 @@
 ---
 title: Permission synchronization and audit
 status: accepted
-last_updated: 2026-10-16
+last_updated: 2026-11-24
 description: Persisted permission settings, join synchronization after wrapper reconnect, and the permission lifecycle audit trail.
 ---
 
@@ -18,8 +18,8 @@ retired wrapper cannot commit a stale observation.
 
 The wrapper requests `permission_sync:{engine}` in its channel join payload
 (`PermissionSyncJoinRequest`); the server replies `permission_sync:true` when
-this contract is supported (`PermissionSyncJoinReply`). The engine value uses
-the existing EngineKind enum and prevents cross-engine settings replay; it does
+this contract is supported (`PermissionSyncJoinReply`). The engine value is the
+wrapper's engine ID and prevents cross-engine settings replay; it does
 not replace capability checks. This negotiation precedes host construction and
 does not depend on a state_change capability advertisement.
 After **every** negotiated wrapper join, the server sends `permission_sync`:

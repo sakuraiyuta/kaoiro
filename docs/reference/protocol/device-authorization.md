@@ -2,7 +2,7 @@
 title: Device authorization grant
 description: The HTTP contract a native client (kaoiro-client.nvim) follows to log in through the browser and use a device access token.
 status: accepted
-last_updated: 2026-11-14
+last_updated: 2026-11-24
 related_adrs: [70, 13, 42]
 ---
 
@@ -57,7 +57,7 @@ the media type are allowed), read no cookie and write none.
 The user code is nine letters from `BCDFGHJKLMNPQRSTVWXZ`, shown as
 `XXX-XXX-XXX`. The approving browser matches it case-insensitively and
 ignores hyphens, spaces and other characters. `client_id` is 1 to 64
-visible ASCII characters; it is self-declared, shown to the approver as such,
+printable ASCII characters (0x20-0x7E, space included); it is self-declared, shown to the approver as such,
 and never trusted.
 
 `POST /oauth/token` answers, once approved:

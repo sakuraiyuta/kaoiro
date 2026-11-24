@@ -1,7 +1,7 @@
 ---
 title: Model and effort state contract
 status: accepted
-last_updated: 2026-09-29
+last_updated: 2026-11-24
 description: The model/effort provenance, resume-drift snapshot, and pending-switch envelope fields.
 ---
 
@@ -44,10 +44,10 @@ confirmation**.
 - Value: `"launch" | "env" | "config" | "default"` (`ModelSource` type)
   - `launch` — SpawnMessage.model / SpawnMessage.effort.
   - `env` — engine-specific environment (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` /
-    `KAOIRO_CODEX_DEFAULT_MODEL`).
+    `KAOIRO_CODEX_DEFAULT_MODEL` / `KAOIRO_ANTIGRAVITY_DEFAULT_MODEL`).
   - `config` — `model` / `effort` in `kaoiro.config.json`.
   - `default` — no explicit value; delegate to the engine account / SDK default.
-- Resolution priority: `launch > env > config > default`.
+- Resolution priority: `launch > config > env > default`.
 - Startup stamp: **when explicitly supplied**, stamp `model` and
   `model_source=launch|env|config` immediately (optimistic stamp, phase-15
   [15-4b/4c]). An SDK report rewrites neither: the pick keeps the spelling it
@@ -135,8 +135,7 @@ turn** ([ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md)
 
 **Operator drift filter for `resume_drift`** (phase-16 addendum, [ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md) F2): do not include
 model/effort changes intentionally made by an operator mid-session (intentional
-change is not drift). Consult the adapter's `modelRollbackPinned` flag and
-switch history; emit drift only for an unintended substitution immediately
+change is not drift); emit drift only for an unintended substitution immediately
 after resume.
 
 ## Related protocol topics
