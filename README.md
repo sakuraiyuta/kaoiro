@@ -8,18 +8,31 @@
 
 # kaoiro (kao-iro, 'complexion' or 'how someone looks')
 
-> **Status**: research prototype. It is developed mainly for daily use by the
-> author and members of their laboratory, and it makes no guarantees
-> about maintenance or responses to issues. Issues are welcome, but the time
-> available to address them is limited. See [CONTRIBUTING.md](CONTRIBUTING.md)
-> for details.
+kaoiro runs, watches and orchestrates several CLI AI agents at once, giving
+each one a face and a name.
+
+<p align="center">
+  <a href="https://sakuraiyuta.github.io/kaoiro/#intro-film">
+    <img src="docs/images/kaoiro-intro-en-poster.png" width="640"
+         alt="Poster of the 108-second kaoiro introduction film. Opens the
+              film on the website.">
+  </a>
+</p>
+
+[Website](https://sakuraiyuta.github.io/kaoiro/)
+([日本語](https://sakuraiyuta.github.io/kaoiro/ja/)) ·
+[Quick start](#install--quick-start) ·
+[Documentation](docs/README.md)
 
 > **Security**: an operator credential lets its holder run commands on
 > every machine where agents run. Treat it like an SSH key to those
 > hosts, and read [SECURITY.md](SECURITY.md) before deploying.
 
-Website: <https://sakuraiyuta.github.io/kaoiro/>
-([日本語](https://sakuraiyuta.github.io/kaoiro/ja/))
+> **Status**: research prototype. It is developed mainly for daily use by the
+> author and members of their laboratory, and it makes no guarantees
+> about maintenance or responses to issues. Issues are welcome, but the time
+> available to address them is limited. See [CONTRIBUTING.md](CONTRIBUTING.md)
+> for details.
 
 A system for **running, watching and orchestrating several CLI AI agents at
 once** (such as Claude Code, Codex, Antigravity, and Grok Build). kaoiro launches agents
