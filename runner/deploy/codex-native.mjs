@@ -1,9 +1,14 @@
-import { hasEntry } from "./codex-snapshot.mjs";
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
+
+// A dangling link is a present, invalid entry, never an empty installation.
+export function hasEntry(path) {
+  try { lstatSync(path); return true; }
+  catch (error) { if (error.code === "ENOENT") return false; throw error; }
+}
 
 function contained(root, path) {
   const real = realpathSync(path);
@@ -29,7 +34,7 @@ export async function nativeIdentity(release, layout = "legacy") {
     return value;
   }
   const cli = contained(root, join(root, "node_modules/@kaoiro/codex/dist/cli.js"));
-  const fromWrapper = createRequire(cli); // codex-recovery-rethrow: sdk-require
+  const fromWrapper = createRequire(cli);
   const sdkManifest = (fromWrapper.resolve.paths("@openai/codex-sdk") ?? [])
     .map((dir) => join(dir, "@openai/codex-sdk/package.json"))
     .find((path) => hasEntry(path));
@@ -44,8 +49,8 @@ export async function nativeIdentity(release, layout = "legacy") {
   // Resolution executes trusted release code. Hash/manifest verification
   // detects accidental corruption; it does not sandbox an untrusted archive.
   const [{ Codex }, { resolveAppServerBinary }] = await Promise.all([
-    import(pathToFileURL(sdkEntry).href), // codex-recovery-rethrow: sdk-import
-    import(pathToFileURL(rpcEntry).href), // codex-recovery-rethrow: sdk-import
+    import(pathToFileURL(sdkEntry).href),
+    import(pathToFileURL(rpcEntry).href),
   ]);
   // Both pinned SDKs resolve in the constructor without spawning. This
   // intentionally fails if that inspected private interface ever changes.

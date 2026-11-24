@@ -3,7 +3,6 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const LEGACY_CHILD_CALLS = {
-  "runner/deploy/codex-service.mjs": 1,
   "scripts/check-github-issue-import.mjs": 1,
   "scripts/github-issue-import.mjs": 1,
   "server/deploy/kaoiro-deploy-docker.mjs": 1,
@@ -12,8 +11,7 @@ const nativeCalls = /\b(?:execFileSync|execFile|execSync|spawnSync|spawn|fork)\s
 
 export const CHILD_ENVIRONMENT_SCOPE = [
   "scripts/build-identity.mjs", "scripts/with-build-identity.mjs",
-  "server/deploy/kaoiro-server-deploy.mjs", "runner/deploy/kaoiro-runner-codex-state.mjs",
-  "runner/deploy/codex-snapshot.mjs",
+  "server/deploy/kaoiro-server-deploy.mjs",
 ];
 
 const SOURCE_DIRECTORIES = ["scripts", "scripts/lib", "server/deploy", "runner/deploy"];

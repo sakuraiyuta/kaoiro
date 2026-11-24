@@ -3,11 +3,11 @@ import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync,
   rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { createStateFixture } from "./codexStateFixture.js";
 import {
   revisionOf, runScript, writeBundleManifest, writeBundleTree,
   writeReleaseTree,
@@ -41,6 +41,24 @@ const archive = () => {
   return result;
 };
 const install = () => run("install", [archive(), "--install-dir", installed]);
+const stateTool = (args: string[]) => {
+  const result = spawnSync(process.execPath, [
+    "--experimental-vm-modules", "--disable-warning=ExperimentalWarning",
+    join(tree, "deploy/kaoiro-runner-codex-state.mjs"), ...args,
+  ], { encoding: "utf8" });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+};
+/** Installs the bundle next to a legacy current with a different native. */
+const installDifferingNative = () => {
+  writeReleaseTree(join(installed, "releases", legacy), legacy);
+  symlinkSync(`releases/${legacy}`, join(installed, "current"));
+  const path = join(tree, "dist/codex-native.json");
+  const record = JSON.parse(readFileSync(path, "utf8"));
+  record.sha256 = "1".repeat(64);
+  writeFileSync(path, JSON.stringify(record));
+  writeBundleManifest(tree);
+  expect(install().status).toBe(0);
+};
 
 it("installs the bundled archive and rolls back to an unchanged legacy tree", () => {
   writeReleaseTree(join(installed, "releases", legacy), legacy);
@@ -141,6 +159,58 @@ it("rejects matching malformed Codex hashes before changing links", () => {
   expect(readlinkSync(previous)).toBe(`releases/${legacy}`);
 });
 
+it("accepts a differing native only with the fixed accept word", () => {
+  installDifferingNative();
+  const guard = (accept: string[]) =>
+    stateTool(["guard", installed, bundled, ...accept]);
+  expect(guard([""]).status).toBe(78);
+  expect(guard([""]).stderr).toContain("Codex native pin differs");
+  expect(guard(["accept-native-change"]).status).toBe(0);
+  for (const accept of [["yes"], ["--codex-native-change"], []]) {
+    expect(guard(accept).status, accept.join()).toBe(64);
+  }
+  expect(readlinkSync(join(installed, "current"))).toBe(`releases/${legacy}`);
+});
+
+it("passes a first install and keeps no release for Codex state", () => {
+  expect(install().status).toBe(0);
+  expect(stateTool(["guard", installed, bundled, ""]).status).toBe(0);
+  const listed = stateTool(["protected", installed]);
+  expect(listed).toEqual({ status: 0, stdout: "", stderr: "" });
+  for (const action of ["preflight", "prepare", "prepare-restore", "resume",
+    "recover", "prune", "promote", "next", "classify", "inspect"]) {
+    expect(stateTool([action, installed, bundled, ""]).status, action).toBe(64);
+  }
+});
+
+it("leaves the state capability line out of the native check", () => {
+  // Updaters before this release read this exact line as the capability to
+  // carry a retained snapshot; without it they refuse this release while a
+  // snapshot is retained.
+  const tool = fileURLToPath(
+    new URL("../deploy/kaoiro-runner-codex-state.mjs", import.meta.url));
+  expect(readFileSync(tool, "utf8"))
+    .not.toMatch(/^export const CODEX_STATE_SCHEMA = 2;\r?$/m);
+});
+
+it("installs a bundle without the compatibility-only Codex files", () => {
+  for (const name of ["codex-snapshot.mjs", "codex-service.mjs"]) {
+    rmSync(join(tree, "deploy", name));
+  }
+  writeBundleManifest(tree);
+  const result = install();
+  expect(result.status, result.stderr).toBe(0);
+});
+
+it.each(["kaoiro-runner-codex-state.mjs", "codex-native.mjs"])(
+  "refuses a bundle without deploy/%s", (name) => {
+    rmSync(join(tree, "deploy", name));
+    writeBundleManifest(tree);
+    const result = install();
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain(`deploy/${name}`);
+  });
+
 it("returns exit 78 from the installed shim when the entry is missing", () => {
   expect(install().status).toBe(0);
   expect(switchTo(bundled).status).toBe(0);
@@ -153,51 +223,3 @@ it("returns exit 78 from the installed shim when the entry is missing", () => {
   expect(result.status).toBe(78);
   expect(result.stdout).not.toContain("bundled runner started");
 });
-
-it.skipIf(process.platform !== "linux").each([false, true])(
-  "preserves Codex recovery across a bundled update (different pin: %s)",
-  async (differentPin) => {
-    const h = await createStateFixture();
-    try {
-      const first = h.forward();
-      expect(first.status, first.stderr).toBe(0);
-      const record = h.records()[0]!;
-      const prune = h.state("prune", h.root, record.uuid);
-      expect(prune.status, prune.stderr).toBe(0);
-      expect(h.records()[0]?.snapshot.status).toBe("retired");
-      const retired = readFileSync(h.recordPath(record.uuid));
-      const path = join(tree, "dist/codex-native.json");
-      const identity = JSON.parse(readFileSync(path, "utf8"));
-      identity.sha256 = differentPin ? "2".repeat(64) : record.target.sha256;
-      writeFileSync(path, JSON.stringify(identity));
-      writeBundleManifest(tree);
-
-      const backup = join(h.dir, "bundled-backup");
-      const updater = join(tree, "deploy/kaoiro-runner-update.sh");
-      const flags = ["--install-dir", h.root, "--service", "kogane468-test"];
-      const forward = runScript(updater, [
-        ...flags, "--tarball", archive(),
-        ...(differentPin
-          ? ["--codex-home", h.home, "--codex-backup-dir", backup] : []),
-      ], h.env());
-      expect(forward.status, forward.stderr).toBe(0);
-      expect(h.current()).toBe(bundled);
-      if (differentPin) {
-        const restore = runScript(updater, [
-          ...flags, "--codex-home", h.home, "--restore-codex-backup", backup,
-        ], h.env());
-        expect(restore.status, restore.stderr).toBe(0);
-        expect(h.records().find((tx) => tx.uuid !== record.uuid)?.phase)
-          .toBe("restored");
-      } else {
-        const back = runScript(join(tree, "deploy/kaoiro-runner-switch.sh"),
-          ["--rollback", "--install-dir", h.root], h.env());
-        expect(back.status, back.stderr).toBe(0);
-      }
-      expect(h.current()).toBe(h.B);
-      expect(readFileSync(h.recordPath(record.uuid))).toEqual(retired);
-    } finally {
-      await h.close();
-    }
-  },
-);

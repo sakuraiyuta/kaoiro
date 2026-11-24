@@ -144,7 +144,7 @@ function lstatType(path) {
     st = lstatSync(path);
   } catch (err) {
     if (err.code === "ENOENT") return "missing";
-    throw err; // codex-recovery-rethrow: lstat-type
+    throw err;
   }
   if (st.isSymbolicLink()) return "symlink";
   if (st.isDirectory()) return "dir";
@@ -454,7 +454,7 @@ function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
   // intermediate ancestor of a nested leaf beneath it) is never
   // legitimately a symlink in any topology this file supports (see
   // walkAncestors's own doc comment).
-  walkAncestors(pkgRoot, realRoot, segments, label, (message) => fail(message), false); // codex-recovery-rethrow: anomaly-forward
+  walkAncestors(pkgRoot, realRoot, segments, label, (message) => fail(message), false);
   const target = join(pkgRoot, leafRel);
   // Captured BEFORE resolving: distinguishes "the leaf itself is simply
   // absent" (build-fixable) from "the leaf is an EXISTING symlink whose
@@ -573,7 +573,7 @@ function checkWorkspaceLinkedSentinel(root, realRoot, rel) {
     realRoot,
     linkParts,
     linkRel,
-    (message) => fail(message), // codex-recovery-rethrow: anomaly-forward
+    (message) => fail(message),
     true,
   );
   if (!ancestorsPresent) {
@@ -709,7 +709,7 @@ function codexRuntimeFiles(root, realRoot) {
     realRoot,
     "node_modules/@kaoiro/codex/dist/cli.js",
   );
-  const runtimeRequire = createRequire(wrapperCli); // codex-recovery-rethrow: runtime-require
+  const runtimeRequire = createRequire(wrapperCli);
   const wrapperPackagePath = join(dirname(dirname(wrapperCli)), "package.json");
   let wrapperPackage;
   try {
@@ -1305,7 +1305,6 @@ export function verifyRelease(root, opts = {}) {
       "kaoiro-runner-update.sh", "kaoiro-runner-bootstrap.sh",
       "kaoiro-runner-setup.sh", "verify-release.mjs",
       "kaoiro-runner-codex-state.mjs", "codex-native.mjs",
-      "codex-snapshot.mjs", "codex-service.mjs",
     ];
     for (const name of required) {
       const real = containedRealPath(root, realRoot, `deploy/${name}`);
@@ -1414,7 +1413,7 @@ function main(argv) {
             : 70,
       );
     }
-    throw err; // codex-recovery-rethrow: verify-cli
+    throw err;
   }
 }
 

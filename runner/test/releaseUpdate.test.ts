@@ -233,9 +233,6 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
       ["empty archive", [tag, "--tarball", ""], "Linux", 64],
       ["checkout", [tag, "--from-repo", "/fixture"], "Linux", 64],
       ["target", [tag, "--target", ""], "Linux", 64],
-      ["restore", [tag, "--restore-codex-backup", "/fixture"], "Linux", 64],
-      ["resume", [tag, "--resume-codex-transaction", "fixture"], "Linux", 64],
-      ["recover", [tag, "--recover-codex-transaction", "fixture"], "Linux", 64],
       ["Darwin", [tag], "Darwin", 64],
       ["missing Node", [tag], "Linux", 78],
     ] as const)("refuses %s before queue", (kind, args, os, status) => {
@@ -1179,7 +1176,7 @@ await import("./cli.js");
 
   it("retired runner flags fail before queue, stop or link changes", () => {
     const archive = makeReleaseTarball(work, B);
-    const flags = ["--release-repo", "--release-authority", "--release-attempt", "--release-plan-sha256", "--skip-release-reconciliation", "--skip-reason", "--expected-authority-sha256", "--release-target", "--release-alias", "--release-invocation", "--release-proof-sha256"];
+    const flags = ["--release-repo", "--release-authority", "--release-attempt", "--release-plan-sha256", "--skip-release-reconciliation", "--skip-reason", "--expected-authority-sha256", "--release-target", "--release-alias", "--release-invocation", "--release-proof-sha256", "--codex-home", "--codex-backup-dir", "--restore-codex-backup", "--resume-codex-transaction", "--recover-codex-transaction", "--codex-transaction"];
     const log = join(dir, "retired-flag-queue"), descriptor = join(root, "release-authority.json");
     for (const present of [false, true]) {
       if (present) writeFileSync(descriptor, "not JSON");

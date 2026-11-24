@@ -90,15 +90,6 @@ kaoiro_lock_acquire() {
   exit 75 # EX_TEMPFAIL
 }
 
-# A held lock under a Codex install root also lists that root's unfinished
-# records and locks, so the hint names the command to run once the lock is gone.
-kaoiro_codex_lock_acquire() {
-  (kaoiro_lock_acquire "$1") && return 0
-  printf '%s: Preserve named home, snapshot, staging and aside objects; do not remove a lock until you have inspected it (see the recovery entry).\n' "$prog" >&2
-  kaoiro_codex_state next "$2" >&2 || true
-  exit 75
-}
-
 kaoiro_lock_release() {
   rmdir "$1" 2>/dev/null || true
 }
@@ -192,6 +183,7 @@ kaoiro_clean_release_id() {
 
 # The updater pins this tool directory before current changes. Machine
 # revisions remain full length even when the operator label is abbreviated.
+# shellcheck disable=SC2154 # deploy_dir is assigned by the sourcing script.
 kaoiro_preflight_build_format() (
   _format_root=$1
   _format_conf_dir=$(kaoiro_config_dir) || exit 78
@@ -199,6 +191,7 @@ kaoiro_preflight_build_format() (
   if [ -f "$_format_env_file" ]; then
     sh -n "$_format_env_file" 2>/dev/null || exit 78
     set -a
+    # shellcheck source=/dev/null
     . "$_format_env_file"
     set +a
   fi
@@ -324,10 +317,7 @@ try {
 ' "$1" "$2"
 }
 
-kaoiro_codex_state_at() {
-  "$(kaoiro_node)" --experimental-vm-modules --disable-warning=ExperimentalWarning "$@"
-}
-
 kaoiro_codex_state() {
-  kaoiro_codex_state_at "$deploy_dir/kaoiro-runner-codex-state.mjs" "$@"
+  "$(kaoiro_node)" --experimental-vm-modules --disable-warning=ExperimentalWarning \
+    "$deploy_dir/kaoiro-runner-codex-state.mjs" "$@"
 }

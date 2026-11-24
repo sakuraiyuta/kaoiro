@@ -28,7 +28,7 @@ test("default constructor executes a real child with a closed environment", () =
 });
 
 test("each operation's explicit keys preserve only its intended authority", () => {
-  for (const profile of ["git", "ci-git", "ssh-git", "ssh", "gh", "systemd", "authority", "runner", "build", "codex-switch", "codex-attest"]) {
+  for (const profile of ["git", "ci-git", "ssh-git", "ssh", "gh", "systemd", "authority", "runner", "build"]) {
     const env = childEnvironment(profile, { ...hostile, SSH_AUTH_SOCK: "/fixture/socket", DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus" });
     assert.equal(env.PATH, profile === "build" ? hostile.PATH : CHILD_PATH);
     for (const key of ["GIT_DIR", "GIT_EXEC_PATH", "GIT_SSH", "LD_PRELOAD", "NODE_OPTIONS", "BASH_ENV", "ENV", "EXTRA_SECRET"]) assert.equal(env[key], undefined, profile + key);
@@ -38,21 +38,6 @@ test("each operation's explicit keys preserve only its intended authority", () =
   const runner = childEnvironment("runner", { ...hostile, ...runnerKeys });
   for (const [key, value] of Object.entries(runnerKeys)) assert.equal(runner[key], value);
   assert.equal(runner.KAOIRO_RELEASE_RETAINED_UNIT, undefined);
-  const codexKeys = { ...runnerKeys, KAOIRO_RUNNER_ENV: "/fixture/runner.env", XDG_CONFIG_HOME: "/fixture/xdg",
-    KAOIRO_SYSTEMCTL: "/fixture/systemctl", KAOIRO_CODEX_NESTED: "1", KAOIRO_RUNNER_CONFIG: "/fixture/config.json", KAOIRO_UNAME: "Darwin",
-    KAOIRO_RUNNER_INSTALL_DIR: "/fixture/install", XDG_DATA_HOME: "/fixture/data", KAOIRO_SYSTEMD_RUN: "/fixture/run",
-    CODEX_HOME: "/fixture/codex", KAOIRO_RUNNER_TOKEN: "inert-token", HOME: "/fixture/home", USER: "fixture",
-    LOGNAME: "fixture", TMPDIR: "/fixture/tmp", SSH_AUTH_SOCK: "/fixture/socket",
-    XDG_RUNTIME_DIR: "/fixture/runtime", DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus" };
-  const base = ["HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "TMPDIR", "TZ", "USER"];
-  for (const [profile, kept] of Object.entries({
-    "codex-switch": ["DBUS_SESSION_BUS_ADDRESS", "KAOIRO_CODEX_NESTED", "KAOIRO_NODE", "KAOIRO_SYSTEMCTL", "XDG_RUNTIME_DIR"],
-    "codex-attest": ["KAOIRO_NODE", "KAOIRO_RUNNER_DIR", "KAOIRO_RUNNER_ENV", "XDG_CONFIG_HOME"],
-  })) {
-    const env = childEnvironment(profile, { ...hostile, ...codexKeys });
-    assert.deepEqual(Object.keys(env).sort(), [...base, ...kept].sort(), profile);
-    for (const key of kept) assert.equal(env[key], codexKeys[key], profile + key);
-  }
   assert.throws(() => childEnvironment("unknown"));
   assert.equal(childEnvironment("ci-git", hostile).GIT_CONFIG_VALUE_0, "AUTHORIZATION: basic " + Buffer.from("x-access-token:inert-secret").toString("base64"));
 });
@@ -72,8 +57,8 @@ test("build children retain the exact selected toolchain PATH without ambient cr
 
 test("coverage check rejects separate existing and new bypasses and its own disabled guard", () => {
   const green = checkReleaseChildEnvironments(root);
-  assert.equal(green.files, 5); assert.equal(green.calls, 14);
-  assert.equal(green.unchanged_legacy_calls, 4);
+  assert.equal(green.files, 3); assert.equal(green.calls, 11);
+  assert.equal(green.unchanged_legacy_calls, 3);
   for (const target of CHILD_ENVIRONMENT_SCOPE) {
     assert.throws(() => checkReleaseChildEnvironments(root, (path, encoding) => {
       const source = readFileSync(path, encoding);
@@ -94,7 +79,7 @@ test("coverage pins import-only, spawn/fork, exact legacy count and both scope-p
     assert.throws(mutate(target, source => source.replace("child-process-environment.mjs", "missing-helper.mjs")), /helper import missing/);
     assert.throws(mutate(target, source => source.replaceAll("spawnChildSync", "unusedChild").replaceAll("execChildSync", "unusedExec")), /no checked call/);
   }
-  assert.throws(mutate("runner/deploy/codex-service.mjs", source => source + "\nexecFileSync('unsafe', []);"), /unmanaged/);
+  assert.throws(mutate("server/deploy/kaoiro-deploy-docker.mjs", source => source + "\nexecFileSync('unsafe', []);"), /unmanaged/);
 });
 
 test("gh keyring session values reach a real child without SSH or loader authority", () => {
@@ -123,7 +108,7 @@ test("the checker enumerates every source directory and follows new relative dep
       const path = relative(dirname(join(fixture, file)), join(fixture, "runner/deploy/child-process-environment.mjs"));
       writeFileSync(join(fixture, file), `import { execChildSync } from ${JSON.stringify(path.startsWith(".") ? path : "./" + path)};\nexecChildSync('authority', 'utility', []);\n`);
     }
-    assert.equal(checkReleaseChildEnvironments(fixture).files, 5);
+    assert.equal(checkReleaseChildEnvironments(fixture).files, 3);
     for (const dir of ["scripts", "scripts/lib", "server/deploy", "runner/deploy"]) {
       const added = join(fixture, dir, "unchecked.mjs");
       writeFileSync(added, "import cp from 'node:child_process';\n");
@@ -136,7 +121,7 @@ test("the checker enumerates every source directory and follows new relative dep
     writeFileSync(dependency, "spawn('unsafe', []);\n");
     assert.throws(() => checkReleaseChildEnvironments(fixture), /unmanaged/);
     writeFileSync(dependency, "export const valid = true;\n");
-    assert.equal(checkReleaseChildEnvironments(fixture).calls, 5);
+    assert.equal(checkReleaseChildEnvironments(fixture).calls, 3);
     rmSync(dependency);
     symlinkSync(join(fixture, "runner/deploy/child-process-environment.mjs"), dependency);
     assert.throws(() => checkReleaseChildEnvironments(fixture), /regular unlinked file/);
