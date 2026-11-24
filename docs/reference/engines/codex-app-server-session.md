@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server session and bridge"
 status: implemented
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 ---
 
 # Codex app-server session and bridge
@@ -11,8 +11,8 @@ Current implementation contracts, extracted from the package README. The
 [ADR-0058](../../adr/0058-codex-app-server-turn-steer.md) retains the decisions and staged authorization.
 Measured coverage and limits are in the [evidence record](../../evidence/codex-app-server/session-and-bridge.md).
 
-Both backends set the [managed-process marker](../configuration/wrapper.md#managed-engine-environment)
-in their native process environment and in `shell_environment_policy.set`.
+The app-server session sets the [managed-process marker](../configuration/wrapper.md#managed-engine-environment)
+in its native process environment and in `shell_environment_policy.set`.
 Start and resume therefore supply `KAOIRO_AGENT=1` to tool shells even with
 `inherit = "none"`. The app-server session includes the marker when no
 `toolHome` is supplied; `CODEX_HOME` is added only when a tool home exists.
@@ -31,7 +31,7 @@ supplies materialized absolute image paths and removes its turn directory after 
 The Host serializes its startup orphan sweep with image materialization through
 directory registration, including when an instruction arrives before `run`.
 The sweep's duration can grow with the number of matching entries under `/tmp`.
-Both backends preserve the materialized image until its turn consumes it.
+The materialized image is preserved until its turn consumes it.
 Before the main app-server session starts, the Host aborts and awaits any
 in-flight account probe. This prevents two app-server children of one Host
 from initializing the same empty `CODEX_HOME` concurrently. It does not

@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server transport"
 status: implemented
-last_updated: 2026-10-09
+last_updated: 2026-11-24
 ---
 
 # Codex app-server transport
@@ -92,7 +92,7 @@ no active turn; see the [Stage 2 probes](../../evidence/codex-app-server/stage2-
 
 An app-server wrapper advertises `early: "steer", yield: "none"` at join. It
 steers only a server-granted early peer input after both delivery-mode and
-`notice_attribution: "v1"` echoes. The exec backend always queues peer input.
+`notice_attribution: "v1"` echoes.
 This path has a distinct per-sequence lease, reply ticket, write-state guard,
 and three-write IA quota within the common eight-steer turn cap. An early
 input can correct its sender's running batch and overtake that sender's
@@ -123,7 +123,8 @@ delivery. The reason is one of:
 
 | Reason | Meaning |
 |---|---|
-| `steer_not_negotiated` | The exec backend, or the join lacks the `early: "steer"` echo or `notice_attribution: "v1"`. |
+| `local_policy_disabled` | The local delivery policy does not allow early delivery. |
+| `steer_not_negotiated` | Early steering is not enabled for this wrapper, or the join lacks the `early: "steer"` echo or `notice_attribution: "v1"`. |
 | `invalid_delivery_identity` | The delivery has no conversation id or no valid delivery sequence. |
 | `behind_queued_root_same_sender` | The sender's dispatched root waits behind another running token. |
 | `behind_earlier_early_same_sender` | An earlier early input awaits its fallback root. |
@@ -180,8 +181,8 @@ opt-in: [wrapper configuration](../configuration/wrapper.md#codex-approval-axis-
 Each `turn/start` carries the approval the runtime captured for that
 execution (`untrusted`, `on-request` or `never`); the policy written is kept
 on the turn's reservation and is the only policy the gate reads, so a
-selection changed mid-turn cannot open it. The exec backend and a
-non-opted-in persona write `never`.
+selection changed mid-turn cannot open it. A non-opted-in persona writes
+`never`.
 
 The separate bridge-tool gate for `request_session_reset` reads the same
 normalized dispatched policy, bound to the host turn token, plus the latest
@@ -284,7 +285,8 @@ The 16 KB rule applies.
 The broker's settle runs the record's callback before the slot changes and
 reports the cause: an operator allow writes `accept`, a deny `decline`, a
 deadline `decline`; an abort or close writes nothing. `decline` carries no
-message. Command approvals on 0.156.1 carry an `availableDecisions` list
+message. Command approvals on the pinned CLI (0.170.0) carry an
+`availableDecisions` list
 that is not in the generated schema and omits `decline`; `decline` was
 measured to be honoured, and that capture is pinned in a test with the Codex
 pin. There is no deadline unless `permission_timeout_ms` is configured. The

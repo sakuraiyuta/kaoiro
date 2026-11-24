@@ -2,7 +2,7 @@
 title: Grok Build ACP engine
 description: Resident ACP host, tools, permissions and unsupported operations.
 status: accepted
-last_updated: 2026-11-15
+last_updated: 2026-11-24
 ---
 
 # Grok Build ACP engine
@@ -79,8 +79,8 @@ before the workspace build.
 
 | Injection point | Where | Grok's value |
 |---|---|---|
-| `session/new` `_meta` | third argument of `AcpSession.open`, passed by value (the host already holds everything it needs; no builder function) | `grokSessionMeta(rules)`, that is `{ rules }` |
-| Extra notifications | `AcpExtension.notifications` of `connectAcp`: method, parser and handler per entry. The method must start with `_` (ACP's extension-name convention); any other name, including every ACP method, makes `connectAcp` throw | `_x.ai/session_notification`, handled by the host's turn-completion match |
+| `session/new` `_meta` | third argument of `AcpSession.newSession` (`AcpSession.open` forwards it), passed by value (the host already holds everything it needs; no builder function) | `grokSessionMeta(rules)`, that is `{ rules }` |
+| Extra notifications | `AcpExtension.notifications` of `connectAcp`: method, parser and handler per entry. The method must start with `_` (ACP's extension-name convention); any other name, including every ACP method, makes `connectAcp` throw | `_x.ai/session_notification`, `_x.ai/queue/changed` and `_x.ai/task_backgrounded`, each handled by the host |
 | Wire-metadata fields | `AcpExtension.wireFields` of `connectAcp` and `metadataTee`: a function from one parsed JSON-RPC line to extra fields, merged after `variant` | `grokWireFields`: `vendor_kind`, `prompt_id`, `request_id`, `hook_event`; the host adds `loading_lines_dropped` |
 
 `acp/` itself records `direction`, `method`, `variant`, `sdk_diagnostic` and
@@ -251,7 +251,7 @@ in the instruction's order.
 | Upload | ACP block |
 | --- | --- |
 | PNG, JPEG, WebP, GIF | `image` with the uploaded MIME type and base64. Grok re-encodes a large image as JPEG itself. |
-| Text and code | `resource` `{ uri: "attachment:///<name>", mimeType, text }`: UTF-8 with replacement characters, the first 1 MB, and a truncation note. |
+| Text and code | `resource` `{ uri: "attachment:///<name>", mimeType, text }`: UTF-8 with replacement characters, the first 1 MiB, and a truncation note. |
 | `.docx`, `.xlsx`, `.pptx` | The text extracted as in the Claude Code adapter (64 MiB uncompressed limit, 8 Mi characters), sent as the same `resource` with `text/plain`. A failed extraction refuses the instruction with `sdk_error`. |
 | PDF | A `resource_link` to a file the wrapper writes when the turn starts (see [PDF files](#pdf-files)). |
 

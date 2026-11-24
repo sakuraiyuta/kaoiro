@@ -2,7 +2,7 @@
 title: Claude events
 description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
-last_updated: 2026-11-10
+last_updated: 2026-11-24
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -162,8 +162,9 @@ stream teardown. The wrapper reports `state=error` and stderr contains
 
 #### Shortened completion summaries
 
-CLI 2.1.321 shows the model a completion summary longer than 1,000 UTF-16
-code units in a shortened form, while the SDK frame keeps the whole text. The
+The pinned CLI (measured on 2.1.321) shows the model a completion summary
+longer than 1,000 UTF-16 code units in a shortened form, while the SDK frame
+keeps the whole text. The
 shortened form is the first 500 and the last 300 code units of the SDK
 summary around `\n\n... [N characters truncated] ...\n\n`, where N is the
 number of code units dropped. A cut never splits a surrogate pair: the head
@@ -284,9 +285,7 @@ The [E1–E4 native measurements](../../evidence/issue-429/2026-09-28-claude-fol
 establish the measured running-tool fold, byte-identical hook text, new root
 after a text-only result, and `priority: "now"` cut under isolated settings.
 They do not establish the phase-2 wrapper's complete behavior under the
-operator's production settings. Keep mode advertisement off until the
-production-settings R3 result-to-hook measurement supports the configured
-root-hook timeout.
+operator's production settings.
 
 ### Reserved resume notes after compaction
 
@@ -421,7 +420,7 @@ session does not receive it.
 | --- | --- | --- |
 | Turn watchdog fail-stop | The watchdog stops the host when a turn stays inactive past its limit and does not end within the interrupt grace, or when it cannot interrupt the turn or attribute it. This fail-stop does not abort the SDK. Closing the CLI's input is not expected to end such a turn, so the wrapper may never exit (inferred from the code, not measured), and its blocked recovery checkpoint stops the runner from relaunching it even after it exits. | Use the procedure below. |
 | Pushed root ownership unavailable | The coordinator could not adopt a pushed root (`InterAgentTurnCoordinator#adoptPushedRoot` found no lease, or the root token already had a batch). `runClaudeCli` freezes only inter-agent admission and sends; the host is not closed, reports no `error`, keeps accepting operator input, and the wrapper does not exit. | Use the procedure below. |
-| Restart cap reached | An unrequested exit after 5 relaunches in the same window logs `exceeded restart cap; leaving down`, and the runner stops relaunching. | Remove the cause, then **復帰**. |
+| Restart cap reached | An unrequested exit after 5 relaunches in the same window logs `exceeded restart cap; …; leaving down`, and the runner stops relaunching. | Remove the cause, then **復帰**. |
 | Context lost after a fresh relaunch | See the session paragraph above. | Switch the agent back to its earlier session. |
 
 The procedure: use the dashboard's **終了** action on the affected agent card
@@ -570,12 +569,12 @@ in streaming-input mode. Boundaries settled by a headless live run:
 - **Selection before the first turn (#107)**: Because `supportedModels()` waits
   for Query initialization, it cannot supply the catalog before an idle-wait
   spawn. Runner registration and the wrapper's first idle `ext.models`
-  advertise an observed SDK 0.3.187 snapshot as an optimistic bootstrap, so
+  advertise the single-row `default` bootstrap
+  ([catalog](claude-model-catalog.md)), so
   LaunchDialog / AgentDetail can choose the first turn's model / effort. After
   SDK initialization, replace it with the account-aware `supportedModels()`
-  return and retain no bootstrap-only option. The fable wire value observed on
-  2026-07-13 was `claude-fable-5[1m]`; effort was
-  `low|medium|high|xhigh|max`. Bootstrap does not guarantee entitlement; an SDK
+  return and retain no bootstrap-only option. Bootstrap does not guarantee
+  entitlement; an SDK
   control rejection is displayed loudly as `switch_error`. The idle-wait
   wrapper delays Query creation itself until first input and buffers
   `set_model` / `set_effort` in startup Options meanwhile. Thus selection does
@@ -609,13 +608,15 @@ in streaming-input mode. Boundaries settled by a headless live run:
   receives and applies server → wrapper `set_model` / `set_effort` control
   ([protocol channels](../protocol/channels.md#directional-message-types-v0-settled)).
 
-### Hooks (SDK surface; kaoiro wires only `CwdChanged`)
+<a id="hooks-sdk-surface-kaoiro-wires-only-cwdchanged"></a>
 
-The SDK offers `PreToolUse` / `PostToolUse` / `Notification` /
-`UserPromptSubmit` / `Stop` / `SubagentStop` / `SessionStart` / `SessionEnd` /
-`PreCompact`. kaoiro does not consume them for state derivation: the message
-sequence + `canUseTool` cover it, and the host registers only `CwdChanged`
-(merged with caller-supplied hooks).
+### Hooks
+
+State is derived from the message sequence and `canUseTool`. The host
+registers `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `PermissionDenied`, `Stop` and `StopFailure` (prompt and
+tool ownership, native continuations) and `CwdChanged`, each merged with
+caller-supplied hooks.
 
 The `CwdChanged` hook (#64) is the only path that reflects cwd changes after
 init in `state_change.ext.cwd` by piggyback (messages other than `init` do not
@@ -675,8 +676,7 @@ state_change directly after spawn (the idle announce emitted by cli.ts):
   event). Display it immediately only when explicit; otherwise await SDK
   reporting.
 - **`ext.cwd`**: The existing CwdChanged-hook pattern (piggyback a cwd change
-  after init onto the next state_change through synchronous assignment, lines
-  187–190).
+  after init onto the next state_change through synchronous assignment).
 
 Implemented in phase-15 15-4b by removing the null guard on `#statusExt` in
 `wrapper/claude-code/src/host.ts` (`#statusExt`) only when explicitly

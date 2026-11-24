@@ -2,7 +2,7 @@
 title: Antigravity tools and permissions
 description: The permission mapping and hook gate, call verification and gate faults, the Stop hook answer, kaoiro tools over the shared HTTP tool host, retirement, and the known limitations of the Antigravity ACP host.
 status: provisional
-last_updated: 2026-11-23
+last_updated: 2026-11-24
 related: [protocol, antigravity-adapter]
 ---
 
@@ -149,6 +149,7 @@ in `Path`, the other write tools in `TargetFile` or `AbsolutePath`. The
   | Wrong nonce or missing request fields | `kaoiro: invalid gate request` |
   | A second request with the same key | `kaoiro: duplicate tool call` |
   | The gate's decision failed | `kaoiro: gate failure` |
+  | Any other error in the hook | `kaoiro: hook failure (<error>)` |
 
 - **Timeouts.** A PreToolUse hook waits for the gate up to
   `KAOIRO_GATE_DEADLINE_MS` (55 min), below its 60 min hook timeout. An
@@ -259,8 +260,9 @@ A tool child of `agy` owns a PTY, so an interactive prompt inside a tool
   carries a watchdog token: an inter-agent delivery its own, an operator
   instruction one the host creates. Each ACP tool call in the window is
   tracked from its first update to its `completed` or `failed` update; the
-  oldest open call is bounded by `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS`
-  (default 600000 ms, minimum 1000), and progress never extends that bound.
+  oldest open call is bounded by `antigravity.tool_timeout_ms` in the runner
+  configuration (deprecated override `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS`;
+  default 600000 ms, minimum 1000), and progress never extends that bound.
   On expiry the wrapper logs `[kaoiro] antigravity turn watchdog tool
   timeout: … step=<n> tool=<name> elapsed=<ms> threshold=<ms>` and a
   `tool_timeout` lifecycle record (step index in order of first sight and

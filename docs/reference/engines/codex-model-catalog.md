@@ -1,7 +1,7 @@
 ---
 title: Codex model catalog reference
 status: accepted
-last_updated: 2026-11-19
+last_updated: 2026-11-24
 related: [codex-exec-events, protocol, plugin-model]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -42,7 +42,7 @@ entry whose `minimal_client_version` is newer is not offered.
 `gpt-6.1-terra` comes from the signed-in remote catalog rather than bundled
 `models.json`. It supports `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`,
 with default effort `low`. Its `minimal_client_version=0.161.0` is kaoiro's
-verified floor for both exec and app-server, not an upstream minimum. The
+verified floor, not an upstream minimum. The
 existing shared paid catalog also includes it for API-key authentication;
 actual entitlement remains account-dependent. See the
 [dated Terra evidence](../../evidence/codex/model-catalog.md#signed-in-remote-catalog-2026-10-27).
@@ -92,7 +92,6 @@ for every account. See the [dated adoption evidence](../../evidence/codex-app-se
   as the Pro-only `gpt-5.3-codex-spark`). At CLI priority 4, it is lower than a
   spawn through kaoiro and does not conflict with an operator's explicit
   selection.
-
 
 ## Migration links
 

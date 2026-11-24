@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server display history"
 status: implemented
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 ---
 
 # Codex app-server display history
@@ -30,15 +30,16 @@ malformed required display data makes either history source incomplete with
 `invalid_response`. Normal non-display items and future item kinds remain
 ignored without reducing coverage. The decoder checks the stable display
 boundary, not opaque/unused extension fields or arbitrary MCP content JSON.
-Unknown items are not guessed into display events. IA framing uses the same
-exclusion as exec history. Projection produces only log envelopes, using the
+Unknown items are not guessed into display events. IA framing is excluded
+with the shared `isFormattedInterAgentMessage`. Projection produces only log
+envelopes, using the
 supplied `now()` because stable items have no timestamp; it does not replay
 results, acknowledgements, lifecycle transitions, or compaction notices.
 
 Resuming a thread sends `excludeTurns: true`, so `thread/resume` returns
 metadata and live-resume state without populating `thread.turns`. Nothing in the
 wrapper reads turns from the resume result; display history comes only from the
-reads above. On the pinned CLI (0.156.1), new threads are paginated by default,
+reads above. On the pinned CLI, new threads are paginated by default,
 and there a resume without `excludeTurns` and `thread/read` with
 `includeTurns: true` each emit a `deprecationNotice` (with different wording).
 On a legacy-history thread neither emits it, and `includeTurns: true` is the only

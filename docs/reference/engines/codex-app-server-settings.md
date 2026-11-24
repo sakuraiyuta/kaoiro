@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server settings and permission"
 status: implemented
-last_updated: 2026-09-18
+last_updated: 2026-11-24
 ---
 
 # Codex app-server settings and permission
@@ -12,7 +12,8 @@ Current implementation contracts, extracted from the package README. The
 Measured coverage and limits are in the [evidence record](../../evidence/codex-app-server/settings-and-permission.md).
 
 The internal session accepts per-turn model, effort, cwd, and sandbox/network
-settings. Approval remains `never` with reviewer `user`. A synchronous
+settings. Thread start and resume send approval `never`; each `turn/start`
+carries the captured approval policy. The reviewer is `user`. A synchronous
 `onDispatch` callback runs after default resolution, immediately before
 `turn/start`; throwing prevents submission. Its host token and client message
 id remain separate from the eventual app-server turn id and RPC request id.
@@ -26,10 +27,10 @@ The pinned CLI retains thread effort on null/omission. The session instead reads
 or the target model's `model/list.defaultReasoningEffort`. An unavailable default
 rejects with `default_effort_unavailable` before dispatch; the prior effort is
 never silently retained. Configuration changes after this read do not change
-the submitted value, whereas a newly spawned exec samples at process startup.
+the submitted value.
 App-server does not support `--profile`; current Host/SDK/session launch does not
-expose that option. Exec behavior is unchanged. The internal Host backend wires
-switch-error reporting and pending/rollback for explicit app-server launches.
+expose that option. The internal Host backend wires
+switch-error reporting and pending/rollback for app-server launches.
 
 The internal Host backend uses the shared permission/settings helpers.
 `beforeDispatch` waits for permission synchronization after default-effort
@@ -45,8 +46,8 @@ not trusted. Completion requires matching thread, host token, current submission
 (revision, requested axes, execution id), and the terminal's app-server turn id.
 A newer pending selection does not invalidate the current execution. Missing or
 contradictory evidence remains unknown; RPC acceptance never means applied.
-Assessment, diagnostics and observation fields share the existing exec rules;
-exec's rollout reader still permits omission of the expected turn id.
+Assessment, diagnostics and observation fields share the rollout reader's
+rules (`rollout.ts`).
 
 Initial settings come from the thread start/resume response. Explicit effort
 survives compatible model changes. Only reset intent or a model change with
@@ -54,7 +55,7 @@ default intent resolves a new default. Successful reset uses the resolved
 receipt, not the display catalog's default. Rollback explicitly resends the
 previous successful model/effort; default intent resolves again. Unknown
 baseline/default fails with `default_effort_unavailable`, without exposing raw
-RPC errors. Exec settings behavior is unchanged.
+RPC errors.
 
 ## Runtime admission
 
@@ -64,8 +65,9 @@ Its synchronization hook must await both the current server
 permission-sync barrier and the Host's blocked-permission gate. If the hook
 returns while the gate is still blocked, the runtime rejects with
 `permission_gate_blocked` without dispatching or replacing the session. Admission
-rejections must be `AppServerAdmissionError` (`permission_gate_blocked` or
-`interrupted`); other hook rejections are connection failures and close the session.
+rejections must be `AppServerAdmissionError` (`permission_gate_blocked`,
+`permission_sync_timeout` or `interrupted`); other hook rejections are
+connection failures and close the session.
 The Host translates its gate timeout into this admission type. The hook is awaited before opening and again after asynchronous settings resolution. The final
 synchronous dispatch check compares permission and pending model/effort/reset
 selection. Superseded preparation repeats without dispatch callbacks; fresh
@@ -84,7 +86,7 @@ policy observation return false and cannot undo that completed settings change.
 Interrupt acceptance does not release admission; the token's terminal still
 owns completion. Pre-dispatch interrupt/close releases synchronization waits.
 Connection or unexpected stream failure closes the session and admission;
-there is no second child or implicit exec fallback. Normal terminal failure
+there is no second child or fallback. Normal terminal failure
 and closed admission/settings errors remain distinct from connection failure.
 
 The Host dispatch callback starts the turn scope and existing delivery/lifecycle

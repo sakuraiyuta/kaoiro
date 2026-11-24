@@ -2,7 +2,7 @@
 title: Claude model catalog
 description: Exact contract for Claude catalog refresh, canonical model identifiers, and two-pass catalog-row matching.
 status: accepted
-last_updated: 2026-11-10
+last_updated: 2026-11-24
 related: [extensions, adapter-contract, protocol]
 ---
 
@@ -230,7 +230,9 @@ the model, including where an alias points: `fable` resolves to
 `claude-fable-5-1` on 0.3.319 and to `claude-fable-5-2` on 0.3.321. Where the
 rows come from has not been measured.
 
-The latest measurement used SDK **0.3.321 / CLI 2.1.321** on 2026-11-10
+The current pin is SDK 0.3.327; its 2026-11-18 catalog probe returned the same
+14 rows as 0.3.321 ([record](../../evidence/claude/issue-1185/sdk-0.3.327-2026-11-18.md)).
+The 0.3.321 measurement used SDK **0.3.321 / CLI 2.1.321** on 2026-11-10
 ([issue #1063](https://github.com/sakuraiyuta/kaoiro/issues/1063)). The compiled
 production probe returned `ok: true`, `source: "init"`, and 14 rows. Against
 the 0.3.293 table below, `fable` resolves to `claude-fable-5-2` and a

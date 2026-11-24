@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server events and telemetry"
 status: implemented
-last_updated: 2026-10-02
+last_updated: 2026-11-24
 ---
 
 # Codex app-server events and telemetry
@@ -13,9 +13,9 @@ Measured coverage and limits are in the [projection evidence](../../evidence/cod
 and [rate-limit refresh evidence](../../evidence/codex-app-server/rate-limit-refresh-2026-10-02.md).
 
 `startProjectedTurn` returns the same independent identities and one projection
-iterator owning the raw notification stream. Known items reuse the exec adapter
-for progress and bounded log payloads; file-change starts and textual function
-outputs have explicit app-server mappings. Unknown item kinds are ignored.
+iterator owning the raw notification stream. Known items reuse the SDK-item
+adapter (`adapter.ts`) for progress and bounded log payloads; file-change
+starts and textual function outputs have explicit app-server mappings. Unknown item kinds are ignored.
 Plan snapshots use `normalizeTasklist`. Started/completed item ids are deduplicated
 within a turn; unrelated thread/turn notifications cannot affect its projection.
 Deltas affect progress only, while completed assistant messages each yield a
@@ -33,7 +33,7 @@ a turn, and EOF without a terminal throws. Result text uses the last
 answer exists. Text and error details use the existing shared bounds;
 Host relay goes through `makeResult`.
 
-The internal Host backend consumes this projection; normal launch defaults to app-server.
+The internal Host backend consumes this projection.
 
 Turn projection retains native `last` and `total` token counts plus the nullable
 model context window. Usage notifications yield detached snapshots, and the
@@ -50,7 +50,7 @@ estimates and unrelated/late events cannot publish. Missing/invalid windows and
 malformed current-owned readings retract context; windows are never inferred or
 reused from an earlier event. Compaction start, accepted model changes and
 session close invalidate immediately. Unknown omits `ext.context` while retaining
-`supports_context_usage: true`. Exec remains unsupported. The complete contract
+`supports_context_usage: true`. The complete contract
 is in [ADR-0040](../../adr/0040-context-usage-capability.md#addendum-2026-10-03--app-server-context-snapshots).
 
 `AppServerTransport` receives `account/rateLimits/updated` independently of any
@@ -64,8 +64,8 @@ Read responses cannot overwrite notifications received during that read or a
 newer read's result. Snapshots distinguish each `limitId`, including an anonymous
 null id, and each supported window; the keyed multi-bucket read is authoritative
 when present. Credits, plan, account identity, and opaque backend data are not
-retained. Numeric window conversion is shared with the exec rollout reader,
-whose finite-value conversion and existing routing remain unchanged.
+retained. Numeric window conversion is shared with the rollout reader
+(`rollout.ts`).
 
 Accepted `account/rateLimits/updated` notifications also forward the detached
 telemetry snapshot from `AppServerTransport` through `AppServerSession` and
