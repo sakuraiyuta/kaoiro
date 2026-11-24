@@ -128,7 +128,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Operator model changes: [model settings](operations/codex-model-settings.md).
 - Permission recovery: [app-server approval requests](reference/engines/codex-app-server.md#approval-requests-adr-0064) and the [permission requests contract](reference/protocol/permission-requests.md).
 - Operational updates: [production runbook](operations/production.md).
-- Dated evidence: [exec verification](evidence/codex/exec-contract.md) and [catalog observations](evidence/codex/model-catalog.md).
+- Dated evidence: [exec verification](evidence/codex/exec-contract.md) (historical: the retired exec backend) and [catalog observations](evidence/codex/model-catalog.md).
 
 ## Extension documentation
 
