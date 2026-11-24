@@ -1,7 +1,7 @@
 ---
 title: Security enforcement boundaries
 status: accepted
-last_updated: 2026-11-23
+last_updated: 2026-11-24
 ---
 
 # Security enforcement boundaries
@@ -17,14 +17,19 @@ Related security topics: [Security boundaries](../../architecture/security-bound
   ([ADR-0012](../../adr/0012-response-display-and-dashboard-scope.md)).
 - MUST: Deliver envelope `ext` (statusline metadata: cwd / model / context /
   rate_limits / slash_commands / future additions) only to the operator role
-  (#46; remove it for viewers on every type).
+  (#46; remove it for viewers on every type). The one exception is the fixed
+  safe projection of `ext.delivery_policy` (policy, revision, applied
+  revision, confirmed, pending, wrapper support and the three mechanism
+  enums; `ViewerAgentProjection.policy_only/1`), which viewers see without
+  action controls ([delivery controls](../ui/delivery-controls.md)).
 - MUST: Viewer delivery uses an **allow-list model**. Of `agents:lobby` events
   / envelope.types, only those explicitly declared for viewer delivery reach
   viewers. Undeclared types are removed completely for viewers (fail closed;
   [ADR-0021](../../adr/0021-role-information-disclosure-policy.md)).
 - MUST: Remove the `permission_request` envelope completely for viewers.
   Deliver a synthetic `state_change(waiting_permission)` (`payload={}`, no
-  `ext`) to viewers in its place for grid consistency
+  `ext` beyond that delivery-policy projection) to viewers in its place for
+  grid consistency
   ([ADR-0021](../../adr/0021-role-information-disclosure-policy.md)).
 - MUST: **Agent-to-agent disclosure also uses an allow-list model**. The peer
   directory (`directory_request`) is a **separate implementation and path**
@@ -199,7 +204,8 @@ boundary ([ADR-0036](../../adr/0036-session-lifecycle-commands.md)).
 - **SessionResets pending lock**: `check_and_acquire/5` atomically verifies
   lock existence + KaoiroState (`idle`/`waiting_input`) - dispatch-cooldown in
   one `handle_call` (the TOCTOU core of ADR-0036 F6). While a reset is pending,
-  reject instruction / set_model / set_effort / set_permission_mode /
+  reject instruction / set_model / set_effort / refresh_models /
+  set_permission_mode / set_permission /
   **resume_session** all with `session_reset_pending` (`resume_session` was
   added after race analysis during the 2026-07-12 ε implementation found it
   omitted from ADR-0036 F2's list). The two-second dispatch cooldown protects

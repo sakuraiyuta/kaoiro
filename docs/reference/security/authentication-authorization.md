@@ -1,7 +1,7 @@
 ---
 title: Authentication and authorization
 status: accepted
-last_updated: 2026-11-18
+last_updated: 2026-11-24
 ---
 
 # Authentication and authorization
@@ -43,9 +43,9 @@ The runner keeps its token out of the processes it starts; see
 
 ## Topic authorization (channel `join/3`)
 
-- Wrapper: `WrapperChannel.join/3` (`wrapper_channel.ex:117-127`) validates the agent ID
-  charset (`validate_agent_id/1`) and duplicate connections (`reject_if_connected/1`,
-  ADR-0024 D5 reject-newcomer).
+- Wrapper: `WrapperChannel.join/3` (`wrapper_channel.ex:133-144`) validates the agent ID
+  charset (`validate_agent_id/1`), the token (`Auth.authorize_wrapper/2`), the persona
+  and duplicate connections (`reject_if_connected/1`, ADR-0024 D5 reject-newcomer).
 - Runner: `runner_channel.ex` validates the host ID charset.
 - Client: `agents_channel.ex` permits only `agents:lobby`; the role is stored in
   socket assigns.
@@ -77,14 +77,20 @@ The runner keeps its token out of the processes it starts; see
 
 `AgentsChannel.handle_out` uses an **allow-list**. Viewers receive:
 
-- `state_change` (remove `ext`, hiding cwd / model / context / rate_limits / pending_permission)
+- `state_change` (remove `ext`, hiding cwd / model / context / rate_limits / pending_permission; the one thing kept is `ext.delivery_policy` reduced to `policy`, `revision`, `applied_revision`, `confirmed`, `pending`, `wrapper_support` and the three mechanism enums, `ViewerAgentProjection`'s `policy_only/1`; see [delivery controls](../ui/delivery-controls.md))
 - `agent_deleted`
 - `permission_request` (rewrite as synthetic `state_change(waiting_permission)`, removing tool_name / input / request_id)
 - `question_request` (rewrite as synthetic `state_change(waiting_question)`, removing the questions)
 - `session_boundary` (payload trimmed to `{mode}`)
+- `delivery_policy_changed` (only for an agent in the viewer's own role-filtered snapshot)
+- `rooms_snapshot` (projected per role: every room's name, memberships only for the agents in the viewer's own snapshot)
 
 All others (`log` / `result` / `inter_agent_message` / `runner_sessions` /
-`spawn_result` / `hosts` / `history_cleared` / `history_reset`) are completely
+`spawn_result` / `hosts` / `directory` / `catalog_result` / `history_cleared` /
+`history_reset` / `history_replay_complete` / `history_replay_envelope` /
+`session_reset_started` / `session_reset_completed` / `session_reset_failed` /
+`delivery_status` / `wrapper_build_info` / `work_changed` /
+`work_scope_overlap` / `status_line_settings`) are completely
 removed for viewers (fail-closed). A new envelope type is not delivered unless
 explicitly declared (`sanitize_envelope_for(:viewer, _) -> :drop`). See the
 MUST items in [threat-model](enforcement-boundaries.md#constraints) for threat-based rationale.
@@ -115,8 +121,14 @@ Call `require_operator(socket)` first, both directly and inside
 - `set_status_line_retention`
 - `create_room` / `rename_room` / `delete_room` / `move_agent` /
   `preview_room_move` / `preview_room_delete`
+- `work_control` / `work_yield_status`
+- `get_delivery_policy` / `set_delivery_policy`
+- `launch_defaults`
+- `list_conversations` / `close_conversation` / `list_session_events`
+- `rename_agent` / `list_users` / `rename_user`
 
-The same events from a viewer are rejected with `{:error, :forbidden}`. Resolve
+`status_line_history` is the one other client event: a viewer may call it, only
+for an agent it can see (above). The same events from a viewer are rejected with `{:error, :forbidden}`. Resolve
 the role with `ClientSocket.role_for/1` for every operation rather than using a
 snapshot (OAuth section, #148, below).
 
@@ -209,8 +221,8 @@ credential is a bearer.
   a demotion (operator → viewer) ineffective in an open tab. Dashboard cookie
   sliding is every 12 hours, too slow to rely on refresh alone. `ClientSocket`
   keeps the credential (`{:token, …}` / `{:oauth, …}`) in assigns, and
-  `AgentsChannel.require_operator/1` calls `ClientSocket.role_for/1` again for
-  every operator action. If it differs from the snapshot, broadcast #47
+  `AgentsChannel.current_role/1` (reached through `require_operator`) calls
+  `ClientSocket.role_for/1` again for every operator action. If it differs from the snapshot, broadcast #47
   `disconnect` to the `socket_id` topic; fan-out (operator-only delivery in
   `handle_out`) and client UI rebuild on reconnect.
 - **Change-driven behavior also covers passive sockets that never act**
@@ -233,7 +245,9 @@ credential is a bearer.
   session / cookie / DETS / logs (Nextcloud OAuth2 lacks scope support, so tokens
   have full access). Because Assent exceptions may render
   `Authorization: Bearer …` through response structs, `AuthController` logs
-  **only the exception type name**.
+  **only the exception type name**; a failure that is not an exception struct
+  (the atoms `:unknown_provider` and `:no_identity`, which kaoiro itself
+  returns) is logged as it is.
 - Google requires an HTTPS redirect URI outside localhost, so Google login is
   unavailable when deployed with `KAOIRO_PLAIN_HTTP=true` (GitHub / Nextcloud
   permit HTTP).
@@ -358,4 +372,3 @@ Heartbeats use the Channels built-in provided by the client library.
   optional `ext.disconnect = {origin, reason}`. The closed pairs are `operator/stop`,
   `runner/stop`, `agent_self/(stop|quota_exhausted|crash)`, and
   `unplanned/socket_lost`. A planned restart omits this terminal attribution.
-
