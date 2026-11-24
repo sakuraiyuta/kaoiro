@@ -2,7 +2,7 @@
 title: Threat model (bidirectional routing)
 description: Threats and mitigations from client → agent instructions and approvals (issue #10).
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-11-24
 related: [protocol, architecture]
 ---
 
@@ -36,11 +36,11 @@ Moved to [Security enforcement boundaries](../reference/security/enforcement-bou
 
 ### Session-reset control (`/new` / `/clear`, phase-17)
 
-Moved to [Security enforcement boundaries](../reference/security/enforcement-boundaries.md#session-reset-control-new--clear-phase-17).
+Moved to [Security enforcement boundaries](../reference/security/enforcement-boundaries.md#session-reset-control-new--clear--reset-phase-17).
 
 ### Antigravity engine — the wrapper is the only enforcement point (phase-34)
 
-Moved to [Security enforcement boundaries](../reference/security/enforcement-boundaries.md#antigravity-engine--the-wrapper-is-the-only-enforcement-point-phase-34).
+Moved to [Security enforcement boundaries](../reference/security/enforcement-boundaries.md#antigravity-engine--the-wrapper-is-the-only-enforcement-point).
 
 ## Open Questions
 

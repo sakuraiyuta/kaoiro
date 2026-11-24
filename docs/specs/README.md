@@ -27,9 +27,9 @@ edit the page it points at.
 | [protocol-inter-agent](../architecture/inter-agent-messaging.md) | provisional | Inter-agent messaging and its boundaries |
 | [protocol-external-human](protocol-external-human.md) | provisional | External human messaging (Discord), one-way authority, discord-wrapper, and Tier A/B |
 | [agent-sdk-events](../reference/engines/claude-events.md) | accepted | Settled Agent SDK event specification and state derivation (Claude edition) |
-| [codex-sdk-events](../reference/engines/codex-exec-events.md) | accepted | Exec SDK event contract and state derivation; [dated verification](../evidence/codex/exec-contract.md) |
+| [codex-sdk-events](../reference/engines/codex-exec-events.md) | accepted | Retired with the wrapper exec backend; current Codex contracts are in the [app-server reference](../reference/engines/codex-app-server.md); [dated exec verification](../evidence/codex/exec-contract.md) |
 | [codex-model-catalog](../reference/engines/codex-model-catalog.md) | accepted | Catalog contract; [model-change procedures](../operations/codex-model-settings.md) and [dated plan/auth/doctor evidence](../evidence/codex/model-catalog.md) |
-| [antigravity-cli-events](../architecture/antigravity-adapter.md) | provisional | Measured Antigravity CLI (agy) headless event specification, hooks-as-permission-gate, and state derivation (third engine, ADR-0057) |
+| [antigravity-cli-events](../architecture/antigravity-adapter.md) | provisional | Antigravity CLI (agy) adapter over ACP, hooks-as-permission-gate, and state derivation (third engine, ADR-0057, ADR-0078) |
 | [subagent-tasks](../architecture/subagent-visibility.md) | provisional | Detection of subagent/workflow tasks and dedicated envelope notifications |
 | [file-upload](../architecture/attachments.md) | accepted | Render dashboard attachments (images/text/PDF/Office) to the SDK in the wrapper |
 | [design](../reference/ui/design.md) | accepted | Visual design specification for the dashboard/UI. Written in DESIGN.md format (YAML tokens + prose), affirming the existing implementation (dashboard/src/) as the canonical source |
@@ -37,7 +37,7 @@ edit the page it points at.
 | [responsive-reachability](../reference/ui/responsive-reachability.md) | provisional | Inventory of reachability paths by size: each element's path, scroll owner, and permanently fixed operations |
 | [personas](personas.md) | accepted | Design policy, image specification, and generation workflow for persona standing illustrations |
 | [persona-pack-schema](../reference/personas/pack-format.md) | accepted | Internal schema of persona packs (zip) and `manifest.json` field definitions |
-| [persona-personality-injection](../architecture/personality-injection.md) | provisional | Mechanism for injecting personality prompts, such as speech style and first-person pronouns, into the Claude Agent SDK |
+| [persona-personality-injection](../architecture/personality-injection.md) | provisional | Mechanism for injecting personality prompts, such as speech style and first-person pronouns, into each engine |
 | [threat-model](../architecture/security-threat-model.md) | accepted | Threats to bidirectional routing and their mitigations |
 | [auth-and-authz](../architecture/security-boundaries.md) | accepted | Current map of authentication and authorization boundaries for each node. Starting point for the pre-OSS-release audit (private Gitea issue 91) |
 | [setup-wizards](../reference/configuration/setup-wizards.md) | accepted | Exact contract for the interactive wizards that generate the server .env and runner configuration (runner.config.json / runner.env); design intent in [architecture/deployment.md](../architecture/deployment.md#setup-wizards) |

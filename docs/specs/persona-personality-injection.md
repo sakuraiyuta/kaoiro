@@ -27,7 +27,7 @@ Moved to [Persona delivery](../reference/protocol/persona-delivery.md#prompt-del
 
 ### Injection into the SDK
 
-Moved to [Personality-prompt injection by engine](../reference/engines/personality-injection.md#injection-into-the-sdk).
+Moved to [Personality-prompt injection by engine](../reference/engines/personality-injection.md#injection-into-the-engine).
 
 ### Common footer
 

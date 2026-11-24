@@ -15,7 +15,7 @@ Moved to [Purpose](../architecture/antigravity-adapter.md#purpose).
 
 ## Why the CLI and not the Python SDK
 
-Moved to [Why the CLI and not the Python SDK](../architecture/antigravity-adapter.md#why-the-cli-and-not-the-python-sdk).
+Moved to [Why the CLI, over ACP](../architecture/antigravity-adapter.md#why-the-cli-over-acp).
 
 ## Definition
 
