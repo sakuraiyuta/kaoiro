@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -257,7 +257,7 @@ the wrapper keeps a rejected report pending until the delivery identity changes.
 Pending `queued` reports are coalesced by delivery identity, sequence and their
 mode, reason and yield-disposition outcome/reason. Timestamp-only retries retain
 the first report; a changed local queued decision is sent separately within
-the same 512-report pending limit. Other stages retain their stage-only pending
+the same 4,096-report pending limit. Other stages retain their stage-only pending
 key. The server retains the first queued timestamp and updates supplied mode
 and reason on the same delivery record. A captured yield disposition is retried
 unchanged; a conflicting later disposition is rejected. Queued reports do not

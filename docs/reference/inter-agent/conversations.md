@@ -1,7 +1,7 @@
 ---
 title: Inter-agent conversation contract
 status: provisional
-last_updated: 2026-11-10
+last_updated: 2026-11-24
 description: Inter-agent conversation contract and its boundaries.
 ---
 
@@ -48,8 +48,9 @@ work in [phase-8](../../plans/phase-8-inter-agent-messaging.md#future--stage-d--
 
 The server mechanically monitors these limits per conversation and cuts off on
 breach. It broadcasts a synthetic envelope (`kind: "escalate-to-user"`,
-`body: "<reason>"`, `meta.done: true`) to every participating wrapper; both
-wrappers inject it as SDK input.
+`body: "conversation auto-terminated: <reason>"`, `meta.done: true`) to every
+participating wrapper, which closes its track without injecting it into the
+model.
 
 | Config key | Unit | Default (Phase 1) | Use |
 |---|---|---|---|
@@ -175,9 +176,8 @@ The wrapper (`agent-common`) keeps corresponding local state
 - **Recheck queued input at the SDK input boundary**: A peer's inbound mode can
   become obsolete while an earlier host turn is still running. All three wrappers
   reclassify queued items when the peer queue advances and again immediately
-  before the host hands input to the engine. Codex applies the latter check in
-  both its SDK and app-server paths, before `runStreamed` and `turn/start`
-  respectively. A now-terminal item is
+  before the host hands input to the engine. Codex applies the latter check before
+  `turn/start`. A now-terminal item is
   acknowledged without an SDK turn; surviving items use their current mode.
   If every item is removed, the host emits a ready state when its own input queue
   is empty; a later peer batch can still arrive from the coordinator's queue.

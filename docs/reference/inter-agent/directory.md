@@ -1,7 +1,7 @@
 ---
 title: Peer directory
 status: provisional
-last_updated: 2026-11-10
+last_updated: 2026-11-24
 ---
 
 # Peer directory
@@ -69,11 +69,12 @@ a restore without a session ID starts fresh. A successful explicit session reset
 a new session. A recent `session_started_at` or `turns: 0` alone is not
 evidence that the engine session or its context is new.
 
-`build` has the nested shape `{revision, dirty, version, channel}`. The wrapper
+`build` has the nested shape `{revision, dirty, version, channel, branch?}`. The wrapper
 reports flat channel fields, which the server validates with
 `WrapperBuildInfos.canonical_info/1` and projects as follows: `build_revision`
 → `build.revision`, `build_dirty` → `build.dirty`, `build_version` →
-`build.version`, and `build_channel` → `build.channel`. The server reads only
+`build.version`, `build_channel` → `build.channel`, and `build_branch` →
+`build.branch` when reported. The server reads only
 its validated live snapshot; it does not copy arbitrary envelope `ext` fields.
 An absent object means the live wrapper has not reported a usable identity (or
 the entry is `directory_only`); a present `unknown` value means the wrapper
