@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#14141d">
   <title>How kaoiro works: engines, parts and extensions</title>
   <meta name="description" content="The four engines kaoiro hosts, how its server, runner, wrapper and client fit together, and where it can be extended.">
+  <meta property="og:title" content="How kaoiro works: engines, parts and extensions">
+  <meta property="og:description" content="The four engines kaoiro hosts, how its server, runner, wrapper and client fit together, and where it can be extended.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://sakuraiyuta.github.io/kaoiro/how-it-works.html">
+  <meta property="og:image" content="https://sakuraiyuta.github.io/kaoiro/assets/kaoiro-intro-en-poster.png">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="alternate" hreflang="ja" href="ja/how-it-works.html">
   <link rel="stylesheet" href="style.css">
   <script src="site.js" defer></script>
@@ -251,7 +257,7 @@
       <p class="intro">Because the parts are separate, you can change one without rewriting the others.</p>
       <ul class="uses two">
         <li class="reveal"><h3>Build your own client</h3><p>The server and client talk over a <a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/protocol">documented public protocol</a>. The bundled dashboard is the reference implementation and uses the same protocol, so another client can be built on it.</p></li>
-        <li class="reveal"><h3>Add an engine in the source</h3><p>Each engine has its own wrapper package on a shared core. Adding one means changing the source, including the engine lists in the runner and the server. Grok Build was added this way.</p></li>
+        <li class="reveal"><h3>Add an engine</h3><p>Each engine has its own wrapper package on a shared core. Adding one in the source means changing the engine lists in the runner and the server; Grok Build was added this way. A runner can also declare a trusted local command as an external engine in its configuration.</p></li>
       </ul>
     </section>
 

@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#14141d">
   <title>Getting started with kaoiro</title>
   <meta name="description" content="From the account each engine needs to installing the kaoiro server and runners, launching the first agent and running it day to day.">
+  <meta property="og:title" content="Getting started with kaoiro">
+  <meta property="og:description" content="From the account each engine needs to installing the kaoiro server and runners, launching the first agent and running it day to day.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://sakuraiyuta.github.io/kaoiro/getting-started.html">
+  <meta property="og:image" content="https://sakuraiyuta.github.io/kaoiro/assets/kaoiro-intro-en-poster.png">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="alternate" hreflang="ja" href="ja/getting-started.html">
   <link rel="stylesheet" href="style.css">
   <script src="site.js" defer></script>
@@ -58,15 +64,15 @@
     <section class="wrap block" aria-labelledby="accounts">
       <p class="eyebrow"><span>02</span> / Accounts</p>
       <h2 id="accounts">An account for each engine</h2>
-      <p class="intro">Each engine needs an account with its vendor, and it signs in through its own CLI or SDK on the agent host.</p>
+      <p class="intro">Each engine needs an account with its vendor. Claude Code, Codex and Grok Build sign in through their own CLI or SDK on the agent host; Antigravity uses Google Cloud authentication.</p>
       <p class="notice warn"><strong>Check each service&#39;s terms.</strong> Plans and terms change. Before you use an engine through kaoiro, read the vendor&#39;s terms and conditions.</p>
       <ul class="cards">
         <li><h3>Anthropic (Claude Code)</h3><p><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK overview</a><br><a href="https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan">Using Claude Code with your Pro or Max plan</a></p></li>
         <li><h3>OpenAI (Codex)</h3><p><a href="https://learn.chatgpt.com/docs/app-server">Codex app-server (Auth endpoints)</a><br><a href="https://help.openai.com/en/articles/20001542-using-your-chatgpt-plan-in-other-apps-and-sites">Using your ChatGPT plan in other apps and sites</a></p></li>
-        <li><h3>Google (Antigravity)</h3><p><a href="https://antigravity.google/terms/">Antigravity additional terms</a><br><a href="https://antigravity.google/docs/plans/">Antigravity plans</a></p></li>
+        <li><h3>Google (Antigravity)</h3><p>Google Cloud authentication only: Application Default Credentials, or a sign-in tied to a Google Cloud project with Pay As You Go billing. Sign-in with a personal Antigravity plan is not supported. <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/runner-install.md#antigravity-authentication">Antigravity authentication</a><br><a href="https://antigravity.google/terms/">Antigravity additional terms</a></p></li>
         <li><h3>xAI (Grok Build)</h3><p><a href="https://x.ai/legal/terms-of-service">Terms of Service - Consumer</a></p></li>
       </ul>
-      <p class="note">kaoiro itself stores no engine credentials: each engine reads its own login on the agent host. The engine reference pages in the <a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/engines">repository docs</a> describe each one.</p>
+      <p class="note">kaoiro itself stores no engine credentials: each engine reads its own login or credential file on the agent host, and for Antigravity the runner&#39;s configuration only names the method. The engine reference pages in the <a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/engines">repository docs</a> describe each one.</p>
     </section>
     <section class="wrap block" aria-labelledby="hosts">
       <p class="eyebrow"><span>03</span> / Hosts</p>
@@ -74,7 +80,7 @@
       <p class="intro">Decide which machine runs the server and which run agents.<br>They can be the same machine (<a href="deployments.html#single-host">example B</a>).</p>
       <ul class="cards">
         <li><h3>Server host</h3><p>Docker Engine with the Docker Compose plugin, Elixir <code>~&gt; 1.15</code> with Phoenix, and Node.js 22 or later for the deploy CLI.</p></li>
-        <li><h3>Agent hosts</h3><p>Node.js 22 or later, and the CLI of each engine you will run there. Linux runs the runner as a systemd user unit.</p></li>
+        <li><h3>Agent hosts</h3><p>Node.js 22 or later. The runner&#39;s bootstrap fetches the Claude Code and Codex CLIs, so the host needs registry access; install the Antigravity (<code>agy</code>) and Grok Build CLIs yourself. Linux runs the runner as a systemd user unit.</p></li>
         <li><h3>How the server is reached</h3><p>Choose before writing <code>.env</code>: the default is <code>127.0.0.1</code> behind an nginx reverse proxy, and a direct address inside a VPN is the alternative.</p></li>
         <li><h3>Access</h3><p>SSH access to the server host and every runner host, with each host key already known.</p></li>
       </ul>
@@ -98,7 +104,7 @@
         <li>Build the runner tarball for the host&#39;s OS and CPU, and copy it to the host.</li>
         <li>Run <code>kaoiro-runner-bootstrap.sh</code> from the unpacked tarball. Its wizard is the only interactive step; it then installs the runner and starts it as a service.</li>
         <li>On Linux, enable lingering for the user so the runner starts at boot without a login.</li>
-        <li>Install each engine&#39;s CLI on the host and sign it in as the user the runner runs as. Production Codex uses a dedicated home directory; see <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/codex-home.md">Codex home for production</a>.</li>
+        <li>Sign each engine in as the user the runner runs as. Bootstrap has already fetched Claude Code and Codex; Antigravity (<code>agy</code>) and Grok Build must be installed first. Production Codex uses a dedicated home directory; see <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/codex-home.md">Codex home for production</a>.</li>
       </ol>
       <p class="note">Detail: <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/runner-install.md">Runner install and distribution</a> and <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#2-runner-install-first-time-per-host">production manual, section 2</a>. Check the result with <a href="https://github.com/sakuraiyuta/kaoiro/blob/develop/docs/operations/production.md#3-verify">section 3, Verify</a>.</p>
     </section>

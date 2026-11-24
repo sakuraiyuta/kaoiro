@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#14141d">
   <title>kaoiro の構築事例</title>
   <meta name="description" content="複数のホストに分ける例、1 台にすべてを載せる例、情報セキュリティを考慮した完全オフライン環境の例(実装予定)。">
+  <meta property="og:title" content="kaoiro の構築事例">
+  <meta property="og:description" content="複数のホストに分ける例、1 台にすべてを載せる例、情報セキュリティを考慮した完全オフライン環境の例(実装予定)。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://sakuraiyuta.github.io/kaoiro/ja/deployments.html">
+  <meta property="og:image" content="https://sakuraiyuta.github.io/kaoiro/assets/kaoiro-intro-ja-poster.png">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="alternate" hreflang="en" href="../deployments.html">
   <link rel="stylesheet" href="../style.css">
   <script src="../site.js" defer></script>
@@ -44,12 +50,12 @@
       <p class="intro">作者が毎日使っている構成です。<br>server、エージェント、テスト環境に、それぞれ別のホストを割り当てています。</p>
       <ul class="cards">
         <li><h3>server-host</h3><p>Linux の 1 台。kaoiro server を Docker Compose で動かし、HTTPS の reverse proxy の後ろに置いて、インターネットから届くようにしています。</p></li>
-        <li><h3>agent-host</h3><p>Linux の 1 台。runner を systemd の user unit で常駐させ、この 1 台で十数人のエージェントを動かしています。内訳はおよそ Claude Code 6、Codex 4、Antigravity 2、Grok Build 1 です。</p></li>
+        <li><h3>agent-host</h3><p>Linux の 1 台。runner を systemd の user unit で常駐させ、この 1 台で約 12 のエージェントを、4 つのエンジンに分けて動かしています。</p></li>
         <li><h3>test-host</h3><p>重い試験を隔離した container で回す別の端末です。kaoiroとは別に用意した作者独自環境です。</p></li>
         <li><h3>client と file</h3><p>運用者は PC とスマートフォンのブラウザ(PWA)でダッシュボードを使います。各エージェントの成果物は、自前の Nextcloud クラウドストレージで受け渡しています。</p></li>
       </ul>
       <figure class="diagram stack">
-        <svg viewBox="0 0 400 560" role="img" aria-label="例 A。PC とスマートフォンのブラウザが、インターネット越しに HTTPS で server-host に届く。server-host では HTTPS の reverse proxy が、Docker Compose で動く kaoiro server へ転送する。agent-host では systemd の user unit で動く runner が、Claude Code 約 6、Codex 約 4、Antigravity 約 2、Grok Build 約 1 のエージェントを見守る。エージェントはデータの経路で server につながり、runner は別に制御の経路でつながる。隔離した container を持つ test-host と Nextcloud の file 共有は作者独自環境。">
+        <svg viewBox="0 0 400 560" role="img" aria-label="例 A。PC とスマートフォンのブラウザが、インターネット越しに HTTPS で server-host に届く。server-host では HTTPS の reverse proxy が、Docker Compose で動く kaoiro server へ転送する。agent-host では systemd の user unit で動く runner が、Claude Code、Codex、Antigravity、Grok Build にまたがる約 12 のエージェントを見守る。エージェントはデータの経路で server につながり、runner は別に制御の経路でつながる。隔離した container を持つ test-host と Nextcloud の file 共有は作者独自環境。">
           <rect class="d-box" x="20" y="8" width="170" height="52" rx="8"/>
           <text class="d-t d-b" x="105" y="30" text-anchor="middle" font-size="14">PC のブラウザ</text>
           <text class="d-m" x="105" y="49" text-anchor="middle" font-size="12">ダッシュボード</text>
@@ -77,16 +83,16 @@
           <text class="d-m" x="86" y="352" text-anchor="middle" font-size="11">systemd の user unit</text>
           <text class="d-t d-b" x="34" y="470" text-anchor="start" font-size="13">agent-host</text>
           <rect class="d-chip" x="160" y="296" width="204" height="34" rx="8"/>
-          <text class="d-t" x="172" y="318" text-anchor="start" font-size="13">Claude Code × 約 6</text>
+          <text class="d-t" x="172" y="318" text-anchor="start" font-size="13">Claude Code</text>
           <path class="d-dash" d="M136 316L160 313"/>
           <rect class="d-chip" x="160" y="336" width="204" height="34" rx="8"/>
-          <text class="d-t" x="172" y="358" text-anchor="start" font-size="13">Codex × 約 4</text>
+          <text class="d-t" x="172" y="358" text-anchor="start" font-size="13">Codex</text>
           <path class="d-dash" d="M136 316L160 353"/>
           <rect class="d-chip" x="160" y="376" width="204" height="34" rx="8"/>
-          <text class="d-t" x="172" y="398" text-anchor="start" font-size="13">Antigravity × 約 2</text>
+          <text class="d-t" x="172" y="398" text-anchor="start" font-size="13">Antigravity</text>
           <path class="d-dash" d="M136 316L160 393"/>
           <rect class="d-chip" x="160" y="416" width="204" height="34" rx="8"/>
-          <text class="d-t" x="172" y="438" text-anchor="start" font-size="13">Grok Build × 約 1</text>
+          <text class="d-t" x="172" y="438" text-anchor="start" font-size="13">Grok Build</text>
           <path class="d-dash" d="M136 316L160 433"/>
           <rect class="d-out" x="20" y="504" width="170" height="48" rx="8"/>
           <text class="d-t d-b" x="105" y="524" text-anchor="middle" font-size="13">test-host</text>

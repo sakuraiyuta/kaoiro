@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#14141d">
   <title>kaoiro: 機能</title>
   <meta name="description" content="複数の AI エージェントに仕事を任せるとき、様子を知り、要所で判断するための機能を紹介します。">
+  <meta property="og:title" content="kaoiro: 機能">
+  <meta property="og:description" content="複数の AI エージェントに仕事を任せるとき、様子を知り、要所で判断するための機能を紹介します。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://sakuraiyuta.github.io/kaoiro/ja/features.html">
+  <meta property="og:image" content="https://sakuraiyuta.github.io/kaoiro/assets/kaoiro-intro-ja-poster.png">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="alternate" hreflang="en"
     href="../features.html">
   <link rel="stylesheet" href="../style.css">
@@ -316,37 +322,6 @@
           </div>
         </div>
       </article>
-      <article class="feature card" id="coordination">
-        <div class="feature-copy">
-          <h3>やり取りが長引いたら、知らせが出る</h3>
-          <p class="feature-main">同じ相手とのやり取りが増え続けたときや、連絡の受け取り確認が止まったときに、画面に知らせが出ます。</p>
-          <p class="feature-support">知らせが来たら、論点を整理したり、指示を足したりできます。</p>
-        </div>
-        <figure class="feature-media shot">
-          <div class="plate">
-            <img src="../assets/feature-notice-ja.webp" width="390" height="71" loading="lazy" alt="やり取りの増加を知らせる帯">
-          </div>
-          <figcaption>実際の画面です。表示しているデータは架空のものです。</figcaption>
-        </figure>
-        <div class="feature-media">
-          <div class="table-wrap">
-            <table>
-              <tr>
-                <th>知らせ</th>
-                <th>見に行くところ</th>
-              </tr>
-              <tr>
-                <td>やり取りの増加</td>
-                <td>論点と、次の行動</td>
-              </tr>
-              <tr>
-                <td>受け取り確認の停滞</td>
-                <td>相手の状態と、連絡の状況</td>
-              </tr>
-            </table>
-          </div>
-        </div>
-      </article>
       </div>
     </section>
 
@@ -429,7 +404,7 @@
       <article class="feature stack" id="roles">
         <div class="feature-copy">
           <h3>見る人と、操作する人を分ける</h3>
-          <p class="feature-main">利用者には、見守る役 (viewer) と、指示や承認を行う役 (operator) を割り当てられます。</p>
+          <p class="feature-main">利用者には、見守る役 (viewer)、指示や承認を行う役 (operator)、operator のすべてができる役 (admin) を割り当てられます。</p>
           <p class="feature-support">viewer に見えるのは、顔と状態、状況表示です。会話の内容や承認の操作は operator の画面に出ます。進み具合を関係者と共有しながら、操作できる人を絞れます。</p>
         </div>
         <figure class="feature-media shot">
@@ -455,6 +430,11 @@
                 <td>operator</td>
                 <td>上に加えて、会話、進み具合、使用量</td>
                 <td>起動、指示、質問への回答、承認</td>
+              </tr>
+              <tr>
+                <td>admin</td>
+                <td>operator に見えるものすべて</td>
+                <td>operator にできることすべて</td>
               </tr>
             </table>
           </div>

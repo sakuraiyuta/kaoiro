@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#14141d">
   <title>kaoiro の仕組み: エンジン、部品、拡張</title>
   <meta name="description" content="kaoiro が動かす 4 つのエンジン、server・runner・wrapper・client の関係、拡張できるところ。">
+  <meta property="og:title" content="kaoiro の仕組み: エンジン、部品、拡張">
+  <meta property="og:description" content="kaoiro が動かす 4 つのエンジン、server・runner・wrapper・client の関係、拡張できるところ。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://sakuraiyuta.github.io/kaoiro/ja/how-it-works.html">
+  <meta property="og:image" content="https://sakuraiyuta.github.io/kaoiro/assets/kaoiro-intro-ja-poster.png">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="alternate" hreflang="en" href="../how-it-works.html">
   <link rel="stylesheet" href="../style.css">
   <script src="../site.js" defer></script>
@@ -251,7 +257,7 @@
       <p class="intro">部品が分かれているので、ほかの部品を書き直さずに 1 つを変えられます。</p>
       <ul class="uses two">
         <li class="reveal"><h3>自分の client を作る</h3><p>server と client は<a href="https://github.com/sakuraiyuta/kaoiro/tree/develop/docs/reference/protocol">文書化された公開 protocol (英語)</a>でつながります。同梱のダッシュボードはこの protocol の参照実装なので、同じ protocol で別の client を作れます。</p></li>
-        <li class="reveal"><h3>source を変更してエンジンを足す</h3><p>エンジンごとに wrapper package があり、共有の core の上に載っています。エンジンの追加は、runner と server のエンジンの一覧を含む source の変更です。Grok Build はこの形で追加しました。</p></li>
+        <li class="reveal"><h3>エンジンを足す</h3><p>エンジンごとに wrapper package があり、共有の core の上に載っています。source で追加するには、runner と server のエンジンの一覧を変更します。Grok Build はこの形で追加しました。runner の設定に、信頼できる local の command を外部エンジンとして宣言する方法もあります。</p></li>
       </ul>
     </section>
 
