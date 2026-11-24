@@ -250,7 +250,7 @@ The `directory_request` reply always includes **`users`** alongside `agents`,
 including an empty array. Its contents follow the operator setting
 `KAOIRO_EXPOSE_USERS_TO_AGENTS`: **the config default is `true`** (unset means
 expose, implementing the issue #187 “visible by default” constraint), and an
-explicit `false` opts out. Only an abnormal case where the config key cannot
+explicit `false`, or any value other than `true`, opts out. Only an abnormal case where the config key cannot
 be read (for example `config/runtime.exs` did not run) uses a closed fallback.
 This is a separate allow-list from the `agents` list (F6-2/F6-3); ADR-0021
 F6-8 is authoritative.

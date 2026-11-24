@@ -1,7 +1,7 @@
 ---
 title: Inter-agent message contract
 status: provisional
-last_updated: 2026-11-10
+last_updated: 2026-11-24
 description: Inter-agent message contract and its boundaries.
 ---
 
@@ -191,8 +191,7 @@ Covered cases:
   closure and, for negotiated v1 sends, compares `in_reply_to` with ordinary
   peer history. The server validates internal `notice_type` and `payload.error`
   before exempting a notice from that history. This is the implemented boundary
-  in `wrapper_channel.ex` (`preflight_inter_agent`, lines 2479–2491 at
-  87500b55) and `ConversationStates.record_bound_message/8`; see
+  in `wrapper_channel.ex` (`preflight_inter_agent/5`) and `ConversationStates.record_bound_message/8`; see
   [conversation lifecycle](conversations.md#conversation-lifecycle-and-post-close-handling-issue-167)
   and [reply basis](reply-basis.md#negotiation-and-comparison). The server also
   synthesizes reachability notices for peers.

@@ -1,7 +1,7 @@
 ---
 title: Inter-agent conversation admission
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-11-24
 description: Inter-agent conversation admission and its boundaries.
 ---
 
@@ -67,7 +67,7 @@ now fails fast and visibly.
   false; %{"new_conversation" => true} -> true; _ -> ... end`) and emits the
   same style of protocol-version warning as `agents_channel.ex` for each such
   message (`inter_agent_message: client declared new_conversation (absent);
-  accepting as true (issue #262 legacy best-effort accept)`). During migration,
+  accepting as true (legacy best-effort accept)`). During migration,
   an explicit unknown CID from an old wrapper therefore opens a new
   conversation silently instead of being rejected; this temporary regression
   disappears once wrappers are updated and is not a permanent bypass.
@@ -87,7 +87,7 @@ now fails fast and visibly.
     permissive side. The separate eighth `server` argument does have a default
     (`__MODULE__`), so normal callers use `/7`; this does not default the
     mandatory seventh `new_conversation?` argument. The cost was mechanical
-    argument updates for existing callers (mostly tests, about 90 sites).
+    argument updates for existing callers (mostly tests).
   - **Removal criterion**: this absent-field branch is not permanent. Once
     operations confirms that every running wrapper is built after issue #252,
     make `validate_live_inter_agent_payload/1` require the key again and remove
