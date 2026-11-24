@@ -36,15 +36,15 @@ graph TD
 
 See the [envelope contract](../docs/reference/protocol/envelope.md#envelope-v0),
 [Claude events](../docs/reference/engines/claude-events.md), and
-[Codex exec events](../docs/reference/engines/codex-exec-events.md).
+[Codex app-server events](../docs/reference/engines/codex-app-server-events.md).
 
 ## Development
 
 ```sh
 pnpm install    # from the repository root
 cd wrapper
-pnpm test       # runs all five packages (vitest)
-pnpm typecheck  # runs all five packages (tsc --noEmit)
+pnpm test       # runs all six packages (vitest)
+pnpm typecheck  # runs all six packages (tsc --noEmit)
 pnpm build      # builds dist/ in dependency order
 ```
 
@@ -63,10 +63,10 @@ GitHub Actions runs `pnpm install`, `pnpm typecheck`, `pnpm build`, and
 
 ## 設定(kaoiro.config.json)
 
-ラッパーは設定ファイル(既定 `kaoiro.config.json`)を読み込む。engine
-別の例は
+The wrapper reads the config file named in `run <launch file>`; there is no
+default file name. Per-engine examples:
 [kaoiro.config.claude-code.example.json](kaoiro.config.claude-code.example.json)
-と [kaoiro.config.codex.example.json](kaoiro.config.codex.example.json)。
+and [kaoiro.config.codex.example.json](kaoiro.config.codex.example.json).
 `agent.*.json` / example は従来どおり本ディレクトリ直下に置く(live
 config は gitignore 済み)。スキーマと読み込みは `core/src/persona.ts`。
 
@@ -91,7 +91,7 @@ on <other>` を 1 行出す。
 | キー | claude-code | codex | 意味 |
 |---|---|---|---|
 | `model` | ✓(catalog 値) | 起動時未指定推奨 | 起動時 model pick。Codex は ChatGPT-plan で account default 委任のため空推奨([codex/src/catalog.ts](codex/src/catalog.ts)) |
-| `effort` | 現状 UI 未露出 | ✓(catalog 値) | 起動時 effort pick。閉じ列挙は engine catalog 側 |
+| `effort` | ✓(catalog 値) | ✓(catalog 値) | 起動時 effort pick。閉じ列挙は engine catalog 側 |
 | `permission_mode` | ✓(6 値、[ADR-0033 F4 追補](../docs/adr/0033-permission-model-dual-axis.md)) | 無視(stderr warn) | 起動時 mode。Codex は launch-fixed(ADR-0033 F3) |
 | `allowed_tools` | ✓ | 無視(stderr warn) | ツール ceiling(ローカル天井、サーバから拡張不可)。省略=読み取り専用 |
 | `sandbox` | 無視(stderr warn) | ✓(3 値) | OS sandbox 軸(ADR-0033 F3)。閉じ列挙:`read-only` / `workspace-write` / `danger-full-access` |
@@ -121,8 +121,8 @@ node ../runner/dist/kaoiro.js wrapper claude-code run <configPath>
 wrapper は常駐モードで動作する。起動後、server の join に成功すると
 `persona_prompt` push を待って SDK セッションを開き、以降はダッシュボード
 からの指示・承認要求を仲介する。10 秒以内に `persona_prompt` を受信できない
-場合は fail-closed でプロセスを異常終了させる(ADR-0029 F3)。`prompt` 引数
-省略時は idle で起動し最初の指示を待つ。手動起動よりも実運用では
+場合は fail-closed でプロセスを異常終了させる(ADR-0029 F3)。設定ファイルに
+`initial_prompt` が無いときは idle で起動し最初の指示を待つ。手動起動よりも実運用では
 [runner](../runner/README.md) から spawn する経路(ADR-0023)を推奨する。
 
 ### 認証(運用時)
@@ -143,7 +143,8 @@ wrapper は常駐モードで動作する。起動後、server の join に成�
 ## Grok ACP package
 
 `grok/` separates the resident process, ACP transport, session and event
-mapping. Its ToolHost serves the common descriptors through `dist/bridge.js`.
+mapping. Its ToolHost (the shared one in `agent-common`) serves the common
+descriptors to Grok as an authenticated loopback HTTP MCP server.
 Signal tests run in a PID namespace whose init reaps adopted children;
 Linux `unshare` and `setsid` are required for that suite. Live acceptance is
 opt-in with `KAOIRO_LIVE_GROK=1` and consumes the provider's account quota.
