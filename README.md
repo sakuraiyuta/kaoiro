@@ -22,7 +22,7 @@ Website: <https://sakuraiyuta.github.io/kaoiro/>
 ([日本語](https://sakuraiyuta.github.io/kaoiro/ja/))
 
 A system for **running, watching and orchestrating several CLI AI agents at
-once** (such as Claude Code, Codex, and Antigravity). kaoiro launches agents
+once** (such as Claude Code, Codex, Antigravity, and Grok Build). kaoiro launches agents
 on any host it supervises, derives each agent's state from engine events and
 draws it as a character with changing expressions, routes permission requests
 and questions to the browser, and carries the messages agents send each other.
@@ -50,7 +50,10 @@ Agents are launched and tuned from the same screen:
             options">
 </p>
 
-The dashboard interface is currently Japanese-only.
+The dashboard interface is available in Japanese and English. It follows the
+browser's language by default and can be switched from the login screen and the
+settings drawer ([UI language contract](docs/reference/ui/i18n.md)). The
+screenshots show the Japanese interface.
 
 ## Features
 
@@ -74,8 +77,9 @@ The dashboard interface is currently Japanese-only.
   other in a single time-ordered pane, with unread marks and click-through to
   the full transcript.
 - **Tuning mid-session** — model switches are supported on Claude Code and
-  Antigravity, and on Codex when its model catalog is available. Effort switches
-  are available on Claude Code and Codex when advertised, but not Antigravity.
+  Antigravity, on Codex when its model catalog is available, and on Grok Build
+  when it reports a switchable selection. Effort switches are available on
+  Claude Code, Codex and Grok Build when advertised, but not Antigravity.
   Permission-mode switching and file uploads follow each engine's declared
   capabilities (`ext.session_capabilities`); prompts and interrupts share one
   control channel across engines.
@@ -88,8 +92,9 @@ The dashboard interface is currently Japanese-only.
 - **Personas as zip packs** — characters are versioned, hash-checked packs read
   from an ingest directory, with a bundled set as the default
   ([persona-pack-format.md](docs/reference/personas/pack-format.md)).
-- **Operator and viewer roles** — sign in with a token or through OAuth; reply
-  logs, controls and persona internals are operator-only and fail closed
+- **Viewer, operator and admin roles** — sign in with a token or through OAuth;
+  reply logs, controls and persona internals need the operator or admin role
+  and fail closed
   ([security boundaries](docs/architecture/security-boundaries.md)).
 - **Notifications, and a layout that folds** — a desktop notification and a
   per-state sound when an agent hands control back, and a dashboard that
@@ -113,7 +118,7 @@ watching:
 This reads `server/.env` (`KAOIRO_CLIENT_TOKENS` is required), starts Phoenix
 (:4000), the Vite dashboard (:5173, HMR), and the runner (`tsx watch`), and
 stops them all with Ctrl-C. Start agents (wrappers) through the dashboard's
-"+ 起動" (Launch) action, which routes through the runner. For environment and token
+"+ Launch" action ("+ 起動" in Japanese), which routes through the runner. For environment and token
 settings or starting each component separately, see "Local development" in
 [server/README.md](server/README.md).
 
@@ -141,8 +146,9 @@ troubleshooting) hold the full procedures.
 Three layers plus a host-resident supervision layer (the runner):
 
 - **Wrapper** — launches agents and mediates their input and output. It hosts
-  the Claude Agent SDK for Claude Code, the Codex app-server for Codex, and the
-  Antigravity CLI, translating engine-specific events into a common format.
+  the Claude Agent SDK for Claude Code, the Codex app-server for Codex, the
+  Antigravity CLI, and a resident ACP session for Grok Build, translating
+  engine-specific events into a common format.
 - **Server** — aggregates multiple wrappers, keeps their state, delivers it to
   clients in real time, and routes instructions to the appropriate agent.
 - **Client** — a Web front end that visualizes each agent's state through its
@@ -157,7 +163,8 @@ data flow.
 ### Technology stack
 
 - **Wrapper: TypeScript** — engine packages host the Claude Agent SDK
-  (`@anthropic-ai/claude-agent-sdk`), Codex app-server, or Antigravity CLI.
+  (`@anthropic-ai/claude-agent-sdk`), Codex app-server, Antigravity CLI, or a
+  resident Grok Build ACP session.
 - **Server: Elixir / OTP + Phoenix**
   - Aggregates wrappers through WebSocket (Phoenix Channels).
   - Fans out updates through PubSub to clients in real time.
@@ -173,7 +180,10 @@ data flow.
 
 The supported engines are **Claude Code**, **Codex**, **Antigravity**, and
 **Grok Build**. Grok requires its CLI on PATH and uses a resident ACP host
-([Grok reference](docs/reference/engines/grok-acp.md)). The
+([Grok reference](docs/reference/engines/grok-acp.md)). Antigravity requires an
+explicit Google Cloud authentication method in the runner configuration before
+it launches
+([Antigravity authentication](docs/operations/runner-install.md#antigravity-authentication)). The
 engine is selectable at launch. Engine-specific differences are represented by
 `ext.session_capabilities` in the envelope, so the UI does not branch on engine
 names. Additional engines can use the same adapter boundary

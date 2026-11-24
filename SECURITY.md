@@ -20,9 +20,9 @@ There is no guaranteed response time.
 Read this before deploying kaoiro anywhere.
 
 The kaoiro client sends instructions and permission approvals to
-connected agents. By design, **anyone holding an operator token or an
-operator-role OAuth identity can make agents read and write files and
-run commands on the machines where those agents run** — the impact is
+connected agents. By design, **anyone holding an operator or admin token, or
+an OAuth identity with the operator or admin role, can make agents read and
+write files and run commands on the machines where those agents run** — the impact is
 equivalent to remote command execution on those hosts, bounded only by
 each wrapper's local `allowedTools` ceiling (which the server and
 client cannot widen).
