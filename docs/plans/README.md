@@ -1,8 +1,9 @@
 # Plans
 
 Proceed through the phases in order (do not skip them). The Status column maps
-each plan's frontmatter `status` to a legend symbol; even when `done`, use 🟡
-when follow-ups have been spun out into issues.
+each plan's actual state (landed work and issue state) to a legend symbol; a
+plan page's frontmatter `status` is a dated record and can lag. Even when done,
+use 🟡 when follow-ups have been spun out into issues.
 
 | Phase | File | Status | Description |
 |-------|------|--------|------|
@@ -43,7 +44,7 @@ when follow-ups have been spun out into issues.
 | 31 | [phase-31-responsive-ui](phase-31-responsive-ui.md) | 🟡 | Equal three-size responsive dashboard — breakpoint and sheet-mechanism foundation, lobby / AgentDetail / surrounding UI, [ADR-0052](../adr/0052-responsive-three-tier-layout.md) |
 | 32 | [phase-32-subagent-workflow-visibility](phase-32-subagent-workflow-visibility.md) | ✅ | Visualize internal sub-agent/workflow activity — wrapper detection, server aggregation (operator-only), dashboard ring above the agent, [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md) |
 | 33 | [phase-33-compaction-resume-lifecycle](phase-33-compaction-resume-lifecycle.md) | 🟡 | Automatic resume after compaction (wrapper-local `resume_prompt`) and a server-retained `session_lifecycle` timeline with an operator pull query, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md). Live verification of automatic resume on an actual `compact_boundary` awaits the master's confirmation |
-| 34 | [phase-34-antigravity-adapter](phase-34-antigravity-adapter.md) | 🟡 | Third engine `antigravity` driving the `agy` CLI headless per turn — hook-based permission gate with mid-session two-axis policy, CLI bridge for kaoiro tools, rules-file persona injection, [ADR-0057](../adr/0057-antigravity-adapter.md), live in production. Stage B parity extras ([#387](https://github.com/sakuraiyuta/kaoiro/issues/387), [#389](https://github.com/sakuraiyuta/kaoiro/issues/389), [#410](https://github.com/sakuraiyuta/kaoiro/issues/410), [#384](https://github.com/sakuraiyuta/kaoiro/issues/384) done; [#385](https://github.com/sakuraiyuta/kaoiro/issues/385), [#388](https://github.com/sakuraiyuta/kaoiro/issues/388) open) remain; Stage C2 (epoch process model) was superseded by the ACP host ([ADR-0078](../adr/0078-antigravity-over-acp.md)) |
+| 34 | [phase-34-antigravity-adapter](phase-34-antigravity-adapter.md) | 🟡 | Third engine `antigravity` driving `agy acp` over ACP, one process per prompt — hook-based permission gate with mid-session two-axis policy, HTTP MCP server for kaoiro tools, ACP `_meta` persona injection, [ADR-0057](../adr/0057-antigravity-adapter.md), live in production. Stage B parity extras ([#387](https://github.com/sakuraiyuta/kaoiro/issues/387), [#389](https://github.com/sakuraiyuta/kaoiro/issues/389), [#410](https://github.com/sakuraiyuta/kaoiro/issues/410), [#384](https://github.com/sakuraiyuta/kaoiro/issues/384) done; [#385](https://github.com/sakuraiyuta/kaoiro/issues/385), [#388](https://github.com/sakuraiyuta/kaoiro/issues/388) open) remain; Stage C2 (epoch process model) was superseded by the ACP host ([ADR-0078](../adr/0078-antigravity-over-acp.md)) |
 | 35 | [phase-35-docs-migration](phase-35-docs-migration.md) | ✅ | Moved docs/specs into the layered taxonomy (ADR-0060, issue #368) after the semantic sync |
 | 36 | [phase-36-grok-acp-adapter](phase-36-grok-acp-adapter.md) | 🟡 | Fourth engine `grok` hosting a resident `grok agent stdio` child over ACP — authenticated HTTP MCP server for kaoiro tools, `_meta.rules` persona injection, declared permission projection with display-only policy details, [issue #589](https://github.com/sakuraiyuta/kaoiro/issues/589) |
 

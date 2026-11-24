@@ -2,6 +2,7 @@
 title: External human messaging protocol
 description: Specification for the envelope schema, discord-wrapper topology, Tier A/B reception, and safeguards for AI agents exchanging bidirectional messages (with one-way authority) with humans through external channels such as Discord.
 status: provisional
+last_updated: 2026-11-24
 related: [protocol, protocol-inter-agent, plugin-model, security-threat-model]
 ---
 <!-- markdownlint-disable MD033 -->

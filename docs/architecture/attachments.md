@@ -21,8 +21,8 @@ rationale is
 | Layer | Responsibility |
 |--|--|
 | Client (dashboard) | File picker + chunker + ArrayBuffer push. Holds no normative policy (UX hints are optional). |
-| Server (Phoenix) | Transparent relay + transport DoS defenses (frame limit and in-flight cap) + operator authorization. Does not interpret envelopes or attach_* (agent-independent). |
-| Wrapper (per engine) | pending_uploads management / final normative decisions / fit-to-SDK / conversion to SDK content blocks / reject notification. Rendering is wrapper-internal. |
+| Server (Phoenix) | Transparent relay + transport DoS defense (frame limit) + operator authorization. Does not interpret envelopes or attach_* (agent-independent). |
+| Wrapper (per engine) | pending_uploads management (including the in-flight cap) / final normative decisions / fit-to-SDK / conversion to SDK content blocks / reject notification. Rendering is wrapper-internal. |
 
 ### UI model (deferred upload)
 

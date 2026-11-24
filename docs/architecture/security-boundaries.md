@@ -15,7 +15,7 @@ and individual ADRs. This document is an overview of **which mechanism protects
 each boundary and which privilege applies after crossing it**, collecting each
 boundary's mechanism, implementation location, and unset behavior in one place.
 
-Build the pre-OSS audit checklist (private Gitea issue 91) from this document.
+Build the [release security audit](../operations/security-release-audit.md) checklist from this document.
 While [threat-model](security-threat-model.md) covers “what is considered a threat and
 how it is mitigated,” this document maps “the boundaries currently implemented.”
 **WHY** belongs in ADRs / the threat model; **HOW** belongs here and in code
@@ -71,7 +71,7 @@ allow rules.
 
 | Area | Current state | Compensation | Related |
 |---|---|---|---|
-| **Inter-agent ACL** | No server-side allowlist for A→B sends | Broker dialog (per-action operator approval) is the only human gate | [#17](https://github.com/sakuraiyuta/kaoiro/issues/17), intentional Phase 1 choice |
+| **Inter-agent ACL** | No server-side allowlist for A→B sends | Only Claude's per-call operator dialog, shown in default-family permission modes and skipped once a conversation is auto-allowed. Codex sends without a dialog | [#17](https://github.com/sakuraiyuta/kaoiro/issues/17), intentional Phase 1 choice |
 | **Message inspection** | Server does not interpret payloads (size cap only) | None — prompt-injection attacks pass through | [#18](https://github.com/sakuraiyuta/kaoiro/issues/18), Phase 2 |
 | **Operator role granularity** | Issue #188 introduced admin / operator / viewer, but operators still have full power (spawn / interrupt / approve / clear, etc.). Per-pair permission demotion is not implemented | None — single-tenant assumption | [issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189) (per-pair permissions, [ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D3) |
 | **Immediate token revocation** | **Forced disconnect of active WS is implemented ([#47](https://github.com/sakuraiyuta/kaoiro/issues/47))**: logout (`DELETE /session`) and refresh 401 for a revoked credential call `disconnect_sockets/1`, broadcasting disconnect on the socket-id topic and dropping all connections. Delivery occurs when a detection trigger arrives rather than as an immediate push | Triggers are the next operator action (gate re-resolution in [#148](https://github.com/sakuraiyuta/kaoiro/issues/148)) / change-driven OAuth allowlist disconnect ([#160](https://github.com/sakuraiyuta/kaoiro/issues/160), including passive sockets) / 12-hour refresh / reconnect / explicit logout. Changing a shared `KAOIRO_CLIENT_TOKENS` value still requires restart because env is not reloaded (out of #160 scope) | Implemented |
@@ -80,9 +80,9 @@ allow rules.
 | **Gate spoofing by the agent itself (antigravity)** | The gate nonce and the correlation state are readable by any shell the agent runs, so a compromised agent can satisfy the self-verification | None — F4b detects a vendor mechanism that stops firing; it is not an authorization boundary | [ADR-0057](../adr/0057-antigravity-adapter.md) F4b |
 | **Multi-tenant isolation** | Every operator can control every agent (OAuth identifies people but has no agent-owner boundary) | None — single-tenant assumption | [ADR-0042](../adr/0042-oauth-allowlist-login.md), out of scope |
 | **Dev fallback leakage risk** | **Resolved (2026-07-25, [#133](https://github.com/sakuraiyuta/kaoiro/issues/133))**: `:dev`/`:test` still allow all wrappers and runners when unset (client tokens fail closed in every environment); `:prod` fails closed when unset (2026-08-02 revision: wrapper accepts only server-minted signed tokens, whose signature derives from `secret_key_base`) | Startup WARN log (environment-specific wording) | Implemented |
-| **Audit logging** | No durable record of who sent what to which agent and when | None | Future (when SQLite is introduced) |
+| **Audit logging** | No durable record of who sent what to which agent and when | None | Future |
 | **Tool-input masking** | Command lines / paths are shown raw in the operator dialog | Operator-only delivery + input dropped above 16KB | Future |
-| **Runner-less wrapper auth** | Localhost direct connection only; a token is unavailable without going through spawn | Runner required | [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) |
+| **Runner-less wrapper auth** | A static `KAOIRO_WRAPPER_TOKENS` pair authenticates a wrapper from any address; the server does not check the source address | Leave `KAOIRO_WRAPPER_TOKENS` unset in `:prod` so only spawn-minted signed tokens authenticate | [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) |
 | **Device access token revocation** | A device access token cannot be revoked on its own; it is valid until its three-day sliding or thirty-day absolute lifetime ends ([ADR-0070](../adr/0070-device-authorization-grant.md)) | Removing the identity from the OAuth allowlist refuses its next request, and the allowlist watcher disconnects its sockets. Already connected WebSockets are not ended by the thirty days | [issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801) |
 | **Device code availability** | Unauthenticated `POST /oauth/device` requests can hold all 20 pending codes (10 per minute), refusing legitimate devices for ten minutes | Codes expire in ten minutes; a restart clears them. Wrong user-code guesses are capped per identity and in total, which bounds a guess to about 2^-30 per code | [issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801) |
 | **conversation_id confidentiality** | Observable by every dashboard operator | `participants_mismatch` guard rejects third-party reuse | [#17](https://github.com/sakuraiyuta/kaoiro/issues/17), intentional Phase 1 choice |
@@ -108,4 +108,4 @@ allow rules.
   [#65](https://github.com/sakuraiyuta/kaoiro/issues/65) (OAuth),
   [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) (runner-less auth),
   [#72](https://github.com/sakuraiyuta/kaoiro/issues/72) (signed-token denylist),
-  private Gitea issue 91 (OSS publication preparation)
+  [release security audit](../operations/security-release-audit.md)

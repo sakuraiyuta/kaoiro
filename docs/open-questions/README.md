@@ -39,7 +39,7 @@ a design. Kept here (not deleted) so the reason for the deferral stays visible.
 
 | Slug | Decided | Reason |
 |------|---------|--------|
-| [codex-lifecycle-observability](codex-lifecycle-observability.md) | 2026-08-31 | No way to observe Codex compaction locally, so Codex `session_lifecycle` / `resume_prompt` support is deferred (engine-side auto-compaction assumed; out of scope for now) |
+| [codex-lifecycle-observability](codex-lifecycle-observability.md) | 2026-08-31 | Codex `session_lifecycle` / `resume_prompt` support is deferred pending [issue #662](https://github.com/sakuraiyuta/kaoiro/issues/662) |
 
 ## Recently decided
 

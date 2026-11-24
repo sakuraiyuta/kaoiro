@@ -20,15 +20,6 @@ outside the wizard** and is covered by the
 [server update](../operations/server-update-and-rollback.md) and
 [runner update](../operations/runner-update-and-rollback.md) runbooks.
 
-## Codex retirement release boundary
-
-Codex exec retirement is a coordinated release of all approved units; the test
-transfer and refusal units must not be released separately. Retain and identify
-the exact last pre-retirement artifact before updating; see the
-[retirement note](../operations/codex-backend-switch.md).
-The release author records these prerequisites in its production release note.
-Develop landing does not authorize production reflection.
-
 ## Overall architecture
 
 ```mermaid

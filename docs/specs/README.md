@@ -54,5 +54,4 @@ edit the page it points at.
 
 ## Conventions
 
-- Slugs use lowercase hyphenation; one topic per file; ≤200 lines.
 - Diagrams use Mermaid (no ASCII art); cross-references use relative paths.

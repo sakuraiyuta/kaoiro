@@ -153,8 +153,11 @@ than engine names
 ### Transport and network
 
 Wrappers run locally, and multiple hosts connect to a central server through
-WebSocket (Phoenix Channels). Wrapper token authentication, TLS, and heartbeats
-are required; a disconnected connection has the `disconnected` state. See
+WebSocket (Phoenix Channels). Wrapper token authentication and heartbeats are
+required. TLS terminates at nginx but is not enforced: wrappers and runners
+accept `ws://` URLs, and plain HTTP is meant only for VPN-restricted
+deployments ([deployment](deployment.md)). A disconnected connection has the
+`disconnected` state. See
 [ADR-0002](../adr/0002-local-wrapper-websocket-topology.md) for the decision
 details. Each host's runner also remains connected to the server for host
 registration, liveness notifications, and spawn/stop/restart control. This is

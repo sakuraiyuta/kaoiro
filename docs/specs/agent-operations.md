@@ -2,6 +2,7 @@
 title: Agent operations (multi-agent workflow)
 description: Operating rules for multiple agents working concurrently in the same work tree. Applies to both implementation and dispatch (director) sides, regardless of engine.
 status: accepted
+last_updated: 2026-11-24
 related: [protocol-inter-agent, personas]
 ---
 

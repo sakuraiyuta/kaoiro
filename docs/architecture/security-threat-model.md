@@ -34,8 +34,9 @@ records threats and mitigations before full operation or external release
 3. **Information leakage through tool input**: The `input` of
    `permission_request` can contain secrets such as command lines, file paths,
    and environment values. Viewers receive only a synthetic
-   `state_change(waiting_permission)` with an empty payload and no `ext`,
-   so they do not receive the input. Lax management of operator credentials
+   `state_change(waiting_permission)` with an empty payload and no `ext` except
+   the fixed safe projection of `ext.delivery_policy`, so they do not receive
+   the input. Lax management of operator credentials
    can still expose it.
 4. **Information leakage through statusline metadata (`ext`)**: cwd (the
    absolute working-directory path, exposing filesystem layout and project
@@ -74,11 +75,11 @@ records threats and mitigations before full operation or external release
 | Limit instructions and approvals to the operator role | Implemented in Phase 3 |
 | Fail closed for token authentication when `KAOIRO_CLIENT_TOKENS` is unset (reject all on that token path) — prevents an operator being defenselessly exposed by misconfiguration (warning log on startup). The OAuth path also rejects all on an unset, missing, or mismatched allowlist | Phase 3.5 ([issue #28](https://github.com/sakuraiyuta/kaoiro/issues/28)) / OAuth in phase-26 |
 | Size limit on `permission_request.input` (drop the input when it serializes to more than 16KB; mark `truncated`) | Implemented in Phase 3 ([permission-requests](../reference/protocol/permission-requests.md)) |
-| Wrapper-side `allowedTools` ceiling — even when instructions arrive, wrapper configuration is the ceiling on executable tools (not extensible by server/client) | Guaranteed by wrapper design (the server cannot override canUseTool) |
-| Instruction audit log (who sent what to which agent and when) | Future (when SQLite is introduced) |
+| Per-engine permission settings bound what an agent may execute: Claude's `permission_mode` (`allowed_tools` only lists tools approved without asking; other tools go through `canUseTool`, which autonomous modes approve automatically) and the sandbox / network / approval axes of Codex, Grok and Antigravity. An operator picks them at launch and, where the engine supports switching, can change them later, including full access (`bypassPermissions`, `danger-full-access`). Grok switches cannot exceed the launch values; Antigravity's runner `antigravity.max_*` caps its launch and switches. The runner's cwd allowlist bounds where an agent starts | Implemented; no limit holds against an operator. The server cannot replace `canUseTool` |
+| Instruction audit log (who sent what to which agent and when) | Future |
 | Tool-input masking (redaction of secret patterns) | Future |
 | Deliver response logs (`log`/`result`, including tool I/O) to operators only | Phase 3.5 ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
-| Remove envelope `ext` (cwd / model / context / rate_limits / slash_commands / future additions) for viewers on every type | Implemented in #46 (commits 9b32c34 / ef7b606) |
+| Remove envelope `ext` (cwd / model / context / rate_limits / slash_commands / future additions) for viewers on every type, except the fixed safe projection of `ext.delivery_policy` (`ViewerAgentProjection.policy_only/1`) | Implemented in #46 (commits 9b32c34 / ef7b606) |
 | Change viewer delivery to an **allow-list model** (operator-only is the default; viewer delivery requires an explicit declaration). Remove the `permission_request` envelope completely for viewers (replace with synthetic `state_change(waiting_permission)` to preserve grid consistency) | #46 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) |
 | Operator-only envelopes such as log/result are broadcast in plaintext to `agents:lobby` and `AgentsChannel.handle_out` filters them per subscriber (not a gate at subscription). Secure this with the invariant that `AgentsChannel` is the only subscriber to `agents:lobby`; do not adopt a separate operator-only topic | #27 (evaluated and **kept the current design**; see MUST below for new subscribers) |
 | Define **agent-to-agent disclosure** (the peer directory) as a third principal on an axis separate from viewers/operators; allow-list only explicitly enumerated fields in `directory_entry` to agents. Do not pass nested `ext` keys through; project only canonical keys. Continue excluding cwd / permission / `session_id` / `pending_permission` / `session_capabilities`, etc. | #150 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6 (“peer-directory information boundary” in [peer directory](../reference/inter-agent/directory.md) is field SoT) |

@@ -2,6 +2,7 @@
 title: Character-design policy (persona standing illustrations)
 description: Design policy for persona standing illustrations — the initial three personas, expression sets, image standards, and the ComfyUI generation workflow.
 status: accepted
+last_updated: 2026-11-24
 related: [protocol]
 ---
 
