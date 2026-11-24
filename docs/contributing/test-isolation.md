@@ -2,7 +2,7 @@
 title: Test isolation
 description: What a test may not reach on the host, how the shared isolation guard enforces it, and how to add a suite or an opt-in native probe.
 status: accepted
-last_updated: 2026-10-24
+last_updated: 2026-11-24
 related: [runner-development]
 ---
 
@@ -49,7 +49,7 @@ runs normally.
 A test that deliberately needs a host surface calls
 
 ```js
-permitHostAccess({ kinds: ["systemd"], optIn: "KAOIRO_RELEASE_UNIT_PROBE", reason: "..." });
+permitHostAccess({ kinds: ["docker"], optIn: "KAOIRO_DOCKER_COMPOSE_PROBE", reason: "..." });
 ```
 
 The variable must be the probe's own `KAOIRO_` variable (not one of the guard's
@@ -80,7 +80,7 @@ tool path, fixtures, state transitions and cleanup.
 - The three exact wrapper/codex helper files are exceptions because tests import them as helpers rather than run them: app_server_approval_harness.ts, fixtures/cli_app_server.ts and fixtures/notice_tap.ts. Their Vitest imports may name only vi and expect. A default or namespace import, a test-registration API (including an alias), unsupported acquisition, or a missing helper invalidates the exception. Other files, including siblings under test/fixtures, follow the first-import rule.
 - Each declared package has a guard-free setup canary, and dashboard also has a guard-free jsdom canary. They assert isolation at module scope and in a test. They import only Vitest and the canonical canary helper; the helper imports only Node built-ins. Do not import the shared guard or dashboard setup in a canary. The checker requires all nine canaries to remain guard-free and verifies that the default package observations select them.
 - The canonical node:test trees remain scripts/test and server/deploy/test. Every entry there is a *.test.mjs whose first import is the shared module. Other source files in those trees must be under fixtures or on the existing helper list. Every static `node:test` importer must be a canonical entry, including files under fixtures.
-- setupOrder remains a source-level declaration check. It reads setupFiles only in a declared package's own vitest.config.* or vite.config.* file, accepts one readable list of string literals, requires the shared module first (through the dashboard hop), and requires sequence.setupFiles to be list when multiple files are declared. It reports setupFiles mentions in other files or unreadable declarations. A config with no readable setupFiles mention is not rejected by this check.
+- setupOrder remains a source-level declaration check. It reads setupFiles only in a declared package's own `vitest.config.*` or `vite.config.*` file, accepts one readable list of string literals, requires the shared module first (through the dashboard hop), and requires sequence.setupFiles to be list when multiple files are declared. It reports setupFiles mentions in other files or unreadable declarations. A config with no readable setupFiles mention is not rejected by this check.
 - The checker observes the default configuration of all eight declared Vitest packages using each package's own vitest list --json command. It requires one project and the selected canary files, including dashboard's jsdom canary. If default setup is missing or does not load the guard, the guard-free canary fails during collection. This observation needs installed dependencies and the wrapper and runner build outputs.
 - The existing package-ownership check remains for Vitest configuration files outside the eight declared packages. Package script text and workflow command strings do not affect ownership. CI still pins the exact checker and self-test lines in the test-isolation job.
 
