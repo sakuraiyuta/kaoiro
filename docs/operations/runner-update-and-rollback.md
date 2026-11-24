@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-11-18
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
@@ -89,14 +89,13 @@ Forward production updates require an exact completed landing tag or schema-2
 release tag ([Release tags](build-identity-and-release-tags.md#release-tags)); `--from-repo`
 builds use `--require-tagged` by default. Tagged and `untagged` candidates also
 check the current server's advertised `build_identity_formats` before stopping
-the old unit. A failed check leaves the old runner running and leaves no Codex transaction record. Updater success uses
+the old unit. A failed check leaves the old runner running. Updater success uses
 `--version --json` with the 40-character SHA, never the seven-character label.
 Legacy releases can attest their pinned physical build-info JSON.
 
 Detached enqueue is not completion. Record the actual worker result, registered
 identity and required Codex acceptance using the
-[deployment completion checks](build-identity-and-release-tags.md#deployment-completion-and-legacy-descriptors). Existing retained
-rollback targets keep their native/state recovery contract.
+[deployment completion checks](build-identity-and-release-tags.md#deployment-completion-and-legacy-descriptors).
 
 Legacy descriptors produce a fixed warning and are ignored; see
 [legacy descriptor handling](build-identity-and-release-tags.md#deployment-completion-and-legacy-descriptors).
@@ -229,10 +228,9 @@ To update again after rollback, repeat the boundary update with the same
 candidate tools after rechecking the source and the approved archive digest.
 
 The updater shipped with the bundle prunes after activation under the link
-lock. It keeps `current`, `previous`, releases protected by Codex state
-records and the newest `--keep` valid release directories (default 3).
-Re-read the retained set after the update. A retired snapshot no longer
-protects its source. Name only measured rollback targets in the card.
+lock. It keeps `current`, `previous` and the newest `--keep` valid release
+directories (default 3). Re-read the retained set after the update. Name only
+measured rollback targets in the card.
 
 ### 4.6.2 Subsequent updates
 
@@ -264,8 +262,7 @@ The updater stops on its error path, so it does not print a successful
 release ID on stdout in either exit-75 case.
 Distinguish the pre-work exit 75 for a held `.lock.update` by the lock name
 in stderr: a post-start skip instead names `.lock.links` or reports changed
-current. An ordinary update has already printed its starting-service line;
-a state-aware forward has already recorded `completed`.
+current. The update has already printed its starting-service line.
 
 `--detach` queues the update as a transient **service** unit via
 `systemd-run --user --no-block`. **Always use it when running from an agent under
@@ -315,6 +312,7 @@ Main options:
 | `--keep <n>` | `3` | Generations to retain; excludes `current` / `previous` |
 | `--install-dir <dir>` | Above default | Install root |
 | `--allow-dirty` | — | Allow activation of `-dirty` / `unknown`; **development hosts only** |
+| `--codex-native-change` | — | Allow a target whose Codex native differs from the current release; see [Codex native changes](#codex-native-changes) |
 
 Never delete the release referenced by `current` / `previous`, regardless of
 `--keep`. The runner **does not resolve the Codex wrapper until the first Codex
@@ -324,8 +322,8 @@ breaks a spawn that has not happened yet.
 #### Update from a published release
 
 With the new updater on Linux x64/systemd, pass the exact published
-`vYYYY.MM.DD.N` tag. This input excludes `--tarball`, `--from-repo`, recovery
-inputs, `--target`, and `--allow-dirty`. Install `curl` and `sha256sum` on the
+`vYYYY.MM.DD.N` tag. This input excludes `--tarball`, `--from-repo`,
+`--target`, and `--allow-dirty`. Install `curl` and `sha256sum` on the
 update host. For a detached update, check the worker result as above.
 
 ```sh
@@ -378,25 +376,9 @@ combination as supported. Production release approval is still required.
 
 ### 4.6.3 Rollback
 
-A rollback across Codex native hashes restores a retained snapshot before
-starting the recorded source release. Never use an old `previous` script for
-this operation. Prepare a verified physical tool-release path before updating:
-
-```sh
-"$tool_release/deploy/kaoiro-runner-update.sh" \
-  --install-dir "$install_root" --service kaoiro-runner \
-  --restore-codex-backup "$snapshot_dir" --codex-home "$codex_home" --detach
-```
-
-Same-native code-only switching remains possible when no operation is
-unfinished, including when a v2 snapshot is retained. A retained v2 snapshot
-forbids activating a pre-N2 tool even with the same native hash. First install
-an N2-capable release with the same native; source and target must both carry
-N2 capability before a state-aware forward.
-
-For an ordinary same-native rollback, use the fixed physical path of a
-verified release containing the guarded switch. Keep stop, switch and start in
-one success chain; a refused switch must leave the runner stopped:
+Use the fixed physical path of a verified release containing the guarded
+switch. Keep stop, switch and start in one success chain; a refused switch
+must leave the runner stopped:
 
 ```sh
 systemctl --user stop kaoiro-runner &&
@@ -405,424 +387,75 @@ systemctl --user stop kaoiro-runner &&
   systemctl --user start kaoiro-runner
 ```
 
-The guard refuses differing native hashes, retained state references or an
-incomplete transaction. Use the snapshot recovery above in those cases; never
+The switch refuses a rollback across a Codex native change; going back across
+one is the exception in [Codex native changes](#codex-native-changes). Never
 retry with an older script through `previous`. The production manual keeps the
 same command as a cheat-sheet entry
 ([rollback](production.md#5-rollback)).
 
-Before durable `start-intent`, recovery returns only to the recorded source
-without replacing its home. Once that intent exists, recovery restores the
-verified snapshot even if the candidate might not actually have started.
-Never restart old code against potentially migrated state. Preserve the named
-home/staging/aside trees after failure and use the recovery commands below.
+## Codex native changes
 
-### Second-level recovery: fresh setup
+The updater and the switch compare the Codex native of the current release
+with the target. When the two differ, the updater refuses before it stops the
+runner and the switch refuses before it changes `current`, unless the operator
+passes `--codex-native-change`. No copy of the Codex home is taken and nothing
+restores one. The new native migrates the home that `CODEX_HOME` in
+`runner.env` names on its first start, so a native change only moves forward.
 
-If snapshot recovery cannot succeed, keep the runner stopped and let the
-operator choose a fresh Codex setup. This deliberately loses Codex conversation
-history, login and caches; it is not an automatic credential reset. Preserve
-failed home/staging/quarantine trees privately until recovery is complete.
-Snapshots and diagnostic trees must stay outside cloud-synchronized or
-externally backed-up directories. Once fresh setup succeeds, the operator must
-record which old credential entries/trees are deleted or explicitly retained.
-Retained trees need private local storage and a deletion date. A new login is
-not evidence that old tokens were revoked. Use account-side session revocation
-if available; do not guess a logout invocation that could affect the new home.
-
-Use [Codex home creation and login](codex-home.md#fresh-setup-after-failed-snapshot-recovery)
-at the configured canonical path with the verified selected release. Normally
-keep the verified current release. A requested code downgrade instead needs a
-fresh installation of that selected release against an empty home, never an
-old binary against the failed migrated database. For a new installation root,
-reinstall the unit with `ExecStart` pointing to that root's `current` launch
-shim, run `systemctl --user daemon-reload`, and verify static unit/environment
-home binding before startup and MainPID home binding afterward. Do not reuse
-the former installation's operation records as authority for the new home.
-
-Before restarting, the operator must preserve the recorded source/tool releases
-and archive the installation's `codex-state` registry into a private diagnostic
-directory under both update/links locks. This manual registry reset is allowed
-only after confirming that the installation's records all belong to this
-home/unit. If that scope cannot be established, preserve the entire old
-installation and provision a fresh installation instead. Do not edit hashes,
-or phases to authorize the new home.
-Recreate configuration, instruction links and hook trust, then have the
-operator log in. Start Codex peers as explicitly new sessions and verify their
-first turn and hook/profile marker; old session IDs must remain visibly missing.
-
-## Codex state backup
-
-This workflow requires Linux/systemd with unified cgroup v2, a private same-user Codex home and an
-operator-controlled maintenance interval with no dispatch, process spawning,
-unit/environment reload, or release modification. Same-native comparison is
-also enforced on macOS, where state-aware migration is currently unsupported.
-The hash comparison does not prevent unmanaged replacement between checking
-and execution. The script rejects unsupported unit/shell configuration rather
-than executing it to discover the home.
-
-For every Codex native pin update, before stopping the runner, obtain explicit
-operator approval and run the candidate release's metadata-only classification
-preflight against the production home. Build/install the candidate without
-activation first, then use its verified physical tool-release path:
+Keep a native pin change in a release of its own, so that a rollback for any
+other reason does not have to cross it. Release it with the flag:
 
 ```sh
-node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" classify "$codex_home"
+"$install_root/current/deploy/kaoiro-runner-update.sh" \
+  --tarball "$archive" --codex-native-change --detach
 ```
 
-Keep the output private. It contains paths, modes and sizes, never credential
-contents. Any classification refusal aborts the update before stopping the
-runner. Unknown entries require a separately reviewed classification before
-retrying; do not delete or rename files merely to make the check pass. Only the
-managed runner and its service descendants are checked for stop completion. External processes are
-not scanned; an unreadable process outside the service or another external writer does not itself refuse
-the update. Each state-aware invocation warns that external writes can make
-snapshot recovery fail. Detected copy/verification errors still stop the update
-before switching or starting.
+The updater passes the flag to its pre-stop check, to the switch and to a
+detached worker. When the started release does not reach a good state, the
+rollback line it prints carries the flag too.
 
-Build/install the candidate without activation, verify its deploy manifest,
-and invoke its fixed physical updater path. An existing updater does not gain
-these guards automatically. Both arguments must be explicit absolute paths;
-the updater never takes its target from inherited `CODEX_HOME`:
+Going back across a native change is an exception. Use the current release's
+switch, which accepts the flag, and run these in order:
+
+1. Stop the runner.
+2. Run the switch with `--rollback --codex-native-change`.
+3. Start the runner.
+4. Check the running version.
+5. If Codex does not work on the migrated home, set up a fresh home as in
+   [Fresh home after going back across a native change](codex-home.md#fresh-home-after-going-back-across-a-native-change).
+   Codex conversations are lost.
 
 ```sh
-"$tool_release/deploy/kaoiro-runner-update.sh" \
-  --install-dir "$install_root" --service kaoiro-runner \
-  --tarball "$archive" --codex-home "$codex_home" \
-  --codex-backup-dir "$new_snapshot_dir" --detach
+tool_release=$(readlink -f "$install_root/current")
+systemctl --user stop kaoiro-runner &&
+  "$tool_release/deploy/kaoiro-runner-switch.sh" --rollback \
+    --install-dir "$install_root" --codex-native-change &&
+  systemctl --user start kaoiro-runner
+"$install_root/current/deploy/kaoiro-runner-launch.sh" --version
 ```
 
-The helper requires unified cgroup v2 before stop. After stop it requires the unit
-to be inactive or failed with `MainPID` 0, and checks for `populated 0` when the unit's
-`ControlGroup` has a `cgroup.events` file. A failed check refuses the update and
-attempts to resume the unchanged source when its recorded phase permits. Keep apt,
-add-apt-repository and other root operations outside the runner's cgroup. Do not
-use pattern-based kill pipelines or automatic sudo cleanup.
+Older releases kept Codex state records under `codex-state/` and snapshots in
+the directories given to their updater. The tools in this repository neither
+read nor write them, but an older release reads them again after a rollback to
+it, and its updater
+refuses to install a newer release while one of its snapshots is retained.
+Leave them until going back to such a release is no longer expected; deleting
+them is the operator's decision.
 
-Forward backup requires an active source runner. State-aware operations
-require explicit nonempty next-start `CODEX_HOME`; the canonical requested,
-live and next-start paths must agree. A live default uses the running
-process's actual `HOME`, not the next-start environment. The selected unit ID
-must also agree. A token, comment or file-inode change at the same home path
-does not invalidate a retained snapshot. The helper interprets supported
-literal unit/environment settings and refuses unsupported shell expressions.
+## Stale operation locks
 
-The operation record is private
-`codex-state/v2/records/<uuid>.json`. The forward phases are `prepared`,
-`snapshot-verified`, `start-intent`, then `completed`; a never-started return
-records `failed` before restarting the source. The updater marks `completed`
-only after verifying active state, positive MainPID, current release, verified
-artifact and live/next-start home agreement. This verifies the runner start,
-not a Codex turn or history resume. Perform those checks separately.
-
-A pre-start snapshot failure returns a nonzero worker result and attempts to
-resume the unchanged source. It verifies the source link/artifact and home
-path before restart, then verifies the running service. A failed start or
-post-start check is not reported as successful recovery. A restore aborted
-before replacement restarts its admission release only if admission began
-active; a restore that began stopped stays stopped on that abort. A stop
-failure preserves its nonzero service-manager status. Transitional or unknown
-activity refuses subsequent mutation.
-
-Inspect the worker journal and selected record. Directory replacement and
-code selection have separate checkpoints. Keep snapshot, staging, aside and
-record paths after interruption; never remove them as scratch. `updaterPid`
-is diagnostic and does not authorize recovery. An unfinished operation blocks
-rival forward, restore, switch and prune operations.
-
-The snapshot excludes `auth.json`, `.credentials.json`, `secrets/` and
-`mcp-oauth-locks/`. Restore moves their current entries without reading or
-copying contents. External keyring entries stay in place. Restore uses the
-original canonical home path because secrets keyring account names derive
-from that path. Backups are private anyway: rollouts/configuration may contain
-sensitive information. New threads after the snapshot stay in quarantine;
-there is no lossless merge or silent replacement of missing resume targets.
-The disposable home-root cache is not restored; connector/plugin catalog lists
-may remain empty until re-fetch completes (especially offline). Check installed
-plugin state separately and do not infer history loss from an empty catalog.
-
-The exact home-root name `.sqlite-maintenance.lock` is disposable, alongside
-`thread-writer-locks`. Codex uses it to elect one background reclamation worker
-per target database parent directory. With no explicit `log_dir` or
-`sqlite_home`, and no `CODEX_SQLITE_HOME` environment variable (it changes the
-placement in the same way; kaoiro runners do not set it), the databases and
-their maintenance lock remain directly under `CODEX_HOME`; this classification
-applies only to that exact root name.
-[0.164.0 reclamation](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/state/src/runtime/reclamation.rs#L73-L137)
-and [database placement](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/state/src/sqlite.rs#L189-L218)
-create the file as needed and retain a kernel lock after acquiring ownership,
-without using its contents as persisted state. Snapshots omit it from both
-manifest and payload. Forward backup leaves its inode/content intact; full
-restore leaves it in quarantine, and Codex recreates it in the restored home
-at its next ownership attempt. Replacing an active lock's inode can admit
-competing reclamation workers: do not delete or rename it to bypass refusal.
-
-### External Codex daemons and their home entries
-
-Kaoiro uses app-server over stdio. An interactive Codex TUI can also start a
-shared Unix-listener daemon that outlives the TUI. Its independently updating
-executable can differ from the wrapper's pin. Do not launch a TUI, daemon or
-installer against the selected home during maintenance. Prefer a separate home
-for interactive use. `--no-daemon` avoids that background daemon but still writes
-the selected home, so it is not a maintenance exception.
-
-The exact root `app-server-control` is disposable. Its advertised socket alias
-and startup-lock file coordinate the Unix listener, not persisted history.
-Forward backup omits this tree from manifest/payload and leaves source inodes
-untouched. Full restore leaves it in quarantine; a later Unix-listener start
-recreates its runtime entries. Never delete a held lock or replace its inode:
-that can admit another startup. A published listener normally no longer holds
-the home startup lock. The physical temporary socket and its own lock are
-separate objects outside the home; the snapshot tool never follows or removes
-the alias target.
-
-Three other exact roots are state: `app-server-daemon` (settings, loaded-thread
-recovery and admitted regular diagnostic/lock files), `packages` (installed
-executables/resources and selection links), and
-`tui-thread-reference-capabilities` (per-thread empty files whose presence affects
-resumed task-reference tools). Backup/restore preserves their bytes, modes and
-symlink text under the usual non-following rules. Package size counts toward
-capacity. Removing a package and fetching a new one later does not restore its
-selected version or offline availability. An abandoned `install-lock-*`
-directory can remain as state; a present `install.lock.d` still refuses admission.
-No prefix exemption is granted to similar or unknown root names.
-
-Classification, transaction admission and stopped snapshot/restore boundaries
-check external-daemon signals, including a previously quarantined original
-home on resume. The following refusals use exit 78 and preserve the signal:
-
-| Code | Meaning | Required action |
-|---|---|---|
-| `CODEX_EXTERNAL_DAEMON_ENTRY` | A control alias, dedicated/legacy PID/startup/socket marker, or installer directory lock exists, even if stale or dangling | Identify and stop the intended external writers; obtain approval for any exact stale-entry disposition. |
-| `CODEX_EXTERNAL_DAEMON_BUSY` | An existing startup/daemon-operation/PID-reservation/installer file lock is held | Wait for the identified operation to stop; never unlink the lock. |
-| `CODEX_EXTERNAL_DAEMON_CHECK_FAILED` | Ownership/type/identity is invalid, a parent is a symlink, or lock inspection failed | Resolve the inspection failure and rerun; an unknown result never means unheld. |
-
-Lock inspection requires `/usr/bin/flock` on this Linux maintenance path. It
-opens existing regular owned single-link files read-only without following
-symlinks or creating/truncating files, and probes one inherited descriptor at
-a time. Every descriptor is closed, including failure paths: child exit alone
-would leave its flock attached to the parent's open file description.
-Missing/broken utility or unexpected exit/signal refuses. Live classification
-briefly takes an available lock and may race another daemon's nonblocking
-operation, so do not repeatedly classify a home with active external clients.
-These are observations, not a lease against later startups. Service cgroup
-emptiness, absent aliases and unheld locks do not prove that custom-socket
-listeners or all other same-home clients are gone. The release card must also
-confirm no external writers and prohibit their restart until validation ends.
-
-After operator authorization, the director stops the identified external pair:
-
-1. Close same-home clients and disable their restart during maintenance. Resolve
-   the intended canonical home and matching native executable explicitly.
-   Validate the listener and updater's exact positive PIDs against current UID,
-   executable, command, `CODEX_HOME` and boot/start identity immediately before
-   signalling. A PID record alone, a reused PID or unreadable identity is not
-   authority. Keep process details private; do not pattern-kill or touch another
-   home's daemon.
-2. Stop the independent updater first with `kill -TERM "$UPDATER_PID"`, using
-   only the verified PID. Wait for its identity and any in-progress installer
-   work to exit. Unknown ownership or remaining work stops maintenance; do not
-   broaden the kill target.
-3. Run `CODEX_HOME="$TARGET_CODEX_HOME" "$VERIFIED_CODEX_BIN" app-server daemon stop`.
-   Both reviewed pins support this command. Use the matching 0.164.0 CLI for a
-   0.164.0 installation. Require exit 0 and `stopped` or `notRunning`, then check
-   the postconditions. Native may force-stop the listener after its configured
-   grace, so authorize the impact on in-flight work first. An unmanaged-listener
-   error requires a separate stop decision for that verified owner.
-4. Confirm zero live external writers using the target home, including TUI,
-   listener, updater and installer processes; unknown same-user identities are
-   not zero. Confirm the control alias and listener PID disappeared. The control
-   directory/startup lock and daemon operation/reservation locks normally remain.
-   Both pins can leave the updater PID record; 0.161.0 can also leave its dead
-   updater socket, while 0.164.0 normally removes that socket alias.
-5. Residual PID/socket entries still block the guard. Stopping a daemon is not
-   approval to delete arbitrary files. Only with separate operator approval and
-   proof that the recorded identity/work is stopped, recheck metadata and unlink
-   the exact stale entry itself. Do not follow its target, remove locks or delete
-   directories/packages. An unexplained or live alias remains a stop condition.
-6. Rerun the compatible tool's classify, then the existing stopped-service
-   backup/restore procedure. Reconfirm no external restart immediately before
-   destructive work. Do not automatically restart the external daemon afterward.
-
-Use the recorded physical tool release that recognizes all four roots for
-forward and full restore, including when selecting older application/native
-code. Older helpers still refuse these names; removing state to appease them is
-not a rollback procedure. Both-pin source links, actual stop order, negative
-control and remaining-file observations are recorded in
-[the dated daemon-home evidence](../evidence/codex-app-server/daemon-home-2026-10-28.md).
-
-An isolated, credential-free local-provider
-[measurement on 2026-10-27](https://github.com/sakuraiyuta/kaoiro/issues/817#issuecomment-6428858413)
-found the same 28 home-root names on 0.161.0 and 0.164.0 with both `exec` and
-`app-server`.
-Each case persisted a thread and completed turn; the existing classifier accepted
-all entries (23 state, 5 disposable), including the lock at the home root.
-Cloud-cache, daemon and plugin writer paths were not exercised by this check;
-the source-based exclusions and separate reviews below still apply.
-
-Use the recorded physical tool release whose classifier recognizes this lock
-for every state-aware operation, including rollback. Helpers without that
-classification refuse a lock-bearing home; switching back to older application
-code does not justify switching to an older, incompatible state helper or
-removing the lock.
-
-An explicitly configured `log_dir` can move the logs database and its lock
-([0.164.0 configuration](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/config/mod.rs#L4245-L4267)).
-Do not place it inside a disposable Codex home subtree such as `log`: that
-subtree classification would omit the logs database from the snapshot.
-Review custom database/log placement separately before changing configuration.
-
-`cloud-config-bundle-cache.json` and random home-root `.tmp` staging files remain
-unclassified. This exclusion assumes stored ChatGPT-token authentication with
-an ineligible workspace, without `CODEX_ACCESS_TOKEN`, workload identity, PAT,
-or agent identity overrides. Before logging into a Business/Edu/Enterprise or
-Sci/SciPlus workspace, migrating organizations, or selecting alternate
-authentication that could enable the cloud cache, complete a separate
-source-based classification review and install its compatible tool release. The
-[cache eligibility predicate](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/cloud-config/src/service.rs#L52-L64)
-guards both startup and background refresh. An unclassified cache can refuse
-the next update at preflight **and full state restore** when the current home is
-inventoried before promotion. Unknown temporary names also remain fail closed;
-neither their prefix nor zero-byte contents authorize disposal.
-
-### Resume and recover
-
-Ask the helper for the commands instead of composing them. `next` is
-read-only: it takes no lock and writes nothing.
-
-```sh
-node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" next "$install_root"
-node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
-  next "$install_root" "$transaction_uuid"
-```
-
-- `next <install-root>` prints each unfinished record's UUID and phase, then
-  its `next (resume):` and `next (recover):` lines. A terminal record with a
-  pending staging cleanup gets its `next (prune):` line. Each held
-  `.lock.update` or `.lock.links` is listed as `lock present:`, followed by
-  a `see:` line for [stale operation locks](#stale-operation-locks); whether
-  its owner is alive is for you to inspect.
-- `next <install-root> <uuid>` prints that record's whole row, including the
-  `restore`, `prune` and `rollback` lines of a terminal record.
-- With an unresolved schema-1 record, `next` prints the old-record guidance
-  and exits 0.
-
-Resume and recover always run from the record's physical tool release, not
-from a `current` symlink that may have changed; the other lines name the tool
-that printed them. Every argument is single-quoted (`'` is written `'\''`),
-so a line can be pasted into a POSIX shell as printed.
-
-A refusal prints its message and a safety instruction. If a record can be
-identified, it also prints that record's `next` lines. Preserve named home,
-snapshot, staging and aside objects, and inspect a lock before removing it.
-When an external Codex daemon is reported, stop external same-home writers and
-resolve runtime entries before retrying; never remove a held lock. A refusal
-before a run's first change leaves the record and service as they were; after a
-run settles, its printed lines describe the resulting record.
-
-#### Recovery table
-
-For an interrupted operation, inspect `next` and the worker result, preserve
-the named objects, and use the commands it prints. A lock left by a dead worker
-may be removed only after the inspection in
-[stale operation locks](#stale-operation-locks). Use the recorded physical
-tool release for `resume` or `recover`; its version need not be the current
-release. `--allow-dirty` is development-only; a printed recovery command may
-be refused for an untagged source.
-
-`resume` continues the recorded operation without reinstalling or rebuilding.
-`recover` returns a never-started forward to its unchanged source, cancels a
-`restore-prepared` attempt before replacement, or restores an unfinished forward in
-`start-intent`. Both commands use the recorded service and home; they do not
-select a new target from current configuration. `--detach` remains available.
-
-Restore explicitly selects any retained snapshot with
-`--restore-codex-backup`. There is no newest-only rule or historical receipt
-chain. Verify the payload, UUID, canonical home and original source/target
-release IDs/hashes before stopping. The snapshot's source release must still
-verify. Each admitted restore appends a new attempt and aside path to the
-same operation record. Consecutive and repeated selected restores are allowed.
-
-`restore-prepared` builds a verified sibling staging directory. After
-`replace-intent`, rename the live home aside and move current credential
-entries into staging. If an expected credential exists in both locations or
-neither, preserve both trees and refuse. Save `startRequested` while the home
-is absent; select the source release under the links lock before publishing
-the staged home. An absent explicit home makes the runner refuse Codex spawn.
-Once the home has been published, a boot may write it: resume does not repeat
-replacement or compare mutable state/credential contents against staging.
-Successful post-start checks mark `restored`. All earlier asides remain named,
-including after cancellation, another restore and prune.
-
-### Editing the runner environment
-
-A same-native code-only update requires no unfinished operation, and does not
-prove home-path agreement. State-aware admission and resume compare the
-canonical requested/recorded path with live and next-start settings. Editing
-`runner.env` in place or by rename is allowed when those paths and the
-selected service still agree. A new inode at the same canonical home path is
-also allowed; this check does not authenticate historical directory identity.
-Moving homes remains a separately approved relocation. Do not edit records
-or snapshot hashes to bypass a mismatch.
-
-### Old records and barriers
-
-N2 does not convert schema-1 records. Before first activation on a host,
-resolve every old unfinished transaction and retire every old retained backup
-with its previous physical tool. The new reader examines only old `phase`
-and `retired`: all transactions must be `completed`, `restored` or `retired`,
-and all backups must have `retired: true`. Obsolete receipt damage does not
-block that projection. Unknown, unreadable, unfinished or retained old records
-refuse mutation and release-protection output with the filename and previous
-tool guidance. Read-only `inventory <install-root>` lists old and v2 filenames.
-Old directories remain untouched. The first N2 deployment must use the same
-native hash; a pre-N2 source cannot enter an N2 state-aware forward.
-
-Files under `codex-state/barriers` are inert: the helper never reads, writes,
-repairs or deletes them. `accept`, `retire`, `abandon`, `repair-barrier` and
-the old per-step actions are unknown actions. There is no acceptance evidence,
-receipt, owner-PID authorization or automatic abandonment.
-
-### Prune and owned staging cleanup
-
-Explicitly discard a terminal operation's snapshot with the `next (prune):`
-line that `next <install-root> <uuid>` prints (see the
-[recovery guidance](#recovery-table)).
-
-Prune requires no history evidence and can remove a corrupt owned snapshot.
-It records durable `prune-intent`, the exact path, root device/inode and logical
-size before recursive removal. Retry after partial deletion without expecting
-an intact payload: an absent root completes retirement, while a symlink or
-reused root refuses. It keeps the operation record and every aside. Retained
-snapshots protect only their source release; unfinished operations additionally
-protect source, target/from and the physical tool. Historical terminal target
-and tool releases do not remain protected solely by that record.
-
-Owned staging removal is separately recorded with path, size and a pending
-flag before deletion. A failed removal remains visible and retryable through
-recovery/prune. Unrecorded orphan directories are not silently adopted or
-deleted. Manual removal of protected releases is prohibited.
-
-### Stale operation locks
-
-Operations acquire `.lock.update`, then `.lock.links` for record/link changes.
+Operations acquire `.lock.update`, then `.lock.links` for link changes.
 A held lock is never stolen. After worker death or boot, inspect the exact
 worker/unit and paths before removing only its stale locks. Confirm that no
-update/install/switch/helper you started remains alive and that the detached
+update/install/switch you started remains alive and that the detached
 `<service>-update.service` is not running. A build-directory cleanup failure
 can deliberately retain `.lock.update`; inspect and preserve that directory
 before clearing the lock. PID reuse or absence is not a state transition.
-Then run the lines that `next <install-root>` prints (see the
-[recovery guidance](#recovery-table)).
 
 ```sh
 rmdir "$install_root/.lock.update"
 rmdir "$install_root/.lock.links"
 ```
-
-A lock directory is not an operation record. Preserve every named snapshot,
-staging and aside tree while investigating; removing a stale lock does not
-settle an operation or justify changing its phase.
 
 ## See Also
 

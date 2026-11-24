@@ -1,7 +1,7 @@
 ---
 title: Reduce release publication and native Codex state protection to what releases and wrapper start/resume need
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-24
 date: 2026-10-22
 opened: 2026-10-22
 supersedes: []
@@ -138,3 +138,27 @@ landed in production release
 it retired the exhaustive branch table and class-specific advice. A refusal
 during a Codex native state update prints one safety instruction; when the
 helper identifies the record, it also prints that record's `next` guidance.
+
+## Addendum — operator decision (2026-11-24)
+
+The operator chose to remove the Codex state backup and restore and to keep
+the native check
+([issue #1246](https://github.com/sakuraiyuta/kaoiro/issues/1246#issuecomment-7111070280)).
+This replaces the 2026-11-05 decision to keep `recover`, `resume`, snapshots
+and state-aware updates.
+
+Of item 4, only two invariants remain: a usable home at launch, and no
+differing native binary without the operator's consent. The updater and the
+switch refuse a differing native unless the operator passes
+`--codex-native-change`. The verified snapshot, the return before the
+candidate's start, the restore, the durable start intent, the credential and
+classification rules for snapshots, the stopped-runner and empty-cgroup
+checks, resumable replacement, the home-path agreement and the protection of
+the snapshot's release are withdrawn. All of item 5 is withdrawn with them:
+the phase machine, the `codex-state/v2/` records, the explicit next-start
+`CODEX_HOME` requirement, the release protection and the snapshot prune.
+
+There is no tool for going back across a native change; it is the manual
+exception in
+[Codex native changes](../operations/runner-update-and-rollback.md#codex-native-changes).
+Implemented by [issue #1259](https://github.com/sakuraiyuta/kaoiro/issues/1259).

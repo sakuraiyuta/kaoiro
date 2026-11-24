@@ -2,7 +2,7 @@
 title: High-risk change release
 description: How to tell whether a change can stop the agents that would fix it, what to prepare first, the production-shape start gate for the runner, bulk restoration, and recovery when every agent has stopped.
 status: accepted
-last_updated: 2026-11-18
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
@@ -131,7 +131,7 @@ change and discard it afterwards. The operator does the work.
 | # | Check |
 |---|---|
 | B1 | The operator can open a shell on the runner host and on the server host without an agent, and has actually done so. The runner unit belongs to a user manager, so use the runner user's own login (`systemctl --user` must work). |
-| B2 | The rollback targets are resolved and written down: the release ids that `current` and `previous` point to. If the update changes a Codex native pin, also the verified physical path of the tool release and the snapshot directory (see [Codex state backup](runner-update-and-rollback.md#codex-state-backup)). |
+| B2 | The rollback targets are resolved and written down: the release ids that `current` and `previous` point to. If the update changes a Codex native pin, the way back crosses it (see [Codex native changes](runner-update-and-rollback.md#codex-native-changes)). |
 | B3 | If the same update deploys the server: the last good transaction id, and the recovery archive exists ([Server update and rollback](server-update-and-rollback.md#44-failure-handling)). |
 | B4 | The rollback commands are written with resolved values, not placeholders, in a note that does not live in an agent's session. The note holds no secret. |
 | B5 | For a change confined to one engine: a standby agent of another engine, alive under a different runner, is named and idle. Otherwise write "plain shell only". |
@@ -407,13 +407,13 @@ Bulk restore requests restoration of existing offline entries; it does not
 exercise the ordinary path for spawning a brand-new agent, so a defect there
 can remain undetected until the first new spawn.
 
-A Codex pin change may require the state-aware steps in
-[Codex state backup](runner-update-and-rollback.md#codex-state-backup). A restore
-can discard post-snapshot conversations from every affected restored Codex peer;
-preserve the snapshot and quarantine/aside trees under that procedure. Before
-rollback, check how to handle shared state written by restored peers, including
-the Claude home, Codex home and state, and Antigravity session index, using
-the information prepared in B2 and B3.
+A Codex pin change migrates the Codex home on its first start. Going back
+across it is the exception in
+[Codex native changes](runner-update-and-rollback.md#codex-native-changes)
+and can lose Codex conversations. Before rollback, check how to handle shared
+state written by restored peers, including the Claude home, Codex home and
+state, and Antigravity session index, using the information prepared in B2 and
+B3.
 
 ## 5. When every agent has stopped
 
@@ -426,7 +426,7 @@ link to them.
 |---|---|---|
 | After an update the runner unit is `failed` with exit 78 | Start shim, verifier, config or Node. Read the journal line printed before the exit; the exit covers several causes and the message has misled before (issue #249) | [Rollback](runner-update-and-rollback.md#463-rollback), then diagnose offline |
 | The runner is up but every agent aborts right after start, or no turn completes | A wrapper turn-lifecycle fault (TL) | [Rollback](runner-update-and-rollback.md#463-rollback); restore the agents afterwards |
-| The rollback is refused (native hashes differ, retained state references, an incomplete transaction) | A Codex native pin changed | [Rollback](production.md#5-rollback) and [Codex state backup](runner-update-and-rollback.md#codex-state-backup); if the snapshot recovery fails, [fresh setup](runner-update-and-rollback.md#second-level-recovery-fresh-setup) |
+| The rollback is refused (the Codex native differs) | A Codex native pin changed | [Codex native changes](runner-update-and-rollback.md#codex-native-changes); if Codex then fails on the migrated home, [fresh home](codex-home.md#fresh-home-after-going-back-across-a-native-change) |
 | The server is unhealthy after the update | Server | [Server update and rollback § 4.4](server-update-and-rollback.md#44-failure-handling) and [Deployment troubleshooting](deployment-troubleshooting.md) |
 | You cannot open a shell without an agent | B1 was not satisfied | Nothing here helps; B1 exists to prevent this |
 

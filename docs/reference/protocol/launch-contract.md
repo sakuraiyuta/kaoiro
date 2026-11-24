@@ -2,7 +2,7 @@
 title: Launch contract between the runner and a wrapper
 description: How the runner finds, starts, configures, supervises and stops a wrapper process ("contract 1"), the engine-specific work the runner does outside that contract, and the paths a wrapper hands to its engine.
 status: accepted
-last_updated: 2026-11-23
+last_updated: 2026-11-24
 related: [protocol, architecture]
 ---
 
@@ -57,7 +57,7 @@ responsibilities are not part of contract 1
 | Session existence | Answers "does this session exist" per engine. For Claude Code, Codex and Antigravity it reads the engine's native session store. For Grok it asks the engine over ACP (`session/list`, paged) and does not read Grok's files. |
 | Engine probes | Runs `agy models`, `agy --version`, the Claude probe script and a Grok ACP `initialize` itself. |
 | Catalog in the register | Builds the per-engine catalog entry of the runner's register message. |
-| Release and deploy tooling | Carries update and rollback tooling for Codex state, and release verification requires each `node_modules/@kaoiro/<engine>/dist/cli.js`. |
+| Release and deploy tooling | Carries update and rollback tooling, including the Codex native check, and release verification requires each `node_modules/@kaoiro/<engine>/dist/cli.js`. |
 
 ## Paths a wrapper hands to its engine
 

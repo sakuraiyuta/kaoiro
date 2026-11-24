@@ -2,13 +2,13 @@
 title: Runner artifacts
 description: The release-profile install-root layout and the activation contract governing what may become `current`.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
 # Runner artifacts
 
-#### Layout
+## Layout
 
 ```text
 <install-root>/
@@ -41,7 +41,7 @@ spanning both once let a **nested install delete an update's in-use build
 directory** (`--from-repo` failed entirely; issue #219 review round 2). Lock
 directories use the `.lock.*` prefix and match neither glob.
 
-#### Activation contract (what may become `current`)
+## Activation contract (what may become `current`)
 
 | Target | Contract |
 |---|---|
@@ -56,7 +56,7 @@ runner** (the release-identity contract in [ADR-0018](../../adr/0018-runner-dist
 `--allow-dirty` is for development hosts; in production it makes `current` a name
 whose contents are not fixed.
 
-#### Restart policy and exit codes
+## Restart policy and exit codes
 
 - On SIGTERM, the runner stops its subordinate wrappers and ends with **exit 0**.
   Because systemd uses `Restart=on-failure` and launchd uses
@@ -114,14 +114,15 @@ whose contents are not fixed.
 - [Runner update and rollback](../../operations/runner-update-and-rollback.md).
 - [Multi-host deployment architecture](../../architecture/deployment.md).
 
-## Codex state-aware deployment tools
+## Codex native check
 
 The manifest builder includes every regular file under `deploy/`. Candidate
-and recovery-tool verification additionally uses `--require-deploy-manifest`
-with `--require-manifest --hash`; it independently requires the existing deploy
-entry points and Codex state modules. Legacy releases remain verifiable without
-this stricter mode for restoration, but cannot serve as backup-capable tools.
-Native payload comparison uses both actual backend resolvers, requires their
-canonical paths to agree, rejects ambiguous payloads, and hashes that executable.
-Native payloads remain outside the general runtime manifest. See the
-[Codex state backup runbook](../../operations/runner-update-and-rollback.md#codex-state-backup).
+verification additionally uses `--require-deploy-manifest` with
+`--require-manifest --hash`; it independently requires the existing deploy
+entry points, `kaoiro-runner-codex-state.mjs` and `codex-native.mjs`.
+`codex-snapshot.mjs` and `codex-service.mjs` are empty and stay only because
+older updaters require their names. Native payload comparison uses both actual
+backend resolvers, requires their canonical paths to agree, rejects ambiguous
+payloads, and hashes that executable. Native payloads remain outside the
+general runtime manifest. See
+[Codex native changes](../../operations/runner-update-and-rollback.md#codex-native-changes).

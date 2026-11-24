@@ -1,7 +1,7 @@
 ---
 title: Production deployment manual
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 description: Command cheat-sheet for bringing up, updating and rolling back a production deployment; each step links to its canonical runbook.
 ---
 
@@ -122,17 +122,18 @@ systemctl --user stop kaoiro-runner &&
   systemctl --user start kaoiro-runner
 ```
 
-Runner, Codex native pin changed (restore the recorded state snapshot):
+Runner, across a Codex native pin change (exceptional; Codex conversations
+can be lost). `$tool_release` is the current release:
 
 ```sh
-"$tool_release/deploy/kaoiro-runner-update.sh" \
-  --install-dir "$install_root" --service kaoiro-runner \
-  --restore-codex-backup "$snapshot_dir" --codex-home "$codex_home" --detach
+systemctl --user stop kaoiro-runner &&
+  "$tool_release/deploy/kaoiro-runner-switch.sh" --rollback \
+    --install-dir "$install_root" --codex-native-change &&
+  systemctl --user start kaoiro-runner
 ```
 
-Detail: [Runner update and rollback § 4.6.3](runner-update-and-rollback.md#463-rollback),
-[Codex state backup](runner-update-and-rollback.md#codex-state-backup) and
-[fresh setup](runner-update-and-rollback.md#second-level-recovery-fresh-setup).
+Detail: [Runner update and rollback § 4.6.3](runner-update-and-rollback.md#463-rollback)
+and [Codex native changes](runner-update-and-rollback.md#codex-native-changes).
 If the server rollback fails: [Server update and rollback § 4.4 (3)](server-update-and-rollback.md#44-failure-handling).
 
 ## First run on an existing (pre-CLI) deployment

@@ -1,7 +1,7 @@
 ---
 title: "Codex home for production"
 status: implemented
-last_updated: 2026-11-20
+last_updated: 2026-11-24
 ---
 
 # Codex home for production
@@ -81,26 +81,6 @@ CODEX_HOME="$H" "$BIN" login status   # expect: Logged in using ChatGPT
 | `[[hooks.*]]` and `[hooks.state]` | Carried, with re-keyed trust entries. See "Hooks". |
 | `rules/default.rules` | Not carried: it holds the operator's own interactive approvals. |
 | `sessions/`, `state_5.sqlite`, `thread_history_1.sqlite`, other databases, caches, plugins, history | Not carried. Created fresh by the pinned binary. |
-
-### State-aware backup and restore
-
-The state-aware updater preserves `AGENTS.md`, `agents`, `hooks` and
-`model-profiles` as symlinks, without following or copying their external
-instruction targets. Restore recreates the recorded link text, not an older
-version of the external ai-settings repository. `plugins`, including installed
-bundles under `plugins/cache` and plugin data, is backed-up state. The distinct
-home-root `cache` is disposable and is re-fetched after restore. Snapshots remain
-private because plugin/configuration content can include sensitive values.
-The daemon settings/recovery tree, installed packages and per-thread TUI
-capability markers are also state. The Unix listener control tree is disposable,
-but a remaining runtime alias/PID marker or held daemon lock refuses admission.
-Do not remove a lock to bypass refusal. Stop external same-home writers and
-resolve any stale entry through the authorized
-[external-daemon procedure](runner-update-and-rollback.md#external-codex-daemons-and-their-home-entries).
-Every pin update requires the candidate classifier's pre-stop check; see
-[Codex state backup](runner-update-and-rollback.md#codex-state-backup).
-After an interrupted or refused operation, follow the printed `next` lines
-and the [recovery guidance](runner-update-and-rollback.md#recovery-table).
 
 ### Hooks
 
@@ -245,47 +225,36 @@ marker (step 5).
    the peer runs without its profile. Then start the others.
 6. Verify the separation (below).
 
-## Fresh setup after failed snapshot recovery
+## Fresh home after going back across a native change
 
-When [snapshot recovery](runner-update-and-rollback.md#463-rollback) fails, an
-operator may recover by rebuilding the home, accepting loss of Codex history,
-login and cache. Keep the runner stopped; preserve the failed home and private
-transaction records. Follow the registry/release handling in
-[second-level recovery](runner-update-and-rollback.md#second-level-recovery-fresh-setup)
-before restarting. An old operation record or a leftover barrier file does not certify a fresh home.
-Keep snapshots and failed trees outside cloud-synchronized or externally
-backed-up directories. After recovery, explicitly record whether old credential
-entries are deleted or retained privately with a deletion date. New login does
-not prove old token revocation; use account-side revocation if available.
+After a rollback across a Codex native change (see
+[Codex native changes](runner-update-and-rollback.md#codex-native-changes)),
+the older Codex may not work on the home the newer native has already
+migrated. Then rebuild the home, accepting the loss of Codex history, login and
+cache. Keep the runner stopped and move the directory that `CODEX_HOME` in
+`runner.env` names aside.
+Keep the old tree private and outside cloud-synchronized or externally
+backed-up directories, and record whether its credential entries are deleted or
+retained with a deletion date. A new login does not prove that old tokens were
+revoked; use account-side revocation if available.
 
 Recreate the directory at its configured canonical path, then repeat the
 operator login, minimal configuration, instruction links and hook trust steps
-above using the verified selected release's pinned binary. Do not copy auth or
-credential files out of the failed home. New state does not recover old session
+above using the running release's pinned binary. Do not copy auth or
+credential files out of the old home. New state does not recover old session
 IDs: start peers as new sessions explicitly, and verify the first turn and hook
 marker as in Cutover. This procedure is manual, never an updater error trap.
 
 ## Rollback of home isolation
 
-This procedure reverses home isolation, not a Codex pin migration. After a
-pin update, use the [state-aware runner rollback](runner-update-and-rollback.md)
-to restore verified state at its original canonical path while preserving
-current credentials. A managed restore requires an explicit next-start
-`CODEX_HOME` and agreement among the recorded/requested, live and next-start
-canonical home paths and the selected installed service. It permits a new
-home inode at the same path, without a historical receipt chain. See
-[resume and recover](runner-update-and-rollback.md#resume-and-recover).
-Changing homes is a separate, approved relocation procedure; no record is
-edited to make a restore pass. Files in `codex-state/barriers` are ignored.
-Removing them does not enable a differing-native code-only rollback, and the
+This procedure reverses home isolation, not a Codex pin change; for that, see
+[Codex native changes](runner-update-and-rollback.md#codex-native-changes).
+Changing homes is a separate, approved relocation procedure. The native
 comparison does not certify a home that `runner.env` or the unit redirects
-outside the managed path. Editing `runner.env` has restore consequences; read
-[editing the runner environment](runner-update-and-rollback.md#editing-the-runner-environment)
-first.
+outside the managed path.
 
 To return to the shared home, set `CODEX_HOME` explicitly to the canonical
-shared-home path and restart the runner. State-aware operations require it
-to remain explicit. The wrappers use
+shared-home path and restart the runner. The wrappers use
 `~/.codex` again and the old threads resume there. Threads created in the
 dedicated home are not resumable in `~/.codex`. The dedicated home can stay or be
 deleted. Rolling back restores the shared-home exposure described above.
