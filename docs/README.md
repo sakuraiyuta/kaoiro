@@ -97,6 +97,12 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [0070](adr/0070-device-authorization-grant.md) | Device authorization grant for native clients | accepted |
 | [0071](adr/0071-dashboard-i18n.md) | Dashboard UI language — typed in-repo string tables, switch without reload | accepted |
 | [0072](adr/0072-rooms-single-membership-send-boundary.md) | Rooms with single membership and a server-side send boundary | accepted |
+| [0073](adr/0073-initial-room-at-launch.md) | The room a new agent starts in | accepted |
+| [0074](adr/0074-standing-design-for-engine-pin-bumps.md) | A standing design for engine pin bumps | accepted |
+| [0075](adr/0075-runner-engine-launch-contract.md) | The launch contract between the runner and an engine | accepted |
+| [0076](adr/0076-single-kaoiro-entry-point.md) | One kaoiro entry point and the run verb | accepted |
+| [0077](adr/0077-antigravity-authentication.md) | Declare Antigravity authentication before launch | accepted |
+| [0078](adr/0078-antigravity-over-acp.md) | Host Antigravity over ACP with one agy process per prompt | accepted |
 <!-- adr-index:end -->
 
 Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh docs` (the script lives in the skill, not in this repository). Do not edit inside the markers manually.
