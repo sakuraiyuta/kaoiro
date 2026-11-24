@@ -2,7 +2,7 @@
 title: Glossary
 description: kaoiro domain terminology (wrapper, server, client, adapter, filter, persona, and state names).
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 related: [overview, system-overview, protocol]
 ---
 
@@ -16,8 +16,8 @@ Standardizes kaoiro domain terminology.
 
 | Term | Meaning |
 |---|---|
-| Wrapper | A TypeScript process that launches and observes one agent, then translates it into common events. It hosts the engine SDK or CLI (Claude Agent SDK, Codex app-server, or the Antigravity `agy` CLI). |
-| Engine | The kind of AI-agent CLI hosted by a wrapper. The values are `claude-code`, `codex` ([ADR-0032](../adr/0032-codex-adapter.md)), and `antigravity` ([ADR-0057](../adr/0057-antigravity-adapter.md)). Determine feature availability from `ext.session_capabilities`, not the engine name ([ADR-0034](../adr/0034-session-capabilities-advertisement.md)). |
+| Wrapper | A TypeScript process that launches and observes one agent, then translates it into common events. It hosts the engine SDK or CLI (Claude Agent SDK, Codex app-server, the Antigravity `agy` CLI, or Grok over ACP). |
+| Engine | The kind of AI-agent CLI hosted by a wrapper. The values are `claude-code`, `codex` ([ADR-0032](../adr/0032-codex-adapter.md)), `antigravity` ([ADR-0057](../adr/0057-antigravity-adapter.md)), and `grok` ([Grok ACP](engines/grok-acp.md)). Determine feature availability from `ext.session_capabilities`, not the engine name ([ADR-0034](../adr/0034-session-capabilities-advertisement.md)). |
 | Runner | A supervisory layer, one per host, that spawns, stops, and restarts wrapper processes; registers the host; and lists sessions ([ADR-0023](../adr/0023-host-runner-architecture.md)). It does not terminate the data path. |
 | Server | The Elixir/Phoenix component that aggregates multiple wrappers and retains and distributes state. |
 | Client | A frontend that visualizes state through characters and expressions. Its implementation is a separate project; this repository includes only a reference dashboard ([ADR-0007](../adr/0007-client-separation-reference-dashboard.md)). |

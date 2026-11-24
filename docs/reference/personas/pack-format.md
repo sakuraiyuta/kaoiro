@@ -2,7 +2,7 @@
 title: Persona pack format
 description: Internal structure and manifest.json schema of the persona-pack ZIP distribution unit.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-24
 related: [personas, persona-personality-injection, protocol]
 ---
 
@@ -102,9 +102,9 @@ manifest.json). A length of 200–1000 Japanese characters is a SHOULD guideline
 (there is no hard upper limit).
 
 The server retains this body unchanged on import. When delivering it to a
-wrapper, if `KAOIRO_FOOTER_DIR` is configured, it concatenates `system-footer.md`
-and `user-footer.md` from that directory to the end and pushes it. If it is not
-configured, it concatenates only the built-in default system footer. The server
+wrapper, the server appends the common footer: `system-footer.md` from
+`KAOIRO_FOOTER_DIR` when that file is present, otherwise the built-in
+default, then `user-footer.md` when that file is present. The server
 is responsible for this composition ([ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md)
 F5).
 

@@ -167,8 +167,9 @@ with an explicit compose override.
 
 Work has no per-director or per-assignee limit. The store-wide record cap
 (`work_max_records`, 4,096 records including terminal work retained for 30
-days), the receipt caps and the link cap are compiled values in
-`config/config.exs`; no environment variable changes them.
+days) and the receipt caps are compiled values in `config/config.exs`.
+The link cap is 32 links per work, compiled in `KaoiroServer.WorkReducer`.
+No environment variable changes them.
 
 `KAOIRO_WORK_NOMINATED_PER_PRINCIPAL` and `KAOIRO_WORK_ACTIVE_PER_ASSIGNEE` are
 no longer read. If they remain in the deployment's `.env`, startup succeeds and

@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-11-23
+last_updated: 2026-11-24
 ---
 
 # Runner configuration
@@ -87,8 +87,9 @@ relayed to wrappers; they get their URL from the runner's own `server_url`.
 Release installations share `<install-root>/engines/<name>@<version>/`.
 Old-layout releases prefer a present store pin and otherwise use their
 bundled engine. The bundled JavaScript release needs a stored executable
-for each managed engine it starts. A missing pin causes wrapper spawn
-or the Claude catalog probe to fail. The launch shim supplies the store
+for Claude Code and Codex. A missing pin fails that engine's wrapper
+spawn, and a missing Claude pin fails the Claude catalog probe.
+Antigravity and Grok are not store pins. The launch shim supplies the store
 location. Acquiring a different pin leaves the running release's choice
 unchanged.
 
@@ -167,7 +168,7 @@ Behaviour settings of the runner and its wrappers live in `runner.config.json`
 (issue #469). A deprecated `KAOIRO_*` variable still overrides the key; it
 logs a deprecation warning and will be removed in a later release. Settings
 are per host; engine settings go in the engine's block (`claude_code`,
-`codex` or `antigravity`) and settings for every engine are top-level keys.
+`codex`, `antigravity` or `grok`) and settings for every engine are top-level keys.
 
 Precedence is variable, then `runner.config.json`, then the default. The
 runner does not copy a variable into the wrapper config: when a variable is
@@ -371,9 +372,9 @@ settings (phase-34 Stage B6, issue #292).
 - `extra_models` (`EngineModelInfo[]`) — the same operator-declaration
   mechanism as Codex's `extra_models` above, reusing the identical
   `parseExtraModels` / `mergeExtraModels` helpers: lets the operator
-  declare a model that the register-time `agy models` probe (or the pinned
-  1.1.26 snapshot fallback) does not yet return, without waiting for a
-  kaoiro release. Only `value` is required; every field accepts only
+  declare a model that the register-time `agy models` probe (or the static
+  snapshot from `antigravityCatalogSnapshot()`) does not yet return,
+  without waiting for a kaoiro release. Only `value` is required; every field accepts only
   `EngineModelInfo`'s INPUT subset — `resolved_model` is upstream-derived
   metadata and is never read from config. `display_name`
   defaults to `value`; omitting `effort_levels` means no effort UI is

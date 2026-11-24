@@ -2,7 +2,7 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-11-18
+last_updated: 2026-11-24
 related: [protocol]
 ---
 
@@ -110,8 +110,9 @@ Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
   all recognise a declared model too, not only the register's launch-time
   list. Absent / empty on either field means no declarations for that
   engine. See [Codex model settings](../../operations/codex-model-settings.md#d-kaoiros-own-extra_models-declaration-issue-292) (D) and
-  [Runner configuration](runner.md)'s "Codex 設定" / "Antigravity
-  configuration" sections for the declaration syntax and merge semantics.
+  [Runner configuration](runner.md)'s "Codex configuration" /
+  "Antigravity configuration" sections for the declaration syntax and
+  merge semantics.
 
 - `antigravity_cli_path` / `antigravity_probe_timeout_ms` — runner-local
   values derived from `antigravity.cli_path` / `antigravity.probe_timeout_ms`.
@@ -187,8 +188,8 @@ and [ADR-0064](../../adr/0064-codex-app-server-approval-requests.md).
 Selecting `untrusted` or `on-request` also requires an operator dialog for
 `request_session_reset`. The dialog is skipped only when both the dispatched
 turn and latest selection are `never` and permission state is unblocked;
-loosening a running strict turn takes effect on its next turn. Exec and
-app-server with the axis off use `never`.
+loosening a running strict turn takes effect on its next turn. App-server
+with the axis off uses `never`.
 
 ## Claude native continuation ownership
 

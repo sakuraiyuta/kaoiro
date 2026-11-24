@@ -2,7 +2,7 @@
 title: Personality configuration (common footer)
 description: The operator-changeable scope of the personality prompt -- the common-footer files, their composition order, and when a change takes effect.
 status: accepted
-last_updated: 2026-10-04
+last_updated: 2026-11-24
 related: [protocol]
 ---
 
@@ -25,8 +25,9 @@ footer composition becomes the prompt.
 | `system-footer.md` | kaoiro default (environment awareness + peer-routing rules + collaborative-behavior guidance + when and how to write the agent's status line with `set_status_line`, [status line](../inter-agent/status-line.md)). When present, replaces the built-in default completely | Use the default text built into the server binary |
 | `user-footer.md` | Free-form operator overlay; an environment-specific file analogous to env | Add nothing |
 
-- Composition order: `preset(claude_code) + personality + system-footer +
-  user-footer` (separated by `\n\n`).
+- Composition order: `personality + system-footer + user-footer`
+  (separated by `\n\n`). There is no engine preset in the server
+  composition.
 - There is **only one of each shared by all personas**. There is no
   persona-specific file (`user-footer.<persona_id>.md`). Express persona-specific
   instructions in the pack's `personality.md`.
