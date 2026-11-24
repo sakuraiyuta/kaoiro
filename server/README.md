@@ -101,7 +101,8 @@ toggle. See
   ならダッシュボードは繋がらず空表示になる**(ローカル開発・デモは通常
   トークンを設定する)。有効な認証手段はダッシュボードが
   `GET /session/auth-methods` で取得して入力欄を出し分ける。
-- **`KAOIRO_WRAPPER_TOKENS` 未設定 → リリース(`:prod`)は全ラッパーを拒否
+- **`KAOIRO_WRAPPER_TOKENS` 未設定 → リリース(`:prod`)は、サーバが発行した
+  署名トークン(runner の spawn 経路が注入、ADR-0024)以外のラッパーを拒否
   (fail-closed、issue #133)**。認証を無効化して任意のラッパーを通すのは
   `mix` を `:dev` / `:test` で動かした場合だけで、loopback 限定の開発向け。
 - **`KAOIRO_RUNNER_TOKENS` 未設定 → 同じ規則を host_id 単位でランナーに適用
@@ -123,7 +124,7 @@ it with mode 0600 when absent and append its host pair to the server value.
 
 | env | 形式 | 例 |
 |---|---|---|
-| `KAOIRO_CLIENT_TOKENS` | `token:role[:name],...`(role = `viewer` / `operator`。任意の 3 番目の name は kaoiro 内 user の表示名初期値、issue #187) | `dev-op:operator:Ops Bot,view1:viewer` |
+| `KAOIRO_CLIENT_TOKENS` | `token:role[:name],...`(role = `viewer` / `operator` / `admin`。任意の 3 番目の name は kaoiro 内 user の表示名初期値、issue #187) | `dev-op:operator:Ops Bot,view1:viewer` |
 | `KAOIRO_WRAPPER_TOKENS` | `agent_id:token,...` | `lab-pc-1.claude-a:wrap-tok` |
 | `KAOIRO_RUNNER_TOKENS` | `host_id:token,...` | `lab-pc-1:runner-tok` |
 | `KAOIRO_OAUTH_{GOOGLE,GITHUB,NEXTCLOUD}_CLIENT_{ID,SECRET}` | provider ごとの OAuth クレデンシャル(Nextcloud は `KAOIRO_OAUTH_NEXTCLOUD_BASE_URL` も) | — |
@@ -132,7 +133,7 @@ it with mode 0600 when absent and append its host pair to the server value.
 
 **形式の注意**: `KAOIRO_CLIENT_TOKENS` は `<token>:<role>[:<name>]` の順。
 生成したシークレット(例 `openssl rand -hex 32`)は **`<token>` 側(コロンの
-前)** に置き、role(`operator` / `viewer`)を後ろに書く。省略可能な
+前)** に置き、role(`viewer` / `operator` / `admin`)を後ろに書く。省略可能な
 `<name>` はこの token での初回ログイン時にだけ使われる表示名の初期値で、
 以後は kaoiro 側で独立管理される(issue #187)。例
 `KAOIRO_CLIENT_TOKENS=<hex>:operator`。`KAOIRO_WRAPPER_TOKENS` は逆順で
@@ -162,7 +163,7 @@ mix kaoiro.env        # SECRET_KEY_BASE 生成・token 3 種の組み立てま�
 トークンは手入力と自動生成(32 バイト hex)を選べる。DETS パスは同梱
 `docker-compose.yaml` が設定するのでウィザードでは聞かず、生成した `.env` に
 コメントとして残る。runner 側の設定は別ウィザード
-([runner/README.md](../runner/README.md) の「設定ウィザード」)で、トークンは
+([runner/README.md](../runner/README.md) の「Setup wizard」)で、トークンは
 自動連携しないため値を貼り合わせる。
 
 手で書く場合:
@@ -173,7 +174,8 @@ cp .env.example .env
 # .env を編集:
 #   SECRET_KEY_BASE       … `mix phx.gen.secret` で生成
 #   KAOIRO_CLIENT_TOKENS  … 必須(未設定だとダッシュボードが接続拒否される)
-#   KAOIRO_WRAPPER_TOKENS … 必須(未設定だとリリースが全ラッパーを拒否)
+#   KAOIRO_WRAPPER_TOKENS … 手動起動のラッパーを使うなら必須(未設定だと
+#                           runner が発行する署名トークン以外を拒否)
 #   KAOIRO_RUNNER_TOKENS  … 必須(未設定だとリリースが全ランナーを拒否)
 docker compose up -d --build
 # ダッシュボード: http://localhost:4000/?token=<KAOIRO_CLIENT_TOKENS の token>
@@ -183,7 +185,9 @@ docker compose up -d --build
 されない)、サーバのコードを変えたら `--build` も付けてコンテナを作り直す。
 
 既定で `127.0.0.1:4000` のみに bind(loopback、`docker-compose.yaml` の
-`ports` マッピング)。LAN 公開時は両トークン必須 + 中央 nginx(WebSocket の
+`ports` マッピング)。LAN 公開時は client の認証(トークンまたは OAuth)と
+runner のトークン(手動起動のラッパーがあれば wrapper のトークンも)を必須に
+し、中央 nginx(WebSocket の
 Upgrade/Connection 転送・`proxy_read_timeout` > 60s)配下に置く。VPN 内
 限定なら nginx なしの plain-HTTP 直結も選べる(`KAOIRO_PLAIN_HTTP` +
 `KAOIRO_PUBLISH_IP`、[docs/operations/network-and-login.md](../docs/operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)
@@ -233,7 +237,9 @@ set -a && . ./.env && set +a && mix phx.server
 cd ../dashboard && pnpm dev
 
 # 3) runner(別ターミナル、repo ルートから。エージェントの起動・再開は
-#    ダッシュボードの「+ 起動」から行う)
+#    ダッシュボードの「+ 起動」から行う)。runner は build 済みの wrapper
+#    package を読み込むので、先に依存導入と wrapper の build を済ませる
+pnpm install && pnpm -C wrapper build
 cd runner &&
   pnpm exec tsx watch src/kaoiro.ts runner runner.config.json
 ```
