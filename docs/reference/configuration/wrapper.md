@@ -243,8 +243,7 @@ not control a direct launch. The startup diagnostic remains
 
 The runner no longer captures or strips these obsolete variables and does not
 relay the old config keys. It still keeps `CODEX_HOME` out of Claude wrappers.
-See [host delivery settings](runner.md#host-delivery-ceilings-and-defaults)
-and the [C5 release prerequisite](../../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement).
+See [host delivery settings](runner.md#host-delivery-ceilings-and-defaults).
 A false ceiling retains FIFO root scheduling. With negotiated mechanisms,
 stored off still allows operator-priority root scheduling while preventing
 new folds/cuts; replacing an old false with stored off can change root order.

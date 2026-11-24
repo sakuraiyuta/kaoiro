@@ -156,8 +156,6 @@ relayed; like other unknown engine-block keys, they are silently ignored,
 even if their values are not booleans. They cannot restrict delivery.
 Use the engine's ceiling, new-row default or per-agent live policy instead.
 Approval-axis controls, including `KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS`, remain.
-The first release containing C5 requires the operator's old-version clean-start
-check and [rollback-window completion](../../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement).
 
 The runner explicitly registers every advertised engine's resolved default and
 bounded [launch metadata](../protocol/runner-control.md#launch-delivery-metadata).
