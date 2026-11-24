@@ -174,8 +174,8 @@ The wrapper (`agent-common`) keeps corresponding local state
   terminal is injected into SDK input (the old “informational only” prompt
   consumed a model turn for a no-reply notice).
 - **Recheck queued input at the SDK input boundary**: A peer's inbound mode can
-  become obsolete while an earlier host turn is still running. All three wrappers
-  reclassify queued items when the peer queue advances and again immediately
+  become obsolete while an earlier host turn is still running. The Claude Code, Codex
+  and Antigravity wrappers reclassify queued items when the peer queue advances and again immediately
   before the host hands input to the engine. Codex applies the latter check before
   `turn/start`. A now-terminal item is
   acknowledged without an SDK turn; surviving items use their current mode.

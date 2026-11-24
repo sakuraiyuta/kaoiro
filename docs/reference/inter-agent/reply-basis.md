@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-11-14
+last_updated: 2026-11-24
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -76,7 +76,6 @@ call. Unknown notification shapes and reused retired prompt IDs remain unbound.
 | Adapter | Origin binding |
 | --- | --- |
 | Claude | A confirmed root `UserPromptSubmit.prompt_id` owns its `PreToolUse.tool_use_id`; a validated background-task notification (explicit or timeout-promoted background Bash, background Agent, or Workflow; see [Claude events](../engines/claude-events.md)) either folds into that live owner or starts an independent token from confirmed completed input. The SDK MCP callback resolves `_meta["claudecode/toolUseId"]` and combines native cancellation with turn retirement. |
-| Legacy Codex exec | A private ToolHost endpoint and captured token per execution turn; endpoint lifetime ends before another turn begins |
 | Codex app-server | Bridge-preserved `x-codex-turn-metadata` thread/turn IDs matched to the authoritative start result and wrapper token; absent/mismatched metadata is rejected |
 | Antigravity | Native engine boundary remains a measurement gate; no full-engine protection claim or v1 activation follows from ToolHost-only measurements |
 

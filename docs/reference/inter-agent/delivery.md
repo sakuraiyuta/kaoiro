@@ -213,11 +213,7 @@ event), optional `included` (evidence `ticket_used` in v1), `settled`,
 not retired or reported lost, and the prefix crosses it when earlier gaps close.
 Stage changes are never injected into model input.
 
-For old Codex exec wrappers, `exec_input_written` means the first `iterator.next()` on
-`runStreamed(input).events` resolves with the child’s first stdout JSONL value.
-By then the SDK has spawned the child, written the input, and closed stdin;
-`runStreamed()` itself resolves before spawn. The name is historical: the
-evidence is first-event receipt. The wrapper reports stages only when the join
+The wrapper reports stages only when the join
 reply supplies the server-issued `inter_agent_delivery_incarnation`; it never
 fabricates one.
 
@@ -248,9 +244,7 @@ turn that was being started carries it: inputs still queued behind it were never
 written and settle with `failed_before_handoff`. The asynchronous peer notice for
 an unknown outcome carries the `timeout` code ("the peer may still be mid-turn,
 wait before retrying"), not `api_error`, so the sender is not told to retry an
-input that may already have been processed. Older Codex exec wrappers do not
-have this: their SDK writes the input without a callback, so a failure before the
-first event still settles with `failed_before_handoff`.
+input that may already have been processed.
 
 The server rejects an unknown `handoff` value with `invalid_delivery_stage`, and
 the wrapper keeps a rejected report pending until the delivery identity changes.
@@ -327,14 +321,8 @@ stage history expires after its retention window; the summary survives for
 the recipient ledger's lifetime and resets when that ledger is deleted.
 
 `yield` is downgraded to early steering when eligible; Codex has no measured
-tool-boundary cut. An omitted Codex backend selects app-server; the runner's
-`codex.backend: "exec"` is rejected by current configuration readers. Old exec
-wrappers advertise no in-flight input; their wire values remain accepted.
-Codex runs on `app-server` only ([Codex backend retirement](../../operations/codex-backend-switch.md)).
-The default change was tracked by
-[issue 564](https://github.com/sakuraiyuta/kaoiro/issues/564), and the dated
-observation is in the
-[C0 baseline record](../../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md). Live per-agent policy
+tool-boundary cut. Codex runs on `app-server` only
+([Codex backend retirement](../../operations/codex-backend-switch.md)). Live per-agent policy
 toggles need a revisioned server acknowledgement and are outside this phase.
 
 ### Claude native continuation ownership
@@ -359,8 +347,7 @@ that server is not proof that negotiated delivery cannot happen.
 Old runners and wrappers can disagree between launch projection and live
 capability during a mixed install; use the actual wrapper declaration and
 server policy state for live delivery.
-A Codex app-server wrapper advertises `early: "steer", yield: "none"`; old Codex exec wrappers
-advertise `early: "none", yield: "none"`. An Antigravity wrapper declares no
+A Codex app-server wrapper advertises `early: "steer", yield: "none"`. An Antigravity wrapper declares no
 delivery modes at join: the server sends no `inter_agent_delivery_modes` echo,
 the wrapper treats the link as `legacy`, and messages queue (phase 4 is tracked by
 [issue 567](https://github.com/sakuraiyuta/kaoiro/issues/567)). The Codex app-server

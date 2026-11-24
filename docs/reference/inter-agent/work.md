@@ -151,9 +151,6 @@ per-work receipts before total.
 | `work_max_records` | `store` |
 | `work_receipts_per_work_principal` | `work_principal` |
 | `work_receipts_per_principal` | `principal` |
-| `work_pending_transfers` | `holds` (twice its configured value) or `transfers` |
-| `work_verdicts_per_work` | `work` |
-| `work_accepted_verdicts_per_work` | `work` |
 | `work_links_per_work` | `work` (32) |
 
 Unknown/malformed diagnostics are ignored without changing the refusal; old
