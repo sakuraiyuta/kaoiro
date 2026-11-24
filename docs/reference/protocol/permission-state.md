@@ -1,7 +1,7 @@
 ---
 title: Permission state contract
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 description: The ext.permission two-axis model and the requested/submitted/effective state machine for a permission change.
 ---
 
@@ -20,10 +20,9 @@ description: The ext.permission two-axis model and the requested/submitted/effec
 
 The Claude adapter has a six-mode → two-axis mapping table (ADR-0033 F2,
 display approximation) and stamps `enforcement: "mode"`. The Codex adapter
-projects its spawn sandbox_mode and fixed `approval: "never"` because exec
-has no approval flow (ADR-0033 F3), stamping `enforcement: "os"` (its
-sandbox is the real OS sandbox). On the app-server backend with the approval
-opt-in, approval is a third field of the requested / submitted / effective
+projects its spawn sandbox_mode and fixed `approval: "never"` (ADR-0033 F3),
+stamping `enforcement: "os"` (its sandbox is the real OS sandbox). With the
+approval opt-in, approval is a third field of the requested / submitted / effective
 triple instead ([ADR-0064](../../adr/0064-codex-app-server-approval-requests.md)). The Antigravity adapter stamps
 `enforcement: "advisory"` because its `--sandbox` flag was measured to have
 no effect; the wrapper enforces the cell by inspecting tool arguments,

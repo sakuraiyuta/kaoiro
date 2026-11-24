@@ -1,7 +1,7 @@
 ---
 title: Permission request contract
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 description: The set_permission wire contract -- request validation, relay, and acknowledgement.
 ---
 
@@ -11,8 +11,7 @@ description: The set_permission wire contract -- request validation, relay, and 
 
 **Contract: accepted; capability-gated rollout.** `set_permission` changes an
 engine's sandbox/network/approval configuration for the next execution. Codex
-applies it at app-server `turn/start` while retaining the thread ID. Older exec
-wrappers used fresh SDK options for each execution while retaining the session ID. Antigravity implements it as of ADR-0057 F4c Stage B0, mutating its
+applies it at app-server `turn/start` while retaining the thread ID. Antigravity implements it as of ADR-0057 F4c Stage B0, mutating its
 per-turn advisory gate and clamping every axis to a host-local launch ceiling
 (below). The operation is not Claude's `set_permission_mode`: its six values
 encode intent/classifier/approval semantics, map only approximately to sandbox,

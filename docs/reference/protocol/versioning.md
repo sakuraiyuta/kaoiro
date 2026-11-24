@@ -1,7 +1,7 @@
 ---
 title: Protocol versioning policy
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-24
 description: The flat outer-version stamping policy and the staged completion inventory for every wrapper/server/client/runner route.
 ---
 
@@ -85,19 +85,19 @@ generated artifact; it is not inferred from runner identity.
 
 ADR-0063 phase 1 adds `delivery_stage`, `yield_claim`,
 `work_status_request` and
-`work_op_result_request` as flat `version: "0"` wrapper controls. Their
-policy registrations land with the shared wrapper implementation. The
+`work_op_result_request` as flat `version: "0"` wrapper controls. The
 existing `delivery_status_request` accepts an optional message key.
 
 #### Server → client (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-`envelope` is stamped by its frame key. The remaining 22 events
+`envelope` is stamped by its frame key. The remaining 24 events
 (`history_replay_envelope` / `snapshot` / `task_snapshot` / `delivery_snapshot` / `history` /
 `hosts` / `directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
 `agent_deleted` / `delivery_status` /
 `session_reset_started` / `session_reset_completed` /
 `session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result` /
-`wrapper_build_info` / `status_line_snapshot` / `status_line` / `status_line_settings`) receive flat
+`wrapper_build_info` / `status_line_snapshot` / `status_line` / `status_line_settings` /
+`rooms_snapshot` / `delivery_policy_changed`) receive flat
 `version` from server `push_versioned/3`. Internal PubSub and runner claims are not wire SoT.
 
 ADR-0063 phase 1 adds operator-only `work_changed` and
@@ -131,7 +131,7 @@ route from bypassing it. Each layer therefore has a test that turns red when byp
 | Server | `require_operator/4` invokes `warn_on_version_mismatch/3` after the role check (viewers cannot forge versions to create logs). | Enumerate `handle_in` event names from the module AST, push an invalid version to each, and assert warnings; new clauses are included automatically. |
 | Wrapper | `#bindServerEvent` is the sole `channel.on` call and its event type must be a `SERVER_EVENT_VERSION_POLICY` key. | Assert the registered event set equals policy and each event is registered exactly once; Phoenix invokes every callback, so a raw duplicate `channel.on` is visible by count. |
 | Runner | `bindControlEvents` loops over the event table to bind. | A source-regex test (`runner/test/transport.test.ts`) asserts `channel.on(` appears exactly once in `transport.ts` and that the one call is `bindControlEvents(channel, ...)` — a raw duplicate bind would fail it. |
-| Client | `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` validate 21 server → client events on receipt. | Integration tests cover every policy omission/match/mismatch and continued acceptance, and check `c.on(` appears only in the bind function. |
+| Client | `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` validate 25 server → client events on receipt. | Integration tests cover every policy omission/match/mismatch and continued acceptance, and check `c.on(` appears only in the bind function. |
 
 #### Non-map payload handling
 

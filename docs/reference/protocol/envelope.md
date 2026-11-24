@@ -1,7 +1,7 @@
 ---
 title: Envelope contract
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-24
 description: The common envelope's outer frame keys, wire shape, and the ext.engine identifier.
 ---
 
@@ -77,7 +77,7 @@ flowchart LR
 
 Engine identifier attached to `state_change`:
 
-- Value: `"claude-code" | "codex" | "antigravity"` (same set as host
+- Value: `"claude-code" | "codex" | "antigravity" | "grok"` (same set as host
   `capabilities`).
 - Source: the engine adapter adds it at startup and includes it on every later
   `state_change`.

@@ -1,7 +1,7 @@
 ---
 title: Channels and directional messages
 status: accepted
-last_updated: 2026-11-10
+last_updated: 2026-11-24
 description: Wrapper/server/client/runner channel events by direction, and the client's Phoenix Channels transport contract.
 ---
 
@@ -102,7 +102,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | client → server | `create_room` / `rename_room` | `{ version, name }` / `{ version, room_id, name }`. Operator-only. Reply `{ room: { id, name } }`; the name follows the agent display name rule. Errors `invalid_room_name`, `missing_room_id`, `unknown_room`, `rooms_unavailable` and `room_change_unconfirmed` ([rooms](../inter-agent/rooms.md#storage-and-failure)). |
 | client → server | `move_agent` / `delete_room` | `{ version, agent_id, room_id }` / `{ version, room_id }`. Operator-only. Saves the membership and closes the conversations the change splits; reply `{ closed_count, member_count }` (conversations closed, agents moved). A move to the agent's current room replies `{ closed_count: 0, member_count: 0 }`. Errors as above plus `lobby_protected`, `unknown_agent`, `invalid_agent_id` and `missing_agent_id`. After `room_change_unconfirmed`, rejoin the channel for a fresh `rooms_snapshot` and read `list_conversations` again; a late save may leave the dashboard stale until it rejoins. |
 | client → server | `preview_room_move` / `preview_room_delete` | Same payloads as the two requests above. Operator-only, changes nothing. Reply `{ closing_count, member_count }`, an advisory count of what the real request would close if it ran now. |
-| client → server | `list_conversations` | `{ version }` is an operator-only pull query. It replies `{ conversations: [{ conversation_id, agents, status, started_at, turns, tokens }, ...], conversations_incomplete?: true }`, newest first. `conversations_incomplete: true` means a newest-first prefix was returned because further complete entries would exceed the transport frame budget. |
+| client → server | `list_conversations` | `{ version }` is an operator-only pull query. It replies `{ conversations: [{ conversation_id, participants, status, started_at, turns, tokens }, ...], conversations_incomplete?: true }`, newest first. `conversations_incomplete: true` means a newest-first prefix was returned because further complete entries would exceed the transport frame budget. |
 | client → server | `list_session_events` | `{ version, agent_id }` is an operator-only pull query for one agent's `session_lifecycle` timeline, with the same `require_operator` gate as `list_conversations` / `list_users` (phase-33, [ADR-0055](../../adr/0055-compaction-resume-and-lifecycle-log.md)). `agent_id` is format-validated only (no existence check): `delete_agent` does not purge the `session_lifecycle` store, so a deleted agent's history stays queryable for post-hoc debugging — that retention is a deliberate decision, not an oversight, made together with this query (issue #200 closing note); an unknown/never-existed `agent_id` returns `{ "events": [] }`, whereas an unreachable or timed-out `SessionLifecycleEvents` store replies with error `session_lifecycle_unavailable` (issue #682). Replies `{ events: [{ kind, trigger, at, details? }, …], events_incomplete?: true }`, newest first; permission events retain their typed details, and `session_reset_started` entries with `details.origin: "director"` include a read-time `details.work_title` when the referenced work is still retained in `WorkStore` (omitted when expired/absent or when `WorkStore` is unavailable, falling back to `details.work_id`). `events_incomplete: true` means a newest-first prefix was returned because further complete entries would exceed the transport frame budget (`TransportLimits.max_frame_bytes/0`, 8,000,000 bytes minus 1,024-byte safety margin); the key is omitted when all events fit. |
 | server → client | `session_reset_started` | `{ request_id, agent_id, mode, origin: "operator" \| "agent_self" \| "director", previous_session_id?, reason?, requested_by?, work_id? }` is operator-only; dashboard shows progress and disables Composer. `requested_by` (`{kind: "agent", id}`) and `work_id` are present exactly when `origin` is `director` ([ADR-0068](../../adr/0068-director-requested-peer-session-reset.md)). ([../adr/0021-role-information-disclosure-policy.md](../../adr/0021-role-information-disclosure-policy.md)) |
 | server → client | `session_reset_completed` | `{ request_id, agent_id, mode, previous_session_id?, to_session_id: string \| null, clear_watermark?: string }` is emitted after fresh wrapper join confirms completion. `/clear` includes a SessionStarts-derived watermark used to filter panes. |
@@ -235,7 +235,7 @@ For a supporting wrapper this temporarily produces `policy_unconfirmed`
 until that incarnation acknowledges the new revision; C2 can show pending.
 An accepted reply does not acknowledge wrapper application.
 
-Claude and both Codex backends declare delivery policy support. The wrapper
+Claude and Codex declare delivery policy support. The wrapper
 installs each valid current-join policy synchronously before sending the
 two-field acknowledgement. A supporting join without a valid row stays
 fenced; a reconnect does not restore readiness from a cached row. Invalid
@@ -246,8 +246,7 @@ See [policy recovery](../../operations/server-update-and-rollback.md#delivery-po
 An absent policy echo is an old server: the wrapper follows its launch-time
 mechanism only when it has no valid policy history or its last valid policy
 was on. Remembered off remains fenced. A present unsupported echo stays
-fenced. Antigravity does not declare policy support; Older Codex exec wrapper participation
-does not enable steering.
+fenced. Antigravity and Grok do not declare policy support.
 
 Older wrappers discard unknown policy downgrade reasons while retaining
 delivery authority, so granted normal input remains usable without those
@@ -318,8 +317,8 @@ nor acknowledges a delivery-policy revision.
 Fresh spawn optionally accepts `delivery_policy: "on" | "off"`, consumed by
 the server before runner broadcast. The seed precedence is explicit choice,
 registered engine default, then on. Runner register optionally declares
-`in_flight_defaults`, a map from canonical `claude-code`, `codex`,
-`antigravity` keys to strict booleans. Legacy authenticated join backfills on;
+`in_flight_defaults`, a map from bundled engine keys (`claude-code`, `codex`,
+`antigravity`, `grok`) or spawn-capable external engine IDs to strict booleans. Legacy authenticated join backfills on;
 existing rows, including off, survive restore, reset and re-registration.
 The C1W wrapper implementation and C3 producer/flag retirement are separate
 children of [the rollout plan](../../plans/issue-463-default-inflight-delivery.md).

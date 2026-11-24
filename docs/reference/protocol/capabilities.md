@@ -1,7 +1,7 @@
 ---
 title: Session capabilities contract
 status: accepted
-last_updated: 2026-11-15
+last_updated: 2026-11-24
 description: The ext.session_capabilities shape, stamp timing, and per-engine advertised values.
 ---
 
@@ -27,16 +27,14 @@ cannot represent.
 - `supports_session_reset: boolean` / `session_reset_modes?: ("new" | "clear")[]` — whether the operator can run `session_reset` and which modes are available. This is separate from exposing the agent's `request_session_reset` tool, which the engines register behind per-call operator approval — Claude through canUseTool, Codex through the wrapper-side gate inside the bridge tool call (ADR-0043, 2026-09-14 amendment), Antigravity and Grok through the same wrapper-side gate with the broker asked on every call. The same advertisement gates an agent as the **target** of a director's `request_peer_session_reset` ([ADR-0068](../../adr/0068-director-requested-peer-session-reset.md)): `false` answers `unsupported_session_reset` to the director as it does to the operator.
 - `supports_context_usage: boolean` — whether this session provides an authoritative context-window snapshot in `ext.context` (phase 21, [ADR-0040](../../adr/0040-context-usage-capability.md)). UI has three states:
   - **absent** — unstamped capability from an old wrapper during rolling upgrade; hide the context row rather than treating it as unsupported.
-  - **explicit `false`** — adapter cannot provide a context snapshot (older Codex exec wrappers and Antigravity); show “unsupported”.
+  - **explicit `false`** — adapter cannot provide a context snapshot (Antigravity); show “unsupported”.
   - **explicit `true`** — adapter promises to stamp `ext.context`; show a meter when it arrives and a loading placeholder before then.
-- Claude is `true`: SDK `getContextUsage()` can return exact `totalTokens`/`maxTokens`/`percentage` (best-effort even immediately after init; failures leave “loading”). Codex app-server is `true`: it publishes a qualified native response snapshot and omits `ext.context` while the reading is unknown. Older Codex exec wrappers report `false`: its input-only completion usage is not a context snapshot. See [app-server events](../engines/codex-app-server-events.md) and [exec events](../engines/codex-exec-events.md).
+- Claude is `true`: SDK `getContextUsage()` can return exact `totalTokens`/`maxTokens`/`percentage` (best-effort even immediately after init; failures leave “loading”). Codex app-server is `true`: it publishes a qualified native response snapshot and omits `ext.context` while the reading is unknown. See [app-server events](../engines/codex-app-server-events.md).
 
 - **Stamp timing**: **from the first state_change** directly after spawn (do not
   wait for a session_init-equivalent event). Codex stamps static capabilities
-  before lazy app-server thread setup. Older exec wrappers delayed `thread.started`
-  until the first turn. Waiting for thread setup would make a newly started Codex agent display falsely as
-  “no capability” under the fail-closed default
-  ([codex-sdk-events](../engines/codex-exec-events.md)). Claude also stamps from its first
+  before lazy app-server thread setup. Waiting for thread setup would make a newly started Codex agent display falsely as
+  “no capability” under the fail-closed default. Claude also stamps from its first
   state_change for symmetry.
 - **UI decision principle**: The UI must not determine capability from the
   engine name (`ext.engine`) (review prohibition,
@@ -67,7 +65,8 @@ cannot represent.
 - **`supports_model_switch` / `supports_effort_switch`** (implemented in
   phase-16, 2026-07-13, [ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md)
   F4): Advertise whether `set_model` / `set_effort` are accepted mid-session.
-  Claude is always `true` because its SDK supports them; Codex is `true` when
+  Claude's model switch is always `true`; its effort switch is `true` when the
+  active model has effort levels. Codex is `true` when
   the catalog resolver can return `EngineModelInfo[]` (auth mode and plan are
   known), and `false` when unknown / the catalog is empty. The engine updates
   the advertisement whenever catalog / auth mode changes.
@@ -76,7 +75,7 @@ cannot represent.
   negotiation. Antigravity additionally requires all runner-supplied sandbox,
   network-access, and approval ceilings; absent capability fields remain
   fail-closed for legacy peers. Codex advertises `permission_switch_axes` only
-  on the app-server backend with the approval opt-in:
+  with the approval opt-in:
   `approval: {max: "never", values: ["untrusted", "on-request", "never"]}`,
   with sandbox and network at their most permissive ceiling
   ([ADR-0064](../../adr/0064-codex-app-server-approval-requests.md)). `values`
