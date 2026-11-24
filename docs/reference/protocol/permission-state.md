@@ -34,8 +34,14 @@ restricted read-only shell commands, and explicitly classified observational
 Git commands may proceed without a dialog. Unknown syntax, `.git` writes,
 commit, merge, remote/network commands, package installation, destructive
 commands, and any compound command with a non-allowed segment ask the
-operator. Git path operands must resolve inside the agent cwd; nonexistent
-in-cwd paths are accepted because they only fail with `ENOENT`. Revision
+operator. The shell allowlist applies only under the `danger-full-access`
+sandbox; under `workspace-write`, shell tools are denied without network
+access and otherwise ask (`never` denies). Path operands are checked for
+`git diff`, `log`, `show` and `add`, which must resolve inside the agent cwd;
+nonexistent in-cwd paths are accepted because they only fail with `ENOENT`.
+`git status`, `ls-files`, `ls-tree`, `cat-file`, `describe` and `rev-parse`
+pass without an argument check
+([issue #1264](https://github.com/sakuraiyuta/kaoiro/issues/1264)). Revision
 syntax is limited to `HEAD`, `HEAD~n`, branch-like names, two-dot/three-dot
 ranges, and `<revision>:<path>`; that last path is checked independently and
 ambiguous syntax asks. Pre-existing repository or global configuration can
