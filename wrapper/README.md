@@ -93,7 +93,7 @@ on <other>` を 1 行出す。
 | `model` | ✓(catalog 値) | 起動時未指定推奨 | 起動時 model pick。Codex は ChatGPT-plan で account default 委任のため空推奨([codex/src/catalog.ts](codex/src/catalog.ts)) |
 | `effort` | ✓(catalog 値) | ✓(catalog 値) | 起動時 effort pick。閉じ列挙は engine catalog 側 |
 | `permission_mode` | ✓(6 値、[ADR-0033 F4 追補](../docs/adr/0033-permission-model-dual-axis.md)) | 無視(stderr warn) | 起動時 mode。Codex は launch-fixed(ADR-0033 F3) |
-| `allowed_tools` | ✓ | 無視(stderr warn) | ツール ceiling(ローカル天井、サーバから拡張不可)。省略=読み取り専用 |
+| `allowed_tools` | ✓ | 無視(stderr warn) | 確認なしで通す tool の一覧(local の設定だけで決まり、サーバからは広げられない)。一覧の外の tool も実行でき、`permission_mode` に従って承認を求めるか自動承認する。省略=読み取り専用の tool |
 | `sandbox` | 無視(stderr warn) | ✓(3 値) | OS sandbox 軸(ADR-0033 F3)。閉じ列挙:`read-only` / `workspace-write` / `danger-full-access` |
 | `network_access` | 無視(stderr warn) | ✓(bool) | `workspace-write` 内でネットワーク許可するか。既定 `false` |
 
