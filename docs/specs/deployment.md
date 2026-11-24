@@ -21,7 +21,7 @@ Moved: 1.1-1.3 to [Server install runbook](../operations/server-install.md), the
 
 ### 1.1 Issue authentication tokens (three required)
 
-Moved to [Server install runbook](../operations/server-install.md#11-issue-authentication-tokens-three-required).
+Moved to [Server install runbook](../operations/server-install.md#11-issue-authentication-tokens).
 
 ### 1.2 Create `.env`
 
