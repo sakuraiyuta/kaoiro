@@ -362,7 +362,9 @@ Heartbeats use the Channels built-in provided by the client library.
     spawn, so pre-registration is unnecessary in runner-only deployments (#133).
   - **Unset `KAOIRO_RUNNER_TOKENS`** has the same dev/test relaxation and prod fail-closed
     behavior, but runners have no signed-token path, so all runners are rejected in prod (#133).
-  - Production must set client, wrapper, and runner env values ([threat-model](../../architecture/security-threat-model.md)).
+  - Production must set the client and runner env values. The wrapper value is
+    needed only for hand-started wrappers, because a spawned wrapper
+    authenticates with a server-minted token ([threat-model](../../architecture/security-threat-model.md)).
 - **Spawned wrappers** authenticate with the server-issued per-agent token in addition to the
   pre-registered token ([ADR-0024](../../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4).
   Direct manual pre-registration remains as above.
