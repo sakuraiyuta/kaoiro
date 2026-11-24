@@ -3,7 +3,13 @@
 # at the previous one (issue #219, ADR-0018).
 #
 #   kaoiro-runner-switch.sh <release-id> [--install-dir <dir>] [--allow-dirty]
+#                           [--codex-native-change]
 #   kaoiro-runner-switch.sh --rollback   [--install-dir <dir>]
+#                           [--codex-native-change]
+#
+# Both forms refuse to cross a Codex native change unless
+# --codex-native-change is given; going back across one is manual, see
+# docs/operations/runner-update-and-rollback.md#codex-native-changes.
 #
 # ACTIVATION IS RESTRICTED TO CLEAN IDS. Only a 40-hex SHA may become
 # `current` by default; `-dirty` and `unknown` need --allow-dirty and are for
@@ -50,6 +56,7 @@ id=
 root=
 rollback=no
 allow_dirty=no
+native_accept=
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -65,6 +72,10 @@ while [ $# -gt 0 ]; do
       ;;
     --allow-dirty)
       allow_dirty=yes
+      shift
+      ;;
+    --codex-native-change)
+      native_accept=accept-native-change
       shift
       ;;
     -h | --help)
@@ -154,8 +165,8 @@ switch_to() {
     _old=$(readlink "$root/current")
   fi
 
-  kaoiro_codex_state guard "$root" "$_id" "" ||
-    kaoiro_die "Codex native check refused $_id; see docs/operations/runner-update-and-rollback.md#codex-native-changes" 78
+  kaoiro_codex_state guard "$root" "$_id" "$native_accept" ||
+    kaoiro_die "Codex native check refused $_id; pass --codex-native-change to cross a native change; see docs/operations/runner-update-and-rollback.md#codex-native-changes" 78
 
   if [ "$_old" = "releases/$_id" ]; then
     printf '%s: current already points at %s\n' "$prog" "$_id" >&2
@@ -205,8 +216,8 @@ if [ "$rollback" = yes ]; then
     cur=$(readlink "$root/current")
   fi
 
-  kaoiro_codex_state guard "$root" "$prev_id" "" ||
-    kaoiro_die "Codex native check refused the rollback; see docs/operations/runner-update-and-rollback.md#codex-native-changes" 78
+  kaoiro_codex_state guard "$root" "$prev_id" "$native_accept" ||
+    kaoiro_die "Codex native check refused the rollback; pass --codex-native-change to cross a native change; see docs/operations/runner-update-and-rollback.md#codex-native-changes" 78
 
   # The rollback itself goes first. A run that dies right after it leaves
   # `current` rolled back — the outcome that was asked for — with `previous`

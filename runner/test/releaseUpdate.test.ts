@@ -673,6 +673,20 @@ await import("./cli.js");
       expect(argv.slice(argv.indexOf("--") + 2)).toContain("--allow-dirty");
     });
 
+    it("forwards --codex-native-change to the worker", () => {
+      const log = join(dir, "systemd-run-argv");
+      const archive = makeReleaseTarball(work, B);
+
+      const result = runUpdate(["--tarball", archive, "--codex-native-change", "--detach"], {
+        KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+        KAOIRO_SYSTEMD_RUN: recordingSystemdRun(log),
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const argv = readFileSync(log, "utf8").split("\n").filter((l) => l !== "");
+      expect(argv.slice(argv.indexOf("--") + 2)).toContain("--codex-native-change");
+    });
+
     it("前回の失敗ユニットが残っていても queue できるよう reset-failed する", () => {
       const archive = makeReleaseTarball(work, B);
 
@@ -808,6 +822,25 @@ await import("./cli.js");
     expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
     expect(existsSync(join(root, ".lock.update"))).toBe(false);
     expect(existsSync(join(root, ".lock.links"))).toBe(false);
+  });
+
+  it("refuses a different Codex native before the stop unless the operator accepts it", () => {
+    const archive = makeReleaseTarball(work, B, { extraFiles: { "node_modules/@openai/codex/vendor/fixture/bin/codex": "#!/bin/sh\nexit 1\n" } });
+    const stub = systemctlStub({ execStart: goodExecStart() });
+
+    const refused = runUpdate(["--tarball", archive], { KAOIRO_SYSTEMCTL: stub });
+    expect(refused.status).toBe(78);
+    expect(refused.stderr).toContain("Codex native pin differs");
+    expect(refused.stderr).toContain("--codex-native-change");
+    expect(readCalls().filter((c) => / (stop|start) /.test(c))).toEqual([]);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+
+    // Both the pre-stop check and the switch after the stop need the flag.
+    const accepted = runUpdate(["--tarball", archive, "--codex-native-change"],
+      { KAOIRO_SYSTEMCTL: stub });
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
   });
 
   it("a held ordinary update lock refuses before prepare or stop", () => {
@@ -1011,7 +1044,22 @@ await import("./cli.js");
 
     expect(result.status).toBe(70);
     expect(result.stderr).toContain("did NOT reach a good state");
-    expect(result.stderr).toContain("--rollback");
+    expect(result.stderr).toContain(" --rollback --install-dir ");
+    expect(result.stderr).not.toContain("--codex-native-change");
+  });
+
+  it("a run with --codex-native-change carries the flag in its rollback hint", () => {
+    const archive = makeReleaseTarball(work, B, {
+      cliVersionOverride: revisionOf("something-else"),
+      cliBuildInfoOverride: { revision: revisionOf("something-else") },
+    });
+
+    const result = runUpdate(["--tarball", archive, "--codex-native-change"], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain(" --rollback --codex-native-change --install-dir ");
   });
 
   it("識別ラベルの表記が変わっても、revision を attest していれば成功する", () => {

@@ -14,6 +14,9 @@
 #                        pruned, whatever this is set to
 #   --allow-dirty        permit activating a `-dirty` / `unknown` release.
 #                        Development only — see kaoiro-runner-switch.sh
+#   --codex-native-change
+#                        permit a target whose Codex native differs from
+#                        the current release (no state is copied)
 #   --detach             queue this same command as a transient systemd user
 #                        unit and return immediately (see below)
 #
@@ -82,6 +85,7 @@ service=kaoiro-runner
 build_target=
 keep=3
 allow_dirty=no
+native_change=no
 detach=no
 
 while [ $# -gt 0 ]; do
@@ -135,6 +139,10 @@ while [ $# -gt 0 ]; do
       ;;
     --allow-dirty)
       allow_dirty=yes
+      shift
+      ;;
+    --codex-native-change)
+      native_change=yes
       shift
       ;;
     --detach)
@@ -209,6 +217,7 @@ if [ "$detach" = yes ]; then
   # argument list is where this kind of code goes wrong.
   set -- --install-dir "$root" --service "$service" --keep "$keep"
   [ "$allow_dirty" = no ] || set -- "$@" --allow-dirty
+  [ "$native_change" = no ] || set -- "$@" --codex-native-change
   [ -z "$tarball" ] || set -- "$@" --tarball "$tarball"
   [ -z "$release_tag" ] || set -- "$@" --from-release "$release_tag"
   if [ -n "$repo" ]; then
@@ -388,14 +397,21 @@ engines_script="$root/releases/$id/deploy/kaoiro-runner-engines.sh"
 [ -x "$engines_script" ] || kaoiro_die "candidate engines script missing" 78
 "$engines_script" install --install-dir "$root"
 
-kaoiro_codex_state guard "$root" "$id" "" ||
-  kaoiro_die "Codex native check refused $id before stopping the runner; see docs/operations/runner-update-and-rollback.md#codex-native-changes" 78
+native_accept=
+native_flag=
+if [ "$native_change" = yes ]; then
+  native_accept=accept-native-change
+  native_flag=" --codex-native-change"
+fi
+kaoiro_codex_state guard "$root" "$id" "$native_accept" ||
+  kaoiro_die "Codex native check refused $id before stopping the runner; pass --codex-native-change to cross a native change; see docs/operations/runner-update-and-rollback.md#codex-native-changes" 78
 kaoiro_preflight_build_format "$root/releases/$id" "$allow_dirty" ||
   kaoiro_die "Target build format refused before stopping the runner" 78
 printf '%s: stopping %s\n' "$prog" "$service" >&2
 "$systemctl_bin" --user stop "$service"
 set -- "$id" --install-dir "$root"
 [ "$allow_dirty" = no ] || set -- "$@" --allow-dirty
+[ "$native_change" = no ] || set -- "$@" --codex-native-change
 if ! "$deploy_dir/kaoiro-runner-switch.sh" "$@" >/dev/null; then
   printf '%s: switch failed; restarting the previous release\n' "$prog" >&2
   "$systemctl_bin" --user start "$service" || true
@@ -408,7 +424,7 @@ running=$(kaoiro_read_machine_identity "$root/current" "${id%-dirty}" "$allow_di
 if [ "$start_failed" = yes ] || ! kaoiro_identity_attests_revision "$running" "${id%-dirty}" "$allow_dirty"; then
   printf '%s: update did NOT reach a good state; roll back with:\n' "$prog" >&2
   printf '  %s --user stop %s\n' "$systemctl_bin" "$service" >&2
-  printf '  %s --rollback --install-dir %s\n' "$deploy_dir/kaoiro-runner-switch.sh" "$root" >&2
+  printf '  %s --rollback%s --install-dir %s\n' "$deploy_dir/kaoiro-runner-switch.sh" "$native_flag" "$root" >&2
   printf '  %s --user start %s\n' "$systemctl_bin" "$service" >&2
   exit 70
 fi

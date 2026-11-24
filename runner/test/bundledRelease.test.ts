@@ -172,6 +172,28 @@ it("accepts a differing native only with the fixed accept word", () => {
   expect(readlinkSync(join(installed, "current"))).toBe(`releases/${legacy}`);
 });
 
+it("crosses a native change in either direction only with the flag", () => {
+  installDifferingNative();
+  const current = join(installed, "current");
+  const previous = join(installed, "previous");
+  const forward = run("switch",
+    [bundled, "--install-dir", installed, "--codex-native-change"]);
+  expect(forward.status, forward.stderr).toBe(0);
+  expect(readlinkSync(current)).toBe(`releases/${bundled}`);
+
+  const refused = switchTo("--rollback");
+  expect(refused.status).toBe(78);
+  expect(refused.stderr).toContain("--codex-native-change");
+  expect(readlinkSync(current)).toBe(`releases/${bundled}`);
+  expect(readlinkSync(previous)).toBe(`releases/${legacy}`);
+
+  const back = run("switch",
+    ["--rollback", "--install-dir", installed, "--codex-native-change"]);
+  expect(back.status, back.stderr).toBe(0);
+  expect(readlinkSync(current)).toBe(`releases/${legacy}`);
+  expect(readlinkSync(previous)).toBe(`releases/${bundled}`);
+});
+
 it("passes a first install and keeps no release for Codex state", () => {
   expect(install().status).toBe(0);
   expect(stateTool(["guard", installed, bundled, ""]).status).toBe(0);
