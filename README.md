@@ -8,14 +8,13 @@
 
 # kaoiro (kao-iro, 'complexion' or 'how someone looks')
 
-kaoiro runs, watches and orchestrates several CLI AI agents at once, giving
-each one a face and a name.
+kaoiro runs, watches and orchestrates several CLI AI agents at once, each with
+a face and a personality. See your agents at a glance.
 
 <p align="center">
   <a href="https://sakuraiyuta.github.io/kaoiro/#intro-film">
     <img src="docs/images/kaoiro-intro-en-poster.png" width="640"
-         alt="Poster of the 108-second kaoiro introduction film. Opens the
-              film on the website.">
+         alt="kaoiro introduction film (108 seconds)">
   </a>
 </p>
 
@@ -28,11 +27,10 @@ each one a face and a name.
 > every machine where agents run. Treat it like an SSH key to those
 > hosts, and read [SECURITY.md](SECURITY.md) before deploying.
 
-> **Status**: research prototype. It is developed mainly for daily use by the
-> author and members of their laboratory, and it makes no guarantees
-> about maintenance or responses to issues. Issues are welcome, but the time
-> available to address them is limited. See [CONTRIBUTING.md](CONTRIBUTING.md)
-> for details.
+> **Status**: research prototype. It is developed mainly for the author's own
+> daily use, and it makes no guarantees about maintenance or responses to
+> issues. Issues are welcome, but the time available to address them is
+> limited. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 A system for **running, watching and orchestrating several CLI AI agents at
 once** (such as Claude Code, Codex, Antigravity, and Grok Build). kaoiro launches agents
@@ -59,7 +57,7 @@ Agents are launched and tuned from the same screen:
        alt="Launch dialog: host, persona, working directory, engine, model,
             permission mode and an optional initial prompt">
   <img src="docs/images/settings-drawer.png" height="360"
-       alt="Settings drawer: language, card display options and grid order">
+       alt="Settings drawer: language, display options and grid order">
 </p>
 
 The dashboard interface is available in Japanese and English. It follows the
