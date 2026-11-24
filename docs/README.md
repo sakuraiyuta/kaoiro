@@ -9,6 +9,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [specs/](specs/) | Pre-taxonomy feature specifications — dissolved into `architecture/`, `reference/`, `operations/`, `evidence/` and `contributing/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368), completed via [plans/phase-35](plans/phase-35-docs-migration.md)); moved pages leave a stub |
 | [evidence/](evidence/) | Dated measurements and their limits — [index](evidence/README.md) |
 | [operations/](operations/) | Operator runbooks |
+| [release/](release/README.md) | One note per production release: changes since the previous release, upgrade steps, known issues |
 | [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md), the [pre-gate](contributing/pre-gate.md) that runs before a full suite, and the [Agent SDK bump checklist](contributing/agent-sdk-bump.md) |
 | [plans/](plans/) | Phase-based implementation plans and status |
 | [open-questions/](open-questions/) | Unresolved issues |
@@ -143,6 +144,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 ## Antigravity documentation
 
 - Adapter rationale: [Antigravity adapter](architecture/antigravity-adapter.md).
+- Operator setup: [Antigravity authentication](operations/runner-install.md#antigravity-authentication) ([ADR-0077](adr/0077-antigravity-authentication.md)).
 - Event and state contract: [Antigravity events](reference/engines/antigravity-events.md).
 - Tool and permission contract: [Antigravity tools and permissions](reference/engines/antigravity-tools-permissions.md).
 - Dated CLI evidence: [Antigravity CLI contract](evidence/antigravity/cli-contract.md).
@@ -176,7 +178,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Architecture and adapter entry: [backend ownership](architecture/codex-backends.md).
 - Exact contracts: [transport](reference/engines/codex-app-server.md), [session/bridge](reference/engines/codex-app-server-session.md), [events/telemetry](reference/engines/codex-app-server-events.md), [settings/permission](reference/engines/codex-app-server-settings.md), [display history](reference/engines/codex-app-server-history.md).
 - Dated measurements: [daemon home and maintenance](evidence/codex-app-server/daemon-home-2026-10-28.md), [transport spikes](evidence/codex-app-server/transport-spikes-2026-09-14.md), [compatibility](evidence/codex-app-server/stage1-compatibility.md), [U1 backend preparation](evidence/codex-app-server/issue-564-u1-compatibility-2026-10-27.md), [session/bridge](evidence/codex-app-server/session-and-bridge.md), [projection/history](evidence/codex-app-server/projection-and-history.md), [settings/permission](evidence/codex-app-server/settings-and-permission.md), [Host composition](evidence/codex-app-server/host-composition.md).
-- Backend operations: [backend retirement note](operations/codex-backend-switch.md), [dedicated Codex home](operations/codex-home.md), [runner selector contract](reference/configuration/runner.md#codex-backend), and [packaged rollback evidence](evidence/codex-app-server/backend-rollback-artifact.md).
+- Backend operations: [backend retirement note](operations/codex-backend-switch.md), [dedicated Codex home](operations/codex-home.md), and the [runner's `codex.backend` setting](reference/configuration/runner.md#codex-backend). Historical, from before the exec backend was retired: [packaged rollback evidence](evidence/codex-app-server/backend-rollback-artifact.md).
 
 ## Security documentation
 
