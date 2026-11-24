@@ -1,8 +1,8 @@
 ---
 title: Antigravity adapter — Antigravity CLI (agy) headless event specification
-description: Measured behaviour of the Antigravity CLI (`agy` 1.1.26) in headless print mode — stream-json events, resume, customization discovery, hooks-as-permission-gate, and their derivation to kaoiro state. Third engine counterpart to claude-events / codex-exec-events.
+description: Migration stub; the Antigravity adapter is now driven over ACP, and every section links to its current page.
 status: provisional
-related: [protocol, plugin-model, architecture, claude-events, codex-exec-events]
+related: [protocol, plugin-model, architecture, claude-events]
 ---
 
 # Antigravity adapter — Antigravity CLI (agy) headless event specification

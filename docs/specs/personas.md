@@ -97,18 +97,11 @@ manner.
 ### Shared independently of engine (2026-07-10, [ADR-0032](../adr/0032-codex-adapter.md) F3)
 
 `personality.md` and standing illustrations (seven-state expressions) are
-shared by both engines (`claude-code` / `codex`) independently of engine.
-Claude injects them into SDK `systemPrompt.append` as before
-([ADR-0026](../adr/0026-persona-personality-injection.md) →
-[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)); Codex
-injects them into config key `developer_instructions` (appended to base
-instructions as a developer-role message; live verified 2026-07-10,
-[ADR-0032](../adr/0032-codex-adapter.md) F3). There are no engine-specific
-persona packs (`kuroe-claude` / `kuroe-codex`) nor engine-specific sections in
-`personality.md`. Live verification on 2026-07-11 confirmed Codex injection is
-effective (reproducing manner of speech and attitude): kuroe / ao were clearly
-differentiated, and `developer_instructions` injection took effect faithfully
-per persona (“Live verification note” in [codex-sdk-events](../evidence/codex/exec-contract.md)).
+shared by every engine independently of engine; the injection point of each
+engine is in
+[Personality-prompt injection by engine](../reference/engines/personality-injection.md).
+There are no engine-specific persona packs (`kuroe-claude` / `kuroe-codex`) nor
+engine-specific sections in `personality.md`.
 
 ### Default persona (plain AI)
 
@@ -133,8 +126,7 @@ the reference dashboard's CSS-face fallback (simple expressions by state,
   whenever the host's trust policy (“Host-side acceptance policy” below) allows
   it. Until ADR-0031, `default` was always injected irrespective of a host-side
   declaration, but it now has the same standing as an ordinary id subject to
-  blocklist / allowlist for id-space consistency and simplification of
-  `HostRegistry.inject_default/1` (see below).
+  blocklist / allowlist for id-space consistency (see below).
 - Example `persona` block in wrapper configuration (for full structure, see
   [wrapper/kaoiro.config.claude-code.example.json](../../wrapper/kaoiro.config.claude-code.example.json)
   or

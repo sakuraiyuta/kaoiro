@@ -60,7 +60,7 @@ flowchart LR
 
 ### envelope.type: "external_message"
 
-This is a reserved extension of the common outer frame in
+This is a planned extension of the common outer frame in
 [protocol.md](../reference/protocol/envelope.md#envelope-v0) (`version` remains unchanged,
 [ADR-0010](../adr/0010-protocol-precisification.md)). `agent_id` identifies the
 relevant agent (the outbound sender or inbound recipient). `payload` is below.
@@ -122,7 +122,7 @@ viewers, [ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
 
 Each conversation has a **three-turn cap** (a transport exchange: agent contact
 → external reply → agent close). The server's existing `ConversationStates`
-enforces it mechanically, shared with inter-agent messaging. Conversation
+would enforce it mechanically, shared with inter-agent messaging. Conversation
 contents are **ephemeral** (not persisted by the server); only contact-list
 configuration is persistent.
 

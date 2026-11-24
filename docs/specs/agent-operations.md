@@ -254,9 +254,8 @@ allocated and how many round trips it may take, and every trigger is judged by
   hash binding is no substitute for the reporting obligation—the better the
   procedure looks, the more legitimate staying inside the loop appears.
 - Allocation of verification depth (not subjecting a throwaway tool to
-  adversarial review) is governed by each agent's global rules (Claude:
-  rules/verification.md “Depth is set by blast radius”; Codex: the verification
-  section of AGENTS.md). It is not duplicated here.
+  adversarial review) is governed by each agent's own global rules. It is not
+  duplicated here.
 
 Why: during the translation wave for issue #91 on 2026-08-24, must-fix rounds
 on a throwaway merge script reached M18 (dozens of round trips, zero

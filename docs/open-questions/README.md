@@ -18,7 +18,7 @@ Basis for judgment / Provisional policy" structure and has `urgency` / `blocks`
 | [file-upload-markitdown-fallback](file-upload-markitdown-fallback.md) | low | — | 2026-06-27 |
 | [persona-behavioral-prompt](persona-behavioral-prompt.md) | low | — | 2026-07-02 |
 | [persona-voice-distinctiveness](persona-voice-distinctiveness.md) | low | — | 2026-07-02 |
-| [persona-language-dispatch](persona-language-dispatch.md) | low | persona-personality-injection | 2026-07-02 |
+| [persona-language-dispatch](persona-language-dispatch.md) | low | — | 2026-07-02 |
 | [persona-personality-vs-dialogue](persona-personality-vs-dialogue.md) | low | — | 2026-07-02 |
 | [external-human-inbound-llm-tier](external-human-inbound-llm-tier.md) | medium | protocol-external-human, phase-9-external-human-messaging | 2026-07-04 |
 | [external-human-inbound-loss](external-human-inbound-loss.md) | low | — | 2026-07-04 |
@@ -30,7 +30,7 @@ Basis for judgment / Provisional policy" structure and has `urgency` / `blocks`
 | [coordination-report-routing](coordination-report-routing.md) | medium | — | 2026-07-28 |
 | [work-division-conflict-guard](work-division-conflict-guard.md) | low | — | 2026-07-28 |
 | [lifecycle-timeline-ui](lifecycle-timeline-ui.md) | medium | — | 2026-08-31 |
-| [inter-agent-delivery-timing-and-turn-ownership](inter-agent-delivery-timing-and-turn-ownership.md) | high | issue-426-agent-handback-admission, issue-412 | 2026-09-28 |
+| [inter-agent-delivery-timing-and-turn-ownership](inter-agent-delivery-timing-and-turn-ownership.md) | high | — | 2026-09-28 |
 
 ## Deferred
 
