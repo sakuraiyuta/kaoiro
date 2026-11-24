@@ -92,7 +92,3 @@ for every account. See the [dated adoption evidence](../../evidence/codex-app-se
   as the Pro-only `gpt-5.3-codex-spark`). At CLI priority 4, it is lower than a
   spawn through kaoiro and does not conflict with an operator's explicit
   selection.
-
-## Migration links
-
-- [Exec event contract](codex-exec-events.md)

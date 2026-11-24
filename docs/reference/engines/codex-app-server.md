@@ -47,7 +47,7 @@ gate; a successful RPC alone does not establish the tool environment.
 
 ## Operator steering (ADR-0058 Stage 2)
 
-A Codex persona on the app-server backend delivers an operator
+A Codex persona delivers an operator
 instruction into the running turn with `turn/steer` instead of queueing it
 when its stored policy is on (no opt-in: [wrapper configuration](../configuration/wrapper.md#codex-operator-steer-controls);
 capability: [`operator_input_modes`](../protocol/channels.md#adr-0063-capability-and-event-contract)).
@@ -148,10 +148,9 @@ The wrapper retains only activated bodies for bounded stale-basis recovery.
 Sequence-scoped failure notices identify which peer turns were affected.
 See [delivery status](../inter-agent/delivery.md#codex-app-server-early-handoff).
 
-On pin 0.156.1 the write and response order is based on the app-server RPC
-and projected item stream. The changed interruption primitives in later
-pins require a new native comparison before any pin migration; the phase-3
-design records the [0.159.2 comparison](../../evidence/codex-app-server/pin-0.159.2-evaluation-2026-10-01.md#authenticated-comparison-and-stage-3-denial).
+On the pinned binary the write and response order is based on the
+app-server RPC and projected item stream
+([native steer test](../../../wrapper/codex/test/app_server_steer.integration.test.ts)).
 
 The transport records its bound thread and up to 256 turn IDs it started;
 past that, the oldest ID is forgotten, so a late item of a turn started more
@@ -175,7 +174,7 @@ operator session reset or wrapper restart.
 
 ## Approval requests (ADR-0064)
 
-An opted-in Codex persona on the app-server backend exposes approval as a
+An opted-in Codex persona exposes approval as a
 mutable axis ([ADR-0064](../../adr/0064-codex-app-server-approval-requests.md);
 opt-in: [wrapper configuration](../configuration/wrapper.md#codex-approval-axis-controls)).
 Each `turn/start` carries the approval the runtime captured for that

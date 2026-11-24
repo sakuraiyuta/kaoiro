@@ -49,7 +49,8 @@ registered once per CLI invocation and removed in `finally`, mirroring
 [ADR-0057](../../adr/0057-antigravity-adapter.md) F2a's listener-accumulation
 fix (a leaked listener across repeated invocations broke vitest teardown).
 
-Per-engine timing (measured where noted; Linux unless stated otherwise):
+Per-engine timing for the Claude Code and Codex wrappers (measured where
+noted; Linux unless stated otherwise):
 
 | Layer | Bound | Source |
 |---|---|---|

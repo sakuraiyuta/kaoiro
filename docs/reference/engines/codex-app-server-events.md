@@ -67,6 +67,11 @@ when present. Credits, plan, account identity, and opaque backend data are not
 retained. Numeric window conversion is shared with the rollout reader
 (`rollout.ts`).
 
+The fresh-idle probe opens no thread. The Host aborts and awaits it before
+creating the app-server session for a turn, so two app-server children never
+initialize one `CODEX_HOME` together. An aborted or unavailable probe leaves
+`rate_limits` absent until a native read supplies them.
+
 Accepted `account/rateLimits/updated` notifications also forward the detached
 telemetry snapshot from `AppServerTransport` through `AppServerSession` and
 `AppServerHostRuntime` to `CodexHost`, independently of an active turn. The
@@ -85,3 +90,15 @@ Failed/interrupted turns and incomplete pairs do not report compaction success.
 Duplicate item notifications are suppressed. `thread/compacted` is treated as
 a redundant companion, not a requirement or a substitute for missing item
 evidence.
+
+`turn/plan/updated` becomes a whole-list `task_type=tasklist` snapshot of the
+agent itself, not a transcript log. Each `step` is an item text, and
+`pending` / `inProgress` / `completed` map to `pending` / `in_progress` /
+`completed`. A plan with a malformed entry is dropped, and a snapshot equal to
+the last one sent is not sent again
+([task envelopes](../protocol/tasks.md#task_type-tasklist-addendum-issue-178-adr-0049-f4)).
+
+Every `state_change`, from the first idle announcement on, carries
+`ext.session_capabilities` built from the catalog and the permission state at
+that moment; the Host does not wait for a thread before advertising them
+([ADR-0034](../../adr/0034-session-capabilities-advertisement.md)).

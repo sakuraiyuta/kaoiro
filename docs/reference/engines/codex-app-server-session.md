@@ -28,6 +28,11 @@ rejected. Relative image paths are rejected before turn admission or RPC,
 avoiding ambiguity between the child process and thread working directories.
 Caller-owned image files are neither copied nor removed by the session. The Host
 supplies materialized absolute image paths and removes its turn directory after completion.
+
+The bound thread ID is the kaoiro `session_id`, without a prefix, and a
+restore resumes that thread. Persona text reaches Codex only as
+`developerInstructions`; the wrapper sets no thread field that replaces the
+base instructions.
 The Host serializes its startup orphan sweep with image materialization through
 directory registration, including when an instruction arrives before `run`.
 The sweep's duration can grow with the number of matching entries under `/tmp`.
