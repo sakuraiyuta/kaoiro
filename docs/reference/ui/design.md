@@ -2,7 +2,7 @@
 title: kaoiro design principles
 description: Visual design specification for the dashboard/UI. Written in DESIGN.md format (YAML tokens + prose), affirming the existing implementation (dashboard/src/) as the canonical source.
 status: accepted
-last_updated: 2026-11-14
+last_updated: 2026-11-24
 related: [overview, personas, protocol, responsive-layout, responsive-reachability, rooms]
 format: stitch-design-md
 version: alpha
@@ -148,9 +148,10 @@ atmosphere, so disabling them never removes information.
 
 ## Colors
 
-**The color system has two layers, 5 + 9.** The upper layer has five neutrals for
+**The color system has two layers, 5 + 10.** The upper layer has five neutrals for
 the UI shell (background, card, line, foreground, dim foreground). The lower layer
-is a state palette with one fixed color for each of the nine protocol states.
+is a state palette with one fixed color for each of the ten states: the nine that
+a wrapper raises (`KaoiroState`) and the server-derived `disconnected`.
 **Nothing outside state colors is saturated.**
 
 ### Brand Primary
@@ -173,8 +174,8 @@ tools.
 
 ### State Palette (canonical)
 
-It maps one-to-one to the nine states defined by the protocol. **This mapping must
-match protocol.md.**
+It maps one-to-one to the nine states defined by the protocol plus the
+server-derived `disconnected`. **This mapping must match protocol.md.**
 
 | state | token | Hue | Appears |
 |---|---|---|---|
@@ -563,10 +564,12 @@ attachments upload: the attachment tray is shared by every agent's composer
 
 ### Permission Dock
 
-Float above the composer with `absolute` positioning. Switch **collapsed (bottom-right
-pill) ↔ expanded (wide card)** with a 0.25s eased transition. The border is always
-`var(--c-waiting_permission)` and the surface is `bg-card`. Avoid covering the
-conversation log (master decision history: #82 / ADR-0022 family).
+An in-flow panel between the log and the composer (`position: relative`), so it
+does not cover the conversation log. A minimize button in its top-right corner
+swaps the **expanded panel for a full-width in-flow bar (`.dock-bar`)** that
+gives the log its height back; clicking the bar expands it again. There is no
+transition between the two. The border is always `var(--c-waiting_permission)`
+and the surface is `bg-card` (master decision history: #82 / ADR-0022 family).
 
 ### Lamp (State Indicator)
 
@@ -608,7 +611,6 @@ Slash-command and option popovers: bg `var(--bg-card)`, border `var(--line)`, an
 | border-color / color hover | `0.2s` |
 | composer drop-zone (D&D feedback) | `0.12s ease-out` |
 | meter fill width | `0.15s ease-out` |
-| permission-dock fold/unfold, menu opacity | `0.25s ease` |
 
 ### Keyframes
 
@@ -616,8 +618,8 @@ Slash-command and option popovers: bg `var(--bg-card)`, border `var(--line)`, an
 |---|---|---|---|
 | `rise` | 0.45s | ease-out | Upward fade for `.agents > li` initial display (stagger: `--stagger: index × 60ms`) |
 | `dissolve` | 0.35s | ease-out | State-switch fade for face sprite / face |
-| `sway` | 2.4s ∞ | ease-in-out | Thinking head sway (rotate ±4°) |
-| `hop` | 1.1s ∞ | ease-in-out | Waiting-permission face bounce (translateY -0.25rem) |
+| `pf-sway` | 2.4s ∞ | ease-in-out | Thinking head sway (rotate to 4° and back) |
+| `pf-hop` | 1.1s ∞ | ease-in-out | Waiting-permission face bounce (translateY -0.25rem on a card, -4% in the detail view) |
 | `blink` | 1.2s ∞ | ease-in-out | Attention badge / permission-pill-lamp blink |
 | `flash` | 1s | ease-out | Highlight when a tool-use ↔ result pair arrives |
 

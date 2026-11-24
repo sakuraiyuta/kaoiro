@@ -2,7 +2,7 @@
 title: Dashboard delivery controls
 description: Launch preferences and current-owner delivery controls, including pending acknowledgements and compatibility behavior.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 related: [responsive-reachability, channels, runner-control]
 ---
 
@@ -42,8 +42,9 @@ The optional engine entry `launch_delivery_policy` has version `v1`, a boolean
 Unknown versions, malformed booleans/enums/overrides, more than 64 overrides,
 or JSON encoding larger than 8,192 UTF-8 bytes make it unavailable. A false
 ceiling requires all mechanisms to be none. The dashboard does not infer
-support from the engine name. Antigravity and older Codex exec wrappers with all-none metadata
-are disabled and show that messages enter the queue.
+support from the engine name. An engine whose metadata is all none (today
+Antigravity and Grok Build, `wrapper/agent-common/src/delivery_modes.ts`) is
+disabled and shows that messages enter the queue.
 
 Absent or invalid metadata disables only the delivery checkbox. The dialog
 shows `起動時の配送方法は未確認`, permits ordinary launch, and omits

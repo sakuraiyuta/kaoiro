@@ -2,7 +2,7 @@
 title: Responsive reachability-path inventory
 description: Exhaustive display conditions, size-specific reachability paths, and scroll owners for each UI element.
 status: provisional
-last_updated: 2026-11-13
+last_updated: 2026-11-24
 related: [responsive-layout, design]
 ---
 
@@ -109,7 +109,7 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 | Composer | Always | Always (fixed to bottom) | Always | Always |
 | Attachment / slash menu | From composer | On composer | Same | Same |
 | Permission dock / question dock | Pending | Between log and composer | Same | Same |
-| Tasklist float | After [#178](https://github.com/sakuraiyuta/kaoiro/issues/178) is implemented | Upper right of log | Same | Same |
+| Tasklist float ([#178](https://github.com/sakuraiyuta/kaoiro/issues/178)) | The agent has a tasklist with at least one item | Upper right of log; compact until expanded | Same | Same |
 
 `interrupt` and the two docks are **in-flow elements** placed between the log
 and composer within `.main`, not floating layers. A sheet is in front of them,
@@ -125,9 +125,10 @@ opening the tab, so a standing notice (resume drift for the whole session, a
 non-zero lost or uncertain count) marks its tab every time the other tab is
 shown, and a second event of the same kind does not change the mark.
 
-Because the Tasklist float remains unimplemented in #178, its row is a
-conditional target that applies after that issue is implemented and is not part
-of phase-31 acceptance.
+The Tasklist float
+([#178](https://github.com/sakuraiyuta/kaoiro/issues/178)) is implemented in
+`dashboard/src/lib/TasklistFloat.svelte`; its row was not part of phase-31
+acceptance.
 
 ### Handling the blind-spot indicator
 

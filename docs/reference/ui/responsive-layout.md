@@ -2,7 +2,7 @@
 title: Responsive layout specification
 description: Breakpoint definitions, area-specific layout rules, sheet mechanism, and safe-area handling that make the dashboard equally viable at PC, tablet, and smartphone sizes.
 status: provisional
-last_updated: 2026-11-10
+last_updated: 2026-11-24
 related: [design, protocol, responsive-reachability]
 ---
 
@@ -162,8 +162,9 @@ inline padding, use `max(2rem, env(safe-area-inset-left))`; existing header top
 and composer bottom padding are each their own floors. Addition would move main
 padding from 64px, breaking the breakpoint calculation and yielding values
 outside the spacing scale for other elements. CSS `env()` also requires
-`viewport-fit=cover` in `index.html`'s viewport meta (currently unset). Inset is
-0 in a browser tab, so the same CSS supports both.
+`viewport-fit=cover` in `index.html`'s viewport meta (set in
+`dashboard/index.html`). Inset is 0 in a browser tab, so the same CSS supports
+both.
 
 ## Constraints
 
@@ -191,7 +192,7 @@ outside the spacing scale for other elements. CSS `env()` also requires
 - **MUST NOT**: Add or change screen-transition or navigation structure.
   Opening/closing within the same screen, such as tabs, accordions, and bottom
   sheets, does not count.
-- **MUST NOT**: Change the design tokens established by design.md (nine state
+- **MUST NOT**: Change the design tokens established by design.md (ten state
   colors / typography / spacing scale).
 
 ## Open Questions
