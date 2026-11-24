@@ -1,7 +1,7 @@
 ---
 title: Security boundaries
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 ---
 
 # Security boundaries
@@ -79,9 +79,9 @@ allow rules.
 | **Sandbox enforcement (antigravity)** | The sandbox axis is advisory: `--sandbox` was measured ineffective, so `read-only` / `workspace-write` are enforced by wrapper argument inspection, never by the OS | `ext.permission.enforcement = "advisory"` plus a permanent dashboard badge; shell needs approval outside `danger-full-access` | [ADR-0057](../adr/0057-antigravity-adapter.md) F4 |
 | **Gate spoofing by the agent itself (antigravity)** | The gate nonce and the correlation state are readable by any shell the agent runs, so a compromised agent can satisfy the self-verification | None — F4b detects a vendor mechanism that stops firing; it is not an authorization boundary | [ADR-0057](../adr/0057-antigravity-adapter.md) F4b |
 | **Multi-tenant isolation** | Every operator can control every agent (OAuth identifies people but has no agent-owner boundary) | None — single-tenant assumption | [ADR-0042](../adr/0042-oauth-allowlist-login.md), out of scope |
-| **Dev fallback leakage risk** | **Resolved (2026-07-25, [#133](https://github.com/sakuraiyuta/kaoiro/issues/133))**: `:dev`/`:test` still allow all when unset; `:prod` fails closed when unset (2026-08-02 revision: wrapper accepts only server-minted signed tokens, whose signature derives from `secret_key_base`) | Startup WARN log (environment-specific wording) | Implemented |
+| **Dev fallback leakage risk** | **Resolved (2026-07-25, [#133](https://github.com/sakuraiyuta/kaoiro/issues/133))**: `:dev`/`:test` still allow all wrappers and runners when unset (client tokens fail closed in every environment); `:prod` fails closed when unset (2026-08-02 revision: wrapper accepts only server-minted signed tokens, whose signature derives from `secret_key_base`) | Startup WARN log (environment-specific wording) | Implemented |
 | **Audit logging** | No durable record of who sent what to which agent and when | None | Future (when SQLite is introduced) |
-| **Tool-input masking** | Command lines / paths are shown raw in the operator dialog | Operator-only delivery + 16KB truncation | Future |
+| **Tool-input masking** | Command lines / paths are shown raw in the operator dialog | Operator-only delivery + input dropped above 16KB | Future |
 | **Runner-less wrapper auth** | Localhost direct connection only; a token is unavailable without going through spawn | Runner required | [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) |
 | **Device access token revocation** | A device access token cannot be revoked on its own; it is valid until its three-day sliding or thirty-day absolute lifetime ends ([ADR-0070](../adr/0070-device-authorization-grant.md)) | Removing the identity from the OAuth allowlist refuses its next request, and the allowlist watcher disconnects its sockets. Already connected WebSockets are not ended by the thirty days | [issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801) |
 | **Device code availability** | Unauthenticated `POST /oauth/device` requests can hold all 20 pending codes (10 per minute), refusing legitimate devices for ten minutes | Codes expire in ten minutes; a restart clears them. Wrong user-code guesses are capped per identity and in total, which bounds a guess to about 2^-30 per code | [issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801) |

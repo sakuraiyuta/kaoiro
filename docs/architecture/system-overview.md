@@ -2,7 +2,7 @@
 title: Architecture
 description: A three-layer structure of wrapper (TS/engine SDK), server (Elixir/Phoenix), and client (Web), with a host-resident runner, and its data flow.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 related: [plugin-model, protocol, antigravity-adapter, codex-backends]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -19,8 +19,8 @@ flow. See [extensions](extensions.md) for the plugin extension model and
 
 ### Wrapper package structure (added 2026-07-10, [ADR-0032](../adr/0032-codex-adapter.md) F1)
 
-The wrapper is a five-package pnpm workspace (`core` / `agent-common` /
-`claude-code` / `codex` / `antigravity`, [ADR-0057](../adr/0057-antigravity-adapter.md) added the fifth). This structure implements
+The wrapper is a six-package pnpm workspace (`core` / `agent-common` /
+`claude-code` / `codex` / `antigravity` / `grok`; [ADR-0057](../adr/0057-antigravity-adapter.md) added the fifth and [ADR-0067](../adr/0067-grok-resident-acp-host.md) the sixth). This structure implements
 [ADR-0017](../adr/0017-wrapper-multientity-packages.md) and was completed in
 [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md):
 
@@ -38,15 +38,20 @@ The wrapper is a five-package pnpm workspace (`core` / `agent-common` /
   (explicit exec configuration is rejected,
   [ADR-0058](../adr/0058-codex-app-server-turn-steer.md))
 - **`wrapper/antigravity` (`@kaoiro/antigravity`)** — concrete Antigravity
-  (`agy` CLI) adapter, driving the CLI headless with a hook-based permission
-  gate ([ADR-0057](../adr/0057-antigravity-adapter.md)); see
+  (`agy` CLI) adapter, driving `agy acp` over ACP with a hook-based permission
+  gate ([ADR-0057](../adr/0057-antigravity-adapter.md),
+  [ADR-0078](../adr/0078-antigravity-over-acp.md)); see
   [antigravity-adapter](antigravity-adapter.md)
+- **`wrapper/grok` (`@kaoiro/grok`)** — concrete Grok Build adapter over ACP
+  ([ADR-0067](../adr/0067-grok-resident-acp-host.md)); see
+  [grok-acp](../reference/engines/grok-acp.md)
 
 The runner resolves engine selection through `SpawnMessage.engine` (values:
-`claude-code` / `codex` / `antigravity`; the runner control message in
+`claude-code` / `codex` / `antigravity` / `grok`, or an external engine ID the
+host declares; the runner control message in
 [runner-control](../reference/protocol/runner-control.md)). LaunchDialog shows
-an engine selector only when the host's `capabilities` field lists at least
-two engine types.
+an engine selector when the host's `capabilities` field lists at least two
+engine types, or when the host offers an external engine.
 
 ### Three-layer structure
 
@@ -74,7 +79,7 @@ flowchart LR
   end
   CC1 <-->|Agent SDK| W1
   CX  <-->|Adapter| W2
-  AGY <-->|CLI + hook gate| W3
+  AGY <-->|ACP + hook gate| W3
   RUN -.->|spawn/stop/restart supervision| W1
   RUN -.->|supervision| W2
   RUN -.->|supervision| W3
@@ -91,9 +96,10 @@ flowchart LR
 The wrapper hosts each engine's official SDK or CLI and uses one mechanism for
 observation, control, and permission routing. Claude Code uses the Claude
 Agent SDK (TS: `@anthropic-ai/claude-agent-sdk`); Codex uses the app-server JSON-RPC transport
-([ADR-0058](../adr/0058-codex-app-server-turn-steer.md)); Antigravity has no
-Node/TS SDK, so it drives the `agy` CLI headless
-([ADR-0057](../adr/0057-antigravity-adapter.md)). All three sit behind the
+([ADR-0058](../adr/0058-codex-app-server-turn-steer.md)); Antigravity and Grok
+are driven over ACP (`agy acp`, `grok agent stdio`;
+[ADR-0078](../adr/0078-antigravity-over-acp.md),
+[ADR-0067](../adr/0067-grok-resident-acp-host.md)). All four sit behind the
 `EngineAdapter` interface. For why PTY scraping was not chosen and what
 alternatives were considered, see
 [ADR-0001](../adr/0001-agent-sdk-integration.md); for the Codex decision, see
@@ -104,7 +110,7 @@ alternatives were considered, see
 |---|---|
 | State observation | Derive state from typed message sequences ([events](../reference/protocol/events.md)) |
 | Instruction injection | Session resume / streaming input |
-| Waiting for permission | Route `canUseTool` (Claude) / tool host bridge (Codex) / PreToolUse hook to a unix socket, advisory sandbox (Antigravity) to the external UI |
+| Waiting for permission | Route `canUseTool` (Claude) / app-server approval requests (Codex) / PreToolUse hook to a unix socket, advisory sandbox (Antigravity) / ACP `session/request_permission` (Grok) to the external UI |
 
 Differences between engines are advertised as `ext.session_capabilities` in an
 envelope. The UI determines feature availability from this capability rather
@@ -124,8 +130,8 @@ than engine names
   failure recovery and session resume
   ([ADR-0014](../adr/0014-session-resume-and-restore.md)).
 - **wrapper (TS / local)**: SDK-based launch and control; translation of SDK
-  messages into common envelopes and state **derivation** (adapter); filter
-  pipeline; translation of instructions and approvals into SDK calls; and
+  messages into common envelopes and state **derivation** (adapter);
+  translation of instructions and approvals into SDK calls; and
   retention of persona and stable ID.
 - **server (Elixir/Phoenix)**: WebSocket aggregation (1 connection = 1 channel
   process); one `AgentStates` GenServer holds the `agent_id → latest envelope`
@@ -181,7 +187,7 @@ authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
 | Isolation per connection | One channel process per connection (managed by Phoenix) |
 | Agent-state retention | One `AgentStates` GenServer (an `agent_id → latest envelope` map; owner pid prevents reconnection races). phase-17 task 17-7 added support for appending `session_boundary` marker envelopes to history, along with a `pending_boundary_patch` stash for lazy Codex ID allocation. |
 | session-reset lifecycle | One in-memory `SessionResets` GenServer. `check_and_acquire/5` atomically verifies lock + KaoiroState + dispatch cooldown in one handle_call (the ADR-0036 F6 TOCTOU core); `resolve/6` moves the runner's spawn result from `:spawning → :awaiting_connect`; `confirm_connection/2`, triggered by the fresh wrapper's `WrapperChannel.after_join`, broadcasts `session_reset_completed` and runs `SessionPointers.detach_session/1` (the F2 two-phase rule: completion occurs only after connection confirmation). |
-| Persistence across restarts | GenServers backed by DETS: `AgentDirectory` (identity ledger, [ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)), `SessionPointers` (latest session_id + last effective configuration snapshot), `PermissionModes`, `IngressOrder`, `SessionStarts` / `ClearWatermarks`, `TokenDenylist`, and `DeliveryStates` (recipient-local delivery-confirmation watermark, not a delivery queue, issue #237). Their storage paths can be overridden with `KAOIRO_*_PATH`. [ADR-0051](../adr/0051-history-restart-resilience.md) removed `InterAgentHistory` (the IA SoT is a sidecar on the wrapper host; display is rebuilt through per-pane projection + hydration handshake). |
+| Persistence across restarts | GenServers backed by DETS: `AgentDirectory` (identity ledger, [ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)), `SessionPointers` (latest session_id + last effective configuration snapshot), `PermissionModes`, `IngressOrder`, `SessionStarts` / `ClearWatermarks`, `TokenDenylist`, and `DeliveryStates` (recipient-local delivery-confirmation watermark, not a delivery queue, issue #237), among others; the canonical list is `KaoiroServer.PersistencePaths`. Their storage paths can be overridden with `KAOIRO_*_PATH`. [ADR-0051](../adr/0051-history-restart-resilience.md) removed `InterAgentHistory` (the IA SoT is a sidecar on the wrapper host; display is rebuilt through per-pane projection + hydration handshake). |
 | Restart resilience of display history | Display history remains a volatile projection within `AgentStates`. After a restart, it is rebuilt automatically from the transcript / IA sidecar through a hydration handshake with the wrapper (join-response verdict + server-allocated replay_id). The client discards a stale baseline using the projection epoch in a `history` push, then merges only live envelopes arriving between the join and the first `history` push for each connection generation ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
 | Failure isolation and restart | Placed under a Supervisor |
 | State fan-out | Phoenix.PubSub |
@@ -194,12 +200,11 @@ authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
    its message sequence.
 2. The adapter translates SDK messages into common envelopes and derives
    state.
-3. The filter pipeline adds properties.
-4. The wrapper sends the result to the server over WebSocket → the Registry
+3. The wrapper sends the result to the server over WebSocket → the Registry
    updates state.
-5. The server delivers it to clients through PubSub → the displayed expressions
+4. The server delivers it to clients through PubSub → the displayed expressions
    update.
-6. Client instructions and approvals take the reverse route to the wrapper
+5. Client instructions and approvals take the reverse route to the wrapper
    (SDK calls).
 
 ## Session ownership and continuity

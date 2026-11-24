@@ -34,8 +34,9 @@ flowchart LR
 ```
 
 - **routing path**: The server reads `payload.to` and pushes the envelope to the
-  `wrapper:<to>` channel. The receiving wrapper injects it as input for the next
-  SDK turn.
+  `wrapper:<to>` channel. The receiving wrapper injects it as SDK input for the
+  next turn, or into the running turn when an `early` intent is delivered
+  in flight (see [delivery intent](../reference/inter-agent/delivery.md#delivery-intent-and-staged-delivery-adr-0063)).
 - **observation path**: The server also includes the envelope in the normal
   `agents:lobby` broadcast (operator-only delivery; see [observation path](#observation-path-dashboard-display)). The dashboard can
   display the inter-agent message in both A and B log panes.

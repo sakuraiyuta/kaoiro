@@ -1,7 +1,7 @@
 ---
 title: Security threat model
 status: accepted
-last_updated: 2026-11-14
+last_updated: 2026-11-24
 ---
 
 # Security threat model
@@ -73,7 +73,7 @@ records threats and mitigations before full operation or external release
 |---|---|
 | Limit instructions and approvals to the operator role | Implemented in Phase 3 |
 | Fail closed for token authentication when `KAOIRO_CLIENT_TOKENS` is unset (reject all on that token path) — prevents an operator being defenselessly exposed by misconfiguration (warning log on startup). The OAuth path also rejects all on an unset, missing, or mismatched allowlist | Phase 3.5 ([issue #28](https://github.com/sakuraiyuta/kaoiro/issues/28)) / OAuth in phase-26 |
-| Size limit on `permission_request.input` (truncate at 16KB; mark `truncated`) | Implemented in Phase 3 ([permission-requests](../reference/protocol/permission-requests.md)) |
+| Size limit on `permission_request.input` (drop the input when it serializes to more than 16KB; mark `truncated`) | Implemented in Phase 3 ([permission-requests](../reference/protocol/permission-requests.md)) |
 | Wrapper-side `allowedTools` ceiling — even when instructions arrive, wrapper configuration is the ceiling on executable tools (not extensible by server/client) | Guaranteed by wrapper design (the server cannot override canUseTool) |
 | Instruction audit log (who sent what to which agent and when) | Future (when SQLite is introduced) |
 | Tool-input masking (redaction of secret patterns) | Future |
@@ -89,7 +89,7 @@ records threats and mitigations before full operation or external release
 | Verify that a resumed session_id exists under the cwd bound to its agent; reject resumes to another cwd/arbitrary path (T3, verified by runner). Re-verify the replacement target of `switch_session` under the same cwd | Implemented in Phase 4 (4-5) |
 | The startup-instruction UI (#22) does not present arbitrary cwd / arbitrary repository clones; restrict selectable cwd to the runner-config allowlist to bound the RCE surface (scope=medium, T1/T5) | Implemented in Phase 4 (4-8) ([ADR-0023](../adr/0023-host-runner-architecture.md)) |
 | Consolidate spawn authentication through runner startup (daemon or one shot); authenticate with per-host runner tokens + server-issued per-agent tokens (secrets remain in the server and do not reach operators/clients). **Do not adopt** a wildcard shared token whose leakage affects the entire scope (consideration deferred to #71) | Implemented in Phase 4 (4-10) ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4). Revocation uses an agent_id-scoped denylist ([#72](https://github.com/sakuraiyuta/kaoiro/issues/72)) |
-| For an engine whose approval gate is enforced only by the wrapper (`antigravity`), disable the CLI's own prompts, make the wrapper hook the sole decision channel, and verify on the production path both that the gate is registered and that completed calls in the measured hook classes (write / read / shell / subagent / network) were gated (otherwise fail the spawn / freeze the session). Unclassified names only warn; names outside those classes are not subject to completion correlation. The class scope is defined in ADR-0057 F4b | Implemented in phase-34 Stage A on 2026-09-04 (`6d48eab5`) ([ADR-0057](../adr/0057-antigravity-adapter.md) F4 / F4b; section below) |
+| For an engine whose approval gate is enforced only by the wrapper (`antigravity`), disable the CLI's own prompts, make the wrapper hook the sole decision channel, and verify on the production path both that the gate is registered and that every tool call `agy` reports over ACP has a hook decision this wrapper recorded (otherwise latch a sticky gate fault; later input is rejected as `gate_broken`) | Implemented in phase-34 Stage A on 2026-09-04 (`6d48eab5`) ([ADR-0057](../adr/0057-antigravity-adapter.md) F4 / F4b); call matching over ACP ([ADR-0078](../adr/0078-antigravity-over-acp.md)) |
 
 ## Open Questions
 

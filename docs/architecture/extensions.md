@@ -2,7 +2,7 @@
 title: Extensions
 description: The adapter and filter extension points, their common event boundary, and the package structure that keeps core agent-independent.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-24
 related: [protocol, adapter-contract, claude-model-catalog]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -39,14 +39,11 @@ into which both are inserted. Overall composition is in
   come from more than one adapter. Move generalizable `cost`, etc. into
   agent-agnostic filters when the filter mechanism is introduced.
   - **Codex treatment of `ext.context`**
-    ([ADR-0040](../adr/0040-context-usage-capability.md), phase-21): The Codex
-    adapter does **not stamp** `ext.context` (because
-    `turn.completed.usage.input_tokens` is only per-turn input and not context
-    utilization; it does no estimated projection either). Instead it explicitly
-    stamps `ext.session_capabilities.supports_context_usage=false`; UI decides
-    “unsupported” only from capability (engine-name branching is prohibited,
-    [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3). Claude
-    stamps the same field `true`.
+    ([ADR-0040](../adr/0040-context-usage-capability.md)): The Codex
+    app-server adapter stamps `ext.context` and
+    `ext.session_capabilities.supports_context_usage=true`; UI decides
+    support only from capability (engine-name branching is prohibited,
+    [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3).
 
 ### Common event boundary
 
@@ -67,14 +64,14 @@ and settled in [ADR-0032](../adr/0032-codex-adapter.md) F1): entity-independent
 core (`wrapper/core`) / AI-agent common layer `wrapper/agent-common` (state
 machine, permission, instruction, `EngineAdapter` interface, common Tool
 description layer) / concrete adapters (`wrapper/claude-code`,
-`wrapper/codex`, `wrapper/antigravity` ([ADR-0057](../adr/0057-antigravity-adapter.md) F1),
+`wrapper/codex`, `wrapper/antigravity` ([ADR-0057](../adr/0057-antigravity-adapter.md) F1), `wrapper/grok`,
 and future databases, host monitors, etc.). State machine,
 permission, and instruction are AI-specific and do not go in core. The eventual
 aim is to visualize the state of diverse entities as characters, not just AI
 (the broader aim is covered separately in vision).
 
 `EffectiveStatusSnapshot` in `agent-common` is SoT for effective-configuration
-projection in both AI adapters. Each host assembles `resolved: ResolvedSnapshotExt`
+projection in the Claude Code, Codex and Grok adapters. Each host assembles `resolved: ResolvedSnapshotExt`
 and engine-neutral `permission` once from engine-specific state; a common helper
 projects them into the respective wire shapes of `state_change.ext` and
 read-only `whoami`. It is a boundary preventing status fields being implemented

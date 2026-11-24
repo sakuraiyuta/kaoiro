@@ -2,7 +2,7 @@
 title: Attachments
 description: Dashboard-to-agent attachment intake -- layer responsibilities, the deferred-upload UI model, and why rendering stays wrapper-internal.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-24
 related: [protocol, architecture]
 ---
 
@@ -34,8 +34,8 @@ Client rules that do not alter the protocol:
    area in AgentDetail) to avoid ambiguity among multiple agents.
 2. Remove an item from the tray with ✕ (this is client-local; the protocol is
    uninvolved).
-3. Press the send button → transfer in this order: `attach_open` × N →
-   `attach_chunk*` → `attach_close` × N →
+3. Press the send button → transfer each file in turn (`attach_open` →
+   `attach_chunk*` → `attach_close`), then
    `instruction(attachment_ids=[...])`.
 
 Immediate upload when a picker / D&D obtains a file is not adopted (avoids

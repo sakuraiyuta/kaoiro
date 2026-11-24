@@ -2,8 +2,8 @@
 title: Antigravity adapter
 description: Why kaoiro drives the Antigravity CLI over ACP and how the adapter owns its process and persona boundary.
 status: provisional
-last_updated: 2026-11-23
-related: [protocol, plugin-model, claude-events, codex-exec-events]
+last_updated: 2026-11-24
+related: [protocol, plugin-model, claude-events, codex-app-server-events]
 ---
 
 # Antigravity adapter
@@ -20,7 +20,7 @@ and permission contract is in
 [Antigravity tools and permissions](../reference/engines/antigravity-tools-permissions.md).
 This architecture is paired with the
 [Claude event contract](../reference/engines/claude-events.md) and
-[Codex exec event contract](../reference/engines/codex-exec-events.md).
+[Codex app-server events](../reference/engines/codex-app-server-events.md).
 
 **Status: provisional** — the ACP behaviour it relies on was measured with
 `agy` 1.5.14 on 2026-11-22 and 2026-11-23

@@ -1,13 +1,12 @@
 ---
 title: "Codex backends and ownership"
 status: implemented
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 ---
 
 # Codex backends and ownership
 
 The staged transport decision is recorded in [ADR-0058](../adr/0058-codex-app-server-turn-steer.md).
-The historical exec contract is documented in [Codex exec events](../reference/engines/codex-exec-events.md).
 For app-server, read [transport](../reference/engines/codex-app-server.md),
 [session and bridge](../reference/engines/codex-app-server-session.md),
 [events and telemetry](../reference/engines/codex-app-server-events.md),
@@ -36,9 +35,9 @@ Abnormal child disconnection propagates once through transport/session/runtime
 to Host. Idle disconnection closes admission and reports error without inventing
 a turn/result; active disconnection settles the existing turn once and retires
 queued inputs. Intentional close does not report an abnormal disconnect. Neither
-path creates a replacement child or falls back to exec.
+path creates a replacement child.
 
-The ordinary entrypoint calls `runCodexCli()` with no arguments and validates
+The ordinary entrypoint calls `runCodexCli()` with no dependency overrides and validates
 startup configuration before constructing the Host. Backend overrides are absent
 from the Host and CLI dependency interfaces; environment and flags cannot select
 a backend.
@@ -50,14 +49,14 @@ each cancelled, unstarted Host batch before forgetting its ownership. Coordinato
 pending batches are retired at freeze; the active Host batch is not retired and
 cannot produce a late result. App-server exercises this ordering.
 
-Host admission failure never creates another app-server child or selects exec.
+Host admission failure never creates another app-server child.
 The runner Supervisor has a separate existing policy: unexpected wrapper exit
 can restart a **new wrapper lifetime**, within its restart budget, without
 replaying the initial prompt. Deliberate stop does not restart.
 
 ## Context snapshot publication
 
-App-server advertises `supports_context_usage: true`. Old exec wrappers report false. The
+App-server advertises `supports_context_usage: true`. The
 Host owns `AppServerContextMeter`, and transport/session/runtime forward typed
 bound-thread facts separately from turn projection. Compaction invalidates even
 when idle. The transport's existing bounded start buffer supplies validated

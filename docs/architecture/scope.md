@@ -2,7 +2,7 @@
 title: Non-goals
 description: Areas kaoiro does not address initially: multi-user RBAC/multi-tenancy, animation/3D rendering, modification of agent implementations, advanced sentiment analysis, and turning the bundled dashboard into a conversation-authoring environment or persistent history.
 status: accepted
-last_updated: 2026-08-30
+last_updated: 2026-11-24
 related: [overview]
 ---
 
@@ -24,8 +24,8 @@ Not done initially; may be considered in the future:
 - **Multi-user access, fine-grained RBAC, and multi-tenant isolation**. OAuth
   identity authentication itself was implemented in phase-26 (Google / GitHub /
   Nextcloud + a text allowlist,
-  [ADR-0042](../adr/0042-oauth-allowlist-login.md)), but roles remain the two
-  values `operator` and `viewer`; there is neither finer division such as an
+  [ADR-0042](../adr/0042-oauth-allowlist-login.md)), but roles remain
+  `viewer`, `operator` and `admin`; there is neither finer division such as an
   approver role nor an agent-ownership boundary (a single-tenant assumption).
   The original stub policy is [ADR-0005](../adr/0005-access-control-oauth-stub.md);
   current boundaries are documented in the Known gaps of

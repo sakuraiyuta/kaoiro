@@ -2,7 +2,7 @@
 title: Multi-host deployment architecture
 description: Why deployment is shaped as one server plus any number of runner hosts behind nginx, and the stop-boundary constraint an in-place build imposes on checkout-direct hosts.
 status: accepted
-last_updated: 2026-11-07
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
@@ -13,12 +13,12 @@ related: [deployment]
 The canonical deployment procedure had been scattered across header comments in
 `server/docker-compose.yaml` and a few lines in `server/README.md`, omitting the
 information needed for public operation on an arbitrary host (nginx settings,
-env list, DETS paths, and wss constraints). This document is the **sole canonical
-manual procedure**. [setup-wizards](#setup-wizards) automates env/config
-generation for **initial deployment**; this document fully records areas the
-wizard does not handle, such as DETS paths and nginx settings. **Updating an
-existing deployment (section 4) is outside the wizard** and is being automated in
-issues #218 / #219 / #220.
+env list, DETS paths, and wss constraints). [setup-wizards](#setup-wizards)
+automates env/config generation for **initial deployment**; the runbooks in
+[See Also](#see-also) cover the rest. **Updating an existing deployment is
+outside the wizard** and is covered by the
+[server update](../operations/server-update-and-rollback.md) and
+[runner update](../operations/runner-update-and-rollback.md) runbooks.
 
 ## Codex retirement release boundary
 
@@ -43,7 +43,8 @@ flowchart LR
 
 Use one server and any number of runners per host ID. TLS terminates at nginx;
 the server remains plain HTTP (decision 2026-06-11, see `docker-compose.yaml`).
-Only deployments restricted to a VPN may use the direct, nginx-free option (1.5).
+Only deployments restricted to a VPN may use the direct, nginx-free option
+([1.5](../operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)).
 
 The device authorization grant for native clients needs this single server:
 its pending codes live in the server's memory, so it is disabled when
@@ -54,7 +55,7 @@ its pending codes live in the server's memory, so it is disabled when
 
 | Limit | Details | Resolving issue |
 |---|---|---|
-| **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn starts the on-disk entry and imports the wrapper's `dist` (`runner/src/spawn.ts`, `runner/src/engines.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure**. By contrast, release-profile builds and extraction stay isolated under `releases/<rev>/` and never touch a running release. Codex backend selection resolves lazily until the first spawn. | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
+| **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn starts the on-disk entry and imports the wrapper's `dist` (`runner/src/spawn.ts`, `runner/src/engines.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure**. By contrast, release-profile builds and extraction stay isolated under `releases/<rev>/` and never touch a running release. | #219 (implemented; **remains until the host moves to the release profile** — [4.6](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219)) |
 
 ### Rollout ordering
 
@@ -132,14 +133,13 @@ validation, and out-of-scope items) are in
 - [Server configuration reference](../reference/configuration/server.md).
 - [auth-and-authz](security-boundaries.md) — details of unset behavior for the three tokens
 - [setup-wizards](#setup-wizards) — interactive wizard automating env / config
-  generation for **initial deployment**; section 4 updates are out of scope
-  (automation in #218 / #219 / #220)
+  generation for **initial deployment**; updates are out of scope
 - [runner/README.md](../../runner/README.md) — package entry point: current capabilities, usage, and the config wizard
 - [Runner install and distribution](../operations/runner-install.md) — full service and tarball-distribution guide
 - [server/README.md](../../server/README.md) — local development and Docker basics
 - [threat-model](security-threat-model.md) — risk assessment for dev fallback / unset tokens
-- [docs/operations/production.md](../operations/production.md) — Codex
-  `codex.backend` selection and its rollback procedure, not covered here
+- [Codex backend retirement](../operations/codex-backend-switch.md) —
+  app-server-only status
 - [ADR-0011](../adr/0011-phase3-reliability-and-auth.md) — token authentication
 - [ADR-0018](../adr/0018-runner-distribution.md) — runner distribution form
 - [ADR-0023](../adr/0023-host-runner-architecture.md) — runner residency

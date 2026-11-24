@@ -2,7 +2,7 @@
 title: kaoiro overview
 description: The purpose, goals, and intended users of a system that visualizes CLI AI agents as characters.
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-11-24
 related: [system-overview, scope, glossary]
 ---
 
@@ -44,8 +44,9 @@ agents in parallel.
 - Obtain one agent's state from the message sequence of an engine SDK and
   represent it as a state machine ([architecture](system-overview.md)). Claude
   Code was the first target; Codex (phase-14,
-  [ADR-0032](../adr/0032-codex-adapter.md)) and Antigravity
-  ([ADR-0057](../adr/0057-antigravity-adapter.md)) were added behind the same
+  [ADR-0032](../adr/0032-codex-adapter.md)), Antigravity
+  ([ADR-0057](../adr/0057-antigravity-adapter.md)) and Grok
+  ([ADR-0067](../adr/0067-grok-resident-acp-host.md)) were added behind the same
   `EngineAdapter` boundary.
 - Aggregate the states of multiple agents on the server and visualize them in
   the client.
@@ -78,5 +79,5 @@ None (this spec is accepted).
 `@kaoiro/grok` owns a child process and one ACP session for the wrapper's
 lifetime. Engine-specific process, transport, session and event modules
 feed the common state machine, brokers and tool handlers. Persona/footer
-rules use native `_meta.rules`; MCP calls use the wrapper's stdio bridge.
+rules use native `_meta.rules`; MCP calls use the wrapper's loopback HTTP MCP endpoint.
 See the [engine reference](../reference/engines/grok-acp.md).
