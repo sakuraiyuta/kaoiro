@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-11-14
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
@@ -17,8 +17,9 @@ build-identity provenance verification is in
 This page covers the server side; the interleaved runner-side steps are in
 [Runner update and rollback](runner-update-and-rollback.md).
 
-Sections 1–2 cover **initial deployment**. This section is canonical for moving
-an already-running deployment to a new version.
+Initial deployment is in [Server install runbook](server-install.md) and
+[Runner install and distribution](runner-install.md). This page is canonical
+for moving an already-running deployment to a new version.
 
 > **The server side is a CLI** (`server/deploy/kaoiro-server-deploy.mjs`,
 > issue #306), driven by a transaction manifest + journal — [4.3](#43-update-procedure)/[4.4](#44-failure-handling) below
@@ -117,7 +118,8 @@ and retain the established backend until the failure is resolved.
 - **Ensure the server host's SSH host key is in `known_hosts`.** Do not bypass with
   `StrictHostKeyChecking=no`.
 - **Ensure every persistence path resolves under the named volume.** The source of
-  truth is the persistence set in 1.2. An unlisted DETS can **silently escape backup**
+  truth is `KaoiroServer.PersistencePaths`
+  (`server/lib/kaoiro_server/persistence_paths.ex`). An unlisted DETS can **silently escape backup**
   (`KAOIRO_USERS_PATH` did so, losing the user ledger on container recreation;
   issue #217).
 - **Know which persistence stores are new in the target image.** A store
@@ -128,7 +130,7 @@ and retain the established backend until the failure is resolved.
   4.3 (2) and the 4.3 (5-b) paragraph that begins
   "For a genuinely new store".
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
-  wrappers beneath it (section 2, “Run as a service”); conversation state is not
+  wrappers beneath it ([Run as a service](runner-install.md#run-as-a-service)); conversation state is not
   persisted, so in-progress exchanges are lost.
 - **The deploy host's `tar` must be GNU tar.** The CLI's own archive-listing
   parser assumes GNU `tar tv*`'s output format; a bsdtar or busybox host fails
@@ -1019,8 +1021,8 @@ test "$(docker inspect "$ID" --format '{{.State.Status}}')" = running
 **(4) Runner does not restart** (4.3 step 7)
 
 Check `systemctl --user status kaoiro-runner` and the journal. Exit code 78
-(`EX_CONFIG`) is a configuration error and restart will not fix it (section 2,
-“Restart policy and exit codes”). Missing `dist` also produces this code, so
+(`EX_CONFIG`) is a configuration error and restart will not fix it
+([Restart policy and exit codes](../reference/deployment/runner-artifacts.md#restart-policy-and-exit-codes)). Missing `dist` also produces this code, so
 first check the recovery procedure in (2).
 
 **At this point the new server has already opened state.** Do not stop at
@@ -1103,9 +1105,9 @@ A file that is not a DETS file is moved to `<path>.corrupt-<UTC>-<n>` and a
 fresh store starts empty (the stored retention pick is lost). Keep the backup
 until the cause is understood.
 
-**File size.** DETS files are limited to 2 GiB. The worst case at the limits
-(200 agents, 100 entries of 16 KiB each) is about 328 MiB, computed from the
-limits and not measured. Pruning frees space inside the file, which is reused;
+**File size.** DETS files are limited to 2 GiB. Each agent keeps at most 100
+entries of at most 16 KiB (about 1.6 MiB per agent); the store does not cap
+the number of agents, and the total is not measured. Pruning frees space inside the file, which is reused;
 the file is not compacted. The start-up log line reports the size, and `ls -l`
 on `KAOIRO_AGENT_STATUS_LINES_PATH` shows it between starts.
 

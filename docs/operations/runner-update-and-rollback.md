@@ -169,7 +169,7 @@ partial `dist`.**
 ### 4.6.1 Migrate from checkout-direct (operator action, once per host)
 
 **Only step (6) touches the running runner.** Agents disconnect only when it is
-restarted there (the warning in section 2 “Run as a service” applies).
+restarted there (the warning in [Run as a service](runner-install.md#run-as-a-service) applies).
 
 ```sh
 # 1. Record current operating state as a baseline for post-migration comparison
@@ -185,11 +185,15 @@ git status --porcelain   # Must be empty (dirty checkout appends -dirty to id)
 ./runner/deploy/kaoiro-runner-install.sh \
   dist-tarball/kaoiro-runner-<rev>-linux-x64.tar.gz
 
+# 3b. Fetch the release's engine pins (reads the runner configuration)
+install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
+"$install_root/releases/<release-id>/deploy/kaoiro-runner-engines.sh" \
+  install --install-dir "$install_root"
+
 # 4. Create current symlink. Unit still points to old path so no disruption
 ./runner/deploy/kaoiro-runner-switch.sh <release-id>
 
 # 5. Retarget unit's ExecStart to point via current
-install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
 sed "s|@@DEPLOY_DIR@@|$install_root/current/deploy|" \
   runner/deploy/kaoiro-runner.service \
   > ~/.config/systemd/user/kaoiro-runner.service
@@ -204,7 +208,8 @@ systemctl --user status kaoiro-runner
 ```
 
 Confirm (7)'s `--version` matches the value recorded in (1) and `status` is
-`active (running)`. Rerun the connectivity checks in section 3.
+`active (running)`. Rerun the
+[connectivity checks](server-update-and-rollback.md#3-connectivity-checks).
 
 **After migration, the repo's `dist` is no longer the live path.** The repo is a
 build source; `pnpm -C runner build` does not affect the running runner.
@@ -260,7 +265,7 @@ Check `readlink "$install_root/current"` and the normal runner identity
 checks before choosing the next operation. A later update retries pruning.
 The updater stops on its error path, so it does not print a successful
 release ID on stdout in either exit-75 case.
-Distinguish the pre-work exit 75 for a held `.lock.update` by the lock name
+Distinguish the pre-work exit 75 for a held `.lock.update` or `.lock.install` by the lock name
 in stderr: a post-start skip instead names `.lock.links` or reports changed
 current. The update has already printed its starting-service line.
 
@@ -309,15 +314,15 @@ Main options:
 | `--target <os-arch>` | — | Build target, only with `--from-repo` (`darwin-arm64` or `linux-x64`) |
 | `--detach` | — | Queue update as a transient systemd user service via `systemd-run --user --no-block` |
 | `--service <name>` | `kaoiro-runner` | Target systemd user unit |
-| `--keep <n>` | `3` | Generations to retain; excludes `current` / `previous` |
+| `--keep <n>` | `3` | Newest valid releases to retain, counting `current` / `previous` (never pruned); at least 1 |
 | `--install-dir <dir>` | Above default | Install root |
 | `--allow-dirty` | — | Allow activation of `-dirty` / `unknown`; **development hosts only** |
 | `--codex-native-change` | — | Allow a target whose Codex native differs from the current release; see [Codex native changes](#codex-native-changes) |
 
 Never delete the release referenced by `current` / `previous`, regardless of
-`--keep`. The runner **does not resolve the Codex wrapper until the first Codex
-spawn**, so the active release continues to be read after startup; deleting it
-breaks a spawn that has not happened yet.
+`--keep`. Every wrapper spawn starts `dist/kaoiro.mjs` from the release the runner
+started from, so the active release continues to be read after startup;
+deleting it breaks a later spawn.
 
 #### Update from a published release
 
@@ -381,6 +386,7 @@ switch. Keep stop, switch and start in one success chain; a refused switch
 must leave the runner stopped:
 
 ```sh
+tool_release=<physical path of that verified release>
 systemctl --user stop kaoiro-runner &&
   "$tool_release/deploy/kaoiro-runner-switch.sh" --rollback \
     --install-dir "$install_root" &&
@@ -444,7 +450,9 @@ them is the operator's decision.
 
 ## Stale operation locks
 
-Operations acquire `.lock.update`, then `.lock.links` for link changes.
+Operations acquire `.lock.update` (update), `.lock.install` (install, which
+update and bootstrap also run) or `.lock.bootstrap` (bootstrap), then
+`.lock.links` for link changes.
 A held lock is never stolen. After worker death or boot, inspect the exact
 worker/unit and paths before removing only its stale locks. Confirm that no
 update/install/switch you started remains alive and that the detached
@@ -454,6 +462,8 @@ before clearing the lock. PID reuse or absence is not a state transition.
 
 ```sh
 rmdir "$install_root/.lock.update"
+rmdir "$install_root/.lock.install"
+rmdir "$install_root/.lock.bootstrap"
 rmdir "$install_root/.lock.links"
 ```
 

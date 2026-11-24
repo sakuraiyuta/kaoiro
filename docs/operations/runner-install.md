@@ -36,7 +36,7 @@ disconnects every agent on that host.
 Service definitions for host residency are in [`deploy/`](../../runner/deploy) (issue #136).
 
 **Initial installation is completed entirely with `kaoiro-runner-bootstrap.sh <tarball>`**
-(issue #314): wizard (the only interactive step) → install → switch → unit/plist placement →
+(issue #314): wizard (the only interactive step) → install → engine acquisition → switch → unit/plist placement →
 enable/start in order. The OS is automatically detected via `uname -s` (systemd user
 unit for Linux, launchd LaunchAgent for macOS). It is idempotent — if config already exists, it
 skips the wizard (forced with `--reconfigure`, backing up existing config before overwriting),
@@ -54,15 +54,15 @@ are out of scope; `kaoiro-runner-bootstrap.sh` is for initial installation only)
 
 | File | Purpose |
 |---|---|
-| [`deploy/kaoiro-runner-bootstrap.sh`](../../runner/deploy/kaoiro-runner-bootstrap.sh) | Single entry point for initial installation. wizard → install → switch → unit/plist → enable/start |
+| [`deploy/kaoiro-runner-bootstrap.sh`](../../runner/deploy/kaoiro-runner-bootstrap.sh) | Single entry point for initial installation. wizard → install → engine acquisition → switch → unit/plist → enable/start |
 | [`deploy/kaoiro-runner-launch.sh`](../../runner/deploy/kaoiro-runner-launch.sh) | Launch shim. Consolidates env file loading, config resolution, and `exec` |
 | [`deploy/kaoiro-runner.service`](../../runner/deploy/kaoiro-runner.service) | systemd **user** unit (Linux) |
 | [`deploy/com.kaoiro.runner.plist`](../../runner/deploy/com.kaoiro.runner.plist) | launchd **LaunchAgent** (macOS) |
 | [`deploy/runner.env.example`](../../runner/deploy/runner.env.example) | Template env file for `KAOIRO_RUNNER_TOKEN`, etc. |
 | [`deploy/kaoiro-runner-install.sh`](../../runner/deploy/kaoiro-runner-install.sh) | Installs tarball to `releases/<rev>/` (does not touch running releases) |
 | [`deploy/kaoiro-runner-switch.sh`](../../runner/deploy/kaoiro-runner-switch.sh) | Atomically switches `current` / `--rollback` |
-| [`deploy/kaoiro-runner-update.sh`](../../runner/deploy/kaoiro-runner-update.sh) | Performs build → install → stop → switch → start → verify → prune in one go. Avoids self-termination with `--detach` |
-| [`deploy/kaoiro-runner-common.sh`](../../runner/deploy/kaoiro-runner-common.sh) | Common logic sourced by the three scripts above (install root resolution, lock, symlink swap) |
+| [`deploy/kaoiro-runner-update.sh`](../../runner/deploy/kaoiro-runner-update.sh) | Performs build or download → install → engine acquisition → stop → switch → start → verify → prune in one go. Avoids self-termination with `--detach` |
+| [`deploy/kaoiro-runner-common.sh`](../../runner/deploy/kaoiro-runner-common.sh) | Common logic sourced by the deploy scripts (install root resolution, lock, symlink swap) |
 
 **Run as a user service** (not as a root system service). This is because the runner reads the
 host user's `~/.claude` credentials and Codex home (`~/.codex`, or the
@@ -118,7 +118,7 @@ determined by what is set in `@@DEPLOY_DIR@@`.
 |---|---|---|
 | **Checkout-direct** | `<repo>/runner/deploy` | Manual launch during development only. The checkout is the live path directly |
 | **Local-build release** | `<install-root>/current/deploy` | **Production**. Build tarball in repo and install as release |
-| **Gitea release** | `<install-root>/current/deploy` | **Production**. Install distributed tarball as release |
+| **GitHub release** | `<install-root>/current/deploy` | **Production**. Install a published release archive |
 
 Production hosts use the release profile. The in-place-build risk and its
 release-profile boundary are documented in
@@ -193,7 +193,7 @@ production environment**. Why both are required:
 - `HostRegistry.register/4` **overwrites** the entry keyed by `host_id` (also
   replacing `runner_pid`), and `drop/3` on disconnect **deletes the entry** by
   matching pid. Because the real runner does not re-register while maintaining
-  its socket (`updateRegister` fires only on config reload), **connecting even
+  its socket (`updateRegister` fires only on config reload or an engine catalog refresh), **connecting even
   momentarily with the same host_id deletes the real host's registration**. If
   `host_id` differs, overwriting does not occur even if `server_url` is mistaken
 
@@ -252,15 +252,15 @@ the runner cannot distinguish this method from a personal login.
 ### Antigravity presence check and version reporting
 
 When the `antigravity` capability is selected during `kaoiro-runner-setup.sh`
-(`runner/src/setup.ts:180-192`), the wizard presence-checks the `agy` executable
+(`runner/src/setup.ts`), the wizard presence-checks the `agy` executable
 on `PATH` (`runner/src/setup.ts:205-220`). If `agy` is not found, the wizard throws
 `ConfigError` with an install hint and fails closed rather than writing an
 unverified configuration. On runner process startup and configuration reload,
-the runner probes `agy --version` (`runner/src/antigravity-version.ts:1-5`,
-`runner/src/runner-cli.ts:185-209, 350-362`). If resolved, it writes
+the runner probes `agy --version` (`runner/src/antigravity-version.ts`,
+`runner/src/runner-cli.ts`). At startup, if resolved, it writes
 `runner: antigravity agy version <version>` to stderr and advertises the version
 in the `RunnerRegister` payload under `antigravity_cli_version`
-(`runner/src/config.ts:704-706`) for server and dashboard visibility
+(`runner/src/config.ts`) for server and dashboard visibility
 (issue #410). This startup version probe is for operator reporting and observability
 only; failure to resolve a version does not gate runner startup. A version
 change detected during configuration reload emits a stderr warning
@@ -269,14 +269,14 @@ change detected during configuration reload emits a stderr warning
 ### Antigravity session index
 
 The runner reads Antigravity session metadata from
-`~/.gemini/antigravity-cli/conversation_summaries.db` (`runner/src/sessions.ts:57-63, 195-214`).
+`~/.gemini/antigravity-cli/conversation_summaries.db` (`runner/src/sessions.ts`).
 If the session picker is empty after an `agy` update, check the runner journal
 for an Antigravity schema warning (`runner: antigravity session index unavailable: schema_mismatch ...`).
 The runner expects `PRAGMA user_version = 3` and requires the table
 `conversation_summaries` to contain columns `conversation_id`, `title`,
 `last_modified_time`, `workspace_uris`, and `nesting_depth`. If `user_version`
 differs or any required column is missing, schema validation fails closed
-(`runner/src/sessions.ts:252-257`), disabling Antigravity session listing and
+(`runner/src/sessions.ts`), disabling Antigravity session listing and
 resume validation. The first SQLite use in each runner process may also emit
 Node's `ExperimentalWarning` to the journal; this is harmless log noise.
 Mixed UTC offsets produce a warning that picker order may be wrong and call for
@@ -340,7 +340,7 @@ runner_pid=$(systemctl --user show --property=MainPID --value kaoiro-runner)
 tr '\0' '\n' < "/proc/$runner_pid/environ" | grep '^PATH='
 ```
 
-Then ask each newly spawned Antigravity, Claude Code, and Codex agent to run
+Then ask each newly spawned Antigravity, Claude Code, Codex, and Grok agent to run
 `gh --version`, `pnpm --version`, and `asdf --version` in its tool shell. For
 Codex, also check a non-login shell (`login:false`). The real `runner.env`
 contains a token: do not dump the file. If checking its assignment, read only
@@ -425,12 +425,14 @@ When placing manually without using the wizard, copy `runner.config.example.json
 `runner.env`).
 
 When running as a service, place the unit / plist from the "Running as a
-service" section above (set `@@DEPLOY_DIR@@` to the absolute path of `deploy/`
-in the extraction target). **The shims inside the distribution can be used
+service" section above (set `@@DEPLOY_DIR@@` to `<install-root>/current/deploy`;
+`kaoiro-runner-bootstrap.sh` already does this). **The shims inside the distribution can be used
 as-is without modification**.
 
-Asset upload to Gitea releases is tracked in
-[#140](https://github.com/sakuraiyuta/kaoiro/issues/140).
+Tagged releases publish `kaoiro-runner-<tag>-<os>-<arch>.tar.gz` for
+`linux-x64` and `darwin-arm64`, each with a `.sha256` sidecar, on GitHub
+releases (`.github/workflows/publish-runner.yml`). The archive's top-level
+directory keeps the `kaoiro-runner-<rev>-<os>-<arch>` name.
 
 ## See Also
 

@@ -2,7 +2,7 @@
 title: Build identity and release tags
 description: Immutable build identities (landing pairs and release tags), deployment completion and recovery.
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-24
 related: [deployment, protocol]
 ---
 
@@ -78,7 +78,8 @@ node scripts/with-build-identity.mjs --require-tagged -- sh -c 'pnpm -C wrapper 
 ```
 
 The tarball builder coordinates its own fan-outs. For a pre-frozen identity,
-pass `KAOIRO_BUILD_IDENTITY_FILE` and its SHA-256; consumers must not recompute.
+pass `KAOIRO_BUILD_IDENTITY_FILE`; the builder hashes it once and its consumers
+check that digest instead of recomputing the identity.
 The server deploy builder passes that same document as
 `KAOIRO_BUILD_IDENTITY_JSON` and all five compatibility scalar fields into
 Compose. The Docker Node stage writes `/app/build-info.json` with a JSON
@@ -86,8 +87,8 @@ serializer and Vite consumes the same document. The final image copies that
 file rather than reconstructing it with shell interpolation. Source checks
 before and after a coordinated build refuse a changed revision or dirty state.
 
-Generated archive VERSION/revision files, manifests, physical release IDs and
-Codex transaction IDs remain in use; the manually maintained repository VERSION
+Generated archive VERSION/revision files, manifests and physical release IDs
+remain in use; the manually maintained repository VERSION
 is removed. `--allow-dirty` explicitly selects development activation. Rollback
 of an already retained release keeps its recovery contract.
 

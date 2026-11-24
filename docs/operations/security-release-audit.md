@@ -1,7 +1,7 @@
 ---
 title: Security release audit
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-11-24
 ---
 
 # Security release audit
@@ -38,8 +38,7 @@ and keep this checklist synchronized with the issue checklist.
 - [ ] Server / client have no path to override the wrapper `allowedTools` ceiling
   (tests).
 - [ ] Antigravity: with the hook removed, the registration check and the
-  completed-tool correlation invariant both fail closed, and the bridge
-  auto-allow rejects every shell-injection fixture (phase-34).
+  completed-tool correlation invariant both fail closed (phase-34).
 - [ ] `scripts/dev.sh` logs contain no secrets (grep `tmp/dev-logs/*.log`).
 - [ ] Scan `git log --all -p` for token / .env / cookie / signed-token strings;
   none may enter commits intended for publication.

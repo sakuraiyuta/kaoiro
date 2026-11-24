@@ -195,7 +195,7 @@ fail() {
 # carry: the runner validates them at start with the fixture's capabilities (claude-code only)
 carry='KAOIRO_CLAUDE_[A-Z0-9_]+|KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS|KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS'
 # blind: validated only for an enabled engine, which the fixture does not enable
-blind='KAOIRO_CODEX_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|APPROVAL_AXIS)|KAOIRO_ANTIGRAVITY_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|TOOL_TIMEOUT_MS|EPOCH_IDLE_MS)'
+blind='KAOIRO_CODEX_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|APPROVAL_AXIS)|KAOIRO_ANTIGRAVITY_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|TOOL_TIMEOUT_MS|EPOCH_IDLE_MS)|KAOIRO_GROK_TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS'
 # paths: would make the shim read other settings than the default directory's
 paths='KAOIRO_RUNNER_(DIR|CONFIG|ENV)'
 # one strict grammar for the carried lines, used to copy AND to check
@@ -212,7 +212,7 @@ sh -n "$prod/runner.env" 2>/dev/null || fail "production env is not valid shell"
 n=$(envlines | grep -Ec "$paths")
 [ "$n" -eq 0 ] || fail "$n production env line(s) name KAOIRO_RUNNER_DIR/CONFIG/ENV; production does not run the default settings this gate reads"
 n=$(envlines | grep -Ec "$blind")
-[ "$n" -eq 0 ] || fail "$n production env line(s) set a Codex or Antigravity variable that this gate cannot validate (the fixture enables only claude-code); move it to its runner.config.json key, where it is validated"
+[ "$n" -eq 0 ] || fail "$n production env line(s) set a Codex, Antigravity or Grok variable that this gate cannot validate (the fixture enables only claude-code); move it to its runner.config.json key, where it is validated"
 # every non-comment line that names a carried variable must be a strict assignment
 n=$(envlines | grep -E "$carry" | grep -Evc "^(export +)?$assign\$")
 [ "$n" -eq 0 ] || fail "$n production env line(s) name a carried variable outside NAME=VALUE (value $val, optionally in one pair of quotes)"
@@ -273,7 +273,7 @@ What the block fixes:
 - **Config.** The fixture is the production `runner.config.json` with only
   `host_id`, `server_url`, `cwd_allowlist` and `capabilities` replaced. Every
   other block is production's, so the candidate's loader validates production's
-  values at the real entry point (shim, verifier, `kaoiro.js`). The host id is
+  values at the real entry point (shim, verifier, `dist/kaoiro.mjs`). The host id is
   random and never collides with a real host, and the server URL points at a
   closed local port, so nothing registers with the real server.
 - **Env.** The fixture env holds a dummy token and the production env
@@ -288,8 +288,8 @@ What the block fixes:
   before the start instead of being copied or dropped silently. The token,
   `PATH`, `CODEX_HOME` and the URL are never copied. The copied names (never
   values) are printed.
-- **Variables the gate cannot check.** The runner validates a Codex or
-  Antigravity behaviour variable only for an enabled engine, and the fixture
+- **Variables the gate cannot check.** The runner validates a Codex,
+  Antigravity or Grok behaviour variable only for an enabled engine, and the fixture
   enables only `claude-code`. A production env line that sets one of them stops
   the gate, with the advice to move it to its `runner.config.json` key: config
   blocks are validated for every engine, so the gate does check them there. A
@@ -330,7 +330,7 @@ What the gate covers: layout, shim, verifier, every config block, the env
 variables of `claude-code` and of the runner itself (the copied ones above), and
 Node. What it does not cover:
 
-- Native probes (Codex auth, `agy`), skipped on purpose because the fixture
+- Native probes (`agy` and the Grok catalog), skipped on purpose because the fixture
   enables only the `claude-code` capability. The runner neither reads nor
   validates a behaviour variable of an engine that is not in `capabilities`
   ([Behaviour settings](../reference/configuration/runner.md#behaviour-settings)),

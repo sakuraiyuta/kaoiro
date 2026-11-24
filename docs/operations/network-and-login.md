@@ -2,7 +2,7 @@
 title: Network and login runbook
 description: nginx reverse proxy, the direct-VPN deployment alternative, and configuring OAuth login.
 status: accepted
-last_updated: 2026-11-14
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
@@ -177,7 +177,8 @@ nextcloud:alice:operator
 ```
 
 For compose, put the file in `server/`. The bundled `docker-compose.yaml`
-already mounts it read-only (`server/docker-compose.yaml:113`); no compose
+already mounts `server/oauth-allowlist.txt` read-only at
+`/etc/kaoiro/oauth-allowlist.txt`; no compose
 edit is needed, only creating the plain file at that path.
 
 **Verify**:

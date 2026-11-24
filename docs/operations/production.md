@@ -116,6 +116,7 @@ node server/deploy/kaoiro-server-deploy.mjs rollback \
 Runner, same native pin:
 
 ```sh
+tool_release=$(readlink -f "$install_root/current")
 systemctl --user stop kaoiro-runner &&
   "$tool_release/deploy/kaoiro-runner-switch.sh" --rollback \
     --install-dir "$install_root" &&
@@ -123,7 +124,7 @@ systemctl --user stop kaoiro-runner &&
 ```
 
 Runner, across a Codex native pin change (exceptional; Codex conversations
-can be lost). `$tool_release` is the current release:
+can be lost), with the same `$tool_release`:
 
 ```sh
 systemctl --user stop kaoiro-runner &&

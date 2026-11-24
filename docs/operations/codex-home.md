@@ -21,14 +21,14 @@ operator action, done after the reader fix is deployed.
 
 - `CODEX_HOME` unset or empty: `~/.codex`, exactly as before.
 - `CODEX_HOME=<absolute dir>` in `runner.env`: the runner's resume scan, every
-  Codex wrapper, the Codex SDK and the `codex app-server` child use that
-  directory for `auth.json`, `config.toml`, `sessions/` and the state databases.
+  Codex wrapper and the `codex app-server` child use that directory for `auth.json`, `config.toml`, `sessions/` and the state databases.
 - Agent tool shells launched by Codex use an empty private `CODEX_HOME` under
   the runner's temporary root. They do not inherit this state directory. The
   native Codex process still uses the dedicated state directory. A restarted
   wrapper receives a new private tool home; the runner removes the previous
-  one when its wrapper exits. Claude and Antigravity wrapper children do not
-  receive `CODEX_HOME` from the runner.
+  one when its wrapper exits. Other wrapper children (Claude Code, Antigravity,
+  Grok and locally configured external engines) do not receive `CODEX_HOME`
+  from the runner.
 - The directory must exist. Codex does not create it and fails fast otherwise
   (`CODEX_HOME points to "<path>", but that path does not exist`). The runner
   checks it and refuses Codex launches with a reason instead of letting every
@@ -52,11 +52,13 @@ that only the pinned version ever touches the home. Use `CODEX_HOME` inline for
 each command:
 
 ```sh
-H="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro/codex-home"
+R="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
+H="$R/codex-home"
 mkdir -p "$H" && chmod 700 "$H"
-BIN=$(find "$HOME/.local/share/kaoiro/current/" -type f -name codex \
-  -path '*/vendor/*')
-printf '%s\n' "$BIN" | wc -l          # must print 1; stop otherwise
+V=$(node -p 'require(process.argv[1]).version' \
+  "$R/current/dist/codex-native.json")
+BIN=$(find "$R/engines/" -type f -name codex -path "*/codex-*@$V/vendor/*")
+[ -n "$BIN" ] && printf '%s\n' "$BIN" | wc -l   # must print 1; stop otherwise
 CODEX_HOME="$H" "$BIN" --version      # expect the pinned version
 CODEX_HOME="$H" "$BIN" login --device-auth
 CODEX_HOME="$H" "$BIN" login status   # expect: Logged in using ChatGPT
@@ -249,9 +251,7 @@ marker as in Cutover. This procedure is manual, never an updater error trap.
 
 This procedure reverses home isolation, not a Codex pin change; for that, see
 [Codex native changes](runner-update-and-rollback.md#codex-native-changes).
-Changing homes is a separate, approved relocation procedure. The native
-comparison does not certify a home that `runner.env` or the unit redirects
-outside the managed path.
+Changing homes is a separate, approved relocation procedure.
 
 To return to the shared home, set `CODEX_HOME` explicitly to the canonical
 shared-home path and restart the runner. The wrappers use

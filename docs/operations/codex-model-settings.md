@@ -1,7 +1,7 @@
 ---
 title: Codex model settings
 status: accepted
-last_updated: 2026-10-27
+last_updated: 2026-11-24
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -53,9 +53,9 @@ do not need an `extra_models` declaration. Terra 6.1 requires the bundled CLI
 to be at least 0.161.0; the measured floor for both GPT-6.2 models is 0.170.0.
 Free/Go continue to advertise `gpt-5.6-terra` only.
 
-The same flags pass to subcommands such as `codex exec` / `codex mcp-server`
-(and to kaoiro through `@openai/codex-sdk`). Under ChatGPT auth, however,
-specifying a slug outside the plan results in 400/404.
+The same flags pass to subcommands such as `codex exec` / `codex mcp-server`.
+Under ChatGPT auth, however, specifying a slug outside the plan results in
+400/404.
 
 ### (C) Persistent setting (`~/.codex/config.toml`)
 
@@ -123,11 +123,11 @@ themselves in the meantime:
 - The declaration is host-wide (every agent on that runner), takes effect
   on the next spawn after a runner restart or config hot-reload, and does
   not bypass entitlement — a model the account is not actually entitled to
-  still fails with the SDK's usual 400/404, surfaced as the existing
+  still fails with the upstream 400/404, surfaced as the existing
   `switch_error` rollback (or a launch failure for a fresh spawn).
 - A Codex declaration may include `minimal_client_version` as a
   `major.minor.patch` string. When present, the runner and wrapper exclude
-  the entry if the SDK-bundled Codex CLI is older. When absent, the entry
+  the entry if the bundled Codex CLI is older. When absent, the entry
   remains advertised and the wrapper writes one process-wide warning per
   model; runner validation itself does not emit that warning. CLI compatibility
   is the operator's responsibility for that escape-hatch declaration.
@@ -141,7 +141,6 @@ mapping from the marketed “Pro 500” plan to an upstream plan ID is unknown a
 is not inferred here. Upstream `available_in_plans` metadata and kaoiro's
 advertising policy are recorded separately in the
 [catalog evidence](../evidence/codex/model-catalog.md#codex-catalog-snapshot-2026-10-01).
-
 
 ## Migration links
 

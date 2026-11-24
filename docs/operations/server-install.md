@@ -2,7 +2,7 @@
 title: Server install runbook
 description: Issue authentication tokens, create the server .env, and start with docker compose.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-24
 related: [deployment]
 ---
 
@@ -39,7 +39,9 @@ Confirm all of these before starting.
 ### 1.0 Clone at the exact commit
 
 Clone the repository at the exact commit you intend to run, on the server host.
-Every later step runs from this checkout.
+Every later step runs from this checkout. The deploy CLI in 1.3 builds only a
+commit that carries a completed landing tag or a release tag on `origin`
+([Build identity and release tags](build-identity-and-release-tags.md)).
 
 ```sh
 git clone <repo-url> <repo-path>
@@ -49,8 +51,11 @@ git checkout <target-sha>
 
 ### 1.1 Issue authentication tokens (three required)
 
-For public operation on an arbitrary host, configure all three
-([auth-and-authz](../architecture/security-boundaries.md)). Generate them with
+A production server accepts nobody without `KAOIRO_CLIENT_TOKENS` (or OAuth
+login) and `KAOIRO_RUNNER_TOKENS`. `KAOIRO_WRAPPER_TOKENS` is needed only for
+wrappers that connect without a runner; runner-spawned wrappers use
+server-minted signed tokens
+([auth-and-authz](../architecture/security-boundaries.md)). Generate tokens with
 `openssl rand -hex 32` (32-byte hex).
 
 ```sh
