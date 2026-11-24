@@ -2,7 +2,7 @@
 title: Inter-agent tool authorization
 description: Which engine gate decides each kaoiro inter-agent MCP tool call (send_to_agent / list_agents / whoami and the session companions), and when a send_to_agent call reaches the operator.
 status: accepted
-last_updated: 2026-11-23
+last_updated: 2026-11-24
 ---
 
 # Inter-agent tool authorization
@@ -23,7 +23,8 @@ Per-engine authorization of the kaoiro inter-agent MCP tools (`send_to_agent` / 
   **Membership is a security
   decision, not a convenience**: omission is the per-use approval gate itself
   (`mcp__kaoiro__send_to_agent` / `request_compact` /
-  `request_session_reset` are intentionally omitted).
+  `request_session_reset` / `request_peer_session_reset` are intentionally
+  omitted).
 
 - **An explicit `allowed_tools` list replaces the default allow set.** The
   Claude wrapper starts from `config.allowed_tools ?? [...READ_ONLY_TOOLS]`
@@ -34,11 +35,12 @@ Per-engine authorization of the kaoiro inter-agent MCP tools (`send_to_agent` / 
   start and end of every piece of work. Add `mcp__kaoiro__set_status_line` and
   `mcp__kaoiro__read_status_line` to such lists (the same rule already applies
   to `mcp__kaoiro__list_agents` and `mcp__kaoiro__whoami`). Codex exposes
-  the tools through its tool-host bridge and Antigravity through the
+  the tools through its tool-host bridge, and Antigravity and Grok through the
   wrapper's HTTP tool host, so this concerns Claude peers only.
 
 - Codex auto-approves kaoiro bridge calls at the engine boundary, so
-  `request_session_reset` uses the wrapper's `operatorApprovalGated` helper.
+  `request_session_reset` and `request_peer_session_reset` use the wrapper's
+  `operatorApprovalGated` helper.
   It skips `PermissionBroker.decide` only when both the dispatched turn's
   normalized wire approval and the latest operator selection are `never`,
   with no blocked permission state. Missing or failed policy evaluation
@@ -48,11 +50,21 @@ Per-engine authorization of the kaoiro inter-agent MCP tools (`send_to_agent` / 
   retain turn ownership (ADR-0043, 2026-10-15 addendum). Antigravity passes
   no autonomy predicate and keeps per-call broker approval.
 
+- Grok serves the tools from the shared HTTP tool host and does not ask before
+  a kaoiro tool call (measured host configuration), so `request_session_reset`
+  is wrapped in `operatorApprovalGated` and every call asks the operator, with
+  no autonomous skip (`wrapper/grok/src/cli.ts`; the wait is bounded at 300
+  seconds, or at `permission_timeout_ms` when that is shorter, and a timeout
+  denies). Grok has no `request_peer_session_reset` tool, and the inter-agent
+  tools are unwrapped as on the other engines
+  ([Grok ACP host](../engines/grok-acp.md)).
+
 ## MCP (`mcp__kaoiro__send_to_agent`)
 
 - Inject the in-process MCP server from `wrapper/agent-common/src/inter_agent.ts`
   into the engine (Claude via `Options.mcpServers`, Codex via the tool-host bridge,
-  Antigravity via `ToolHost.listen` in `wrapper/antigravity/src/host.ts`).
+  Antigravity and Grok via `ToolHost.listen` in `wrapper/antigravity/src/host.ts`
+  and `wrapper/grok/src/host.ts`).
 - On Claude, `send_to_agent` is **not in the default allowedTools**, so every call
   enters `canUseTool`, and it reaches the broker (operator dialog) unless the
   conversation-scoped whitelist below allows it first
@@ -153,12 +165,14 @@ from the server for that pair**.
 - MUST (Claude Code): When injecting a new in-process MCP tool into the SDK,
   explicitly decide whether it belongs in default allowedTools (omitted =
   per-use approval; included = unsupervised).
-- MUST (Codex and Antigravity): When adding a descriptor to `toolDescriptors`
-  in `wrapper/codex/src/cli.ts` or `wrapper/antigravity/src/cli.ts`, explicitly
+- MUST (Codex, Antigravity and Grok): When adding a descriptor to
+  `toolDescriptors` in `wrapper/codex/src/cli.ts`,
+  `wrapper/antigravity/src/cli.ts` or `wrapper/grok/src/cli.ts`, explicitly
   decide whether to wrap it in `operatorApprovalGated`
-  (`wrapper/agent-common/src/approval_gate.ts`). Neither the Codex tool-host
-  bridge nor Antigravity's `ToolHost` carries an approval axis, so an unwrapped
-  descriptor is auto-approved by construction on every call; the
-  wrapper-owned broker wait that `operatorApprovalGated` adds is the only
-  route to the operator (`request_session_reset` takes it on both engines,
-  the inter-agent tools do not).
+  (`wrapper/agent-common/src/approval_gate.ts`). None of the Codex tool-host
+  bridge, Antigravity's `ToolHost` and Grok's `ToolHost` carries an approval
+  axis, so an unwrapped descriptor is auto-approved by construction on every
+  call; the wrapper-owned broker wait that `operatorApprovalGated` adds is the
+  only route to the operator (`request_session_reset` takes it on all three
+  engines and `request_peer_session_reset` on Codex and Antigravity; the
+  inter-agent tools do not).

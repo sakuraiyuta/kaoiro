@@ -1,7 +1,7 @@
 ---
 title: Tool authorization
 status: accepted
-last_updated: 2026-09-30
+last_updated: 2026-11-24
 ---
 
 # Tool authorization
@@ -25,7 +25,7 @@ The structural type for permission configurations is `PermissionConfiguration` i
 
 - Claude's tool ceiling remains `allowedTools` / `canUseTool`. Codex's selected
   sandbox/network policy may change through the operator-only `set_permission`
-  control; approval stays `never` on exec and on a non-opted-in app-server
+  control; approval stays `never` on a non-opted-in app-server
   persona. Selection is not an immutable launch-time
   ceiling ([ADR-0033](../../adr/0033-permission-model-dual-axis.md) F3).
   On the app-server backend with the approval opt-in
@@ -75,14 +75,14 @@ child and the wrapper ([ADR-0057](../../adr/0057-antigravity-adapter.md) F4).
 
 | Boundary | Mechanism | Implementation | On failure |
 |---|---|---|---|
-| `agy` child → hook process | Hook registration in the wrapper-owned `.agents/hooks.json`, discovered through `--add-dir` | `wrapper/antigravity` customization-dir writer | Not registered → spawn fails with `antigravity_gate_not_registered`; hook exceeding the CLI `timeout` is killed and the tool call fails without running (measured) |
-| hook process → wrapper | Per-agent unix socket inside a 0700 `mkdtemp` dir; per-spawn nonce carried in the hook's environment. Distinct from the `ToolHost` socket below — two sockets, two nonces, two protocols, so a shell that reaches the tool socket cannot answer gate questions | `hook.ts` → `gate.ts` | Socket error / wrapper deadline / malformed payload / missing nonce → `deny`; connection closed before an answer → the pending broker entry resolves as deny and `waiting_permission` is cleared |
+| `agy` child → hook process | Hook registration in the wrapper-owned `.agents/hooks.json`, discovered through `--add-dir`; before each spawn the wrapper reads `agy`'s own hook list (`agy -p /hooks`) and requires exactly the managed PreToolUse and Stop registrations and no other enabled Stop hook | `wrapper/antigravity` customization-dir writer, `checkHookList` (`customization.ts`) | Start fails with `antigravity_hooks_refused:<reason>` (`registration_mismatch`, `foreign_stop_hook:<source>`, `timeout`, `nonzero_exit`, `invalid_json`, `spawn_failure:…`); hook exceeding the CLI `timeout` is killed and the tool call fails without running (measured) |
+| hook process → wrapper | Per-agent unix socket inside a 0700 `mkdtemp` dir; per-spawn nonce carried in the hook's environment. Distinct from the HTTP `ToolHost` below — a separate endpoint with its own secret (a nonce here, a bearer there) and its own protocol, so a shell that reaches the tool host cannot answer gate questions | `hook.ts` → `gate.ts` | Socket error / wrapper deadline / malformed payload / missing nonce → `deny`; connection closed before an answer → the pending broker entry resolves as deny and `waiting_permission` is cleared |
 | wrapper → operator | `PermissionBroker` → `permission_request` (operator-only) → `permission_decision` (operator-only relay) | shared with the Claude path above | unchanged |
 
 - Each nonce rejects an unrelated same-uid process that guessed its socket
   path. Neither is a defence against the agent itself, whose shell
   inherits both socket paths and can read both nonces — which is why
-  [threat-model](enforcement-boundaries.md#antigravity-engine--the-wrapper-is-the-only-enforcement-point-phase-34) records the gate self-verification as
+  [threat-model](enforcement-boundaries.md#antigravity-engine--the-wrapper-is-the-only-enforcement-point) records the gate self-verification as
   detection rather than authorization.
 - The **execution-capability ceiling** for this engine is the wrapper's
   tool-class table plus the sandbox × approval × network cell matrix, not an
@@ -91,17 +91,19 @@ child and the wrapper ([ADR-0057](../../adr/0057-antigravity-adapter.md) F4).
   is denied unconditionally, and a tool name absent from the table is
   unclassified: denied under `approval: never`, escalated to the operator
   otherwise.
-- kaoiro's own tool surface rides the `ToolHost` unix socket shared with the
-  Codex adapter — a second socket, separate from the gate — invoked as a CLI
-  through `run_command`. Its auto-allow is a whole-string
-  match on a metacharacter-free alphabet (ADR-0057 F5). The socket is
-  reachable from the agent's own shell and exposes only tools that agent
-  already holds, so it is not a privilege boundary.
+- kaoiro's own tool surface rides the shared HTTP `ToolHost`
+  (`wrapper/agent-common/src/toolhost.ts`, [ADR-0078](../../adr/0078-antigravity-over-acp.md)):
+  an MCP server on `127.0.0.1` that each `agy` process reaches with a bearer
+  minted for that process. The gate allows a registered `mcp_kaoiro_*` tool
+  before the network check and the permission cell. The host is reachable
+  from the agent's own shell and exposes only tools that agent already
+  holds, so it is not a privilege boundary. (Codex keeps its own unix-socket
+  tool host and bridge.)
 - The customization dir (persona rules + gate config) is wrapper-owned:
-  0700 `mkdtemp`, rewritten from memory and hash-verified before every
-  per-turn spawn, referencing writes and shell denied in every permission
-  cell, deleted on close, with stale `kaoiro-agy-*` directories swept at
-  startup after a SIGKILL.
+  0700 `mkdtemp`, rewritten from memory before every per-turn spawn and
+  hash-verified when each input settles, referencing writes and shell denied
+  in every permission cell, deleted on close, with stale `kaoiro-agy-*`
+  directories swept at startup after a SIGKILL.
 
 ## Constraints (MUST)
 
