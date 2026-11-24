@@ -607,6 +607,7 @@ h2 { scroll-margin-top: 5rem; }
 .hero-copy { grid-area: copy; min-width: 0; }
 .hero h1 img { width: min(100%, 20rem); }
 .lead { margin: 1.25rem 0; font-size: clamp(1.65rem, 3.3vw, 2.75rem); line-height: 1.25; }
+.lead-sub { margin: -0.5rem 0 1rem; font-size: 1.05rem; line-height: 1.4; color: var(--muted); }
 .actions { gap: 0.75rem 1.1rem; font-size: 0.95rem; }
 .actions a:not(.badge) { text-underline-offset: 0.3em; }
 .hero .notices { grid-area: notices; margin: 0; }
