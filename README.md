@@ -43,11 +43,10 @@ Agents are launched and tuned from the same screen:
 
 <p>
   <img src="docs/images/launch-dialog.png" height="360"
-       alt="Launch dialog: host, persona, working directory, permission mode
-            and an optional initial prompt">
+       alt="Launch dialog: host, persona, working directory, engine, model,
+            permission mode and an optional initial prompt">
   <img src="docs/images/settings-drawer.png" height="360"
-       alt="Settings drawer: notification sound, volume and card display
-            options">
+       alt="Settings drawer: language, card display options and grid order">
 </p>
 
 The dashboard interface is available in Japanese and English. It follows the
