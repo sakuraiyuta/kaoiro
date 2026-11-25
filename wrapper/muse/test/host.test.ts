@@ -176,7 +176,7 @@ describe("muse host", () => {
       const path = join(tmpdir(), `kaoiro-muse-launch-${process.pid}.json`);
       rmSync(path, { force: true });
       try {
-        await started({ resumeSessionId, env: { ...process.env,
+        await started({ ...(resumeSessionId ? { resumeSessionId } : {}), env: { ...process.env,
           KAOIRO_TEST_LAUNCH_FILE: path, KAOIRO_TEST_SENTINEL: "unchanged",
           MUSE_EXPERIMENTAL_ACP: "off" } });
         const launch = JSON.parse(readFileSync(path, "utf8"));
@@ -196,8 +196,8 @@ describe("muse host", () => {
         { network_access: false }]) {
         const host = new MuseHost({ config: { ...config, ...restriction },
           cwd: process.cwd(), personaPrompt: "persona", send: () => {},
-          decidePermission: async () => ({ allow: true }), executable, resumeSessionId,
-          env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
+          decidePermission: async () => ({ allow: true }), executable,
+          ...(resumeSessionId ? { resumeSessionId } : {}), env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
         hosts.push(host);
         await expect(host.run()).rejects.toThrow(/does not accept/);
         expect(existsSync(path)).toBe(false);
