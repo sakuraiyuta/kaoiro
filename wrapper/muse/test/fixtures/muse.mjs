@@ -66,6 +66,7 @@ async function connectMcp(servers) {
   const mcp = servers?.[0];
   if (!mcp || mcp.type !== "http") return;
   const headers = Object.fromEntries((mcp.headers ?? []).map((h) => [h.name, h.value]));
+  if (process.env.KAOIRO_TEST_MUSE_BAD_AUTH) headers.Authorization = "Bearer invalid";
   const transport = new StreamableHTTPClientTransport(new URL(mcp.url), {
     requestInit: { headers },
   });
@@ -144,6 +145,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         break;
       case "session/set_config_option": {
         if (process.env.KAOIRO_TEST_HANG_SWITCH) break;
+        if (process.env.KAOIRO_TEST_DELAY_SWITCH) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
         const { configId, value } = msg.params;
         if (configId === "model" && MODELS.some((m) => m.value === value)) model = value;
         else if (configId === "effort" && EFFORTS.some((e) => e.value === value)) effort = value;

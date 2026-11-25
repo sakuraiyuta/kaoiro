@@ -340,6 +340,16 @@ describe("muse host", () => {
     }
   });
 
+  it("reports kaoiro tools as missing after rejected MCP authentication", async () => {
+    const { host, envelopes } = await started({
+      env: { ...process.env, KAOIRO_TEST_MUSE_BAD_AUTH: "1",
+        KAOIRO_TEST_MCP_ON_PROMPT: "1" },
+    });
+    await host.send("hello");
+    expect(envelopes.some((e) => e.type === "log" &&
+      String(e.payload.text).includes("not connected"))).toBe(true);
+  });
+
   it("recognizes an MCP connection during the first prompt", async () => {
     const { host, envelopes } = await started({
       env: { ...process.env, KAOIRO_TEST_MCP_ON_PROMPT: "1" },
@@ -388,22 +398,29 @@ describe("muse host", () => {
     await turn;
   });
 
-  it("pauses inactivity during a pending permission and rearms after resolution", async () => {
-    const { host, envelopes } = await started({ watchdogTimeoutMs: 120 });
-    const turn = host.send("sleep");
-    await vi.waitFor(() => expect(host.state).toBe("tool_running"));
-    host.setPendingPermission({ request_id: "p", tool_name: "tool", ts: "now" });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(envelopes.some((e) => e.type === "result")).toBe(false);
-    host.setPendingPermission(null);
-    const finished = await Promise.race([
-      turn.then(() => true, () => false),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
-    ]);
-    expect(finished).toBe(true);
-    expect(envelopes.find((e) => e.type === "result")?.ext)
-      .toMatchObject({ interrupted: true });
-  });
+  it.each(["permission", "question"])(
+    "pauses inactivity during %s and rearms after resolution", async (kind) => {
+      const { host, envelopes } = await started({ watchdogTimeoutMs: 120 });
+      const turn = host.send("sleep");
+      await vi.waitFor(() => expect(host.state).toBe("tool_running"));
+      if (kind === "permission") {
+        host.setPendingPermission({ request_id: "p", tool_name: "tool", ts: "now" });
+      } else {
+        host.setPendingQuestion({ request_id: "q", questions: [], ts: "now" });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(envelopes.some((e) => e.type === "result")).toBe(false);
+      if (kind === "permission") host.setPendingPermission(null);
+      else host.setPendingQuestion(null);
+      const finished = await Promise.race([
+        turn.then(() => true, () => false),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
+      ]);
+      expect(finished).toBe(true);
+      expect(envelopes.find((e) => e.type === "result")?.ext)
+        .toMatchObject({ interrupted: true });
+    },
+  );
 
   it("records the native session in the recovery checkpoint", async () => {
     const checkpoint = join(tmpdir(), `kaoiro-muse-recovery-${process.pid}.json`);
@@ -571,15 +588,18 @@ describe("muse host", () => {
     await expect(host.setEffort("no-such-effort")).rejects.toThrow();
   });
 
-  it("stops and rejects a queued prompt when a model switch times out", async () => {
-    const { host, run } = await started({ switchTimeoutMs: 100,
-      env: { ...process.env, KAOIRO_TEST_HANG_SWITCH: "1" } });
-    const switching = host.setModel("muse-wonder");
-    const prompt = expect(host.send("must not run")).rejects.toThrow();
-    await expect(switching).rejects.toThrow();
-    await prompt;
-    await expect(run).rejects.toThrow(/timed out/);
-  });
+  it.each(["KAOIRO_TEST_HANG_SWITCH", "KAOIRO_TEST_DELAY_SWITCH"])(
+    "stops and rejects a queued prompt on switch timeout: %s", async (key) => {
+      const { host, run } = await started({ switchTimeoutMs: 100,
+        env: { ...process.env, [key]: "1" } });
+      const switching = host.setModel("muse-wonder");
+      const prompt = expect(host.send("must not run")).rejects.toThrow();
+      await expect(switching).rejects.toThrow();
+      await prompt;
+      await expect(run).rejects.toThrow(/timed out/);
+      expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
+    },
+  );
 
   it("rejects permission-mode and permission switching explicitly", async () => {
     const { host } = await started();

@@ -457,7 +457,19 @@ export function writeWorkspaceCheckout(
     const link = join(runner, "node_modules", "@kaoiro", wrapper);
     const member = join(ws, "wrapper", wrapper);
     mkdirSync(dirname(member), { recursive: true });
-    renameSync(link, member);
+    if (wrapper === "muse") {
+      mkdirSync(join(member, "dist"), { recursive: true });
+      writeFileSync(join(member, "package.json"), JSON.stringify({
+        name: "@kaoiro/muse", version: "0.0.0", type: "module",
+      }));
+      writeFileSync(join(member, "dist/cli.js"), "// stub muse wrapper\n");
+      writeFileSync(join(member, "dist/build-info.json"), JSON.stringify({
+        revision, dirty: options.dirty ?? false,
+        built_at: "2026-08-16T00:00:00.000Z", version: "0.0.0", channel: "dev",
+      }));
+    } else {
+      renameSync(link, member);
+    }
     symlinkSync(`../../../wrapper/${wrapper}`, link);
   }
   const runtimePackages = join(runner, "node_modules", "@openai");

@@ -61,7 +61,8 @@ const installDifferingNative = () => {
 };
 
 it("installs the bundled archive and rolls back to an unchanged legacy tree", () => {
-  writeReleaseTree(join(installed, "releases", legacy), legacy);
+  const oldTree = writeReleaseTree(join(installed, "releases", legacy), legacy);
+  expect(existsSync(join(oldTree, "node_modules/@kaoiro/muse"))).toBe(false);
   symlinkSync(`releases/${legacy}`, join(installed, "current"));
   expect(install().status).toBe(0);
   expect(switchTo(bundled).status).toBe(0);
