@@ -378,6 +378,21 @@ describe("muse host", () => {
     },
   );
 
+  it.each(["KAOIRO_TEST_MUSE_HANG_NEW", "KAOIRO_TEST_MUSE_HANG_MODE"])(
+    "reaches the session RPC before its startup deadline: %s", async (key) => {
+      let rpcSent = false;
+      const method = key.endsWith("NEW") ? "session/new" : "session/set_mode";
+      const host = new MuseHost({ config: { ...config }, cwd: process.cwd(),
+        personaPrompt: "persona", send: () => {}, executable, startupTimeoutMs: 5_000,
+        env: { ...process.env, [key]: "1" },
+        onMetadata: (event) => { if (event.direction === "out" && event.method === method) rpcSent = true; },
+        decidePermission: async () => ({ allow: true }) });
+      hosts.push(host);
+      await expect(host.run()).rejects.toThrow(/startup did not finish/);
+      expect(rpcSent).toBe(true);
+    }, 8_000,
+  );
+
   it("reports a session whose kaoiro tools never connect", async () => {
     process.env.KAOIRO_TEST_MUSE_NO_MCP = "1";
     try {
