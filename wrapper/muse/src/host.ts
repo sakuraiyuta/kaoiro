@@ -553,12 +553,6 @@ export class MuseHost implements EngineAdapter {
       authoritative: false,
       why: "the turn failed",
     };
-    // Persona contract (docs/reference/engines/muse-acp.md): the persona
-    // rides at the head of the first turn of a FRESH session only, and it
-    // stays pending until that prompt is accepted, so a failed first
-    // prompt is retried with the persona still attached. A resumed
-    // session keeps the persona it was created with and never receives
-    // it again; after an agent-side compaction it is not re-supplied.
     const carriesPersona = this.#personaPending;
     try {
       const promptText = carriesPersona
