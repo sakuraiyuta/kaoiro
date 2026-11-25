@@ -215,6 +215,31 @@ describe("muse host", () => {
     },
   );
 
+  it("cancels a pending approval if the native mode becomes unsafe", async () => {
+    const path = join(tmpdir(), `kaoiro-muse-permission-${process.pid}.json`);
+    rmSync(path, { force: true });
+    let decisionSignal: AbortSignal | undefined;
+    try {
+      const { host, run } = await started({
+        env: { ...process.env, KAOIRO_TEST_PERMISSION_FLIP: "1",
+          KAOIRO_TEST_PERMISSION_RESULT: path },
+        decidePermission: async (_name, _input, signal) => {
+          decisionSignal = signal;
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          return { allow: true };
+        },
+      });
+      const turn = host.send("permission").then(() => false, () => true);
+      await expect(run).rejects.toThrow(/approval mode/);
+      expect(await turn).toBe(true);
+      expect(decisionSignal?.aborted).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
   it("refuses launch restriction inputs before start", async () => {
     const host = new MuseHost({
       config: { ...config, sandbox: "read-only" },

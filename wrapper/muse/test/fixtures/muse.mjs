@@ -200,7 +200,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
                 { optionId: "always", name: "Allow always", kind: "allow_always" },
                 { optionId: "no", name: "Reject", kind: "reject_once" },
               ] } }) + "\n");
+          if (process.env.KAOIRO_TEST_PERMISSION_FLIP) {
+            setTimeout(() => update({ sessionUpdate: "current_mode_update",
+              currentModeId: "allow-all" }), 20);
+          }
           const answer = await awaitResponse("perm-1");
+          if (process.env.KAOIRO_TEST_PERMISSION_RESULT) {
+            writeFileSync(process.env.KAOIRO_TEST_PERMISSION_RESULT, JSON.stringify(answer));
+          }
           const outcome = answer.result?.outcome;
           finish(msg.id, outcome?.outcome === "selected" && outcome.optionId !== "no"
             ? "allowed" : "denied");
