@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import type { PermissionSelection } from "@kaoiro/protocol";
+import type { PermissionMode, PermissionSelection } from "@kaoiro/protocol";
 import {
   askUserQuestionDescriptor,
   classifyInterAgentError,
@@ -20,7 +20,9 @@ import {
   loadConfig,
   loadWrapperBuildInfo,
   parseCliArgs,
+  RecoveryReporter,
   ServerLink,
+  shutdownForRecovery,
   type ServerLinkOptions,
 } from "@kaoiro/wrapper-core";
 import { MuseHost, type MuseHostOptions } from "./host.js";
@@ -51,6 +53,11 @@ export async function runMuseCli(
   );
   let host: MuseHost | undefined;
   let link: ServerLink | undefined;
+  const recovery = new RecoveryReporter(config, resumeSessionId, (failure) => {
+    void shutdownForRecovery(failure, () => host?.close(),
+      () => link?.reportDisconnectIntent("crash"), () => { link?.close(); }).catch(() => {});
+  });
+  if (recovery.failure) throw recovery.failure;
   let pendingName: { displayName: string; revision: number } | undefined;
   let chain: Promise<void> = Promise.resolve();
   let ready!: () => void;
@@ -211,8 +218,25 @@ export async function runMuseCli(
       if (host) void host.setEffort(level).catch(() => controlFailure("effort switching", "failed"));
       else controlFailure("effort switching", "is not ready");
     },
-    onSetPermission: (_value: PermissionSelection) => controlFailure("permission switching"),
-    onSetPermissionMode: () => controlFailure("permission mode switching"),
+    onSetPermission: (value: PermissionSelection) => {
+      // Unsupported controls are returned as unsupported, not merely
+      // logged: the host throws, and the unchanged effective state is
+      // re-published so the server does not persist the pick as applied.
+      if (host) {
+        void host.setPermission(value).catch(() => {
+          controlFailure("permission switching");
+          host?.republishState();
+        });
+      } else controlFailure("permission switching", "is not ready");
+    },
+    onSetPermissionMode: (mode: string) => {
+      if (host) {
+        void host.setPermissionMode(mode as PermissionMode).catch(() => {
+          controlFailure("permission mode switching");
+          host?.republishState();
+        });
+      } else controlFailure("permission mode switching", "is not ready");
+    },
     onRenameDisplayName: (name: string, revision: number) => {
       if (host) host.renameDisplayName(name, revision);
       else
@@ -282,6 +306,7 @@ export async function runMuseCli(
         config,
         cwd,
         personaPrompt: rules,
+        recovery,
         ...(resumeSessionId ? { resumeSessionId } : {}),
         send,
         toolDescriptors: [
@@ -342,9 +367,10 @@ export async function runMuseCli(
     host?.close();
     await host?.closed;
     try {
-      await link?.reportDisconnectIntent(disconnectReason);
+      if (!recovery.failure) await link?.reportDisconnectIntent(disconnectReason);
     } finally {
       link?.close();
+      if (recovery.failure) throw recovery.failure;
     }
   }
 }

@@ -89,14 +89,28 @@ describe("muse session discovery over session/list", () => {
   });
 
   it("dispatches through sessions.ts for the muse engine", async () => {
-    // With no `muse` on PATH in the test environment the probe fails and
-    // discovery fails closed; what is pinned here is the dispatch shape
-    // (a promise from the ACP probe, never the Claude Code store).
+    // The dispatch resolves `muse` from PATH, so PATH is routed through a
+    // controlled fixture binary: the test must never launch a real `muse`
+    // that happens to be installed on the machine running it.
+    const { env } = fake({
+      pages: { __first__: { sessions: [entry("sess-1")] } },
+    });
+    const bin = mkdtempSync(join(tmpdir(), "kaoiro-muse-bin-"));
+    dirs.push(bin);
+    writeFileSync(join(bin, "muse"), readFileSync(FAKE, "utf8"), { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    vi.stubEnv("FAKE_MUSE_SCENARIO", env.FAKE_MUSE_SCENARIO);
+    vi.stubEnv("FAKE_MUSE_LOG", env.FAKE_MUSE_LOG);
     const listed = listSessions(CWD, "muse", new AbortController().signal);
     expect(listed).toBeInstanceOf(Promise);
-    await expect(listed).resolves.toEqual([]);
+    await expect(listed).resolves.toEqual([
+      { session_id: "sess-1", summary: "title sess-1", mtime: "2026-11-25T00:00:00Z" },
+    ]);
     const exists = sessionExists(CWD, "sess-1", "muse", new AbortController().signal);
     expect(exists).toBeInstanceOf(Promise);
-    await expect(exists).resolves.toBe(false);
+    await expect(exists).resolves.toBe(true);
+    await expect(
+      sessionExists(CWD, "sess-9", "muse", new AbortController().signal),
+    ).resolves.toBe(false);
   });
 });

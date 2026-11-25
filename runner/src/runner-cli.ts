@@ -42,7 +42,7 @@ import { antigravityAuthProblem } from "./antigravity-auth.js";
 import { resolveAntigravityCatalog } from "./antigravity-catalog.js";
 import { resolveAgyVersion } from "./antigravity-version.js";
 import { GrokCatalog, probeGrokCatalog, type GrokCatalogProbeOptions } from "./grok-catalog.js";
-import { grokProbesSettled } from "./grok_acp_probe.js";
+import { acpProbesSettled } from "./acp_probe.js";
 import {
   DEFAULT_AGY_PROBE_TIMEOUT_MS,
   antigravityCatalogSnapshot,
@@ -665,7 +665,7 @@ async function startRunner(
       if (shuttingDown) return;
       shuttingDown = true;
       close();
-      void grokProbesSettled().finally(() => process.exit(0));
+      void acpProbesSettled().finally(() => process.exit(0));
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);

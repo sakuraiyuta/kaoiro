@@ -1,3 +1,4 @@
+import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { updateEvents } from "../src/muse/events.js";
@@ -69,15 +70,22 @@ describe("parseSelection", () => {
 
 describe("process arguments and environment", () => {
   it("builds the resident ACP arguments, with a launch model pick", () => {
-    expect(museAcpArgs()).toEqual(["acp", "--trust-workspace"]);
-    expect(museAcpArgs("default")).toEqual(["acp", "--trust-workspace"]);
-    expect(museAcpArgs("muse-wonder")).toEqual(
+    expect(museAcpArgs()).toEqual(["acp"]);
+    expect(museAcpArgs("default")).toEqual(["acp"]);
+    expect(museAcpArgs("muse-wonder")).toEqual(["acp", "--model", "muse-wonder"]);
+  });
+
+  it("adds --trust-workspace only on the operator's explicit opt-in", () => {
+    expect(museAcpArgs(undefined, true)).toEqual(["acp", "--trust-workspace"]);
+    expect(museAcpArgs("muse-wonder", true)).toEqual(
       ["acp", "--trust-workspace", "--model", "muse-wonder"]);
   });
 
-  it("opens the ACP gate only when the operator has not set it", () => {
-    expect(childEnvironment({}).MUSE_EXPERIMENTAL_ACP).toBe("on");
+  it("passes the environment through unchanged, ACP gate included", () => {
+    expect(childEnvironment({}).MUSE_EXPERIMENTAL_ACP).toBeUndefined();
     expect(childEnvironment({ MUSE_EXPERIMENTAL_ACP: "off" }).MUSE_EXPERIMENTAL_ACP)
       .toBe("off");
+    expect(childEnvironment({ MUSE_EXPERIMENTAL_ACP: "on" }).MUSE_EXPERIMENTAL_ACP)
+      .toBe("on");
   });
 });

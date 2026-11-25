@@ -8,18 +8,30 @@ last_updated: 2026-11-25
 # Muse ACP engine
 
 The `muse` engine requires Muse Code on `PATH`, logged in with
-`muse login`. The wrapper launches `muse acp --trust-workspace` once (plus
-`--model <id>` when a launch pick names a model), initializes one ACP
-session (`session/new`, or `session/resume` for a cold resume) and uses
+`muse login`. The wrapper launches `muse acp` once (plus `--model <id>`
+when a launch pick names a model, and `--trust-workspace` only on the
+operator's explicit opt-in below), initializes one ACP session
+(`session/new`, or `session/resume` for a cold resume) and uses
 `session/prompt` for each queued turn. It does not launch `muse` per turn.
 
 `muse acp` is experimental upstream. It speaks ACP version 1 over stdio and
 translates to the same Muse Code host as `muse serve`. The gate that
-enables it is open by default; the wrapper sets `MUSE_EXPERIMENTAL_ACP=on`
-for the child only when the operator's environment does not set it either
-way, so an operator who closed the gate keeps it closed. Approval flags are
-refused by `muse acp`, so none are passed; the approval mode is chosen
-through ACP.
+enables it is open by default upstream; the wrapper passes the operator's
+environment through unchanged and never forces `MUSE_EXPERIMENTAL_ACP=on`,
+because that would re-open a gate the operator (or a remote configuration)
+deliberately closed. Approval flags are refused by `muse acp`, so none are
+passed; the approval mode is chosen through ACP (see below).
+
+`--trust-workspace` loads the workspace's own skills and rules. kaoiro's
+cwd allowlist authorizes where an agent may launch; it does not imply
+trusting the workspace contents, so the flag is **off by default** and is
+passed only when the operator sets `KAOIRO_MUSE_TRUST_WORKSPACE` to a
+truthy value (`1` / `true` / `yes` / `on`) in the wrapper's environment.
+
+Startup is bounded: `initialize` / `session/new` / `session/resume`
+together get a 30-second deadline, and a shutdown landing mid-startup
+aborts the remaining steps instead of letting the host and child be
+created afterwards.
 
 The ACP client is the shared one in `wrapper/agent-common/src/acp/`. Muse
 Code sends plain ACP session updates and no vendor extensions are consumed,
@@ -27,6 +39,26 @@ so there is no `muse/wire.ts` injection surface: the mapping in
 `wrapper/muse/src/muse/events.ts` is the protocol's own vocabulary
 (message and thought chunks, tool call rows and completions, plan entries,
 `usage_update`).
+
+## Approval mode
+
+Muse's approval behaviour is the ACP session mode selector. At session
+start — fresh and resumed alike — the adapter reads the advertised modes,
+selects the one that asks before unmatched actions (kaoiro's default
+posture is the operator in the loop) with `session/set_mode`, and reports
+the effective mode in `ext.approval_mode`. When the agent advertises no
+modes, or no ask posture, its own current mode stands and is reported
+as-is; `current_mode_update` notifications keep the reported value
+current. The mode ids are the agent's own, so the default is matched by
+mode name/id rather than a hard-coded id, and the effective value on a
+real build is an open measurement item.
+
+kaoiro's permission axes have no projection onto these modes: a launch
+that carries `permission_mode`, `sandbox`, `approval` or `network_access`
+is refused before start, and runtime `set_permission` /
+`set_permission_mode` controls are returned as unsupported (the host
+throws and the unchanged effective state is re-published, so the server
+does not persist the pick as applied).
 
 ## Tools
 
@@ -36,12 +68,14 @@ bearer token in a header, never in the URL (see the
 [Grok tool transport](grok-acp.md#tool-transport) for the shared checks).
 Startup fails closed when the agent does not report `mcpCapabilities.http`.
 
-Unlike Grok, startup does **not** wait for an authenticated `tools/list`:
-Muse Code starts the session's MCP servers when a turn starts, so a
-`tools/list` may legitimately not have happened yet when the session opens.
-Whether the tools are usable is therefore only observable inside a turn.
-This is a design reading of the upstream ACP documentation, not a live
-measurement; it must be rechecked against a real `muse acp` build.
+Advertising HTTP MCP support is not proof the tools arrived: upstream, a
+session still opens when an MCP server fails to start, and Muse may only
+connect its MCP servers when a turn starts. The wrapper therefore tracks
+the ToolHost's first authenticated `tools/list` instead of assuming it,
+and if no `tools/list` has arrived by the end of the first turn it
+publishes a system log line saying the agent is running without the
+kaoiro tools. Measuring the exact moment a real `muse acp` build makes
+the tools reachable remains an open item.
 
 ## Personality prompt
 
@@ -49,32 +83,50 @@ Muse's ACP surface documents no `session/new` system-prompt metadata
 (compare [personality injection](personality-injection.md), where Claude
 Code, Codex, Antigravity and Grok each have a named injection point). Until
 a Muse injection point is documented or measured, the wrapper delivers
-the server-composed persona and footer at the head of the **first turn
-only**, ahead of the operator's text. This is provisional: the text is
-visible in the session transcript, and a resumed session does not receive
-it again. Replacing this with a native injection point is the first
-follow-up when upstream documents one.
+the server-composed persona and footer at the head of a prompt under this
+contract:
+
+- **First turn of a fresh session:** the persona is prepended.
+- **Retry:** it stays pending until a prompt carrying it is accepted, so
+  a failed first prompt is retried with the persona still attached.
+- **Cold resume:** it is never prepended; the resumed session keeps the
+  persona it was created with.
+- **Compaction:** it is not re-supplied after an agent-side compaction.
+
+This is provisional: the text is visible in the session transcript.
+Replacing this with a native injection point is the first follow-up when
+upstream documents one.
+
+## Session recovery
+
+The wrapper runs the common `RecoveryReporter` (see
+[runner control](../protocol/runner-control.md)): a fresh `session/new`
+records the native id as a candidate, the first successful turn confirms
+it `live`, a successful `session/resume` confirms the requested id, and a
+refused resume goes through the reporter's candidate/strict handling.
+A wrapper restart therefore relaunches with the stored resume id instead
+of starting over.
 
 ## Capabilities
 
 The adapter supports text turns, conversation continuity while the wrapper
 is resident, cancellation (`session/cancel`), operator permission requests
 (ACP `session/request_permission`, answered by the common PermissionBroker
-with the `allow_once` / `reject_once` option), user questions through the
-kaoiro `ask_user_question` tool, normal peer messages, and context usage
-from ACP `usage_update` (`ext.context`). Live model and effort switching
-are supported when the session's config options offer a `model` and a
-`thought_level` select: values are validated against those options and
-applied with `session/set_config_option` before the next prompt (or at
-once while idle). A rejected switch publishes `switch_error` once and
-changes nothing. Cold resume is supported when the agent advertises
-`sessionCapabilities.resume`.
+with the `allow_once` / `reject_once` option; a pending request publishes
+`waiting_permission` and pauses the turn watchdog until it is answered),
+user questions through the kaoiro `ask_user_question` tool, normal peer
+messages, and context usage from ACP `usage_update` (`ext.context`). Live
+model and effort switching are supported when the session's config options
+offer a `model` and a `thought_level` select: switches are serialized
+with prompts in one work queue, values are validated against the session's
+options, the source metadata is written only for an applied switch, and a
+rejected switch publishes `switch_error` once and changes nothing. Cold
+resume is supported when the agent advertises `sessionCapabilities.resume`.
 
 Declared unsupported, each rejected explicitly rather than silently:
 
-- Permission-mode switching and the two-axis permission selector. Muse's
-  four ACP approval modes are not projected onto kaoiro's permission axes
-  in this adapter, and a launch `permission_mode` fails the start.
+- Permission-mode switching and the two-axis permission selector (see
+  Approval mode above).
 - Attachments (`supports_attachments: false`).
 - Session reset (`supports_session_reset: false`).
 - Dashboard history replay on resume: the wrapper registers no hydration
@@ -86,7 +138,10 @@ Declared unsupported, each rejected explicitly rather than silently:
 Session enumeration for the resume picker is not one of the limits: the
 runner probes a short-lived `muse acp` with ACP `session/list {cwd}`
 (`runner/src/muse_sessions.ts`), the same contract the Grok discovery
-uses, and the resume existence check answers from that listing.
+uses, and the resume existence check answers from that listing. The
+runner-side probes (Grok and Muse) share one tracking registry
+(`runner/src/acp_probe.ts`), and runner shutdown waits for both before
+exiting.
 
 ## Login and failure modes
 

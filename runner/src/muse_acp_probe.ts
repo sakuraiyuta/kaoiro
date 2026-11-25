@@ -1,9 +1,13 @@
 // A short-lived Muse ACP process for questions the runner asks without a
-// session of its own: `initialize`, then one operation. Modeled on the Grok
-// probe (grok_acp_probe.ts), with Muse's launch shape: `muse acp`, and the
-// experimental ACP gate opened for the child unless the operator set it.
+// session of its own: `initialize`, then one operation. The probe machinery
+// is shared with Grok's (acp_probe.ts): same tracking, same teardown, so
+// runner shutdown waits for Muse probes too. Muse's launch shape is
+// `muse acp`, with the operator's environment passed through unchanged
+// (the experimental ACP gate is on by default upstream and is never
+// forced open here).
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { trackAcpProbe } from "./acp_probe.js";
 import { endProbeGroup } from "./grok_acp_probe.js";
 
 export const MUSE_PROBE_DEADLINE_MS = 10_000;
@@ -37,13 +41,21 @@ export type MuseProbeCall = (method: string, params: unknown) => Promise<unknown
  *  Rejects with MuseProbeAborted when `signal` aborts and with
  *  MuseProbeError for every other failure; the process group gets the
  *  shared bounded teardown either way. */
-export async function runMuseProbe<T>(
+export function runMuseProbe<T>(
+  options: MuseProbeOptions,
+  operation: (call: MuseProbeCall, initialized: unknown) => Promise<T>,
+): Promise<T> {
+  const running = runMuseProbeInner(options, operation);
+  trackAcpProbe(running);
+  return running;
+}
+
+async function runMuseProbeInner<T>(
   options: MuseProbeOptions,
   operation: (call: MuseProbeCall, initialized: unknown) => Promise<T>,
 ): Promise<T> {
   if (options.signal?.aborted) throw new MuseProbeAborted();
   const env = { ...(options.env ?? process.env) };
-  if (env.MUSE_EXPERIMENTAL_ACP === undefined) env.MUSE_EXPERIMENTAL_ACP = "on";
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawn(options.executable ?? "muse", ["acp"], {

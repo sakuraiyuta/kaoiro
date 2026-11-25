@@ -4,6 +4,7 @@
 // process it started.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { acpProbesSettled, trackAcpProbe } from "./acp_probe.js";
 
 export const GROK_PROBE_DEADLINE_MS = 10_000;
 const KILL_GRACE_MS = 1_000;
@@ -11,28 +12,9 @@ const GROUP_POLL_MS = 25;
 /** Room for one probe's teardown: two grace periods and some slack. */
 export const GROK_PROBE_SETTLE_MS = 2 * KILL_GRACE_MS + 500;
 
-// Every probe from spawn until its group's teardown has finished.
-const inFlight = new Set<Promise<void>>();
-
-/** Resolves true once every probe of this process has finished its group
- *  teardown, false if that takes longer than `withinMs`. A shutdown awaits
- *  it after aborting the probes, so the TERM/KILL escalation runs before
- *  the process exits. */
-export async function grokProbesSettled(withinMs = GROK_PROBE_SETTLE_MS): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), withinMs);
-  });
-  const drained = (async () => {
-    while (inFlight.size > 0) await Promise.all(inFlight);
-    return true;
-  })();
-  try {
-    return await Promise.race([drained, expired]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+/** The shared probe registry (acp_probe.ts): Grok and Muse probes settle
+ *  on the same tracking and deadline, so shutdown waits for both. */
+export const grokProbesSettled = acpProbesSettled;
 
 export class GrokProbeError extends Error {
   constructor(
@@ -147,7 +129,7 @@ export async function runGrokProbe<T>(
   const pid = child.pid;
   let finished!: () => void;
   const running = new Promise<void>((resolve) => { finished = resolve; });
-  inFlight.add(running);
+  trackAcpProbe(running);
   const pending = new Map<number, {
     resolve: (value: unknown) => void;
     reject: (error: Error) => void;
@@ -250,7 +232,6 @@ export async function runGrokProbe<T>(
     try {
       await endProbeGroup(pid);
     } finally {
-      inFlight.delete(running);
       finished();
     }
     child.stdout.destroy();

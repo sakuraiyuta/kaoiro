@@ -12,6 +12,14 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 const sid = "fixture-session";
 let model = "muse-spark-1.3";
 let effort = "high";
+let mode = "allow-all";
+const MODES = [
+  { id: "allow-all", name: "Allow all" },
+  { id: "ask-unmatched", name: "Ask before unmatched actions" },
+  { id: "deny-unmatched", name: "Deny unmatched actions" },
+];
+const modes = () => ({ currentModeId: mode, availableModes: MODES });
+let promptCount = 0;
 const MODELS = [
   { value: "muse-spark-1.3", name: "Muse Spark 1.3" },
   { value: "muse-wonder", name: "Muse Wonder" },
@@ -41,6 +49,7 @@ let mcpClient;
 let connecting = Promise.resolve();
 
 async function connectMcp(servers) {
+  if (process.env.KAOIRO_TEST_MUSE_NO_MCP) return;
   const mcp = servers?.[0];
   if (!mcp || mcp.type !== "http") return;
   const headers = Object.fromEntries((mcp.headers ?? []).map((h) => [h.name, h.value]));
@@ -58,7 +67,9 @@ async function connectMcp(servers) {
       );
     }
   })().catch(() => {});
-  await connecting;
+  // Not awaited by the caller: like the real agent, the fixture connects
+  // its MCP servers asynchronously and the session opens first; a prompt
+  // that needs a tool awaits `connecting` itself.
 }
 
 function finish(id, text, stopReason = "end_turn") {
@@ -77,6 +88,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     switch (msg.method) {
       case "initialize":
+        if (process.env.KAOIRO_TEST_MUSE_HANG_INIT) break;
         reply(msg.id, {
           protocolVersion: 1,
           agentCapabilities: {
@@ -88,13 +100,21 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         });
         break;
       case "session/new":
-        await connectMcp(msg.params.mcpServers);
-        reply(msg.id, { sessionId: sid, configOptions: configOptions() });
+        void connectMcp(msg.params.mcpServers);
+        reply(msg.id, { sessionId: sid, configOptions: configOptions(), modes: modes() });
         break;
       case "session/resume":
         if (msg.params.sessionId !== sid) return fail(msg.id, "unknown session");
-        await connectMcp(msg.params.mcpServers);
-        reply(msg.id, { configOptions: configOptions() });
+        void connectMcp(msg.params.mcpServers);
+        reply(msg.id, { configOptions: configOptions(), modes: modes() });
+        break;
+      case "session/set_mode":
+        if (!MODES.some((m) => m.id === msg.params.modeId)) {
+          return fail(msg.id, "unknown mode");
+        }
+        mode = msg.params.modeId;
+        reply(msg.id, {});
+        update({ sessionUpdate: "current_mode_update", currentModeId: mode });
         break;
       case "session/load":
         reply(msg.id, { configOptions: configOptions() });
@@ -114,6 +134,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       }
       case "session/prompt": {
         const text = msg.params.prompt[0].text;
+        promptCount += 1;
+        if (process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE) {
+          const { appendFileSync } = await import("node:fs");
+          appendFileSync(
+            process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE,
+            JSON.stringify(text) + "\n",
+          );
+        }
+        if (process.env.KAOIRO_TEST_MUSE_FAIL_FIRST_PROMPT && promptCount === 1) {
+          return fail(msg.id, "fixture first prompt failure");
+        }
         const lastLine = text.split("\n").pop();
         if (lastLine === "sleep") {
           sleepingPrompt = msg.id;

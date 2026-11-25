@@ -133,6 +133,7 @@ keys. Omitted keys resolve independently:
 | `codex` | `in_flight_delivery.codex` | `true` | `true` |
 | `antigravity` | `in_flight_delivery.antigravity` | `false` | `false` |
 | `grok` | `in_flight_delivery.grok` | `false` | `false` |
+| `muse` | `in_flight_delivery.muse` | `false` | `false` |
 
 `enabled: false` is a launch ceiling: it disables every in-flight mechanism
 for that engine, regardless of retired flags or persona lists. `true`
@@ -430,6 +431,21 @@ through the same behaviour registry; deprecated environment overrides are
 Session enumeration and the resume existence check run a short-lived Grok
 over ACP `session/list` (see the
 [Grok engine reference](../engines/grok-acp.md#cold-resume-and-session-discovery)).
+
+## Muse runner configuration
+
+Add `muse` to capabilities to expose the Muse engine. The Muse
+Code CLI must be on PATH and logged in (`muse login`); the launch catalog
+offers the account `default` model entry until a session reports its own
+config options. The wrapper passes the operator's environment through
+unchanged. Two environment variables are read by the Muse wrapper
+itself: `KAOIRO_MUSE_TURN_WATCHDOG_INACTIVITY_MS` and
+`KAOIRO_MUSE_TURN_WATCHDOG_ABORT_GRACE_MS` (same ranges and defaults as
+the Grok pair), and `KAOIRO_MUSE_TRUST_WORKSPACE` opts in to launching
+with `--trust-workspace` (off by default; see the
+[Muse engine reference](../engines/muse-acp.md)). Session enumeration
+and the resume existence check run a short-lived `muse acp` over ACP
+`session/list`, sharing the Grok probe's tracking and teardown.
 
 ### External engines
 

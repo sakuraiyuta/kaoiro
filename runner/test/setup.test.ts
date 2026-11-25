@@ -187,6 +187,7 @@ describe("runSetup", () => {
       "n", // codex
       "n", // antigravity
       "n", // grok off
+      "n", // muse off
       "y", // set a token?
       "n", // generate?
       "manual-token", // token
@@ -213,6 +214,28 @@ describe("runSetup", () => {
     expect(statSync(result.envPath).mode & 0o777).toBe(0o600);
   });
 
+  it("muse を有効にすると capabilities に載る", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-setup-"));
+    const prompt = scripted([
+      "lab-pc-1",
+      "ws://localhost:4000/runner",
+      "/tmp/work",
+      "",
+      "n", // claude-code off
+      "n", // codex off
+      "n", // antigravity off
+      "n", // grok off
+      "y", // muse on
+      "n", // no token
+      "", // node path
+    ]);
+
+    const result = await runSetup(prompt, options(dir));
+
+    const config = JSON.parse(readFileSync(result.configPath, "utf8"));
+    expect(config.capabilities).toEqual(["muse"]);
+  });
+
   it("不正な host_id / server_url / 相対パスは聞き直す", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-setup-"));
     const prompt = scripted([
@@ -228,6 +251,7 @@ describe("runSetup", () => {
       "n", // codex
       "n", // antigravity
       "n", // grok off
+      "n", // muse off
       "n", // no token
       "", // node path
     ]);
@@ -251,6 +275,7 @@ describe("runSetup", () => {
       "y", // codex on
       "n", // antigravity
       "n", // grok off
+      "n", // muse off
       "y", // codex uses a ChatGPT plan
       "y", // set a token
       "y", // generate
@@ -278,6 +303,7 @@ describe("runSetup", () => {
       "n", // codex
       "n", // antigravity
       "n", // grok off
+      "n", // muse off
       "n", // no token
       "", // node path
       "n", // overwrite runner.config.json? -> no
@@ -305,6 +331,7 @@ describe("runSetup", () => {
       "y", // codex on
       "n", // antigravity
       "n", // grok off
+      "n", // muse off
       "n", // ChatGPT plan? -> no, so API key
       "n", // no token
       "", // node path
@@ -333,6 +360,7 @@ describe("runSetup", () => {
       "n", // codex
       "n", // antigravity
       "n", // grok off
+      "n", // muse off
       "y", // set a token
       "n", // generate?
       "tok", // token
@@ -358,6 +386,7 @@ describe("runSetup", () => {
       "n", // codex off
       "n", // antigravity off
       "n", // grok off
+      "n", // muse off
       "n", // no token
       "", // node path
     ]);
@@ -379,6 +408,7 @@ describe("runSetup", () => {
       "n", // codex off
       "y", // antigravity on
       "n", // grok off
+      "n", // muse off
       "n", // no token
       "", // node path
     ]);
@@ -407,6 +437,7 @@ describe("runSetup", () => {
       "n", // codex off
       "y", // antigravity on
       "n", // grok off
+      "n", // muse off
     ]);
 
     await expect(
@@ -437,6 +468,7 @@ describe("runSetup", () => {
       "n", // codex off
       "y", // antigravity on
       "n", // grok off
+      "n", // muse off
       "n", // no token
       "", // node path
     ]);

@@ -1,4 +1,42 @@
-import type { SessionConfigOption } from "@agentclientprotocol/sdk";
+import type { SessionConfigOption, SessionModeState } from "@agentclientprotocol/sdk";
+
+export interface MuseMode {
+  id: string;
+  name: string;
+}
+
+export interface MuseModes {
+  current: string;
+  available: MuseMode[];
+}
+
+/** Reads the ACP session mode state (the approval-mode selector) out of a
+ *  session/new, session/load or session/resume response. */
+export function parseModes(modes: SessionModeState | null | undefined): MuseModes | undefined {
+  if (!modes) return undefined;
+  return {
+    current: modes.currentModeId,
+    available: modes.availableModes.map((mode) => ({ id: mode.id, name: mode.name })),
+  };
+}
+
+const ASK_FIRST = [/ask before/i, /ask/i, /request/i, /confirm/i];
+
+/** kaoiro's default approval posture is the operator in the loop (the
+ *  permission broker answers tool requests), so the adapter's default
+ *  Muse mode is the advertised one that asks before unmatched actions.
+ *  Matching is by mode name/id because the mode ids are the agent's own;
+ *  when nothing advertises an ask posture, the agent's current mode is
+ *  kept and reported as-is. */
+export function preferredApprovalMode(modes: MuseModes): MuseMode | undefined {
+  for (const pattern of ASK_FIRST) {
+    const hit = modes.available.find(
+      (mode) => pattern.test(mode.name) || pattern.test(mode.id),
+    );
+    if (hit) return hit;
+  }
+  return undefined;
+}
 
 export interface MuseModel {
   value: string;

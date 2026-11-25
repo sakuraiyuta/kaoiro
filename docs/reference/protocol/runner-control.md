@@ -107,6 +107,7 @@ offline reset/direct runner switch needs an existing entry and is unavailable.
 | Codex app-server | `startThread` records candidate; successful `resumeThread` checks identity/confirms live in shared runtime open, including startup history. RPC resume refusal selects candidate fallback or strict block. Successful native terminal confirms a fresh candidate. |
 | Grok | `newSession` records candidate before MCP readiness. Resume/load response success confirms attachment; those responses contain no id to compare. Only startup resume refusal classifies candidate fallback/strict block; same-wrapper lane load refusal preserves `restart_failed` retry and its checkpoint. |
 | Antigravity | Native init records candidate or checks each requested epoch id, including recreation after idle TTL. Mismatch closes the epoch before id/success publication; candidate may fall back, strict/live blocks. Successful native terminal confirms live. |
+| Muse | `session/new` records the returned id as candidate; the first successful `session/prompt` confirms live. `session/resume` success confirms the requested id; a startup resume refusal goes through the reporter's candidate fallback / strict block handling. |
 
 Watchdog and contradictory session/native binding prohibit automatic recovery;
 recoverable wrapper-local attribution failures retain the latest candidate/live

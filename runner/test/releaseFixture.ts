@@ -245,7 +245,7 @@ export function writeReleaseTree(
   // used to miss entirely: removing a file from it verified clean and then
   // failed at import, on a real tarball (issue #219, 2026-08-16). A fixture
   // with no dependency edges could not measure the difference.
-  for (const wrapper of ["claude-code", "codex", "antigravity", "grok"]) {
+  for (const wrapper of ["claude-code", "codex", "antigravity", "grok", "muse"]) {
     // The codex wrapper locates its bridge through `new URL(...,
     // import.meta.url)` — a real runtime module edge no import statement
     // expresses. The closure walk missed it entirely until もも removed
@@ -260,11 +260,11 @@ export function writeReleaseTree(
     // dist/build-info.json (declared, not `new URL`-resolved, like
     // codex/claude-code's own build-info.json — ADR-0053).
     // grok declares only its build info: its tools are served over HTTP, so
-    // it composes no asset path of its own.
+    // it composes no asset path of its own. Muse is the same shape.
     const asset: string[] =
       wrapper === "codex"
         ? ["dist/bridge.js"]
-        : wrapper === "grok"
+        : wrapper === "grok" || wrapper === "muse"
           ? ["dist/build-info.json"]
           : wrapper === "claude-code"
             ? ["dist/probe.js"]
@@ -310,6 +310,10 @@ export function writeReleaseTree(
   put("node_modules/@kaoiro/antigravity/dist/hook.js", "// stub hook\n");
   put(
     "node_modules/@kaoiro/grok/dist/build-info.json",
+    JSON.stringify({ revision, dirty, built_at: "2026-08-16T00:00:00.000Z", version: "0.0.0", channel: "dev" }),
+  );
+  put(
+    "node_modules/@kaoiro/muse/dist/build-info.json",
     JSON.stringify({ revision, dirty, built_at: "2026-08-16T00:00:00.000Z", version: "0.0.0", channel: "dev" }),
   );
   put(
@@ -451,9 +455,9 @@ export function writeWorkspaceCheckout(
   writeFileSync(
     join(ws, "pnpm-workspace.yaml"),
     "packages:\n  - runner\n  - wrapper/claude-code\n  - wrapper/codex\n" +
-      "  - wrapper/antigravity\n  - wrapper/grok\n",
+      "  - wrapper/antigravity\n  - wrapper/grok\n  - wrapper/muse\n",
   );
-  for (const wrapper of ["claude-code", "codex", "antigravity", "grok"]) {
+  for (const wrapper of ["claude-code", "codex", "antigravity", "grok", "muse"]) {
     const link = join(runner, "node_modules", "@kaoiro", wrapper);
     const member = join(ws, "wrapper", wrapper);
     mkdirSync(dirname(member), { recursive: true });

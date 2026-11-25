@@ -44,8 +44,10 @@ request (`wrapper/grok/src/grok/wire.ts`).
 
 **Muse**: No injection point is documented on Muse Code's ACP surface.
 Provisionally, the wrapper delivers the string at the head of the first
-turn only (see [Muse ACP engine](muse-acp.md#personality-prompt)). This
-does not meet the "passes through unmodified into a native injection
+turn of a fresh session, keeps it pending until a prompt carrying it is
+accepted, never resends it on cold resume, and does not re-supply it
+after compaction (see [Muse ACP engine](muse-acp.md#personality-prompt)).
+This does not meet the "passes through unmodified into a native injection
 point" bar the other engines meet; it is a stopgap until upstream
 documents one.
 

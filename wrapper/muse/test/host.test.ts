@@ -1,3 +1,4 @@
+import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,14 +63,179 @@ describe("muse host", () => {
   });
 
   it("prepends the persona to the first turn only", async () => {
-    const { host, envelopes } = await started();
-    await host.send("one");
-    await host.send("two");
-    const results = envelopes.filter((e) => e.type === "result");
-    // The fixture echoes the prompt's last line, so both turns answer with
-    // their own text; the persona rides only on the first (see the fixture's
-    // recorded prompt in the tools test below for the positive check).
-    expect(results.map((e) => e.payload.text)).toEqual(["echo:one", "echo:two"]);
+    const promptsFile = join(tmpdir(), `kaoiro-muse-prompts-${process.pid}.jsonl`);
+    rmSync(promptsFile, { force: true });
+    process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE = promptsFile;
+    try {
+      const { host, envelopes } = await started();
+      await host.send("one");
+      await host.send("two");
+      const results = envelopes.filter((e) => e.type === "result");
+      expect(results.map((e) => e.payload.text)).toEqual(["echo:one", "echo:two"]);
+      const prompts = readFileSync(promptsFile, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line) as string);
+      expect(prompts).toHaveLength(2);
+      expect(prompts[0]).toContain("PERSONA_AND_FOOTER");
+      expect(prompts[0]).toContain("one");
+      expect(prompts[1]).toBe("two");
+    } finally {
+      delete process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE;
+      rmSync(promptsFile, { force: true });
+    }
+  });
+
+  it("does not prepend the persona on a resumed session", async () => {
+    const promptsFile = join(tmpdir(), `kaoiro-muse-prompts-resume-${process.pid}.jsonl`);
+    rmSync(promptsFile, { force: true });
+    process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE = promptsFile;
+    try {
+      const { host } = await started({ resumeSessionId: "fixture-session" });
+      await host.send("hello");
+      const prompts = readFileSync(promptsFile, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line) as string);
+      expect(prompts).toEqual(["hello"]);
+    } finally {
+      delete process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE;
+      rmSync(promptsFile, { force: true });
+    }
+  });
+
+  it("keeps the persona pending when the first prompt fails", async () => {
+    const promptsFile = join(tmpdir(), `kaoiro-muse-prompts-retry-${process.pid}.jsonl`);
+    rmSync(promptsFile, { force: true });
+    process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE = promptsFile;
+    process.env.KAOIRO_TEST_MUSE_FAIL_FIRST_PROMPT = "1";
+    try {
+      const { host } = await started();
+      await expect(host.send("one")).rejects.toThrow();
+      await host.send("two");
+      const prompts = readFileSync(promptsFile, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line) as string);
+      expect(prompts).toHaveLength(2);
+      expect(prompts[0]).toContain("PERSONA_AND_FOOTER");
+      expect(prompts[1]).toContain("PERSONA_AND_FOOTER");
+      expect(prompts[1]).toContain("two");
+    } finally {
+      delete process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE;
+      delete process.env.KAOIRO_TEST_MUSE_FAIL_FIRST_PROMPT;
+      rmSync(promptsFile, { force: true });
+    }
+  });
+
+  it("selects the ask-before-actions approval mode and reports it", async () => {
+    const { host } = await started();
+    expect(host.statusExtSnapshot()).toMatchObject({
+      approval_mode: { id: "ask-unmatched", name: "Ask before unmatched actions" },
+    });
+    const resumed = await started({ resumeSessionId: "fixture-session" });
+    expect(resumed.host.statusExtSnapshot()).toMatchObject({
+      approval_mode: { id: "ask-unmatched" },
+    });
+  });
+
+  it("refuses launch restriction inputs before start", async () => {
+    const host = new MuseHost({
+      config: { ...config, sandbox: "read-only" },
+      cwd: process.cwd(),
+      personaPrompt: "PERSONA_AND_FOOTER",
+      send: () => {},
+      decidePermission: async () => ({ allow: true }),
+      executable,
+    });
+    hosts.push(host);
+    await expect(host.run()).rejects.toThrow(/does not accept sandbox/);
+  });
+
+  it("times out a startup whose initialize never answers", async () => {
+    process.env.KAOIRO_TEST_MUSE_HANG_INIT = "1";
+    try {
+      const host = new MuseHost({
+        config: { ...config },
+        cwd: process.cwd(),
+        personaPrompt: "PERSONA_AND_FOOTER",
+        send: () => {},
+        decidePermission: async () => ({ allow: true }),
+        executable,
+        startupTimeoutMs: 300,
+      });
+      hosts.push(host);
+      await expect(host.run()).rejects.toThrow(/startup did not finish/);
+    } finally {
+      delete process.env.KAOIRO_TEST_MUSE_HANG_INIT;
+    }
+  });
+
+  it("reports a session whose kaoiro tools never connect", async () => {
+    process.env.KAOIRO_TEST_MUSE_NO_MCP = "1";
+    try {
+      const { host, envelopes } = await started();
+      await host.send("hello");
+      const notice = envelopes.find(
+        (e) => e.type === "log" && e.payload.kind === "system" &&
+          String(e.payload.text).includes("not connected"),
+      );
+      expect(notice).toBeDefined();
+    } finally {
+      delete process.env.KAOIRO_TEST_MUSE_NO_MCP;
+    }
+  });
+
+  it("publishes waiting_permission and pauses while a request is pending", async () => {
+    let hostRef: MuseHost | undefined;
+    const decide = vi.fn(async () => {
+      hostRef!.setPendingPermission({
+        request_id: "perm-1",
+        tool_name: "write fixture",
+        ts: new Date().toISOString(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      hostRef!.setPendingPermission(null);
+      return { allow: true };
+    });
+    const startedHost = await started({ decidePermission: decide });
+    hostRef = startedHost.host;
+    await startedHost.host.send("permission");
+    const states = startedHost.envelopes
+      .filter((e) => e.type === "state_change")
+      .map((e) => e.state);
+    expect(states).toContain("waiting_permission");
+    expect(startedHost.envelopes.find((e) => e.type === "result")?.payload)
+      .toMatchObject({ text: "allowed" });
+  });
+
+  it("records the native session in the recovery checkpoint", async () => {
+    const checkpoint = join(tmpdir(), `kaoiro-muse-recovery-${process.pid}.json`);
+    rmSync(checkpoint, { force: true });
+    const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+    try {
+      const recoveryConfig = { ...config, recovery_checkpoint_path: checkpoint };
+      const first = await started({
+        config: recoveryConfig,
+        recovery: new RecoveryReporter(recoveryConfig, undefined, () => {}),
+      });
+      await first.host.send("hello");
+      expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toEqual({
+        version: 1,
+        state: "live",
+        session_id: "fixture-session",
+      });
+      first.host.close();
+      await first.host.closed;
+      // A restarted wrapper with the same checkpoint resumes the same id.
+      const second = await started({
+        config: recoveryConfig,
+        resumeSessionId: "fixture-session",
+        recovery: new RecoveryReporter(recoveryConfig, "fixture-session", () => {}),
+      });
+      await second.host.send("again");
+      expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toEqual({
+        version: 1,
+        state: "live",
+        session_id: "fixture-session",
+      });
+    } finally {
+      rmSync(checkpoint, { force: true });
+    }
   });
 
   it("fails a turn the agent rejects and keeps the host usable", async () => {
