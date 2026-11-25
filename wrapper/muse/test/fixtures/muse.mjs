@@ -42,7 +42,7 @@ const configOptions = () => [
     category: "mode", type: "select", currentValue: "allow-all", options: MODES.map(m => ({ value: m.id, name: m.name })) }] : []),
   { id: "model", name: "Model", category: "model", type: "select", currentValue: model, options: MODELS },
   { id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: effort, options: EFFORTS },
-];
+].filter(option => !(process.env.KAOIRO_TEST_START_MISSING_AXIS === option.category));
 const reply = (id, result) =>
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
 const fail = (id, message) =>
@@ -151,6 +151,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (process.env.KAOIRO_TEST_SWITCH_OTHER_AXIS) {
           if (msg.params.configId === "model") effort = "low";
           else model = "muse-wonder";
+          return reply(msg.id, { configOptions: configOptions() });
+        }
+        if (process.env.KAOIRO_TEST_SWITCH_OTHER_AXIS_NOTICE) {
+          const oldModel = model, oldEffort = effort;
+          if (msg.params.configId === "model") effort = "low";
+          else model = "muse-wonder";
+          update({ sessionUpdate: "config_option_update", configOptions: configOptions() });
+          model = oldModel; effort = oldEffort;
           return reply(msg.id, { configOptions: configOptions() });
         }
         if (process.env.KAOIRO_TEST_SWITCH_MISSING_AXIS) {
