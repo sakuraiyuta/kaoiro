@@ -357,7 +357,9 @@ describe("muse host", () => {
       const host = new MuseHost({ config: { ...config }, cwd: process.cwd(),
         personaPrompt: "persona", send: () => {}, executable,
         env: { ...process.env, [key]: "1" },
-        onMetadata: (event) => { if (event.direction === "out" && event.method === method) rpcSent = true; },
+        onMetadata: (event) => {
+          if (event.direction === "out" && event.method === method) rpcSent = true;
+        },
         decidePermission: async () => ({ allow: true }) });
       hosts.push(host);
       const run = host.run();
@@ -383,9 +385,12 @@ describe("muse host", () => {
       let rpcSent = false;
       const method = key.endsWith("NEW") ? "session/new" : "session/set_mode";
       const host = new MuseHost({ config: { ...config }, cwd: process.cwd(),
-        personaPrompt: "persona", send: () => {}, executable, startupTimeoutMs: 5_000,
+        personaPrompt: "persona", send: () => {}, executable,
+        startupTimeoutMs: 5_000,
         env: { ...process.env, [key]: "1" },
-        onMetadata: (event) => { if (event.direction === "out" && event.method === method) rpcSent = true; },
+        onMetadata: (event) => {
+          if (event.direction === "out" && event.method === method) rpcSent = true;
+        },
         decidePermission: async () => ({ allow: true }) });
       hosts.push(host);
       await expect(host.run()).rejects.toThrow(/startup did not finish/);
