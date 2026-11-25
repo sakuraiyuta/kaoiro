@@ -792,6 +792,37 @@ describe("muse host", () => {
     expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
   });
 
+  it.each(["model", "effort"] as const)(
+    "stops a rejected %s switch when the other axis changed", async (axis) => {
+      const path = join(tmpdir(), `muse-switch-pair-${axis}-${process.pid}.jsonl`);
+      rmSync(path, { force: true });
+      try {
+        const { host, run } = await started({ env: { ...process.env,
+          KAOIRO_TEST_SWITCH_OTHER_AXIS: "1", KAOIRO_TEST_MUSE_PROMPTS_FILE: path } });
+        const switching = axis === "model"
+          ? host.setModel("muse-wonder") : host.setEffort("low");
+        const prompt = expect(host.send("must not run")).rejects.toThrow();
+        await expect(switching).rejects.toThrow();
+        await prompt;
+        await expect(run).rejects.toThrow();
+        expect(existsSync(path)).toBe(false);
+      } finally { rmSync(path, { force: true }); }
+    },
+  );
+
+  it.each(["model", "effort"] as const)(
+    "stops a rejected %s switch when the other axis is missing", async (axis) => {
+      const { host, run } = await started({ env: { ...process.env,
+        KAOIRO_TEST_SWITCH_MISSING_AXIS: "1" } });
+      const switching = axis === "model"
+        ? host.setModel("muse-wonder") : host.setEffort("low");
+      const prompt = expect(host.send("must not run")).rejects.toThrow();
+      await expect(switching).rejects.toThrow();
+      await prompt;
+      await expect(run).rejects.toThrow();
+    },
+  );
+
   it("stops when a conflicting notification precedes an old-value response", async () => {
     const { host, run } = await started({ env: { ...process.env,
       KAOIRO_TEST_SWITCH_CONFLICTING_NOTICE: "1" } });

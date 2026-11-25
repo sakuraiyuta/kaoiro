@@ -828,6 +828,7 @@ export class MuseHost implements EngineAdapter {
       ? this.#selection.modelConfigId
       : this.#selection.effortConfigId;
     const current = axis === "model" ? this.#selection.model : this.#selection.effort;
+    const previous = { model: this.#selection.model, effort: this.#selection.effort };
     if (configId === undefined) {
       job.reject(new Error(`muse ${axis} switching is unavailable`));
       return;
@@ -863,10 +864,9 @@ export class MuseHost implements EngineAdapter {
       const selection = parseSelection(response.configOptions);
       const applied = axis === "model" ? selection.model : selection.effort;
       if (applied !== value) {
-        const observed = axis === "model"
-          ? this.#selection.model : this.#selection.effort;
-        confirmedRejection = current !== undefined && applied === current &&
-          observed === current;
+        confirmedRejection = previous.model !== undefined && previous.effort !== undefined &&
+          selection.model === previous.model && selection.effort === previous.effort &&
+          this.#selection.model === previous.model && this.#selection.effort === previous.effort;
         throw new Error("muse switch not applied");
       }
       this.#adoptSelection(response.configOptions);

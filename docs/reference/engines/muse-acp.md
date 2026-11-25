@@ -123,8 +123,10 @@ messages, and context usage from ACP `usage_update` (`ext.context`). Live
 model and effort switching are supported when the session's config options
 offer a `model` and a `thought_level` select: switches are serialized
 with prompts in one work queue, values are validated against the session's
-options, the source metadata is written only for an applied switch, and a
-rejected switch publishes `switch_error` once and changes nothing. Cold
+options, and the source metadata is written only for an applied switch.
+A rejected switch continues the queue and reports `switch_error` only if
+both model and effort are confirmed unchanged; an uncertain or conflicting
+result stops the host for revalidation. Cold
 resume is supported when the agent advertises `sessionCapabilities.resume`.
 
 Declared unsupported, each rejected explicitly rather than silently:

@@ -148,6 +148,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (process.env.KAOIRO_TEST_SWITCH_UNCHANGED) {
           return reply(msg.id, { configOptions: configOptions() });
         }
+        if (process.env.KAOIRO_TEST_SWITCH_OTHER_AXIS) {
+          if (msg.params.configId === "model") effort = "low";
+          else model = "muse-wonder";
+          return reply(msg.id, { configOptions: configOptions() });
+        }
+        if (process.env.KAOIRO_TEST_SWITCH_MISSING_AXIS) {
+          const missing = msg.params.configId === "model" ? "thought_level" : "model";
+          return reply(msg.id, {
+            configOptions: configOptions().filter(option => option.category !== missing),
+          });
+        }
         if (process.env.KAOIRO_TEST_SWITCH_CONFLICTING_NOTICE) {
           const old = model;
           model = "third-model";
