@@ -256,6 +256,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           const { appendFileSync } = await import("node:fs");
           appendFileSync(process.env.KAOIRO_TEST_CANCEL_FILE, "cancel\n");
         }
+        if (process.env.KAOIRO_TEST_PROGRESS_ON_CANCEL) {
+          update({ sessionUpdate: "tool_call_update", toolCallId: "long",
+            status: "in_progress" });
+        }
         if (process.env.KAOIRO_TEST_IGNORE_CANCEL) break;
         if (sleepingPrompt !== undefined) {
           const id = sleepingPrompt;

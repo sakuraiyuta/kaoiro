@@ -600,10 +600,13 @@ describe("muse host", () => {
       const recovery = new RecoveryReporter(cfg, undefined, () => {});
       const { host, run } = await started({ config: cfg, recovery,
         watchdogTimeoutMs: 100, env: { ...process.env,
-          KAOIRO_TEST_IGNORE_CANCEL: "1", KAOIRO_TEST_CANCEL_FILE: cancels } });
+          KAOIRO_TEST_IGNORE_CANCEL: "1", KAOIRO_TEST_CANCEL_FILE: cancels,
+          KAOIRO_TEST_PROGRESS_ON_CANCEL: "1" } });
       const turn = host.send("sleep").then(() => false, () => true);
       await vi.waitFor(() => expect(existsSync(cancels)).toBe(true), { timeout: 5_000 });
       await host.interrupt();
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(readFileSync(cancels, "utf8").trim().split("\n")).toHaveLength(1);
       await expect(run).rejects.toThrow(/watchdog/);
       expect(await turn).toBe(true);
       expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toMatchObject({
