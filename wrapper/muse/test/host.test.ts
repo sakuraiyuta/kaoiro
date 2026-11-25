@@ -141,6 +141,26 @@ describe("muse host", () => {
     }
   });
 
+  it("ignores stale persona delivery evidence for a fresh session", async () => {
+    const checkpoint = join(tmpdir(), `muse-fresh-evidence-${process.pid}.json`);
+    const prompts = `${checkpoint}.prompts`;
+    const cfg = { ...config, recovery_checkpoint_path: checkpoint,
+      muse_persona_delivered: true };
+    try {
+      const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+      const { host } = await started({ config: cfg,
+        recovery: new RecoveryReporter(cfg, undefined, () => {}, true),
+        env: { ...process.env, KAOIRO_TEST_MUSE_PROMPTS_FILE: prompts } });
+      expect(JSON.parse(readFileSync(checkpoint, "utf8")))
+        .toMatchObject({ state: "unbound", muse_persona_delivered: false });
+      await host.send("fresh");
+      expect(JSON.parse(readFileSync(prompts, "utf8"))).toContain("PERSONA_AND_FOOTER");
+    } finally {
+      rmSync(checkpoint, { force: true });
+      rmSync(prompts, { force: true });
+    }
+  });
+
   it("selects the ask-before-actions approval mode and reports it", async () => {
     const { host } = await started();
     expect(host.statusExtSnapshot()).toMatchObject({
@@ -571,6 +591,30 @@ describe("muse host", () => {
     }
   });
 
+  it("preserves the watchdog grace when interrupted after watchdog cancel", async () => {
+    const checkpoint = join(tmpdir(), `muse-watchdog-interrupt-${process.pid}.json`);
+    const cancels = `${checkpoint}.cancels`;
+    const cfg = { ...config, recovery_checkpoint_path: checkpoint };
+    try {
+      const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+      const recovery = new RecoveryReporter(cfg, undefined, () => {});
+      const { host, run } = await started({ config: cfg, recovery,
+        watchdogTimeoutMs: 100, env: { ...process.env,
+          KAOIRO_TEST_IGNORE_CANCEL: "1", KAOIRO_TEST_CANCEL_FILE: cancels } });
+      const turn = host.send("sleep").then(() => false, () => true);
+      await vi.waitFor(() => expect(existsSync(cancels)).toBe(true), { timeout: 5_000 });
+      await host.interrupt();
+      await expect(run).rejects.toThrow(/watchdog/);
+      expect(await turn).toBe(true);
+      expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toMatchObject({
+        state: "blocked", reason: "watchdog", session_id: "fixture-session",
+      });
+    } finally {
+      rmSync(checkpoint, { force: true });
+      rmSync(cancels, { force: true });
+    }
+  }, 10_000);
+
   it("does not report success when the checkpoint cannot be confirmed", async () => {
     const checkpoint = join(tmpdir(), `kaoiro-muse-fail-recovery-${process.pid}.json`);
     const tmp = `${checkpoint}.tmp`;
@@ -721,6 +765,29 @@ describe("muse host", () => {
       expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
     },
   );
+
+  it.each(["KAOIRO_TEST_SWITCH_UNSAFE_MODE", "KAOIRO_TEST_SWITCH_OTHER",
+    "KAOIRO_TEST_SWITCH_RPC_REJECT"])(
+    "stops a switch and queued prompt on uncertain response: %s", async (key) => {
+      const { host, run } = await started({ env: { ...process.env, [key]: "1" } });
+      const switching = host.setModel("muse-wonder");
+      const prompt = expect(host.send("must not run")).rejects.toThrow();
+      await expect(switching).rejects.toThrow();
+      await prompt;
+      await expect(run).rejects.toThrow();
+      expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
+    },
+  );
+
+  it("continues queued prompts when the response confirms the old value", async () => {
+    const { host } = await started({ env: { ...process.env,
+      KAOIRO_TEST_SWITCH_UNCHANGED: "1" } });
+    const switching = host.setModel("muse-wonder");
+    const prompt = host.send("after rejection");
+    await expect(switching).rejects.toThrow(/rejected/);
+    await expect(prompt).resolves.toBeUndefined();
+    expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
+  });
 
   it("rejects permission-mode and permission switching explicitly", async () => {
     const { host } = await started();

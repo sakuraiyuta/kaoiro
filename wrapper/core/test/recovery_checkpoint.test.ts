@@ -80,7 +80,8 @@ describe("launch recovery checkpoint", () => {
       writeFileSync(path, JSON.stringify({ version: 1, state: "live",
         session_id: "id", muse_persona_delivered: value }));
       expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: {
-        version: 1, state: "live", session_id: "id", muse_persona_delivered: value,
+        version: 1, state: "live", session_id: "id",
+        ...(typeof value === "boolean" ? { muse_persona_delivered: value } : {}),
       } });
     },
   );

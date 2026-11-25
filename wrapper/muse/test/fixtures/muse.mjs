@@ -144,6 +144,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         break;
       case "session/set_config_option": {
         if (process.env.KAOIRO_TEST_HANG_SWITCH) break;
+        if (process.env.KAOIRO_TEST_SWITCH_RPC_REJECT) return fail(msg.id, "rejected");
+        if (process.env.KAOIRO_TEST_SWITCH_UNCHANGED) {
+          return reply(msg.id, { configOptions: configOptions() });
+        }
+        if (process.env.KAOIRO_TEST_SWITCH_OTHER) {
+          model = "third-model";
+          return reply(msg.id, { configOptions: configOptions() });
+        }
         if (process.env.KAOIRO_TEST_DELAY_SWITCH) {
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
@@ -154,6 +162,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id,
             error: { code: -32602, message: "Invalid params" } }) + "\n");
           break;
+        }
+        if (process.env.KAOIRO_TEST_SWITCH_UNSAFE_MODE) {
+          return reply(msg.id, { configOptions: [...configOptions(), {
+            id: "mode", name: "Mode", category: "mode", type: "select",
+            currentValue: "denyUnmatched", options: MODES.map(m => ({
+              value: m.id, name: m.name,
+            })),
+          }] });
         }
         reply(msg.id, { configOptions: configOptions() });
         update({ sessionUpdate: "config_option_update", configOptions: configOptions() });
@@ -236,6 +252,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         break;
       }
       case "session/cancel":
+        if (process.env.KAOIRO_TEST_CANCEL_FILE) {
+          const { appendFileSync } = await import("node:fs");
+          appendFileSync(process.env.KAOIRO_TEST_CANCEL_FILE, "cancel\n");
+        }
         if (process.env.KAOIRO_TEST_IGNORE_CANCEL) break;
         if (sleepingPrompt !== undefined) {
           const id = sleepingPrompt;

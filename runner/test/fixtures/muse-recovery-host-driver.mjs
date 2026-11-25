@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { MuseHost } from "@kaoiro/muse";
 import { RecoveryReporter } from "@kaoiro/wrapper-core";
 
@@ -12,10 +12,14 @@ const host = new MuseHost({
   personaPrompt: "persona",
   executable: process.env.MUSE_HOST_FAKE,
   env: { ...process.env, ...(config.resume_session_id ? {} :
-    process.env.MUSE_HOST_SCENARIO === "switch" ? { KAOIRO_TEST_HANG_SWITCH: "1" } : {}) },
+    process.env.MUSE_HOST_SCENARIO === "switch" ? { KAOIRO_TEST_HANG_SWITCH: "1" } :
+    process.env.MUSE_HOST_SCENARIO === "watchdog" ? {
+      KAOIRO_TEST_IGNORE_CANCEL: "1", KAOIRO_TEST_CANCEL_FILE: process.env.MUSE_CANCEL_FILE,
+    } : {}) },
   recovery: reporter,
   ...(config.resume_session_id ? { resumeSessionId: config.resume_session_id } : {}),
   switchTimeoutMs: 100,
+  ...(process.env.MUSE_HOST_SCENARIO === "watchdog" ? { watchdogTimeoutMs: 100 } : {}),
   decidePermission: async () => ({ allow: true }),
   send: (envelope) => { if (envelope.type === "state_change" &&
     envelope.state === "waiting_input") ready(); },
@@ -32,7 +36,18 @@ if (config.resume_session_id) {
   await run;
 } else {
   await host.send("hello");
-  if (process.env.MUSE_HOST_SCENARIO === "switch") {
+  if (process.env.MUSE_HOST_SCENARIO === "watchdog") {
+    const turn = host.send("sleep");
+    void turn.catch(() => {});
+    while (!existsSync(process.env.MUSE_CANCEL_FILE)) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await host.interrupt();
+    await run.catch(() => {});
+    writeFileSync(process.env.MUSE_RECOVERY_RESULT,
+      readFileSync(config.recovery_checkpoint_path));
+    process.exitCode = 1;
+  } else if (process.env.MUSE_HOST_SCENARIO === "switch") {
     const switching = host.setModel("muse-wonder");
     const queued = host.send("must-not-replay");
     void queued.catch(() => {});

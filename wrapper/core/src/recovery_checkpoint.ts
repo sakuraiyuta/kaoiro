@@ -31,6 +31,9 @@ export function readRecoveryCheckpoint(path: string): RecoverySnapshot {
         break;
       default: throw new Error();
     }
+    if (typeof r.muse_persona_delivered !== "boolean") {
+      delete r.muse_persona_delivered;
+    }
     return { ok: true, record: record as RecoveryRecord };
   } catch { return { ok: false, reason: "invalid" }; }
 }
@@ -80,7 +83,8 @@ export class RecoveryReporter {
     readonly onFailure: (failure: RecoveryFailure) => void, trackMusePersona = false) {
     this.#path = config.recovery_checkpoint_path;
     this.#trackMusePersona = trackMusePersona;
-    this.#musePersonaDelivered = trackMusePersona && config.muse_persona_delivered === true;
+    this.#musePersonaDelivered = trackMusePersona && requestedId !== undefined &&
+      requestedId.length > 0 && config.muse_persona_delivered === true;
     if (config.recovery_resume_kind === "candidate" && requestedId !== undefined)
       this.#record = { version: 1, state: "unbound", candidate_id: requestedId,
         ...(this.#trackMusePersona ? { muse_persona_delivered: this.#musePersonaDelivered } : {}) };

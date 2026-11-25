@@ -134,6 +134,7 @@ export class MuseHost implements EngineAdapter {
   #assistantText = "";
   #timer: ReturnType<typeof setTimeout> | undefined;
   #abortTimer: ReturnType<typeof setTimeout> | undefined;
+  #watchdogGrace = false;
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   #displayNameRevision = 0;
@@ -152,7 +153,8 @@ export class MuseHost implements EngineAdapter {
 
   constructor(options: MuseHostOptions) {
     this.#options = options;
-    this.#personaPending = options.config.muse_persona_delivered !== true;
+    this.#personaPending = !(options.resumeSessionId &&
+      options.config.muse_persona_delivered === true);
     this.#closedPromise = new Promise((resolve) => {
       this.#resolveClosed = resolve;
     });
@@ -478,6 +480,17 @@ export class MuseHost implements EngineAdapter {
     return option?.type === "select" ? option.currentValue : undefined;
   }
 
+  #checkModeConfig(configOptions: acp.SessionConfigOption[] | undefined): boolean {
+    this.#modeConfig = this.#readModeConfig(configOptions);
+    if (!this.#started || this.#modeConfig === undefined ||
+      this.#modeConfig === "promptUnmatched") return true;
+    this.#signal?.abort();
+    void this.#session?.cancel().catch(() => {});
+    this.#state("error");
+    this.#fail(new Error("muse approval mode changed unexpectedly"));
+    return false;
+  }
+
   #adoptSelection(configOptions: acp.SessionConfigOption[] | undefined) {
     const next = parseSelection(configOptions);
     // An empty reading never shrinks a known catalog.
@@ -605,6 +618,7 @@ export class MuseHost implements EngineAdapter {
     } finally {
       clearTimeout(this.#timer);
       clearTimeout(this.#abortTimer);
+      this.#watchdogGrace = false;
       this.#signal?.abort();
       this.#signal = undefined;
       this.#active = undefined;
@@ -644,10 +658,12 @@ export class MuseHost implements EngineAdapter {
    *  pauses it, and clearing the request re-arms it. */
   #progress() {
     clearTimeout(this.#timer);
-    if (!this.#active || this.#closing || this.#pendingPermission || this.#pendingQuestion) return;
+    if (!this.#active || this.#closing || this.#watchdogGrace ||
+      this.#pendingPermission || this.#pendingQuestion) return;
     this.#timer = setTimeout(() => {
       // Expiry first cancels the turn and gives it the abort grace to
       // settle; only a turn still running after the grace closes the host.
+      this.#watchdogGrace = true;
       void this.#session?.cancel().catch(() => {});
       this.#abortTimer = setTimeout(
         () => {
@@ -666,15 +682,7 @@ export class MuseHost implements EngineAdapter {
       // session's stored copy instead could report a switch that the
       // agent did not take.
       const before = `${this.#selection.model}/${this.#selection.effort}`;
-      this.#modeConfig = this.#readModeConfig(notification.update.configOptions);
-      if (this.#started && this.#modeConfig !== undefined &&
-        this.#modeConfig !== "promptUnmatched") {
-        this.#signal?.abort();
-        void this.#session?.cancel().catch(() => {});
-        this.#state("error");
-        this.#fail(new Error("muse approval mode changed unexpectedly"));
-        return;
-      }
+      if (!this.#checkModeConfig(notification.update.configOptions)) return;
       this.#adoptSelection(notification.update.configOptions);
       const after = `${this.#selection.model}/${this.#selection.effort}`;
       if (before !== after) this.#state(this.state);
@@ -759,6 +767,7 @@ export class MuseHost implements EngineAdapter {
 
   async interrupt(): Promise<void> {
     if (!this.#active || !this.#session) return;
+    if (this.#watchdogGrace) return;
     clearTimeout(this.#abortTimer);
     this.#abortTimer = setTimeout(
       () => this.close(),
@@ -828,6 +837,7 @@ export class MuseHost implements EngineAdapter {
       this.#state(this.state);
       return;
     }
+    let confirmedRejection = false;
     try {
       let timer: ReturnType<typeof setTimeout> | undefined;
       let response: Awaited<ReturnType<AcpSession["setConfigOption"]>>;
@@ -847,13 +857,24 @@ export class MuseHost implements EngineAdapter {
         clearTimeout(timer);
       }
       if (this.#closing) throw new Error("muse host closed");
+      if (!this.#checkModeConfig(response.configOptions)) {
+        throw new Error("muse approval mode changed unexpectedly");
+      }
+      const selection = parseSelection(response.configOptions);
+      const applied = axis === "model" ? selection.model : selection.effort;
+      if (applied !== value) {
+        confirmedRejection = current !== undefined && applied === current;
+        throw new Error("muse switch not applied");
+      }
       this.#adoptSelection(response.configOptions);
-      const applied = axis === "model" ? this.#selection.model : this.#selection.effort;
-      if (applied !== value) throw new Error("muse switch not applied");
       if (axis === "model") this.#context = undefined;
       job.resolve();
       this.#state(this.state);
     } catch {
+      if (!this.#closing && !confirmedRejection) {
+        this.#state("error");
+        this.#fail(new Error("muse config switch outcome uncertain"));
+      }
       if (this.#closing) {
         job.reject(new Error(`muse ${axis} switching stopped`));
         return;

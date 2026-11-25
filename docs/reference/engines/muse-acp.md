@@ -43,15 +43,10 @@ so there is no `muse/wire.ts` injection surface: the mapping in
 ## Approval mode
 
 Muse's approval behaviour is the ACP session mode selector. At session
-start — fresh and resumed alike — the adapter reads the advertised modes,
-selects the one that asks before unmatched actions (kaoiro's default
-posture is the operator in the loop) with `session/set_mode`, and reports
-the effective mode in `ext.approval_mode`. When the agent advertises no
-modes, or no ask posture, its own current mode stands and is reported
-as-is; `current_mode_update` notifications keep the reported value
-current. The mode ids are the agent's own, so the default is matched by
-mode name/id rather than a hard-coded id, and the effective value on a
-real build is an open measurement item.
+start — fresh and resumed alike — the adapter requires the advertised
+`promptUnmatched` mode, selects it with `session/set_mode` if needed, and
+reports it in `ext.approval_mode`. Missing or inconsistent mode information
+stops startup before the first prompt. A later mode change stops the host.
 
 kaoiro's permission axes have no projection onto these modes: a launch
 that carries `permission_mode`, `sandbox`, `approval` or `network_access`

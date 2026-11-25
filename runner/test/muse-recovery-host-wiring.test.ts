@@ -7,6 +7,42 @@ import { expect, it, vi } from "vitest";
 import { makeLauncher } from "../src/spawn.js";
 import { Supervisor } from "../src/supervisor.js";
 
+it("refuses runner recovery after watchdog cancel followed by interrupt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-muse-watchdog-recovery-"));
+  const result = join(root, "blocked.json");
+  vi.stubEnv("MUSE_RECOVERY_RESULT", result);
+  vi.stubEnv("MUSE_CANCEL_FILE", join(root, "cancel"));
+  vi.stubEnv("MUSE_HOST_SCENARIO", "watchdog");
+  vi.stubEnv("MUSE_HOST_FAKE", fileURLToPath(
+    new URL("../../wrapper/muse/test/fixtures/muse.mjs", import.meta.url)));
+  const driver = fileURLToPath(
+    new URL("./fixtures/muse-recovery-host-driver.mjs", import.meta.url));
+  const launch = makeLauncher([process.execPath, driver]);
+  let launches = 0;
+  const supervisor = new Supervisor({ hostId: "fixture", cwdAllowlist: [root],
+    wrapperServerUrl: "ws://fixture/wrapper",
+    launch: (...args) => { launches += 1; return launch(...args); },
+    sendResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {},
+    listSessions: () => [], sessionExists: () => true });
+  const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  try {
+    supervisor.handleSpawn({ version: "0", agent_id: "fixture.muse",
+      persona: { id: "p", name: "P", sprite_set: "p" }, cwd: root, engine: "muse" });
+    await vi.waitFor(() => expect(diagnostic.mock.calls.some(([value]) =>
+      String(value).includes("checkpoint=blocked:watchdog"))).toBe(true),
+    { timeout: 10_000 });
+    expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({
+      state: "blocked", reason: "watchdog", session_id: "fixture-session",
+    });
+    expect(launches).toBe(1);
+  } finally {
+    supervisor.stopAll();
+    diagnostic.mockRestore();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
+
 it.each(["mode", "switch"])(
   "revalidates approval after %s failure without replaying the queue", async (scenario) => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-muse-host-recovery-"));
