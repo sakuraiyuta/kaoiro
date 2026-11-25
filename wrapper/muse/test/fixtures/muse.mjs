@@ -222,6 +222,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (process.env.KAOIRO_TEST_DELAYED_SELECTION) {
           if (delayedSelection) {
             update({ sessionUpdate: "config_option_update", configOptions: delayedSelection });
+            await new Promise((resolve) => setTimeout(resolve, 250));
           }
           delayedSelection = beforeSwitch;
           return reply(msg.id, { configOptions: configOptions() });

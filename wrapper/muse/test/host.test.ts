@@ -791,10 +791,11 @@ describe("muse host", () => {
     const second = host.setEffort("low");
     const prompt = host.send("after both switches");
     await expect(first).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(diagnostic.mock.calls.some(([text]) =>
+      String(text).includes("config notification differs"))).toBe(true));
+    expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-wonder", effort: "high" });
     await expect(second).resolves.toBeUndefined();
     await expect(prompt).resolves.toBeUndefined();
-    expect(diagnostic.mock.calls.some(([text]) =>
-      String(text).includes("config notification differs"))).toBe(true);
     expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-wonder", effort: "low" });
   });
 
