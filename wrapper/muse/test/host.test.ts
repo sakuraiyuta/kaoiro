@@ -428,6 +428,7 @@ describe("muse host", () => {
           String(e.payload.text).includes("not connected"),
       );
       expect(notice).toBeDefined();
+      expect(String(notice?.payload.text)).toContain("KAOIRO_MUSE_TRUST_WORKSPACE=on");
     } finally {
       delete process.env.KAOIRO_TEST_MUSE_NO_MCP;
     }

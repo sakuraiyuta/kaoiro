@@ -166,6 +166,9 @@ bounded [launch metadata](../protocol/runner-control.md#launch-delivery-metadata
 `KAOIRO_MUSE_TRUST_WORKSPACE` is an environment opt-in for Muse processes
 on the host; unset or unrecognized values mean false. When set in `runner.env`,
 changes require restarting the runner and restarting the affected wrappers.
+Muse does not start MCP servers in untrusted workspaces, so using kaoiro's
+tools requires this opt-in for a workspace the operator trusts. Enabling it
+also loads that workspace's skills and rules.
 Reloading runner configuration or restarting only a wrapper does not reload
 `runner.env` into the runner's environment.
 

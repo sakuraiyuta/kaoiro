@@ -648,7 +648,9 @@ export class MuseHost implements EngineAdapter {
       {
         kind: "system",
         text: "muse: the kaoiro tools are not connected to this session " +
-          "(no MCP tools/list arrived); the agent is running without them",
+          "(no MCP tools/list arrived); the agent is running without them. " +
+          "For a trusted workspace, set KAOIRO_MUSE_TRUST_WORKSPACE=on and restart " +
+          "the runner and wrapper; other MCP failures can also cause this warning.",
       },
     ));
   }

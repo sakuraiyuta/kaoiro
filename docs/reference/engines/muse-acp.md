@@ -27,6 +27,10 @@ cwd allowlist authorizes where an agent may launch; it does not imply
 trusting the workspace contents, so the flag is **off by default** and is
 passed only when the operator sets `KAOIRO_MUSE_TRUST_WORKSPACE` to a
 truthy value (`1` / `true` / `yes` / `on`) in the wrapper's environment.
+Muse does not start MCP servers in untrusted workspaces. To use kaoiro's
+tools, opt in for a workspace you trust; this also loads its own skills and
+rules. If configured in `runner.env`, restart the runner and affected wrappers.
+See the [Muse Code changelog](https://dev.meta.ai/docs/muse-code/changelog).
 
 Startup is bounded: `initialize` / `session/new` / `session/resume`
 together get a 30-second deadline, and a shutdown landing mid-startup
@@ -69,8 +73,8 @@ connect its MCP servers when a turn starts. The wrapper therefore tracks
 the ToolHost's first authenticated `tools/list` instead of assuming it,
 and if no `tools/list` has arrived by the end of the first turn it
 publishes a system log line saying the agent is running without the
-kaoiro tools. Measuring the exact moment a real `muse acp` build makes
-the tools reachable remains an open item.
+kaoiro tools and explaining the trust opt-in. Other MCP failures can also
+cause this warning.
 
 ## Personality prompt
 
