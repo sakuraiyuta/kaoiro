@@ -89,9 +89,12 @@ contract:
 - **First turn of a fresh session:** the persona is prepended.
 - **Retry:** it stays pending until a prompt carrying it is accepted, so
   a failed first prompt is retried with the persona still attached.
-- **Cold resume:** it is never prepended; the resumed session keeps the
-  persona it was created with.
-- **Compaction:** it is not re-supplied after an agent-side compaction.
+- **Cold resume:** it is never prepended. A candidate resumed before its
+  first prompt has never received the persona or footer. An external Muse
+  session has no guarantee of a kaoiro persona; the dashboard selection can
+  differ from the native session history.
+- **Compaction:** it is not re-supplied after an agent-side compaction;
+  retention after compaction has not been measured.
 
 This is provisional: the text is visible in the session transcript.
 Replacing this with a native injection point is the first follow-up when
@@ -103,7 +106,7 @@ The wrapper runs the common `RecoveryReporter` (see
 [runner control](../protocol/runner-control.md)): a fresh `session/new`
 records the native id as a candidate, the first successful turn confirms
 it `live`, a successful `session/resume` confirms the requested id, and a
-refused resume goes through the reporter's candidate/strict handling.
+resume failure retains the requested id when the cause is not identifiable.
 A wrapper restart therefore relaunches with the stored resume id instead
 of starting over.
 

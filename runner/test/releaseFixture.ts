@@ -245,7 +245,7 @@ export function writeReleaseTree(
   // used to miss entirely: removing a file from it verified clean and then
   // failed at import, on a real tarball (issue #219, 2026-08-16). A fixture
   // with no dependency edges could not measure the difference.
-  for (const wrapper of ["claude-code", "codex", "antigravity", "grok", "muse"]) {
+  for (const wrapper of ["claude-code", "codex", "antigravity", "grok"]) {
     // The codex wrapper locates its bridge through `new URL(...,
     // import.meta.url)` — a real runtime module edge no import statement
     // expresses. The closure walk missed it entirely until もも removed
@@ -264,7 +264,7 @@ export function writeReleaseTree(
     const asset: string[] =
       wrapper === "codex"
         ? ["dist/bridge.js"]
-        : wrapper === "grok" || wrapper === "muse"
+        : wrapper === "grok"
           ? ["dist/build-info.json"]
           : wrapper === "claude-code"
             ? ["dist/probe.js"]
@@ -310,10 +310,6 @@ export function writeReleaseTree(
   put("node_modules/@kaoiro/antigravity/dist/hook.js", "// stub hook\n");
   put(
     "node_modules/@kaoiro/grok/dist/build-info.json",
-    JSON.stringify({ revision, dirty, built_at: "2026-08-16T00:00:00.000Z", version: "0.0.0", channel: "dev" }),
-  );
-  put(
-    "node_modules/@kaoiro/muse/dist/build-info.json",
     JSON.stringify({ revision, dirty, built_at: "2026-08-16T00:00:00.000Z", version: "0.0.0", channel: "dev" }),
   );
   put(

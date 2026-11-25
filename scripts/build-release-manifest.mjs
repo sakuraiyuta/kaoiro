@@ -44,7 +44,6 @@ const ENTRY_PACKAGES = [
   "@kaoiro/codex",
   "@kaoiro/antigravity",
   "@kaoiro/grok",
-  "@kaoiro/muse",
 ];
 
 const CODE_FILE_RE = /\.(js|mjs|cjs|json)$/;

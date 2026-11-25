@@ -63,6 +63,8 @@ export interface MuseHostOptions {
   }) => void;
   /** Test seam for the startup deadline (M10). */
   startupTimeoutMs?: number;
+  switchTimeoutMs?: number;
+  watchdogTimeoutMs?: number;
 }
 
 interface Turn {
@@ -138,7 +140,12 @@ export class MuseHost implements EngineAdapter {
   #personaPending: boolean;
   #resumed = false;
   #recoveryConfirmed = false;
-  #toolsConnected = false;
+  #modeUpdate: string | undefined;
+  #modeConfig: string | undefined;
+  #cancelStartup!: () => void;
+  #startupCancelled = new Promise<void>((resolve) => {
+    this.#cancelStartup = resolve;
+  });
   #toolsNoticeSent = false;
   readonly #settings: MuseSettings;
   readonly #options: MuseHostOptions;
@@ -299,6 +306,10 @@ export class MuseHost implements EngineAdapter {
       await this.#start();
       this.#starting = false;
       if (!this.#closing) {
+        if (this.#modes?.current !== "promptUnmatched" ||
+          (this.#modeConfig !== undefined && this.#modeConfig !== "promptUnmatched")) {
+          throw new MuseLaunchError("muse approval mode changed during startup");
+        }
         this.#started = true;
         this.#state("waiting_input");
         if (prompt !== undefined) void this.send(prompt).catch(() => {});
@@ -318,6 +329,7 @@ export class MuseHost implements EngineAdapter {
       }
       this.close();
       await this.closed;
+      if (this.#failure) throw this.#failure;
       if (!stopping) throw error;
     }
   }
@@ -342,7 +354,10 @@ export class MuseHost implements EngineAdapter {
       if (this.#closing) throw new StartupAborted();
     };
     try {
-      await Promise.race([this.#startSteps(check), deadline]);
+      await Promise.race([
+        this.#startSteps(check), deadline,
+        this.#startupCancelled.then(() => { throw new StartupAborted(); }),
+      ]);
     } catch (error) {
       if (error instanceof StartupAborted) throw error;
       void expired;
@@ -359,15 +374,11 @@ export class MuseHost implements EngineAdapter {
     const toolHost = await ToolHost.listen(this.#options.toolDescriptors ?? [], {
       turnSignal: () => this.#signal?.signal ?? null,
     });
+    if (this.#closing) {
+      toolHost.close();
+      throw new StartupAborted();
+    }
     this.#toolHost = toolHost;
-    // MCP reachability is observed, not assumed: the session opens even
-    // when a server fails to start, and Muse may only connect at the
-    // first turn, so `listed()` is tracked rather than awaited here. The
-    // first turn's end reports a session whose tools never arrived.
-    void toolHost.listed(0).then(
-      () => { this.#toolsConnected = true; },
-      () => {},
-    );
     check();
     const childProcess = new MuseProcess(
       executable,
@@ -406,7 +417,7 @@ export class MuseHost implements EngineAdapter {
       try {
         resumed = await session.resume(resumeId, this.#options.cwd, mcpServers);
       } catch {
-        this.#options.recovery?.refuseLaunch();
+        check();
         throw new MuseLaunchError("muse could not resume the session");
       }
       check();
@@ -427,9 +438,10 @@ export class MuseHost implements EngineAdapter {
     }
     this.#sessionId = session.sessionId;
     this.#adoptSelection(session.configOptions);
+    this.#modeConfig = this.#readModeConfig(session.configOptions);
     this.#modes = parseModes(modes);
     await this.#applyDefaultMode(check);
-    if (config.model && config.model !== "default" && this.#selection.model !== config.model) {
+    if (config.model && config.model !== "default") {
       this.#enqueueSwitch("model", config.model, "launch").catch(() => {});
     }
     if (config.effort && this.#selection.effort !== config.effort) {
@@ -438,30 +450,32 @@ export class MuseHost implements EngineAdapter {
     if (this.#sessionId !== undefined) this.#options.onSessionId?.(this.#sessionId);
   }
 
-  /** Selects the adapter's default approval mode (the advertised
-   *  ask-before-actions mode) on fresh and resumed sessions alike, then
-   *  reads the effective mode back into the reported state. When the
-   *  agent advertises no modes, or no ask posture, its own current mode
-   *  stands and is reported as-is. */
   async #applyDefaultMode(check: () => void): Promise<void> {
-    if (!this.#modes || !this.#session || !this.#sessionId) return;
-    const preferred = preferredApprovalMode(this.#modes);
-    if (!preferred || preferred.id === this.#modes.current) return;
-    try {
-      await this.#session.connection.agent.request(
-        acp.methods.agent.session.setMode,
-        { sessionId: this.#sessionId, modeId: preferred.id },
-      );
-      check();
-      this.#modes = { ...this.#modes, current: preferred.id };
-    } catch {
-      // The mode stays the agent's own; it is reported verbatim in
-      // ext.approval_mode, so the operator sees the effective value.
-      writeRedactedStderr(
-        `[kaoiro] muse: could not select approval mode ${preferred.id}; ` +
-        `the agent's mode ${this.#modes.current} stands\n`,
-      );
+    if (!this.#modes || !this.#session || !this.#sessionId ||
+      !preferredApprovalMode(this.#modes)) {
+      throw new MuseLaunchError("muse approval mode promptUnmatched unavailable");
     }
+    if (this.#modes.current === "promptUnmatched") {
+      if (this.#modeConfig !== undefined && this.#modeConfig !== this.#modes.current) {
+        throw new MuseLaunchError("muse approval mode information conflicts");
+      }
+      return;
+    }
+    this.#modeUpdate = undefined;
+    await this.#session.connection.agent.request(
+      acp.methods.agent.session.setMode,
+      { sessionId: this.#sessionId, modeId: "promptUnmatched" },
+    );
+    check();
+    if (this.#modeUpdate !== "promptUnmatched" ||
+      (this.#modeConfig !== undefined && this.#modeConfig !== "promptUnmatched")) {
+      throw new MuseLaunchError("muse approval mode was not confirmed");
+    }
+  }
+
+  #readModeConfig(configOptions: acp.SessionConfigOption[] | undefined): string | undefined {
+    const option = configOptions?.find((entry) => entry.category === "mode");
+    return option?.type === "select" ? option.currentValue : undefined;
   }
 
   #adoptSelection(configOptions: acp.SessionConfigOption[] | undefined) {
@@ -551,8 +565,16 @@ export class MuseHost implements EngineAdapter {
         ? `${this.#options.personaPrompt}\n\n${turn.text}`
         : turn.text;
       const response = await this.#session!.prompt(promptText);
-      if (carriesPersona) this.#personaPending = false;
+      if (this.#closing) throw new Error("muse host closed");
       const interrupted = response.stopReason === "cancelled";
+      if (!interrupted && !this.#recoveryConfirmed && this.#sessionId !== undefined &&
+        this.#options.recovery?.confirm(this.#sessionId) === false) {
+        throw this.#options.recovery.failure;
+      }
+      if (!interrupted) {
+        this.#recoveryConfirmed = true;
+        if (carriesPersona) this.#personaPending = false;
+      }
       this.#flushAssistantLog();
       settled = interrupted
         ? { authoritative: false, why: "the turn was interrupted" }
@@ -573,11 +595,6 @@ export class MuseHost implements EngineAdapter {
           },
         ),
       );
-      if (!this.#recoveryConfirmed && this.#sessionId !== undefined &&
-        this.#options.recovery?.confirm(this.#sessionId) === false) {
-        throw this.#options.recovery.failure;
-      }
-      this.#recoveryConfirmed = true;
       turn.resolve();
     } catch (cause) {
       error = cause instanceof Error ? cause : new Error("muse turn failed");
@@ -615,7 +632,8 @@ export class MuseHost implements EngineAdapter {
    *  first turn's end (the latest point by which a turn-start MCP
    *  connection must have happened). */
   #reportToolsMissing() {
-    if (this.#toolsConnected || this.#toolsNoticeSent || this.#closing) return;
+    if ((this.#toolHost?.stats().authenticatedLists ?? 0) > 0 ||
+      this.#toolsNoticeSent || this.#closing) return;
     this.#toolsNoticeSent = true;
     this.#options.send(makeLog(
       this.#options.config, this.state, new Date().toISOString(),
@@ -638,27 +656,47 @@ export class MuseHost implements EngineAdapter {
       // settle; only a turn still running after the grace closes the host.
       void this.#session?.cancel().catch(() => {});
       this.#abortTimer = setTimeout(
-        () => this.close(),
+        () => {
+          this.#options.recovery?.block("watchdog");
+          this.#fail(new Error("muse turn watchdog expired"));
+        },
         Math.min(this.#settings.watchdog.abortGraceMs, 3_000),
       );
-    }, this.#settings.watchdog.inactivityMs);
+    }, this.#options.watchdogTimeoutMs ?? this.#settings.watchdog.inactivityMs);
   }
 
   #update(notification: acp.SessionNotification) {
-    if (notification.sessionId !== this.#sessionId) return;
+    if (this.#closing || notification.sessionId !== this.#sessionId) return;
     if (notification.update.sessionUpdate === "config_option_update") {
       // The notified options are the applied values; re-reading the
       // session's stored copy instead could report a switch that the
       // agent did not take.
       const before = `${this.#selection.model}/${this.#selection.effort}`;
+      this.#modeConfig = this.#readModeConfig(notification.update.configOptions);
+      if (this.#started && this.#modeConfig !== undefined &&
+        this.#modeConfig !== "promptUnmatched") {
+        this.#signal?.abort();
+        void this.#session?.cancel().catch(() => {});
+        this.#state("error");
+        this.#fail(new Error("muse approval mode changed unexpectedly"));
+        return;
+      }
       this.#adoptSelection(notification.update.configOptions);
       const after = `${this.#selection.model}/${this.#selection.effort}`;
       if (before !== after) this.#state(this.state);
       return;
     }
     if (notification.update.sessionUpdate === "current_mode_update") {
-      if (this.#modes && this.#modes.current !== notification.update.currentModeId) {
-        this.#modes = { ...this.#modes, current: notification.update.currentModeId };
+      this.#modeUpdate = notification.update.currentModeId;
+      if (this.#modes) {
+        this.#modes = { ...this.#modes, current: this.#modeUpdate };
+        if (this.#started && this.#modeUpdate !== "promptUnmatched") {
+          this.#signal?.abort();
+          void this.#session?.cancel().catch(() => {});
+          this.#state("error");
+          this.#fail(new Error("muse approval mode changed unexpectedly"));
+          return;
+        }
         this.#state(this.state);
       }
       return;
@@ -701,7 +739,7 @@ export class MuseHost implements EngineAdapter {
     request: acp.RequestPermissionRequest,
     signal: AbortSignal,
   ): Promise<acp.RequestPermissionResponse> {
-    if (!this.#active || request.sessionId !== this.#sessionId) {
+    if (this.#closing || !this.#active || request.sessionId !== this.#sessionId) {
       return { outcome: { outcome: "cancelled" } };
     }
     const alive = AbortSignal.any([signal, this.#signal!.signal]);
@@ -715,6 +753,9 @@ export class MuseHost implements EngineAdapter {
       { ...input, tool_call_id: request.toolCall.toolCallId },
       alive,
     );
+    if (alive.aborted || this.#closing) {
+      return { outcome: { outcome: "cancelled" } };
+    }
     const kind = decision.allow ? "allow_once" : "reject_once";
     const option = request.options.find((o) => o.kind === kind);
     return option
@@ -735,6 +776,8 @@ export class MuseHost implements EngineAdapter {
   close(): void {
     if (this.#closing) return;
     this.#closing = true;
+    this.#cancelStartup();
+    this.#signal?.abort();
     clearTimeout(this.#timer);
     clearTimeout(this.#abortTimer);
     for (const turn of this.#queue.splice(0)) {
@@ -792,12 +835,35 @@ export class MuseHost implements EngineAdapter {
       return;
     }
     try {
-      const response = await this.#session!.setConfigOption(configId, value);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let response: Awaited<ReturnType<AcpSession["setConfigOption"]>>;
+      try {
+        response = await Promise.race([
+          this.#session!.setConfigOption(configId, value),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              const error = new Error("muse config switch timed out");
+              this.#state("error");
+              this.#fail(error);
+              reject(error);
+            }, this.#options.switchTimeoutMs ?? 30_000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (this.#closing) throw new Error("muse host closed");
       this.#adoptSelection(response.configOptions);
+      const applied = axis === "model" ? this.#selection.model : this.#selection.effort;
+      if (applied !== value) throw new Error("muse switch not applied");
       if (axis === "model") this.#context = undefined;
       job.resolve();
       this.#state(this.state);
     } catch {
+      if (this.#closing) {
+        job.reject(new Error(`muse ${axis} switching stopped`));
+        return;
+      }
       this.#switchErrorOnce = {
         kind: axis,
         requested: value,
@@ -851,9 +917,9 @@ export class MuseHost implements EngineAdapter {
     if (pending) {
       // Pause the watchdog while the operator answers, and say so.
       clearTimeout(this.#timer);
-      this.#state("waiting_permission");
+      this.#event({ kind: "permission_request" });
     } else {
-      this.#state(this.state);
+      this.#event({ kind: "permission_resolved" });
       this.#progress();
     }
   }
@@ -863,9 +929,9 @@ export class MuseHost implements EngineAdapter {
     if (!this.#active) return;
     if (pending) {
       clearTimeout(this.#timer);
-      this.#state("waiting_question");
+      this.#event({ kind: "question_request" });
     } else {
-      this.#state(this.state);
+      this.#event({ kind: "question_resolved" });
       this.#progress();
     }
   }

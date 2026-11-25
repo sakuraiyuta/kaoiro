@@ -470,7 +470,7 @@ function isEnabled(
   return config.capabilities?.includes(engine) ?? true;
 }
 
-const ALL_ENGINES: readonly EngineKind[] = ["claude-code", "codex", "antigravity", "grok"];
+const ALL_ENGINES: readonly EngineKind[] = ["claude-code", "codex", "antigravity", "grok", "muse"];
 
 interface SetVariable {
   row: BehaviourRow;

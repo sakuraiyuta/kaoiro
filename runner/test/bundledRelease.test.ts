@@ -84,6 +84,7 @@ const omissions: Array<[string, string, boolean]> = [
   ["entry omitted from the tree", "dist/kaoiro.mjs", false],
   ["entry and its record omitted", "dist/kaoiro.mjs", true],
   ["identity record omitted", "dist/codex-native.json", true],
+  ["build identity and its record omitted", "dist/build-info.json", true],
   ...variants.flatMap((variant): Array<[string, string, boolean]> => [
     [`${variant} native entry omitted`,
       `node_modules/@img/sharp-${variant}/lib/sharp-${variant}-0.35.2.node`, true],

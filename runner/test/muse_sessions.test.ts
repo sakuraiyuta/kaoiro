@@ -1,4 +1,5 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
+import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +37,44 @@ const entry = (sessionId: string, cwd = CWD, extra: Record<string, unknown> = {}
   ({ sessionId, cwd, title: `title ${sessionId}`, updatedAt: "2026-11-25T00:00:00Z", ...extra });
 
 describe("muse session discovery over session/list", () => {
+  it("waits for a stubborn Muse probe during runner shutdown", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-muse-shutdown-"));
+    dirs.push(root);
+    const bin = join(root, "muse");
+    const scenario = join(root, "scenario.json");
+    const pids = join(root, "pids");
+    const configPath = join(root, "runner.config.json");
+    writeFileSync(bin, readFileSync(FAKE), { mode: 0o755 });
+    writeFileSync(scenario, JSON.stringify({ hang: true, stubbornChild: true }));
+    writeFileSync(configPath, JSON.stringify({ host_id: "muse-test",
+      server_url: "ws://runner.invalid/runner", cwd_allowlist: [root],
+      capabilities: ["muse"] }));
+    const driverPath = fileURLToPath(new URL("./fixtures/muse-sessions-shutdown.ts", import.meta.url));
+    const driver = spawn(process.execPath, ["--import", "tsx", driverPath], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)), stdio: "ignore",
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}`, OWN_CONFIG: configPath,
+        OWN_CWD: root, FAKE_MUSE_SCENARIO: scenario, FAKE_MUSE_PIDS: pids },
+    });
+    let leader = 0;
+    const timer = setTimeout(() => driver.kill("SIGKILL"), 10_000);
+    try {
+      const code = await new Promise<number | null>((resolve) => driver.once("exit", resolve));
+      expect(code).toBe(0);
+      const values = readFileSync(pids, "utf8").trim().split(" ").map(Number);
+      leader = values[0]!;
+      expect(leader).toBeGreaterThan(1);
+      expect(values[1]).toBeGreaterThan(1);
+      expect(() => process.kill(-leader, 0)).toThrow();
+    } finally {
+      clearTimeout(timer);
+      if (!leader && existsSync(pids)) leader = Number(readFileSync(pids, "utf8").split(" ")[0]);
+      if (Number.isSafeInteger(leader) && leader > 1) {
+        try { process.kill(-leader, "SIGKILL"); } catch { /* already gone */ }
+      }
+      if (driver.exitCode === null && driver.signalCode === null) driver.kill("SIGKILL");
+    }
+  }, 15_000);
+
   it("lists the sessions bound to the cwd, skipping foreign and malformed ids", async () => {
     const { env, requests } = fake({
       pages: {

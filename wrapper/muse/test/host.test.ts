@@ -1,11 +1,12 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { MuseHost, type MuseHostOptions } from "../src/host.js";
+import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
 
 const executable = fileURLToPath(
   new URL("./fixtures/muse.mjs", import.meta.url),
@@ -125,13 +126,84 @@ describe("muse host", () => {
   it("selects the ask-before-actions approval mode and reports it", async () => {
     const { host } = await started();
     expect(host.statusExtSnapshot()).toMatchObject({
-      approval_mode: { id: "ask-unmatched", name: "Ask before unmatched actions" },
+      approval_mode: { id: "promptUnmatched", name: "Ask before unmatched actions" },
     });
     const resumed = await started({ resumeSessionId: "fixture-session" });
     expect(resumed.host.statusExtSnapshot()).toMatchObject({
-      approval_mode: { id: "ask-unmatched" },
+      approval_mode: { id: "promptUnmatched" },
     });
   });
+
+  it.each([
+    "KAOIRO_TEST_MODE_MISSING",
+    "KAOIRO_TEST_MODE_CURRENT_UNADVERTISED",
+    "KAOIRO_TEST_MODE_REJECT",
+    "KAOIRO_TEST_MODE_NO_UPDATE",
+    "KAOIRO_TEST_MODE_CONFLICT",
+    "KAOIRO_TEST_MODE_CONFIG_CONFLICT",
+  ])("rejects unconfirmed approval mode: %s", async (key) => {
+    const prompts = join(tmpdir(), `kaoiro-muse-mode-${process.pid}.jsonl`);
+    rmSync(prompts, { force: true });
+    const host = new MuseHost({
+      config: { ...config }, cwd: process.cwd(), personaPrompt: "persona",
+      send: () => {}, decidePermission: async () => ({ allow: true }),
+      executable, env: { ...process.env, [key]: "1", KAOIRO_TEST_MUSE_PROMPTS_FILE: prompts },
+    });
+    hosts.push(host);
+    try {
+      const failed = host.run("must not run").then(() => false, () => true);
+      const outcome = await Promise.race([
+        failed, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+      expect(outcome).toBe(true);
+      expect(existsSync(prompts)).toBe(false);
+    } finally {
+      rmSync(prompts, { force: true });
+    }
+  });
+
+  it("stops when the native approval mode changes after startup", async () => {
+    const { host, run } = await started();
+    const turn = host.send("unsafe-mode");
+    await expect(turn).rejects.toThrow();
+    await expect(run).rejects.toThrow(/approval mode/);
+    await expect(host.send("later")).rejects.toThrow();
+  });
+
+  it.each([undefined, "fixture-session"])(
+    "preserves native environment on fresh and resumed launch: %s",
+    async (resumeSessionId) => {
+      const path = join(tmpdir(), `kaoiro-muse-launch-${process.pid}.json`);
+      rmSync(path, { force: true });
+      try {
+        await started({ resumeSessionId, env: { ...process.env,
+          KAOIRO_TEST_LAUNCH_FILE: path, KAOIRO_TEST_SENTINEL: "unchanged",
+          MUSE_EXPERIMENTAL_ACP: "off" } });
+        const launch = JSON.parse(readFileSync(path, "utf8"));
+        expect(launch).toEqual({ args: ["acp"], gate: "off", sentinel: "unchanged" });
+      } finally {
+        rmSync(path, { force: true });
+      }
+    },
+  );
+
+  it.each([undefined, "fixture-session"])(
+    "rejects sandbox and network restrictions before native launch: %s",
+    async (resumeSessionId) => {
+      const path = join(tmpdir(), `kaoiro-muse-rejected-${process.pid}.json`);
+      rmSync(path, { force: true });
+      for (const restriction of [{ sandbox: "read-only" as const },
+        { network_access: false }]) {
+        const host = new MuseHost({ config: { ...config, ...restriction },
+          cwd: process.cwd(), personaPrompt: "persona", send: () => {},
+          decidePermission: async () => ({ allow: true }), executable, resumeSessionId,
+          env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
+        hosts.push(host);
+        await expect(host.run()).rejects.toThrow(/does not accept/);
+        expect(existsSync(path)).toBe(false);
+      }
+    },
+  );
 
   it("refuses launch restriction inputs before start", async () => {
     const host = new MuseHost({
@@ -144,6 +216,54 @@ describe("muse host", () => {
     });
     hosts.push(host);
     await expect(host.run()).rejects.toThrow(/does not accept sandbox/);
+  });
+
+  it("unblocks startup on close and closes a late listener", async () => {
+    const actualListen = ToolHost.listen.bind(ToolHost);
+    let release!: () => void;
+    let late!: ToolHost;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(ToolHost, "listen").mockImplementation(async (...args) => {
+      await gate;
+      late = await actualListen(...args);
+      vi.spyOn(late, "close");
+      return late;
+    });
+    const host = new MuseHost({
+      config: { ...config }, cwd: process.cwd(), personaPrompt: "persona",
+      send: () => {}, decidePermission: async () => ({ allow: true }), executable,
+    });
+    hosts.push(host);
+    const run = host.run();
+    host.close();
+    await run;
+    expect(host.processId).toBeUndefined();
+    release();
+    await vi.waitFor(() => expect(late?.close).toHaveBeenCalledTimes(1));
+  });
+
+  it("closes a listener that arrives after the startup deadline", async () => {
+    const actualListen = ToolHost.listen.bind(ToolHost);
+    let release!: () => void;
+    let late!: ToolHost;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(ToolHost, "listen").mockImplementation(async (...args) => {
+      await gate;
+      late = await actualListen(...args);
+      vi.spyOn(late, "close");
+      return late;
+    });
+    const host = new MuseHost({ config: { ...config }, cwd: process.cwd(),
+      personaPrompt: "persona", send: () => {}, executable, startupTimeoutMs: 100,
+      decidePermission: async () => ({ allow: true }) });
+    hosts.push(host);
+    try {
+      await expect(host.run()).rejects.toThrow(/startup did not finish/);
+      expect(host.processId).toBeUndefined();
+    } finally {
+      release();
+      await vi.waitFor(() => expect(late?.close).toHaveBeenCalledTimes(1));
+    }
   });
 
   it("times out a startup whose initialize never answers", async () => {
@@ -165,6 +285,46 @@ describe("muse host", () => {
     }
   });
 
+  it("ends run when closed during a pending initialize RPC", async () => {
+    const host = new MuseHost({ config: { ...config }, cwd: process.cwd(),
+      personaPrompt: "persona", send: () => {}, executable,
+      env: { ...process.env, KAOIRO_TEST_MUSE_HANG_INIT: "1" },
+      decidePermission: async () => ({ allow: true }) });
+    hosts.push(host);
+    const run = host.run();
+    await vi.waitFor(() => expect(host.processId).toBeDefined());
+    host.close();
+    await run;
+  });
+
+  it.each(["KAOIRO_TEST_MUSE_HANG_NEW", "KAOIRO_TEST_MUSE_HANG_MODE"])(
+    "aborts a pending session RPC on close: %s", async (key) => {
+      let rpcSent = false;
+      const method = key.endsWith("NEW") ? "session/new" : "session/set_mode";
+      const host = new MuseHost({ config: { ...config }, cwd: process.cwd(),
+        personaPrompt: "persona", send: () => {}, executable,
+        env: { ...process.env, [key]: "1" },
+        onMetadata: (event) => { if (event.direction === "out" && event.method === method) rpcSent = true; },
+        decidePermission: async () => ({ allow: true }) });
+      hosts.push(host);
+      const run = host.run();
+      await vi.waitFor(() => expect(rpcSent).toBe(true));
+      host.close();
+      await run;
+    },
+  );
+
+  it.each(["KAOIRO_TEST_MUSE_HANG_NEW", "KAOIRO_TEST_MUSE_HANG_MODE"])(
+    "times out a pending session RPC: %s", async (key) => {
+      const host = new MuseHost({ config: { ...config }, cwd: process.cwd(),
+        personaPrompt: "persona", send: () => {}, executable, startupTimeoutMs: 500,
+        env: { ...process.env, [key]: "1" },
+        decidePermission: async () => ({ allow: true }) });
+      hosts.push(host);
+      await expect(host.run()).rejects.toThrow(/startup did not finish/);
+    },
+  );
+
   it("reports a session whose kaoiro tools never connect", async () => {
     process.env.KAOIRO_TEST_MUSE_NO_MCP = "1";
     try {
@@ -178,6 +338,15 @@ describe("muse host", () => {
     } finally {
       delete process.env.KAOIRO_TEST_MUSE_NO_MCP;
     }
+  });
+
+  it("recognizes an MCP connection during the first prompt", async () => {
+    const { host, envelopes } = await started({
+      env: { ...process.env, KAOIRO_TEST_MCP_ON_PROMPT: "1" },
+    });
+    await host.send("hello");
+    expect(envelopes.some((e) => e.type === "log" &&
+      String(e.payload.text).includes("not connected"))).toBe(false);
   });
 
   it("publishes waiting_permission and pauses while a request is pending", async () => {
@@ -201,6 +370,39 @@ describe("muse host", () => {
     expect(states).toContain("waiting_permission");
     expect(startedHost.envelopes.find((e) => e.type === "result")?.payload)
       .toMatchObject({ text: "allowed" });
+  });
+
+  it("clears overlapping permission and question wait states", async () => {
+    const { host } = await started();
+    const turn = host.send("sleep");
+    await vi.waitFor(() => expect(host.state).toBe("tool_running"));
+    host.setPendingPermission({ request_id: "p", tool_name: "tool", ts: "now" });
+    expect(host.state).toBe("waiting_permission");
+    host.setPendingQuestion({ request_id: "q", questions: [], ts: "now" });
+    expect(host.state).toBe("waiting_permission");
+    host.setPendingPermission(null);
+    expect(host.state).toBe("waiting_question");
+    host.setPendingQuestion(null);
+    expect(host.state).toBe("tool_running");
+    await host.interrupt();
+    await turn;
+  });
+
+  it("pauses inactivity during a pending permission and rearms after resolution", async () => {
+    const { host, envelopes } = await started({ watchdogTimeoutMs: 120 });
+    const turn = host.send("sleep");
+    await vi.waitFor(() => expect(host.state).toBe("tool_running"));
+    host.setPendingPermission({ request_id: "p", tool_name: "tool", ts: "now" });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(envelopes.some((e) => e.type === "result")).toBe(false);
+    host.setPendingPermission(null);
+    const finished = await Promise.race([
+      turn.then(() => true, () => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ]);
+    expect(finished).toBe(true);
+    expect(envelopes.find((e) => e.type === "result")?.ext)
+      .toMatchObject({ interrupted: true });
   });
 
   it("records the native session in the recovery checkpoint", async () => {
@@ -234,6 +436,68 @@ describe("muse host", () => {
         session_id: "fixture-session",
       });
     } finally {
+      rmSync(checkpoint, { force: true });
+    }
+  });
+
+  it("blocks recovery when the watchdog cancellation grace expires", async () => {
+    const checkpoint = join(tmpdir(), `kaoiro-muse-watchdog-${process.pid}.json`);
+    rmSync(checkpoint, { force: true });
+    const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+    try {
+      const recoveryConfig = { ...config, recovery_checkpoint_path: checkpoint };
+      const recovery = new RecoveryReporter(recoveryConfig, undefined, () => {});
+      const { host, run } = await started({ config: recoveryConfig, recovery,
+        watchdogTimeoutMs: 100, env: { ...process.env, KAOIRO_TEST_IGNORE_CANCEL: "1" } });
+      const turn = host.send("sleep").then(() => false, () => true);
+      await expect(run).rejects.toThrow(/watchdog/);
+      expect(await turn).toBe(true);
+      expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toMatchObject({
+        state: "blocked", reason: "watchdog", session_id: "fixture-session",
+      });
+    } finally {
+      rmSync(checkpoint, { force: true });
+    }
+  }, 10_000);
+
+  it("retains a candidate on an unclassified resume failure", async () => {
+    const checkpoint = join(tmpdir(), `kaoiro-muse-candidate-${process.pid}.json`);
+    rmSync(checkpoint, { force: true });
+    const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+    try {
+      const recoveryConfig = { ...config, recovery_checkpoint_path: checkpoint,
+        recovery_resume_kind: "candidate" as const };
+      const recovery = new RecoveryReporter(recoveryConfig, "unknown", () => {});
+      const host = new MuseHost({ config: recoveryConfig, cwd: process.cwd(),
+        personaPrompt: "persona", send: () => {}, executable, recovery,
+        resumeSessionId: "unknown", decidePermission: async () => ({ allow: true }) });
+      hosts.push(host);
+      await expect(host.run()).rejects.toThrow(/could not resume/);
+      expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toEqual({
+        version: 1, state: "unbound", candidate_id: "unknown",
+      });
+    } finally {
+      rmSync(checkpoint, { force: true });
+    }
+  });
+
+  it("does not report success when the checkpoint cannot be confirmed", async () => {
+    const checkpoint = join(tmpdir(), `kaoiro-muse-fail-recovery-${process.pid}.json`);
+    const tmp = `${checkpoint}.tmp`;
+    rmSync(checkpoint, { force: true });
+    rmSync(tmp, { force: true, recursive: true });
+    const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+    try {
+      const recoveryConfig = { ...config, recovery_checkpoint_path: checkpoint };
+      const recovery = new RecoveryReporter(recoveryConfig, undefined, () => {});
+      const { host, envelopes } = await started({ config: recoveryConfig, recovery });
+      mkdirSync(tmp);
+      await expect(host.send("hello")).rejects.toThrow();
+      expect(envelopes.filter((e) => e.type === "result")
+        .some((e) => e.payload.is_error === false)).toBe(false);
+      expect(recovery.failure?.exitCode).toBe(79);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
       rmSync(checkpoint, { force: true });
     }
   });
@@ -305,6 +569,16 @@ describe("muse host", () => {
     });
     await expect(host.setModel("no-such-model")).rejects.toThrow();
     await expect(host.setEffort("no-such-effort")).rejects.toThrow();
+  });
+
+  it("stops and rejects a queued prompt when a model switch times out", async () => {
+    const { host, run } = await started({ switchTimeoutMs: 100,
+      env: { ...process.env, KAOIRO_TEST_HANG_SWITCH: "1" } });
+    const switching = host.setModel("muse-wonder");
+    const prompt = expect(host.send("must not run")).rejects.toThrow();
+    await expect(switching).rejects.toThrow();
+    await prompt;
+    await expect(run).rejects.toThrow(/timed out/);
   });
 
   it("rejects permission-mode and permission switching explicitly", async () => {

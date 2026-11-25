@@ -140,6 +140,7 @@ describe("permission_timeout_ms (top level, every engine)", () => {
       codex: { permission_timeout_ms: 5000 },
       antigravity: { permission_timeout_ms: 5000 },
       grok: { permission_timeout_ms: 5000 },
+      muse: { permission_timeout_ms: 5000 },
     });
     expect(computeBehaviourRelay(withFile, { [VARIABLE]: "9000" })).toEqual({});
   });

@@ -20,22 +20,8 @@ export function parseModes(modes: SessionModeState | null | undefined): MuseMode
   };
 }
 
-const ASK_FIRST = [/ask before/i, /ask/i, /request/i, /confirm/i];
-
-/** kaoiro's default approval posture is the operator in the loop (the
- *  permission broker answers tool requests), so the adapter's default
- *  Muse mode is the advertised one that asks before unmatched actions.
- *  Matching is by mode name/id because the mode ids are the agent's own;
- *  when nothing advertises an ask posture, the agent's current mode is
- *  kept and reported as-is. */
 export function preferredApprovalMode(modes: MuseModes): MuseMode | undefined {
-  for (const pattern of ASK_FIRST) {
-    const hit = modes.available.find(
-      (mode) => pattern.test(mode.name) || pattern.test(mode.id),
-    );
-    if (hit) return hit;
-  }
-  return undefined;
+  return modes.available.find((mode) => mode.id === "promptUnmatched");
 }
 
 export interface MuseModel {

@@ -9,16 +9,26 @@ import { writeFileSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+if (process.env.KAOIRO_TEST_LAUNCH_FILE) {
+  writeFileSync(process.env.KAOIRO_TEST_LAUNCH_FILE, JSON.stringify({
+    args: process.argv.slice(2), gate: process.env.MUSE_EXPERIMENTAL_ACP,
+    sentinel: process.env.KAOIRO_TEST_SENTINEL,
+  }));
+}
+
 const sid = "fixture-session";
 let model = "muse-spark-1.3";
 let effort = "high";
-let mode = "allow-all";
+let mode = process.env.KAOIRO_TEST_MODE_CURRENT_UNADVERTISED
+  ? "promptUnmatched" : "allow-all";
 const MODES = [
   { id: "allow-all", name: "Allow all" },
-  { id: "ask-unmatched", name: "Ask before unmatched actions" },
+  { id: "promptUnmatched", name: "Ask before unmatched actions" },
   { id: "deny-unmatched", name: "Deny unmatched actions" },
 ];
-const modes = () => ({ currentModeId: mode, availableModes: MODES });
+const modes = () => ({ currentModeId: mode, availableModes:
+  (process.env.KAOIRO_TEST_MODE_MISSING || process.env.KAOIRO_TEST_MODE_CURRENT_UNADVERTISED)
+    ? MODES.filter(m => m.id !== "promptUnmatched") : MODES });
 let promptCount = 0;
 const MODELS = [
   { value: "muse-spark-1.3", name: "Muse Spark 1.3" },
@@ -29,6 +39,8 @@ const EFFORTS = [
   { value: "high", name: "high" },
 ];
 const configOptions = () => [
+  ...(process.env.KAOIRO_TEST_MODE_CONFIG_CONFLICT ? [{ id: "mode", name: "Mode",
+    category: "mode", type: "select", currentValue: "allow-all", options: MODES.map(m => ({ value: m.id, name: m.name })) }] : []),
   { id: "model", name: "Model", category: "model", type: "select", currentValue: model, options: MODELS },
   { id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: effort, options: EFFORTS },
 ];
@@ -47,6 +59,7 @@ const awaitResponse = (id) => new Promise((resolve) => waiters.set(id, resolve))
 let sleepingPrompt;
 let mcpClient;
 let connecting = Promise.resolve();
+let deferredServers;
 
 async function connectMcp(servers) {
   if (process.env.KAOIRO_TEST_MUSE_NO_MCP) return;
@@ -100,7 +113,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         });
         break;
       case "session/new":
-        void connectMcp(msg.params.mcpServers);
+        if (process.env.KAOIRO_TEST_MUSE_HANG_NEW) break;
+        if (process.env.KAOIRO_TEST_MCP_ON_PROMPT) deferredServers = msg.params.mcpServers;
+        else void connectMcp(msg.params.mcpServers);
         reply(msg.id, { sessionId: sid, configOptions: configOptions(), modes: modes() });
         break;
       case "session/resume":
@@ -109,17 +124,26 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         reply(msg.id, { configOptions: configOptions(), modes: modes() });
         break;
       case "session/set_mode":
+        if (process.env.KAOIRO_TEST_MUSE_HANG_MODE) break;
+        if (process.env.KAOIRO_TEST_MODE_REJECT) return fail(msg.id, "rejected");
+        if (process.env.KAOIRO_TEST_MODE_NO_UPDATE) return reply(msg.id, {});
+        if (process.env.KAOIRO_TEST_MODE_CONFLICT) {
+          update({ sessionUpdate: "current_mode_update", currentModeId: "promptUnmatched" });
+          update({ sessionUpdate: "current_mode_update", currentModeId: "allow-all" });
+          return reply(msg.id, {});
+        }
         if (!MODES.some((m) => m.id === msg.params.modeId)) {
           return fail(msg.id, "unknown mode");
         }
         mode = msg.params.modeId;
-        reply(msg.id, {});
         update({ sessionUpdate: "current_mode_update", currentModeId: mode });
+        reply(msg.id, {});
         break;
       case "session/load":
         reply(msg.id, { configOptions: configOptions() });
         break;
       case "session/set_config_option": {
+        if (process.env.KAOIRO_TEST_HANG_SWITCH) break;
         const { configId, value } = msg.params;
         if (configId === "model" && MODELS.some((m) => m.value === value)) model = value;
         else if (configId === "effort" && EFFORTS.some((e) => e.value === value)) effort = value;
@@ -133,6 +157,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         break;
       }
       case "session/prompt": {
+        if (deferredServers) {
+          await connectMcp(deferredServers);
+          await connecting;
+          deferredServers = undefined;
+        }
         const text = msg.params.prompt[0].text;
         promptCount += 1;
         if (process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE) {
@@ -146,6 +175,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           return fail(msg.id, "fixture first prompt failure");
         }
         const lastLine = text.split("\n").pop();
+        if (lastLine === "unsafe-mode") {
+          update({ sessionUpdate: "current_mode_update", currentModeId: "allow-all" });
+          return;
+        }
         if (lastLine === "sleep") {
           sleepingPrompt = msg.id;
           update({ sessionUpdate: "tool_call", toolCallId: "long", title: "sleep",
@@ -185,6 +218,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         break;
       }
       case "session/cancel":
+        if (process.env.KAOIRO_TEST_IGNORE_CANCEL) break;
         if (sleepingPrompt !== undefined) {
           const id = sleepingPrompt;
           sleepingPrompt = undefined;

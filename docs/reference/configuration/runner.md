@@ -163,6 +163,12 @@ bounded [launch metadata](../protocol/runner-control.md#launch-delivery-metadata
 
 ## Behaviour settings
 
+`KAOIRO_MUSE_TRUST_WORKSPACE` is an environment opt-in for Muse processes
+on the host; unset or unrecognized values mean false. When set in `runner.env`,
+changes require restarting the runner and restarting the affected wrappers.
+Reloading runner configuration or restarting only a wrapper does not reload
+`runner.env` into the runner's environment.
+
 Behaviour settings of the runner and its wrappers live in `runner.config.json`
 (issue #469). A deprecated `KAOIRO_*` variable still overrides the key; it
 logs a deprecation warning and will be removed in a later release. Settings

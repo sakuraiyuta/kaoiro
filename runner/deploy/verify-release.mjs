@@ -852,7 +852,6 @@ const ENTRY_PACKAGES = [
   "@kaoiro/codex",
   "@kaoiro/antigravity",
   "@kaoiro/grok",
-  "@kaoiro/muse",
 ];
 
 /** Specifiers this verifier follows at all. `node:` builtins and third-party

@@ -7,6 +7,7 @@
 // Every request is appended to FAKE_MUSE_LOG as JSON lines.
 import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { spawn } from "node:child_process";
 
 const scenario = JSON.parse(readFileSync(process.env.FAKE_MUSE_SCENARIO, "utf8"));
 const log = process.env.FAKE_MUSE_LOG;
@@ -25,6 +26,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (msg.method === "session/list") {
+    if (scenario.stubbornChild) {
+      const child = spawn(process.execPath, ["-e",
+        "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000)"],
+      { stdio: ["ignore", "pipe", "ignore"] });
+      child.stdout.once("data", () => appendFileSync(process.env.FAKE_MUSE_PIDS,
+        `${process.pid} ${child.pid}\n`));
+    }
     if (scenario.hang) return;
     const key = msg.params.cursor ?? "__first__";
     const page = scenario.pages?.[key];
