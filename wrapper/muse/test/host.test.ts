@@ -176,11 +176,21 @@ describe("muse host", () => {
       const path = join(tmpdir(), `kaoiro-muse-launch-${process.pid}.json`);
       rmSync(path, { force: true });
       try {
-        await started({ ...(resumeSessionId ? { resumeSessionId } : {}), env: { ...process.env,
-          KAOIRO_TEST_LAUNCH_FILE: path, KAOIRO_TEST_SENTINEL: "unchanged",
-          MUSE_EXPERIMENTAL_ACP: "off" } });
+        const env = { PATH: process.env.PATH!, KAOIRO_TEST_LAUNCH_FILE: path,
+          KAOIRO_TEST_SENTINEL: "unchanged", MUSE_EXPERIMENTAL_ACP: "off",
+          MUSE_TEST_SANDBOX: "upstream", MUSE_TEST_NETWORK: "upstream" };
+        await started({ ...(resumeSessionId ? { resumeSessionId } : {}), env });
         const launch = JSON.parse(readFileSync(path, "utf8"));
-        expect(launch).toEqual({ args: ["acp"], gate: "off", sentinel: "unchanged" });
+        const isolationKeys = new Set([
+          "DBUS_SESSION_BUS_ADDRESS", "DOCKER_CONFIG", "DOCKER_HOST", "GH_CONFIG_DIR",
+          "KAOIRO_TEST_ISOLATION_CHILD", "KAOIRO_TEST_ISOLATION_FOREIGN",
+          "KAOIRO_TEST_ISOLATION_INERT", "KAOIRO_TEST_ISOLATION_ROOTS",
+          "NODE_OPTIONS", "XDG_RUNTIME_DIR",
+        ]);
+        const relevant = Object.fromEntries(Object.entries(launch.env).filter(([key]) =>
+          !isolationKeys.has(key)));
+        expect(launch.args).toEqual(["acp"]);
+        expect(relevant).toEqual(env);
       } finally {
         rmSync(path, { force: true });
       }

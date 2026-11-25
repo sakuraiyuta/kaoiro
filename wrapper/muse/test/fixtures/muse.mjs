@@ -11,8 +11,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 if (process.env.KAOIRO_TEST_LAUNCH_FILE) {
   writeFileSync(process.env.KAOIRO_TEST_LAUNCH_FILE, JSON.stringify({
-    args: process.argv.slice(2), gate: process.env.MUSE_EXPERIMENTAL_ACP,
-    sentinel: process.env.KAOIRO_TEST_SENTINEL,
+    args: process.argv.slice(2), env: process.env,
   }));
 }
 
