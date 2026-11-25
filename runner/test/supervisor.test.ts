@@ -360,7 +360,7 @@ describe("parseSpawn / resolveWrapperConfig", () => {
   });
 
   it("accepts the engines of the engine table and rejects any other name", () => {
-    for (const engine of ["claude-code", "codex", "antigravity", "grok"]) {
+    for (const engine of ["claude-code", "codex", "antigravity", "grok", "muse"]) {
       expect(parseSpawn({ ...spawnMsg, engine })?.engine).toBe(engine);
     }
     for (const engine of ["gemini", "", "constructor", 7]) {

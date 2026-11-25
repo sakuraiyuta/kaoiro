@@ -32,13 +32,13 @@ describe("host delivery settings", () => {
     } });
     expect(config.in_flight_delivery).toEqual({ "claude-code": { enabled: false, default: false }, codex: { enabled: false, default: true }, antigravity: { default: true } });
     expect(config.claude_code).toEqual({});
-    expect(HOST_DELIVERY_ROWS.map(row => row.engine)).toEqual(["claude-code", "codex", "antigravity", "grok"]);
+    expect(HOST_DELIVERY_ROWS.map(row => row.engine)).toEqual(["claude-code", "codex", "antigravity", "grok", "muse"]);
     const base = parseRunnerConfig(raw); const snapshot = createDeliverySnapshot(base);
     const defaults = buildRegister(base, undefined, "chatgpt", undefined, undefined, undefined, snapshot);
-    expect(defaults.in_flight_defaults).toEqual({ "claude-code": true, codex: true, antigravity: false, grok: false });
-    expect(defaults.engines?.map(e => [e.id, e.launch_delivery_policy?.ceiling])).toEqual([["claude-code", true], ["codex", true], ["antigravity", false], ["grok", false]]);
+    expect(defaults.in_flight_defaults).toEqual({ "claude-code": true, codex: true, antigravity: false, grok: false, muse: false });
+    expect(defaults.engines?.map(e => [e.id, e.launch_delivery_policy?.ceiling])).toEqual([["claude-code", true], ["codex", true], ["antigravity", false], ["grok", false], ["muse", false]]);
     const changed = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(config));
-    expect(changed.in_flight_defaults).toEqual({ "claude-code": false, codex: true, antigravity: true, grok: false });
+    expect(changed.in_flight_defaults).toEqual({ "claude-code": false, codex: true, antigravity: true, grok: false, muse: false });
     expect(changed.engines?.every(e => Object.values(e.launch_delivery_policy!.mechanisms).every(mode => mode === "none"))).toBe(true);
     expect(changedFields(base, { ...base, in_flight_delivery: { codex: { default: false } } })).toEqual(["in_flight_delivery"]);
   });

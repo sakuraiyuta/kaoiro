@@ -83,6 +83,11 @@ Declared unsupported, each rejected explicitly rather than silently:
   entry until the session reports its own config options; there is no
   short-lived catalog probe for Muse yet.
 
+Session enumeration for the resume picker is not one of the limits: the
+runner probes a short-lived `muse acp` with ACP `session/list {cwd}`
+(`runner/src/muse_sessions.ts`), the same contract the Grok discovery
+uses, and the resume existence check answers from that listing.
+
 ## Login and failure modes
 
 A host that is not logged in cannot open a session: `session/new` fails

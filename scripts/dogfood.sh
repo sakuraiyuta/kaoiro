@@ -113,7 +113,7 @@ echo "dogfood: installing workspace deps + building wrapper packages..."
   pnpm -r --filter '@kaoiro/wrapper-core' \
     --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
     --filter '@kaoiro/codex' --filter '@kaoiro/antigravity' \
-    --filter '@kaoiro/grok' run build ) \
+    --filter '@kaoiro/grok' --filter '@kaoiro/muse' run build ) \
     2>&1 | tee -a "$logdir/stack.log"
 
 # 2) Build runner dist. The workspace install in step 1 covered runner
@@ -143,7 +143,7 @@ if [[ ! -f "$runner_config" ]]; then
   "server_url": "ws://localhost:4000/runner",
   "blocked_personas": [],
   "cwd_allowlist": ["$root"],
-  "capabilities": ["claude-code", "codex", "antigravity", "grok"]
+  "capabilities": ["claude-code", "codex", "antigravity", "grok", "muse"]
 }
 JSON
 fi

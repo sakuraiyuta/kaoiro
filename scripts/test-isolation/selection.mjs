@@ -16,6 +16,7 @@ export const PACKAGES = [
   "wrapper/codex",
   "wrapper/antigravity",
   "wrapper/grok",
+  "wrapper/muse",
   "dashboard",
 ];
 export const CANARIES = [

@@ -627,7 +627,7 @@ export function loadRunnerConfig(path: string): RunnerConfig {
 /** Engines this runner build bundles (ADR-0032 F4a, ADR-0057 F1); the
  *  default capabilities when the config file does not restrict them. */
 const BUNDLED_ENGINES: EngineKind[] = [
-  "claude-code", "codex", "antigravity", "grok",
+  "claude-code", "codex", "antigravity", "grok", "muse",
 ];
 
 /** Effective capabilities: the configured list (legacy "claude" normalized
@@ -721,6 +721,16 @@ export function buildRegister(
       // else the default entry alone.
       models: grokCatalogOverride ?? [{ value: "default", display_name: "Account default" }],
       launch_permission_axes: { sandbox: true, approval: false },
+    });
+  }
+  if (capabilities.includes("muse")) {
+    engines.push({
+      id: "muse",
+      // No register-time probe yet: the default entry alone, replaced by
+      // the session's own config options once the wrapper starts
+      // (docs/reference/engines/muse-acp.md). Muse exposes no launch
+      // permission axes; its approval mode lives inside the ACP session.
+      models: [{ value: "default", display_name: "Account default" }],
     });
   }
   const safeBuildInfo =

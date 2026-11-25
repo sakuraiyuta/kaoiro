@@ -1313,7 +1313,8 @@ export class Supervisor {
         payload.engine !== "claude-code" &&
         payload.engine !== "codex" &&
         payload.engine !== "antigravity" &&
-        payload.engine !== "grok"
+        payload.engine !== "grok" &&
+        payload.engine !== "muse"
       ) {
         this.#sendSessions({
           version: "0",

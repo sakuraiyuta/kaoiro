@@ -58,7 +58,7 @@ if [[ ! -f "$runner_config" ]]; then
   "server_url": "ws://localhost:4000/runner",
   "blocked_personas": [],
   "cwd_allowlist": ["$root"],
-  "capabilities": ["claude-code", "codex", "antigravity", "grok"]
+  "capabilities": ["claude-code", "codex", "antigravity", "grok", "muse"]
 }
 JSON
 fi
@@ -187,7 +187,7 @@ pids+=("$!")
   cd "$root" && pnpm -r --filter '@kaoiro/wrapper-core' \
     --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
     --filter '@kaoiro/codex' --filter '@kaoiro/antigravity' \
-    --filter '@kaoiro/grok' run build &&
+    --filter '@kaoiro/grok' --filter '@kaoiro/muse' run build &&
   cd "$root/runner" &&
   exec pnpm exec tsx watch src/kaoiro.ts runner runner.config.json
 ) </dev/null 2>&1 | tee -a "$logdir/runner.log" &

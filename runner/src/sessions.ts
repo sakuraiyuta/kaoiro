@@ -34,6 +34,7 @@ import { codexHome } from "@kaoiro/codex";
 import type { EngineKind, SessionMeta } from "@kaoiro/protocol";
 import { clipUtf16Head } from "@kaoiro/wrapper-core";
 import { grokSessionExists, listGrokSessions } from "./grok_sessions.js";
+import { listMuseSessions, museSessionExists } from "./muse_sessions.js";
 
 /** session_id rides a JSONL filename and the wrapper's `--resume` arg, so its
  *  charset is restricted (UUID-shaped: letters, digits, hyphen) — no path
@@ -771,6 +772,9 @@ export function listSessions(
   if (engine === "antigravity") {
     return listAntigravitySessionsFrom(antigravityDatabasePath(), cwd);
   }
+  if (engine === "muse") {
+    return listMuseSessions(cwd, signal === undefined ? {} : { signal });
+  }
   return engine === "codex"
     ? listCodexSessionsIn(codexSessionsRoot(), cwd)
     : listSessionsIn(projectsDir(cwd));
@@ -788,6 +792,9 @@ export function sessionExists(
   if (engine === "grok") return grokSessionExists(cwd, sessionId, signal === undefined ? {} : { signal });
   if (engine === "antigravity") {
     return antigravitySessionExistsIn(antigravityDatabasePath(), cwd, sessionId);
+  }
+  if (engine === "muse") {
+    return museSessionExists(cwd, sessionId, signal === undefined ? {} : { signal });
   }
   return engine === "codex"
     ? codexSessionExistsIn(codexSessionsRoot(), cwd, sessionId)

@@ -5,6 +5,7 @@ export const DELIVERY_ENGINE_SETTINGS = [
   { engine: "codex", enabled: true, default: true },
   { engine: "antigravity", enabled: false, default: false },
   { engine: "grok", enabled: false, default: false },
+  { engine: "muse", enabled: false, default: false },
 ] as const;
 
 export interface DeliveryInputs {

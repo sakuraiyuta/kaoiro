@@ -129,7 +129,7 @@ export interface SetupResult {
   token: string;
 }
 
-const CAPABILITY_CHOICES = ["claude-code", "codex", "antigravity", "grok"] as const;
+const CAPABILITY_CHOICES = ["claude-code", "codex", "antigravity", "grok", "muse"] as const;
 
 async function askHostId(prompt: Prompt, fallback: string): Promise<string> {
   for (;;) {
