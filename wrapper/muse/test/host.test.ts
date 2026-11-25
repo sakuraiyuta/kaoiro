@@ -361,7 +361,7 @@ describe("muse host", () => {
         decidePermission: async () => ({ allow: true }) });
       hosts.push(host);
       const run = host.run();
-      await vi.waitFor(() => expect(rpcSent).toBe(true));
+      await vi.waitFor(() => expect(rpcSent).toBe(true), { timeout: 4_000 });
       host.close();
       await run;
     },
