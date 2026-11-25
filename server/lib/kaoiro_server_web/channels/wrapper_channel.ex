@@ -2534,7 +2534,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          "ext" => %{"permission_control" => permission_control, "engine" => engine}
        })
        when is_map(permission_control) and
-              engine in ["claude-code", "codex", "antigravity", "grok"] do
+              engine in ["claude-code", "codex", "antigravity", "grok", "muse"] do
     case record_permission_observation_safely(agent_id, engine, permission_control) do
       {:confirmed, %{engine: confirmed_engine, effective: effective}} ->
         record_confirmed_permission_snapshot(agent_id, confirmed_engine, effective)

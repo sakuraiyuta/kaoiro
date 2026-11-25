@@ -161,6 +161,9 @@ const P0_FIELDS_BY_ENGINE: Record<EngineKind, readonly P0ApplyField[]> = {
   codex: ["sandbox", "networkAccess"],
   antigravity: ["sandbox", "approval", "networkAccess"],
   grok: ["sandbox", "networkAccess"],
+  // Muse carries no P0 privilege axes: its approval mode lives inside the
+  // ACP session and is not a wire input for the wrapper.
+  muse: [],
 };
 
 /** P1 (phase-23): 5-case source-aware pair rule for `model` / `effort`.

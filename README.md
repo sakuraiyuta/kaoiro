@@ -33,7 +33,7 @@ a face and a personality. See your agents at a glance.
 > limited. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 A system for **running, watching and orchestrating several CLI AI agents at
-once** (such as Claude Code, Codex, Antigravity, and Grok Build). kaoiro launches agents
+once** (such as Claude Code, Codex, Antigravity, Grok Build, and Muse). kaoiro launches agents
 on any host it supervises, derives each agent's state from engine events and
 draws it as a character with changing expressions, routes permission requests
 and questions to the browser, and carries the messages agents send each other.
@@ -88,15 +88,15 @@ screenshots show the Japanese interface.
   the full transcript.
 - **Tuning mid-session** — model switches are supported on Claude Code and
   Antigravity, on Codex when its model catalog is available, and on Grok Build
-  when it reports a switchable selection. Effort switches are available on
-  Claude Code, Codex and Grok Build when advertised, but not Antigravity.
+  and Muse when they report a switchable selection. Effort switches are available on
+  Claude Code, Codex, Grok Build and Muse when advertised, but not Antigravity.
   Permission-mode switching and file uploads follow each engine's declared
   capabilities (`ext.session_capabilities`); prompts and interrupts share one
   control channel across engines.
 - **Multi-host** — one runner per machine registers that host, declares which
   engines it can spawn, and supervises the wrapper processes living there
   ([deployment architecture](docs/architecture/deployment.md)).
-- **Four engines, one protocol** — Claude Code, Codex, Antigravity and Grok Build use one
+- **Five engines, one protocol** — Claude Code, Codex, Antigravity, Grok Build and Muse use one
   adapter boundary. The UI branches on declared capabilities rather than engine
   names ([adapter contract](docs/reference/engines/adapter-contract.md)).
 - **Personas as zip packs** — characters are versioned, hash-checked packs read
@@ -157,7 +157,7 @@ Three layers plus a host-resident supervision layer (the runner):
 
 - **Wrapper** — launches agents and mediates their input and output. It hosts
   the Claude Agent SDK for Claude Code, the Codex app-server for Codex, the
-  Antigravity CLI, and a resident ACP session for Grok Build, translating
+  Antigravity CLI, and resident ACP sessions for Grok Build and Muse, translating
   engine-specific events into a common format.
 - **Server** — aggregates multiple wrappers, keeps their state, delivers it to
   clients in real time, and routes instructions to the appropriate agent.
@@ -174,7 +174,7 @@ data flow.
 
 - **Wrapper: TypeScript** — engine packages host the Claude Agent SDK
   (`@anthropic-ai/claude-agent-sdk`), Codex app-server, Antigravity CLI, or a
-  resident Grok Build ACP session.
+  resident ACP session (Grok Build, Muse).
 - **Server: Elixir / OTP + Phoenix**
   - Aggregates wrappers through WebSocket (Phoenix Channels).
   - Fans out updates through PubSub to clients in real time.
@@ -188,9 +188,12 @@ data flow.
 
 ### Target agents
 
-The supported engines are **Claude Code**, **Codex**, **Antigravity**, and
-**Grok Build**. Grok requires its CLI on PATH and uses a resident ACP host
-([Grok reference](docs/reference/engines/grok-acp.md)). Antigravity requires an
+The supported engines are **Claude Code**, **Codex**, **Antigravity**,
+**Grok Build**, and **Muse**. Grok requires its CLI on PATH and uses a resident ACP host
+([Grok reference](docs/reference/engines/grok-acp.md)). Muse requires the
+`muse` CLI on PATH, logged in with `muse login`, and uses a resident ACP
+host over its experimental `muse acp` command
+([Muse reference](docs/reference/engines/muse-acp.md)). Antigravity requires an
 explicit Google Cloud authentication method in the runner configuration before
 it launches
 ([Antigravity authentication](docs/operations/runner-install.md#antigravity-authentication)). The

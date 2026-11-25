@@ -54,6 +54,11 @@ export const ENGINES: Record<EngineKind, Engine> = {
       run: run(async () => (await import("@kaoiro/grok/dist/cli.js")).runGrokCli),
     },
   },
+  muse: {
+    verbs: {
+      run: run(async () => (await import("@kaoiro/muse/dist/cli.js")).runMuseCli),
+    },
+  },
 };
 
 export function isEngine(value: unknown): value is EngineKind {

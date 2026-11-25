@@ -396,7 +396,7 @@ export type PermissionMode =
 export type EngineId = string;
 
 /** Bundled implementation keys known to this runner. */
-export type EngineKind = "claude-code" | "codex" | "antigravity" | "grok";
+export type EngineKind = "claude-code" | "codex" | "antigravity" | "grok" | "muse";
 
 /** ext.permission — the agent's current permission posture as the
  *  engine-neutral two-axis form (ADR-0033 F1). Claude adapters derive it

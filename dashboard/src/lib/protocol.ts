@@ -2634,7 +2634,7 @@ export interface EngineCatalog {
 }
 
 export function bundledEngine(id: string): boolean {
-  return ["claude-code", "codex", "antigravity", "grok"].includes(id);
+  return ["claude-code", "codex", "antigravity", "grok", "muse"].includes(id);
 }
 
 export function externalCatalog(host: HostInfo | undefined | null, id: string) {

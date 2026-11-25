@@ -2,11 +2,11 @@
   "name": "@kaoiro/wrapper-meta",
   "version": "0.0.0",
   "private": true,
-  "description": "Fan-out scripts for the six wrapper packages.",
+  "description": "Fan-out scripts for the seven wrapper packages.",
   "scripts": {
-    "build": "node ../scripts/with-build-identity.mjs -- pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity --filter @kaoiro/grok run build",
-    "typecheck": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity --filter @kaoiro/grok run typecheck",
-    "test": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity --filter @kaoiro/grok run test",
+    "build": "node ../scripts/with-build-identity.mjs -- pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity --filter @kaoiro/grok --filter @kaoiro/muse run build",
+    "typecheck": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity --filter @kaoiro/grok --filter @kaoiro/muse run typecheck",
+    "test": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity --filter @kaoiro/grok --filter @kaoiro/muse run test",
     "demo": "for f in agent.*.json; do node ../runner/dist/kaoiro.js wrapper claude-code run \"$f\" & done; wait"
   },
   "packageManager": "pnpm@10.20.0",

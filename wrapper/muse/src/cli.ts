@@ -1,0 +1,350 @@
+import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import type { PermissionSelection } from "@kaoiro/protocol";
+import {
+  askUserQuestionDescriptor,
+  classifyInterAgentError,
+  createDeliveryAcknowledgementRuntime,
+  formatInboundMessage,
+  InterAgentTool,
+  makeLog,
+  mergePendingDisplayNameSync,
+  PermissionBroker,
+  QuestionBroker,
+  writeRedactedStderr,
+  type Envelope,
+  type ToolDescriptor,
+  type WhoamiSnapshot,
+} from "@kaoiro/agent-common";
+import {
+  loadConfig,
+  loadWrapperBuildInfo,
+  parseCliArgs,
+  ServerLink,
+  type ServerLinkOptions,
+} from "@kaoiro/wrapper-core";
+import { MuseHost, type MuseHostOptions } from "./host.js";
+
+export interface MuseCliDependencies {
+  parseCliArgs?: typeof parseCliArgs;
+  loadConfig?: typeof loadConfig;
+  loadWrapperBuildInfo?: typeof loadWrapperBuildInfo;
+  createServerLink?: (
+    ...args: ConstructorParameters<typeof ServerLink>
+  ) => ServerLink;
+  createHost?: (options: MuseHostOptions) => MuseHost;
+  onHostCreated?: (host: MuseHost) => void;
+  onMetadata?: (metadata: { direction: string; method?: string; variant?: string }) => void;
+  additionalTools?: ToolDescriptor[];
+  cwd?: string;
+}
+
+export async function runMuseCli(
+  dependencies: MuseCliDependencies = {},
+  argv: string[] = process.argv.slice(2),
+) {
+  const { configPath } = (dependencies.parseCliArgs ?? parseCliArgs)(argv);
+  const config = (dependencies.loadConfig ?? loadConfig)(configPath);
+  const resumeSessionId = config.resume_session_id;
+  const buildInfo = (dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo)(
+    fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
+  );
+  let host: MuseHost | undefined;
+  let link: ServerLink | undefined;
+  let pendingName: { displayName: string; revision: number } | undefined;
+  let chain: Promise<void> = Promise.resolve();
+  let ready!: () => void;
+  const hostReady = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const deliveries = new Map<string, Envelope[]>();
+  const send = (envelope: Envelope) => link?.send(envelope);
+  const cwd = dependencies.cwd ?? process.cwd();
+  const permission = new PermissionBroker({
+    config,
+    send,
+    onPendingChange: (pending) => host?.setPendingPermission(pending),
+  });
+  const question = new QuestionBroker({
+    config,
+    send,
+    onPendingChange: (pending) => host?.setPendingQuestion(pending),
+  });
+  const turns = {
+    deliverySequencesForTurn: (token: string) =>
+      (deliveries.get(token) ?? []).flatMap((envelope) => {
+        const seq = (envelope as Envelope & { delivery_seq?: number })
+          .delivery_seq;
+        return seq === undefined ? [] : [seq];
+      }),
+    deliveryEnvelopesForTurn: (token: string) => deliveries.get(token) ?? [],
+  };
+  const acknowledgements = createDeliveryAcknowledgementRuntime(
+    (seq) => link?.acknowledgeInterAgentDelivery(seq),
+    turns,
+    () => {
+      const incarnation = link?.deliveryIncarnation();
+      const generation = link?.deliveryGeneration();
+      return incarnation && generation ? { incarnation, generation } : null;
+    },
+  );
+  const workTools = {
+    workControlSupported: () =>
+      typeof link?.workControlSupported === "function" &&
+      link.workControlSupported(),
+    deliveryModesSupported: () =>
+      typeof link?.deliveryModes === "function" && link.deliveryModes() !== null,
+    deliveryModes: () => typeof link?.deliveryModesState === "function"
+      ? link.deliveryModesState() : "pending" as const,
+    workStatus: ({ work_id }: { work_id?: string | undefined }) => link
+      ? link.requestWorkStatus(work_id === undefined ? {} : { work_id })
+      : Promise.reject(new Error("work_control_unavailable")),
+    workOpResult: (input: { operation_id: string }) => link
+      ? link.requestWorkOpResult(input)
+      : Promise.reject(new Error("work_control_unavailable")),
+    deliveryStatus: (input: {
+      conversation_id?: string | undefined;
+      turn_number?: number | undefined;
+    }) => link
+      ? link.requestDeliveryStatus(
+        input.conversation_id === undefined || input.turn_number === undefined
+          ? {}
+          : { conversation_id: input.conversation_id,
+            turn_number: input.turn_number },
+      )
+      : Promise.reject(new Error("work_control_unavailable")),
+  };
+  const interAgent = new InterAgentTool({
+    workTools,
+    config,
+    send,
+    getState: () => host?.state ?? "idle",
+    getActiveInterAgentTurnToken: () =>
+      host?.activeInterAgentTurnToken() ?? null,
+    noticeAttributionMode: () => link?.noticeAttributionMode() ?? "pending",
+    sendInterAgent: (envelope) =>
+      link?.sendInterAgent(envelope) ??
+      Promise.resolve({ kind: "unknown", reason: "not_connected" }),
+    requestDirectory: () =>
+      link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
+    setStatusLine: (text) =>
+      link?.setStatusLine(text) ??
+      Promise.resolve({ kind: "error", reason: "not_connected" }),
+    readStatusLine: (id) =>
+      link?.readStatusLine(id) ??
+      Promise.resolve({ kind: "error", reason: "not_connected" }),
+    requestInterAgentDeliveryStatus: () =>
+      link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
+    requestSelfIdentity: () => link?.requestSelfIdentity() ?? Promise.resolve(null),
+    getWhoami: () =>
+      ({
+        agent_id: config.agent_id,
+        persona: config.persona,
+        state: host?.state ?? "idle",
+        ...(host?.statusSnapshot() ?? { engine: "muse" }),
+        build: buildInfo,
+      }) as WhoamiSnapshot,
+  });
+  let resolvePersona!: (text: string) => void;
+  const persona = new Promise<string>((resolve) => {
+    resolvePersona = resolve;
+  });
+  const controlFailure = (operation: string, detail = "is unsupported by the muse engine") => {
+    send(
+      makeLog(config, host?.state ?? "idle", new Date().toISOString(), {
+        kind: "system",
+        text: `muse ${operation} ${detail}`,
+      }),
+    );
+  };
+  const turnFailure = () => send(makeLog(
+    config, host?.state ?? "idle", new Date().toISOString(),
+    { kind: "system", text: "muse turn failed" },
+  ));
+  const options = acknowledgements.withServerLinkOptions<ServerLinkOptions>({
+    personaId: config.persona.id,
+    ...(config.server_token ? { token: config.server_token } : {}),
+    ...(config.transition_id ? { transitionId: config.transition_id } : {}),
+    buildInfo,
+    noticeAttribution: "v1" as const,
+    workControl: "v1" as const,
+    onWorkNotice: (notice) => {
+      chain = chain
+        .then(async () => {
+          await hostReady;
+          await host!.send(`Work notice: ${JSON.stringify(notice)}`);
+        })
+        .catch(() => {
+          turnFailure();
+        });
+    },
+    interAgentDeliveryModes: {
+      version: "v1" as const,
+      early: "none" as const,
+      yield: "none" as const,
+      stage_reports: false,
+    },
+    onPersonaPrompt: resolvePersona,
+    onInstruction: (text: string, attachments?: string[]) => {
+      chain = chain
+        .then(async () => {
+          await hostReady;
+          await host!.send(text, attachments);
+        })
+        .catch(() => {
+          turnFailure();
+        });
+    },
+    onPermissionDecision: (
+      decision: Parameters<PermissionBroker["resolve"]>[0],
+    ) => permission.resolve(decision),
+    onQuestionResponse: (answer: Parameters<QuestionBroker["resolve"]>[0]) =>
+      question.resolve(answer),
+    onInterrupt: () => {
+      if (host) void host.interrupt().catch(() => host?.close());
+    },
+    onSetModel: (value: string) => {
+      if (host) void host.setModel(value).catch(() => controlFailure("model switching", "failed"));
+      else controlFailure("model switching", "is not ready");
+    },
+    onSetEffort: (level: string) => {
+      if (host) void host.setEffort(level).catch(() => controlFailure("effort switching", "failed"));
+      else controlFailure("effort switching", "is not ready");
+    },
+    onSetPermission: (_value: PermissionSelection) => controlFailure("permission switching"),
+    onSetPermissionMode: () => controlFailure("permission mode switching"),
+    onRenameDisplayName: (name: string, revision: number) => {
+      if (host) host.renameDisplayName(name, revision);
+      else
+        pendingName = mergePendingDisplayNameSync(pendingName, name, revision);
+    },
+    onInterAgentMessage: (envelope: Envelope) => {
+      acknowledgements.captureDelivery(envelope);
+      chain = chain
+        .then(async () => {
+          await hostReady;
+          const disposition = await interAgent.receiveInbound(envelope);
+          if (disposition.consumed || !disposition.inject) {
+            if (!(disposition.consumed && disposition.deferAck)) {
+              acknowledgements.acknowledgeDelivery(envelope);
+            }
+            if (disposition.notice) send(disposition.notice);
+            return;
+          }
+          const token = randomUUID();
+          const id = String(envelope.payload.conversation_id);
+          deliveries.set(token, [envelope]);
+          interAgent.notePendingInjection(envelope, token);
+          try {
+            await host!.send(
+              formatInboundMessage(envelope, { mode: disposition.mode }),
+              undefined,
+              [id],
+              token,
+            );
+          } catch {
+            for (const notice of interAgent.resolveTurnEnd(
+              token,
+              [id],
+              classifyInterAgentError({ detail: "muse turn failed" }),
+            ))
+              send(notice);
+          } finally {
+            deliveries.delete(token);
+          }
+        })
+        .catch(() => {
+          turnFailure();
+        });
+    },
+  });
+  const createLink =
+    dependencies.createServerLink ??
+    ((...values: ConstructorParameters<typeof ServerLink>) =>
+      new ServerLink(...values));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stop = () => host?.close();
+  let disconnectReason: "stop" | "crash" = "stop";
+  try {
+    link = createLink(config.server_url, config.agent_id, options);
+    const rules = await Promise.race([
+      persona,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("muse persona prompt timed out")),
+          10_000,
+        );
+      }),
+    ]);
+    clearTimeout(timer);
+    host = (dependencies.createHost ?? ((opts) => new MuseHost(opts)))(
+      acknowledgements.withHostOptions({
+        config,
+        cwd,
+        personaPrompt: rules,
+        ...(resumeSessionId ? { resumeSessionId } : {}),
+        send,
+        toolDescriptors: [
+          ...interAgent.descriptors(),
+          askUserQuestionDescriptor((questions) => question.decide(questions)),
+          ...(dependencies.additionalTools ?? []),
+        ],
+        decidePermission: (
+          name: string,
+          input: Record<string, unknown>,
+          signal?: AbortSignal,
+        ) => permission.decide(name, input, signal),
+        onSessionId: (id: string) => {
+          link?.setSessionId(id);
+        },
+        onMetadata: (metadata) => {
+          writeRedactedStderr(
+            `[kaoiro] muse ACP ${JSON.stringify(metadata)}\n`,
+          );
+          dependencies.onMetadata?.(metadata);
+        },
+        onTurnEnd: ({
+          turnToken,
+          conversationIds,
+          error,
+        }: {
+          turnToken: string;
+          conversationIds: string[];
+          error?: { detail: string; reason?: string };
+        }) => {
+          question.close();
+          for (const notice of interAgent.resolveTurnEnd(
+            turnToken,
+            conversationIds,
+            error ? classifyInterAgentError(error) : undefined,
+          ))
+            send(notice);
+        },
+      }),
+    );
+    if (pendingName)
+      host.renameDisplayName(pendingName.displayName, pendingName.revision);
+    ready();
+    dependencies.onHostCreated?.(host);
+    process.on("SIGTERM", stop);
+    process.on("SIGINT", stop);
+    await host.run(config.initial_prompt);
+  } catch (error) {
+    disconnectReason = "crash";
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    process.off("SIGTERM", stop);
+    process.off("SIGINT", stop);
+    question.close();
+    permission.close();
+    interAgent.close();
+    host?.close();
+    await host?.closed;
+    try {
+      await link?.reportDisconnectIntent(disconnectReason);
+    } finally {
+      link?.close();
+    }
+  }
+}

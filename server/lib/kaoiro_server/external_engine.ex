@@ -1,6 +1,6 @@
 defmodule KaoiroServer.ExternalEngine do
   @moduledoc false
-  @bundled ~w(claude-code codex antigravity grok)
+  @bundled ~w(claude-code codex antigravity grok muse)
   @operations ~w(spawn resume enumerate_sessions refresh_engine_catalog)
   @snapshot_fields ~w(model model_source effort effort_source)
 

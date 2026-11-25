@@ -34,6 +34,9 @@ importers:
       '@kaoiro/grok':
         specifier: workspace:*
         version: link:../wrapper/grok
+      '@kaoiro/muse':
+        specifier: workspace:*
+        version: link:../wrapper/muse
       '@kaoiro/wrapper-core':
         specifier: workspace:*
         version: link:../wrapper/core
@@ -241,6 +244,37 @@ importers:
       officeparser:
         specifier: ^7.2.2
         version: 7.2.2
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@kaoiro/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.0)
+
+  wrapper/muse:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.8.0
+        version: 1.8.0(zod@4.4.3)
+      '@kaoiro/agent-common':
+        specifier: workspace:*
+        version: link:../agent-common
+      '@kaoiro/wrapper-core':
+        specifier: workspace:*
+        version: link:../core
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.3)
       zod:
         specifier: ^4.4.3
         version: 4.4.3

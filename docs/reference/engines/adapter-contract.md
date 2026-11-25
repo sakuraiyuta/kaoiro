@@ -19,7 +19,7 @@ The `EngineAdapter` interface in the common AI-agent layer
 declares the contract concrete adapters must implement:
 
 - State derivation: engine-specific event stream (Claude `SDKMessage`, Codex
-  app-server notifications, Antigravity and Grok ACP updates)
+  app-server notifications, Antigravity, Grok and Muse ACP updates)
   → common `AdapterEvent`
 - Lifecycle and control: `run` / `send` / `interrupt` / `close` /
   `setModel` / `setEffort` / `setPermission` / `setPermissionMode`
@@ -27,7 +27,7 @@ declares the contract concrete adapters must implement:
   and revision-fenced `renameDisplayName`
 - Convert the common Tool description layer (JSON Schema + handler pair) to
   engine-specific APIs (Claude: Zod + `createSdkMcpServer` in-process; Codex:
-  the bundled stdio MCP bridge; Antigravity and Grok: the shared HTTP tool
+  the bundled stdio MCP bridge; Antigravity, Grok and Muse: the shared HTTP tool
   host). See the [Antigravity tool contract](antigravity-tools-permissions.md#kaoiro-tools)
   for its hook and permission boundary.
 
