@@ -805,6 +805,18 @@ describe("muse host", () => {
     await expect(host.send("next")).resolves.toBeUndefined();
   });
 
+  it("continues if the selection diagnostic cannot be written", async () => {
+    const { host } = await started();
+    const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      throw new Error("diagnostic unavailable");
+    });
+    try {
+      await expect(host.send("partial-update")).resolves.toBeUndefined();
+      expect(diagnostic).toHaveBeenCalled();
+      await expect(host.send("next")).resolves.toBeUndefined();
+    } finally { diagnostic.mockRestore(); }
+  });
+
   it.each(["KAOIRO_TEST_HANG_SWITCH", "KAOIRO_TEST_DELAY_SWITCH"])(
     "stops and rejects a queued prompt on switch timeout: %s", async (key) => {
       const { host, run } = await started({ switchTimeoutMs: 100,
