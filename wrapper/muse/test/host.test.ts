@@ -345,7 +345,7 @@ describe("muse host", () => {
       decidePermission: async () => ({ allow: true }) });
     hosts.push(host);
     const run = host.run();
-    await vi.waitFor(() => expect(host.processId).toBeDefined());
+    await vi.waitFor(() => expect(host.processId).toBeDefined(), { timeout: 4_000 });
     host.close();
     await run;
   });

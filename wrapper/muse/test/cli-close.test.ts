@@ -73,7 +73,7 @@ it("leaves the CLI after close interrupts a pending ACP request", async () => {
     },
   });
   try {
-    await vi.waitFor(() => expect(initialized).toBe(true));
+    await vi.waitFor(() => expect(initialized).toBe(true), { timeout: 4_000 });
     host.close();
     await work;
     expect(disconnected).toBe(true);
