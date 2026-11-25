@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-11-23
+last_updated: 2026-11-25
 ---
 
 # Release notes
@@ -69,6 +69,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.25.1](v2026.11.25.1.md) | 2026-11-25 | v2026.11.23.1 | Removed the Codex work query and backend switching tools, the launch dialog build warning, rally and stall monitoring, per-principal work limits, and the runner's Codex state backup and restore. |
 | [v2026.11.23.1](v2026.11.23.1.md) | 2026-11-23 | v2026.11.21.1 | Antigravity requires a declared Google Cloud authentication and runs over ACP with one `agy` process per prompt, without a rate limit gauge; Grok and Antigravity share the ACP client and the HTTP tool host. |
 | [v2026.11.21.1](v2026.11.21.1.md) | 2026-11-21 | v2026.11.16.1 (server/dashboard) and v2026.11.20.1 (runner/wrappers) | Published runner archives, host-scoped engine declarations and controls, and optional local external engines. |
 | [v2026.11.20.1](v2026.11.20.1.md) | 2026-11-20 | v2026.11.19.2 | Bundled runner and wrappers; Claude Code fail-stop recovery; explicit Codex authentication mode; Antigravity catalog refresh guidance. |
