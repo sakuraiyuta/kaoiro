@@ -60,6 +60,7 @@ let mcpClient;
 let connecting = Promise.resolve();
 let deferredServers;
 let delayedSelection;
+let postSwitchNotice;
 
 async function connectMcp(servers) {
   if (process.env.KAOIRO_TEST_MUSE_NO_MCP) return;
@@ -240,12 +241,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (partialMode !== "response" && process.env.KAOIRO_TEST_NOTICE_FIRST) sendNotice();
         reply(msg.id, { configOptions: responseOptions });
         if (partialMode !== "response" && !process.env.KAOIRO_TEST_NOTICE_FIRST) {
-          if (process.env.KAOIRO_TEST_CONFLICT_NOTICE) setTimeout(sendNotice, 20);
-          else sendNotice();
+          if (process.env.KAOIRO_TEST_CONFLICT_NOTICE) {
+            if (configId === "effort") postSwitchNotice = sendNotice;
+          } else sendNotice();
         }
         break;
       }
       case "session/prompt": {
+        if (postSwitchNotice) {
+          postSwitchNotice();
+          postSwitchNotice = undefined;
+        }
         if (deferredServers) {
           await connectMcp(deferredServers);
           await connecting;
