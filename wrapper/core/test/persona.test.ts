@@ -33,6 +33,7 @@ const ROUND_TRIP_CASES: {
   resume_session_id: { value: "session-1" },
   recovery_checkpoint_path: { value: "/tmp/checkpoint" },
   recovery_resume_kind: { value: "candidate" },
+  muse_persona_delivered: { value: true },
   in_flight_delivery_enabled: { value: false },
   server_token: { value: "tok-1" },
   permission_timeout_ms: { value: 5000 },
@@ -82,6 +83,12 @@ const ROUND_TRIP_CASES: {
 };
 
 describe("parseConfig", () => {
+  it("uses only strict true as Muse persona delivery evidence", () => {
+    for (const value of [false, null, "true", 1, {}]) {
+      expect(parseConfig({ ...valid, muse_persona_delivered: value })
+        .muse_persona_delivered).toBeUndefined();
+    }
+  });
   it("preserves explicit ceiling false and rejects non-booleans", () => {
     expect(parseConfig({ ...valid, in_flight_delivery_enabled: false }).in_flight_delivery_enabled).toBe(false);
     for (const value of [null, "false", 0, [], {}]) {
