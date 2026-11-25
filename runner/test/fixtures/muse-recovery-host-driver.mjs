@@ -38,7 +38,10 @@ if (config.resume_session_id) {
     void queued.catch(() => {});
     await switching.catch(() => {});
   } else {
-    await host.send("unsafe-mode").catch(() => {});
+    const turn = host.send("unsafe-mode");
+    const queued = host.send("must-not-replay");
+    void queued.catch(() => {});
+    await turn.catch(() => {});
   }
   await run;
 }
