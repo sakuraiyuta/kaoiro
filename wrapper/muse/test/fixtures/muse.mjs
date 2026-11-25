@@ -148,6 +148,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (process.env.KAOIRO_TEST_SWITCH_UNCHANGED) {
           return reply(msg.id, { configOptions: configOptions() });
         }
+        if (process.env.KAOIRO_TEST_SWITCH_CONFLICTING_NOTICE) {
+          const old = model;
+          model = "third-model";
+          update({ sessionUpdate: "config_option_update", configOptions: configOptions() });
+          model = old;
+          return reply(msg.id, { configOptions: configOptions() });
+        }
         if (process.env.KAOIRO_TEST_SWITCH_OTHER) {
           model = "third-model";
           return reply(msg.id, { configOptions: configOptions() });

@@ -792,6 +792,16 @@ describe("muse host", () => {
     expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
   });
 
+  it("stops when a conflicting notification precedes an old-value response", async () => {
+    const { host, run } = await started({ env: { ...process.env,
+      KAOIRO_TEST_SWITCH_CONFLICTING_NOTICE: "1" } });
+    const switching = host.setModel("muse-wonder");
+    const prompt = expect(host.send("must not run")).rejects.toThrow();
+    await expect(switching).rejects.toThrow();
+    await prompt;
+    await expect(run).rejects.toThrow();
+  });
+
   it("rejects permission-mode and permission switching explicitly", async () => {
     const { host } = await started();
     await expect(host.setPermissionMode("default")).rejects.toThrow(/unsupported/);

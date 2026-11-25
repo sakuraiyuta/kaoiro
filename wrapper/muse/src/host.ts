@@ -863,7 +863,10 @@ export class MuseHost implements EngineAdapter {
       const selection = parseSelection(response.configOptions);
       const applied = axis === "model" ? selection.model : selection.effort;
       if (applied !== value) {
-        confirmedRejection = current !== undefined && applied === current;
+        const observed = axis === "model"
+          ? this.#selection.model : this.#selection.effort;
+        confirmedRejection = current !== undefined && applied === current &&
+          observed === current;
         throw new Error("muse switch not applied");
       }
       this.#adoptSelection(response.configOptions);
