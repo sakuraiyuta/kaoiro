@@ -204,6 +204,7 @@ export interface WrapperConfig {
   resume_session_id?: string;
   recovery_checkpoint_path?: string;
   recovery_resume_kind?: "candidate";
+  muse_persona_delivered?: boolean;
   in_flight_delivery_enabled?: boolean;
   agent_id: string;
   persona: Persona;

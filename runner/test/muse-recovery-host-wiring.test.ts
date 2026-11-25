@@ -39,3 +39,42 @@ it.each(["mode", "switch"])(
     }
   }, 15_000,
 );
+
+it.each(["none", "before-response", "before-checkpoint"])(
+  "carries persona evidence through runner after %s", async (scenario) => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-muse-persona-recovery-"));
+  const result = join(root, "resumed.json");
+  const prompts = join(root, "prompts.jsonl");
+  vi.stubEnv("MUSE_RECOVERY_RESULT", result);
+  if (scenario === "before-response")
+    vi.stubEnv("MUSE_PROMPT_CRASH_MARKER", join(root, "received"));
+  if (scenario === "before-checkpoint")
+    vi.stubEnv("MUSE_RESPONSE_CRASH_MARKER", join(root, "confirmed"));
+  vi.stubEnv("KAOIRO_TEST_MUSE_PROMPTS_FILE", prompts);
+  vi.stubEnv("MUSE_HOST_FAKE", fileURLToPath(
+    new URL("../../wrapper/muse/test/fixtures/muse.mjs", import.meta.url)));
+  const driver = fileURLToPath(
+    new URL("./fixtures/muse-persona-recovery-driver.mjs", import.meta.url));
+  const supervisor = new Supervisor({ hostId: "fixture", cwdAllowlist: [root],
+    wrapperServerUrl: "ws://fixture/wrapper", launch: makeLauncher([process.execPath, driver]),
+    sendResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {},
+    listSessions: () => [], sessionExists: () => true });
+  try {
+    supervisor.handleSpawn({ version: "0", agent_id: "fixture.muse",
+      persona: { id: "p", name: "P", sprite_set: "p" }, cwd: root, engine: "muse" });
+    await vi.waitFor(() => expect(existsSync(result)).toBe(true), { timeout: 10_000 });
+    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({
+      resume: "fixture-session", delivered: true,
+    });
+    const inputs = readFileSync(prompts, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as string);
+    expect(inputs).toHaveLength(scenario === "none" ? 2 : 3);
+    expect(inputs[0]).toContain("PERSONA_AND_FOOTER");
+    if (scenario !== "none") expect(inputs[1]).toContain("PERSONA_AND_FOOTER");
+    expect(inputs.at(-1)).toBe("third");
+  } finally {
+    supervisor.stopAll();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);

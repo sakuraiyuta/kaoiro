@@ -74,6 +74,17 @@ describe("launch recovery checkpoint", () => {
     const { path } = fixture(); writeFileSync(path, raw);
     expect(readRecoveryCheckpoint(path)).toEqual({ ok: false, reason: "invalid" });
   });
+  it.each([true, false, "true", 1, null])(
+    "keeps recovery records readable with an auxiliary value %j", (value) => {
+      const { path } = fixture();
+      writeFileSync(path, JSON.stringify({ version: 1, state: "live",
+        session_id: "id", muse_persona_delivered: value }));
+      expect(readRecoveryCheckpoint(path)).toEqual({ ok: true, record: {
+        version: 1, state: "live", session_id: "id", muse_persona_delivered: value,
+      } });
+    },
+  );
+
   it("distinguishes unreadable from invalid", () => {
     const { path } = fixture(); rmSync(path);
     expect(readRecoveryCheckpoint(path)).toEqual({ ok: false, reason: "unreadable" });

@@ -3,7 +3,7 @@ import { MuseHost } from "@kaoiro/muse";
 import { RecoveryReporter } from "@kaoiro/wrapper-core";
 
 const config = JSON.parse(readFileSync(process.argv.at(-1), "utf8"));
-const reporter = new RecoveryReporter(config, config.resume_session_id, () => {});
+const reporter = new RecoveryReporter(config, config.resume_session_id, () => {}, true);
 let ready;
 const started = new Promise((resolve) => { ready = resolve; });
 const host = new MuseHost({

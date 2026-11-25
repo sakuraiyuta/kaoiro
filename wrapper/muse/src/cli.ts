@@ -56,7 +56,7 @@ export async function runMuseCli(
   const recovery = new RecoveryReporter(config, resumeSessionId, (failure) => {
     void shutdownForRecovery(failure, () => host?.close(),
       () => link?.reportDisconnectIntent("crash"), () => { link?.close(); }).catch(() => {});
-  });
+  }, true);
   if (recovery.failure) throw recovery.failure;
   let pendingName: { displayName: string; revision: number } | undefined;
   let chain: Promise<void> = Promise.resolve();

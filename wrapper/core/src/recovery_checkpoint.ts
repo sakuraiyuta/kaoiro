@@ -3,7 +3,7 @@ import type { WrapperConfig } from "@kaoiro/protocol";
 
 export const RECOVERY_CHECKPOINT_UNAVAILABLE_EXIT_CODE = 79;
 export type RecoveryBlockReason = "watchdog" | "session_binding" | "resume_rejected" | "session_unusable" | "checkpoint_unavailable";
-export type RecoveryRecord = { version: 1 } & (
+export type RecoveryRecord = { version: 1; muse_persona_delivered?: boolean } & (
   | { state: "initial" }
   | { state: "unbound"; candidate_id?: string }
   | { state: "live"; session_id: string }
@@ -74,11 +74,16 @@ export class RecoveryReporter {
   #record: RecoveryRecord = { version: 1, state: "unbound" };
   #failure: RecoveryFailure | undefined;
   readonly #path: string | undefined;
+  readonly #trackMusePersona: boolean;
+  #musePersonaDelivered: boolean;
   constructor(config: WrapperConfig, readonly requestedId: string | undefined,
-    readonly onFailure: (failure: RecoveryFailure) => void) {
+    readonly onFailure: (failure: RecoveryFailure) => void, trackMusePersona = false) {
     this.#path = config.recovery_checkpoint_path;
+    this.#trackMusePersona = trackMusePersona;
+    this.#musePersonaDelivered = trackMusePersona && config.muse_persona_delivered === true;
     if (config.recovery_resume_kind === "candidate" && requestedId !== undefined)
-      this.#record = { version: 1, state: "unbound", candidate_id: requestedId };
+      this.#record = { version: 1, state: "unbound", candidate_id: requestedId,
+        ...(this.#trackMusePersona ? { muse_persona_delivered: this.#musePersonaDelivered } : {}) };
     this.launchKind = config.recovery_resume_kind;
     this.#write(this.#record);
   }
@@ -102,13 +107,19 @@ export class RecoveryReporter {
     if (!this.active) return true;
     if (this.#failure || this.#record.state === "blocked") return false;
     if (this.#record.state === "live" && this.#record.session_id === id) return true;
-    return this.#write({ version: 1, state: "unbound", candidate_id: id });
+    return this.#write({ version: 1, state: "unbound", candidate_id: id,
+      ...(this.#trackMusePersona ? { muse_persona_delivered: this.#musePersonaDelivered } : {}) });
   }
-  confirm(id: string): boolean {
+  confirm(id: string, personaDelivered = false): boolean {
     if (!this.active) return true;
-    if (this.#record.state === "live" && this.#record.session_id === id) return !this.#failure;
+    if (this.#record.state === "live" && this.#record.session_id === id &&
+      (!this.#trackMusePersona || !personaDelivered || this.#musePersonaDelivered)) return !this.#failure;
     if (this.#record.state === "unbound" && this.#record.candidate_id !== undefined && this.#record.candidate_id !== id) return false;
-    return this.#write({ version: 1, state: "live", session_id: id });
+    const delivered = this.#musePersonaDelivered || personaDelivered;
+    const written = this.#write({ version: 1, state: "live", session_id: id,
+      ...(this.#trackMusePersona ? { muse_persona_delivered: delivered } : {}) });
+    if (written && this.#trackMusePersona) this.#musePersonaDelivered = delivered;
+    return written;
   }
   accept(id: string, expected?: string): boolean {
     if (!this.active) return true;

@@ -152,7 +152,7 @@ export class MuseHost implements EngineAdapter {
 
   constructor(options: MuseHostOptions) {
     this.#options = options;
-    this.#personaPending = options.resumeSessionId === undefined;
+    this.#personaPending = options.config.muse_persona_delivered !== true;
     this.#closedPromise = new Promise((resolve) => {
       this.#resolveClosed = resolve;
     });
@@ -567,14 +567,14 @@ export class MuseHost implements EngineAdapter {
       const response = await this.#session!.prompt(promptText);
       if (this.#closing) throw new Error("muse host closed");
       const interrupted = response.stopReason === "cancelled";
-      if (!interrupted && !this.#recoveryConfirmed && this.#sessionId !== undefined &&
-        this.#options.recovery?.confirm(this.#sessionId) === false) {
+      const personaDelivered = carriesPersona && response.stopReason === "end_turn";
+      if ((!interrupted && !this.#recoveryConfirmed || personaDelivered) &&
+        this.#sessionId !== undefined &&
+        this.#options.recovery?.confirm(this.#sessionId, personaDelivered) === false) {
         throw this.#options.recovery.failure;
       }
-      if (!interrupted) {
-        this.#recoveryConfirmed = true;
-        if (carriesPersona) this.#personaPending = false;
-      }
+      if (!interrupted) this.#recoveryConfirmed = true;
+      if (personaDelivered) this.#personaPending = false;
       this.#flushAssistantLog();
       settled = interrupted
         ? { authoritative: false, why: "the turn was interrupted" }

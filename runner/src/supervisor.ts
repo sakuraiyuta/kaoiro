@@ -637,6 +637,7 @@ interface ChildEntry {
   restarting: boolean;
   cycle?: "restart" | "switch";
   recoveryKind?: "candidate";
+  musePersonaDeliveredId?: string;
   lockedSession?: string;
   /** Session-reset in flight (phase-17 17-5). When set, `#onExit` routes
    *  into `#relaunchForReset` instead of the ordinary restart path. */
@@ -1097,6 +1098,7 @@ export class Supervisor {
     entry.lockedSession = resume;
     entry.cycle = "switch";
     delete entry.recoveryKind;
+    delete entry.musePersonaDeliveredId;
     // Apply the snapshot's engine-relevant privilege axes to entry.parsed
     // BEFORE the relaunch (D1/D2): snapshot is SSOT on a resume operation,
     // so the fresh wrapper enforces the last-effective sandbox / network /
@@ -1819,6 +1821,17 @@ export class Supervisor {
       if (record.candidate_id !== undefined) { target = record.candidate_id; kind = "candidate"; }
       else if (kind === "candidate") { target = undefined; kind = undefined; }
     }
+    if (entry.parsed.engine === "muse") {
+      const recordedId = record.state === "live" ? record.session_id
+        : record.state === "unbound" ? record.candidate_id : undefined;
+      if (recordedId !== undefined) {
+        if (record.muse_persona_delivered === true) entry.musePersonaDeliveredId = recordedId;
+        else delete entry.musePersonaDeliveredId;
+      }
+      if (target !== entry.musePersonaDeliveredId) delete entry.musePersonaDeliveredId;
+    } else {
+      delete entry.musePersonaDeliveredId;
+    }
     if (target !== entry.lockedSession && target !== undefined && this.#activeSessions.has(target)) {
       process.stderr.write(`runner: recovery session already owned for ${agentId}\n`);
       return false;
@@ -1847,7 +1860,10 @@ export class Supervisor {
       child = this.#launch(
         agentId,
         { ...this.#wrapperConfig(agentId, entry.parsed, entry.permissionCeiling),
-          ...(entry.recoveryKind === undefined ? {} : { recovery_resume_kind: entry.recoveryKind }) },
+          ...(entry.recoveryKind === undefined ? {} : { recovery_resume_kind: entry.recoveryKind }),
+          ...(entry.parsed.engine === "muse" && entry.musePersonaDeliveredId !== undefined &&
+            entry.musePersonaDeliveredId === entry.parsed.resumeSessionId
+            ? { muse_persona_delivered: true } : {}) },
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
         undefined,
@@ -1882,6 +1898,7 @@ export class Supervisor {
   #relaunchForReset(agentId: string, entry: ChildEntry): void {
     const pending = entry.pendingReset;
     if (pending === undefined) return;
+    delete entry.musePersonaDeliveredId;
     const refusal = this.#launchRefusal(agentId, entry.parsed);
     if (refusal !== null) {
       this.#rollback(agentId, entry, "spawn_failed");

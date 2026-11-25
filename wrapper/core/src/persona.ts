@@ -471,6 +471,8 @@ export function parseConfig(raw: unknown): WrapperConfig {
     if (raw.recovery_resume_kind !== "candidate") throw new ConfigError("invalid recovery_resume_kind");
     config.recovery_resume_kind = "candidate";
   }
+  if (raw.muse_persona_delivered === true)
+    config.muse_persona_delivered = true;
   if (raw.codex_tool_home !== undefined) {
     config.codex_tool_home = nonEmptyString(raw.codex_tool_home, "codex_tool_home");
   }

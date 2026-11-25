@@ -174,6 +174,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             JSON.stringify(text) + "\n",
           );
         }
+        if (process.env.MUSE_PROMPT_CRASH_MARKER) {
+          const { existsSync, writeFileSync } = await import("node:fs");
+          if (!existsSync(process.env.MUSE_PROMPT_CRASH_MARKER)) {
+            writeFileSync(process.env.MUSE_PROMPT_CRASH_MARKER, "received");
+            process.exit(1);
+          }
+        }
         if (process.env.KAOIRO_TEST_MUSE_FAIL_FIRST_PROMPT && promptCount === 1) {
           return fail(msg.id, "fixture first prompt failure");
         }
@@ -189,6 +196,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           break;
         }
         if (lastLine === "fail") return fail(msg.id, "fixture turn failure");
+        if (lastLine === "refuse") return finish(msg.id, "refused", "refusal");
         if (lastLine === "permission") {
           update({ sessionUpdate: "tool_call", toolCallId: "perm-tool", title: "write fixture",
             status: "in_progress", kind: "edit" });

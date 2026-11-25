@@ -87,14 +87,20 @@ the server-composed persona and footer at the head of a prompt under this
 contract:
 
 - **First turn of a fresh session:** the persona is prepended.
-- **Retry:** it stays pending until a prompt carrying it is accepted, so
-  a failed first prompt is retried with the persona still attached.
-- **Cold resume:** it is never prepended. A candidate resumed before its
-  first prompt has never received the persona or footer. An external Muse
-  session has no guarantee of a kaoiro persona; the dashboard selection can
-  differ from the native session history.
-- **Compaction:** it is not re-supplied after an agent-side compaction;
+- **Retry:** it stays pending until a prompt carrying it ends with `end_turn`;
+  a failed, refused or interrupted turn is retried with the persona attached.
+- **Resume:** the persona is prepended unless the runner has a checkpoint
+  confirming it was delivered to that session. An external session or an
+  older checkpoint has no such confirmation, so the first new prompt carries it.
+- **Compaction:** the persona is not re-supplied after agent-side compaction;
   retention after compaction has not been measured.
+
+A persona-bearing prompt is recorded as delivered only after `end_turn`.
+A crash after native receipt but before the checkpoint write can cause a
+repeat. Runner restart or offline restore also loses the per-child checkpoint;
+the next new prompt carries the current persona again. The original user
+prompt is not replayed. A checkpoint records delivery of the persona at that
+time; it does not track later changes to the server-composed text.
 
 This is provisional: the text is visible in the session transcript.
 Replacing this with a native injection point is the first follow-up when

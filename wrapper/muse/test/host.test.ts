@@ -85,7 +85,7 @@ describe("muse host", () => {
     }
   });
 
-  it("does not prepend the persona on a resumed session", async () => {
+  it("prepends the persona on a resumed session without delivery evidence", async () => {
     const promptsFile = join(tmpdir(), `kaoiro-muse-prompts-resume-${process.pid}.jsonl`);
     rmSync(promptsFile, { force: true });
     process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE = promptsFile;
@@ -94,7 +94,8 @@ describe("muse host", () => {
       await host.send("hello");
       const prompts = readFileSync(promptsFile, "utf8").trim().split("\n")
         .map((line) => JSON.parse(line) as string);
-      expect(prompts).toEqual(["hello"]);
+      expect(prompts[0]).toContain("PERSONA_AND_FOOTER");
+      expect(prompts[0]).toContain("hello");
     } finally {
       delete process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE;
       rmSync(promptsFile, { force: true });
@@ -120,6 +121,23 @@ describe("muse host", () => {
       delete process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE;
       delete process.env.KAOIRO_TEST_MUSE_FAIL_FIRST_PROMPT;
       rmSync(promptsFile, { force: true });
+    }
+  });
+
+  it("keeps persona pending after a refusal", async () => {
+    const path = join(tmpdir(), `kaoiro-muse-refusal-${process.pid}.jsonl`);
+    rmSync(path, { force: true });
+    try {
+      const { host } = await started({ env: { ...process.env,
+        KAOIRO_TEST_MUSE_PROMPTS_FILE: path } });
+      await host.send("refuse");
+      await host.send("next");
+      const inputs = readFileSync(path, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line));
+      expect(inputs[0]).toContain("PERSONA_AND_FOOTER");
+      expect(inputs[1]).toContain("PERSONA_AND_FOOTER");
+    } finally {
+      rmSync(path, { force: true });
     }
   });
 
@@ -554,6 +572,44 @@ describe("muse host", () => {
     }
   });
 
+  it("records persona after a resumed first turn and omits it on the next resume", async () => {
+    const checkpoint = join(tmpdir(), `kaoiro-muse-persona-${process.pid}.json`);
+    const prompts = join(tmpdir(), `kaoiro-muse-persona-${process.pid}.jsonl`);
+    rmSync(checkpoint, { force: true });
+    rmSync(prompts, { force: true });
+    const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+    try {
+      const cfg = { ...config, recovery_checkpoint_path: checkpoint };
+      const env = { ...process.env, KAOIRO_TEST_MUSE_PROMPTS_FILE: prompts };
+      const first = await started({ config: cfg, env,
+        recovery: new RecoveryReporter(cfg, undefined, () => {}, true) });
+      expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toMatchObject({
+        state: "unbound", candidate_id: "fixture-session", muse_persona_delivered: false,
+      });
+      first.host.close();
+      await first.host.closed;
+      const candidate = { ...cfg, recovery_resume_kind: "candidate" as const };
+      const second = await started({ config: candidate, env, resumeSessionId: "fixture-session",
+        recovery: new RecoveryReporter(candidate, "fixture-session", () => {}, true) });
+      await second.host.send("first");
+      expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toMatchObject({
+        state: "live", session_id: "fixture-session", muse_persona_delivered: true,
+      });
+      second.host.close();
+      await second.host.closed;
+      const confirmed = { ...cfg, muse_persona_delivered: true };
+      const third = await started({ config: confirmed, env, resumeSessionId: "fixture-session",
+        recovery: new RecoveryReporter(confirmed, "fixture-session", () => {}, true) });
+      await third.host.send("second");
+      const inputs = readFileSync(prompts, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(inputs[0]).toContain("PERSONA_AND_FOOTER");
+      expect(inputs[1]).toBe("second");
+    } finally {
+      rmSync(checkpoint, { force: true });
+      rmSync(prompts, { force: true });
+    }
+  });
+
   it("fails a turn the agent rejects and keeps the host usable", async () => {
     const { host, envelopes } = await started();
     await expect(host.send("fail")).rejects.toThrow();
@@ -586,15 +642,25 @@ describe("muse host", () => {
   });
 
   it("interrupts a running turn with session/cancel", async () => {
-    const { host, envelopes } = await started();
-    const turn = host.send("sleep");
-    await vi.waitFor(() => expect(host.state).toBe("tool_running"), {
-      timeout: 5_000,
-    });
-    await host.interrupt();
-    await turn;
-    expect(envelopes.find((e) => e.type === "result")?.ext)
-      .toMatchObject({ interrupted: true, stop_reason: "cancelled" });
+    const path = join(tmpdir(), `kaoiro-muse-cancel-${process.pid}.jsonl`);
+    rmSync(path, { force: true });
+    const { host, envelopes } = await started({ env: { ...process.env,
+      KAOIRO_TEST_MUSE_PROMPTS_FILE: path } });
+    try {
+      const turn = host.send("sleep");
+      await vi.waitFor(() => expect(host.state).toBe("tool_running"), {
+        timeout: 5_000,
+      });
+      await host.interrupt();
+      await turn;
+      expect(envelopes.find((e) => e.type === "result")?.ext)
+        .toMatchObject({ interrupted: true, stop_reason: "cancelled" });
+      await host.send("next");
+      const inputs = readFileSync(path, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line));
+      expect(inputs[0]).toContain("PERSONA_AND_FOOTER");
+      expect(inputs[1]).toContain("PERSONA_AND_FOOTER");
+    } finally { rmSync(path, { force: true }); }
   });
 
   it("switches the model and effort through the session config options", async () => {

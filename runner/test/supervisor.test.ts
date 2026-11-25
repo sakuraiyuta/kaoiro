@@ -3475,6 +3475,103 @@ describe("Codex launch gate on an unusable CODEX_HOME", () => {
 describe("Supervisor launch-owned recovery", () => {
   const live = (session_id: string) => ({ ok: true as const, record: { version: 1 as const, state: "live" as const, session_id } });
   const unbound = (candidate_id?: string) => ({ ok: true as const, record: { version: 1 as const, state: "unbound" as const, ...(candidate_id ? { candidate_id } : {}) } });
+  it("passes Muse persona evidence only for the recorded recovery ID", () => {
+    const h = harness();
+    h.sup.handleSpawn({ ...spawnMsg, engine: "muse" });
+    Object.assign(h.children[0]!, { recovery: { ok: true, record: {
+      version: 1, state: "live", session_id: "session-a", muse_persona_delivered: true,
+    } } });
+    h.children[0]!.exit();
+    expect(h.resumes[1]).toBe("session-a");
+    expect(h.configs[1]!.muse_persona_delivered).toBe(true);
+    Object.assign(h.children[1]!, { recovery: { ok: true, record: {
+      version: 1, state: "initial",
+    } } });
+    h.children[1]!.exit();
+    expect(h.configs[2]!.muse_persona_delivered).toBe(true);
+    Object.assign(h.children[2]!, { recovery: { ok: true, record: {
+      version: 1, state: "live", session_id: "session-a",
+    } } });
+    h.children[2]!.exit();
+    expect(h.configs[3]!.muse_persona_delivered).toBeUndefined();
+  });
+
+  it.each([false, "true", 1, null, undefined])(
+    "treats non-true Muse persona evidence as unknown: %j", (value) => {
+      const h = harness();
+      h.sup.handleSpawn({ ...spawnMsg, engine: "muse" });
+      Object.assign(h.children[0]!, { recovery: { ok: true, record: {
+        version: 1, state: "live", session_id: "session-a",
+        ...(value === undefined ? {} : { muse_persona_delivered: value }),
+      } } });
+      h.children[0]!.exit();
+      expect(h.resumes[1]).toBe("session-a");
+      expect(h.configs[1]!.muse_persona_delivered).toBeUndefined();
+    },
+  );
+
+  it("does not reuse Muse persona evidence after an explicit same-session switch", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({ ...spawnMsg, engine: "muse" });
+    Object.assign(h.children[0]!, { recovery: { ok: true, record: {
+      version: 1, state: "live", session_id: "session-a", muse_persona_delivered: true,
+    } } });
+    h.children[0]!.exit();
+    expect(h.configs[1]!.muse_persona_delivered).toBe(true);
+    h.sup.handleSwitchSession({ agent_id: spawnMsg.agent_id, resume_session_id: "session-a" });
+    h.children[1]!.exit();
+    expect(h.configs[2]!.muse_persona_delivered).toBeUndefined();
+    Object.assign(h.children[2]!, { recovery: { ok: true, record: {
+      version: 1, state: "initial",
+    } } });
+    h.children[2]!.exit();
+    expect(h.configs[3]!.muse_persona_delivered).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "clears Muse persona evidence on reset and rollback: rollback=%s", (rollback) => {
+      const h = harness({ exists: true, ...(rollback && { launchThrowsOnCall: 3 }) });
+      h.sup.handleSpawn({ ...spawnMsg, engine: "muse" });
+      Object.assign(h.children[0]!, { recovery: { ok: true, record: {
+        version: 1, state: "live", session_id: "session-a", muse_persona_delivered: true,
+      } } });
+      h.children[0]!.exit();
+      expect(h.configs[1]!.muse_persona_delivered).toBe(true);
+      h.sup.handleResetSession({ agent_id: spawnMsg.agent_id, mode: "new",
+        request_id: "reset-persona", previous_session_id: "session-a" });
+      h.children[1]!.exit();
+      expect(h.resumes[2]).toBe(rollback ? "session-a" : undefined);
+      expect(h.configs[2]!.muse_persona_delivered).toBeUndefined();
+      Object.assign(h.children[2]!, { recovery: { ok: true, record: {
+        version: 1, state: "initial",
+      } } });
+      h.children[2]!.exit();
+      expect(h.configs[3]!.muse_persona_delivered).toBeUndefined();
+    },
+  );
+
+  it("does not accept an ID-less record as Muse persona evidence", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({ ...spawnMsg, engine: "muse", resume_session_id: "session-a" });
+    Object.assign(h.children[0]!, { recovery: { ok: true, record: {
+      version: 1, state: "initial", muse_persona_delivered: true,
+    } } });
+    h.children[0]!.exit();
+    expect(h.resumes[1]).toBe("session-a");
+    expect(h.configs[1]!.muse_persona_delivered).toBeUndefined();
+  });
+
+  it("ignores Muse persona evidence on another engine", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    Object.assign(h.children[0]!, { recovery: { ok: true, record: {
+      version: 1, state: "live", session_id: "session-a", muse_persona_delivered: true,
+    } } });
+    h.children[0]!.exit();
+    expect(h.resumes[1]).toBe("session-a");
+    expect(h.configs[1]!.muse_persona_delivered).toBeUndefined();
+  });
+
   it("resumes a first-turn candidate, then permits fresh only after candidate clear", () => {
     const h = harness(); h.sup.handleSpawn({ ...spawnMsg, initial_prompt: "once" });
     Object.assign(h.children[0]!, { recovery: unbound("first-turn") }); h.children[0]!.exit();
