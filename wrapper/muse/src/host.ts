@@ -195,7 +195,7 @@ export class MuseHost implements EngineAdapter {
         : [{ value: "default", display_name: "Account default" }],
       ...(selection.model
         ? { model: selection.model, model_source: this.#modelSource }
-        : { model: "default", model_source: "default" }),
+        : {}),
       ...(selection.effort
         ? { effort: selection.effort, effort_source: this.#effortSource }
         : {}),
@@ -439,7 +439,7 @@ export class MuseHost implements EngineAdapter {
       }
     }
     this.#sessionId = session.sessionId;
-    this.#adoptSelection(session.configOptions);
+    this.#adoptSelection(parseSelection(session.configOptions));
     this.#modeConfig = this.#readModeConfig(session.configOptions);
     this.#modes = parseModes(modes);
     await this.#applyDefaultMode(check);
@@ -491,12 +491,13 @@ export class MuseHost implements EngineAdapter {
     return false;
   }
 
-  #adoptSelection(configOptions: acp.SessionConfigOption[] | undefined) {
-    const next = parseSelection(configOptions);
-    // An empty reading never shrinks a known catalog.
-    if (next.models.length > 0 || this.#selection.models.length === 0) {
-      this.#selection = next;
-    }
+  #adoptSelection(next: MuseSelection) {
+    this.#selection = {
+      ...next,
+      models: next.modelConfigId === undefined ? this.#selection.models : next.models,
+      effortLevels: next.effortConfigId === undefined
+        ? this.#selection.effortLevels : next.effortLevels,
+    };
   }
 
   #fail(error: Error) {
@@ -680,14 +681,13 @@ export class MuseHost implements EngineAdapter {
   #update(notification: acp.SessionNotification) {
     if (this.#closing || notification.sessionId !== this.#sessionId) return;
     if (notification.update.sessionUpdate === "config_option_update") {
-      // The notified options are the applied values; re-reading the
-      // session's stored copy instead could report a switch that the
-      // agent did not take.
-      const before = `${this.#selection.model}/${this.#selection.effort}`;
       if (!this.#checkModeConfig(notification.update.configOptions)) return;
-      this.#adoptSelection(notification.update.configOptions);
-      const after = `${this.#selection.model}/${this.#selection.effort}`;
-      if (before !== after) this.#state(this.state);
+      const selection = parseSelection(notification.update.configOptions);
+      if (selection.model !== this.#selection.model ||
+        selection.effort !== this.#selection.effort) {
+        try { process.stderr.write("[kaoiro] muse config notification differs from response\n"); }
+        catch { /* diagnostic output must not affect the session */ }
+      }
       return;
     }
     if (notification.update.sessionUpdate === "current_mode_update") {
@@ -821,16 +821,13 @@ export class MuseHost implements EngineAdapter {
     });
   }
 
-  /** Applies one switch. The job leaves the queue only here, the source
-   *  metadata is written only on success, and a rejection publishes
-   *  switch_error with the value still in effect. */
+  /** Applies one switch and reports the last response values. */
   async #applySwitch(job: SwitchJob): Promise<void> {
     const { axis, value } = job;
     const configId = axis === "model"
       ? this.#selection.modelConfigId
       : this.#selection.effortConfigId;
     const current = axis === "model" ? this.#selection.model : this.#selection.effort;
-    const previous = { model: this.#selection.model, effort: this.#selection.effort };
     if (configId === undefined) {
       job.reject(new Error(`muse ${axis} switching is unavailable`));
       return;
@@ -840,7 +837,7 @@ export class MuseHost implements EngineAdapter {
       this.#state(this.state);
       return;
     }
-    let confirmedRejection = false;
+    let returned: string | undefined;
     try {
       let timer: ReturnType<typeof setTimeout> | undefined;
       let response: Awaited<ReturnType<AcpSession["setConfigOption"]>>;
@@ -864,22 +861,15 @@ export class MuseHost implements EngineAdapter {
         throw new Error("muse approval mode changed unexpectedly");
       }
       const selection = parseSelection(response.configOptions);
-      const applied = axis === "model" ? selection.model : selection.effort;
-      if (applied !== value) {
-        confirmedRejection = previous.model !== undefined && previous.effort !== undefined &&
-          selection.model === previous.model && selection.effort === previous.effort &&
-          this.#selection.model === previous.model && this.#selection.effort === previous.effort;
+      this.#adoptSelection(selection);
+      returned = axis === "model" ? selection.model : selection.effort;
+      if (returned !== value) {
         throw new Error("muse switch not applied");
       }
-      this.#adoptSelection(response.configOptions);
       if (axis === "model") this.#context = undefined;
       job.resolve();
       this.#state(this.state);
     } catch {
-      if (!this.#closing && !confirmedRejection) {
-        this.#state("error");
-        this.#fail(new Error("muse config switch outcome uncertain"));
-      }
       if (this.#closing) {
         job.reject(new Error(`muse ${axis} switching stopped`));
         return;
@@ -888,7 +878,7 @@ export class MuseHost implements EngineAdapter {
         kind: axis,
         requested: value,
         reason: "control_rejected",
-        ...(current ? { rolled_back_to: current } : {}),
+        ...(returned !== undefined ? { rolled_back_to: returned } : {}),
       };
       this.#state(this.state);
       job.reject(new Error(`muse ${axis} switching rejected`));
@@ -901,7 +891,6 @@ export class MuseHost implements EngineAdapter {
         kind: "model",
         requested: value,
         reason: "control_rejected",
-        ...(this.#selection.model ? { rolled_back_to: this.#selection.model } : {}),
       };
       this.#state(this.state);
       throw new Error("muse model switching rejected");
@@ -915,7 +904,6 @@ export class MuseHost implements EngineAdapter {
         kind: "effort",
         requested: level,
         reason: "control_rejected",
-        ...(this.#selection.effort ? { rolled_back_to: this.#selection.effort } : {}),
       };
       this.#state(this.state);
       throw new Error("muse effort switching rejected");

@@ -128,10 +128,11 @@ model and effort switching are supported when the session's config options
 offer a `model` and a `thought_level` select: switches are serialized
 with prompts in one work queue, values are validated against the session's
 options, and the source metadata is written only for an applied switch.
-A rejected switch continues the queue and reports `switch_error` only if
-both model and effort are confirmed unchanged; an uncertain or conflicting
-result stops the host for revalidation. Cold
-resume is supported when the agent advertises `sessionCapabilities.resume`.
+Reported model and effort values come from the last correlated session or
+switch response; they are not a claim about the agent's effective values.
+Unsolicited changes are not reflected in these reported values. A rejected
+switch reports `switch_error` and the queue continues. Cold resume is
+supported when the agent advertises `sessionCapabilities.resume`.
 
 Declared unsupported, each rejected explicitly rather than silently:
 

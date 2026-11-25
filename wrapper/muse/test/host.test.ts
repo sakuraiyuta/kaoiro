@@ -757,6 +757,54 @@ describe("muse host", () => {
     await expect(host.setEffort("no-such-effort")).rejects.toThrow();
   });
 
+  it("reports an effort response without a model selector", async () => {
+    const { host } = await started({ env: { ...process.env,
+      KAOIRO_TEST_SWITCH_PARTIAL: "response" } });
+    const switching = host.setEffort("low");
+    const prompt = host.send("after switch");
+    await expect(switching).resolves.toBeUndefined();
+    await expect(prompt).resolves.toBeUndefined();
+    expect(host.statusExtSnapshot().effort).toBe("low");
+    expect(host.statusExtSnapshot().model).toBeUndefined();
+  });
+
+  it("ignores a conflicting notification after a response", async () => {
+    const diagnostic = vi.spyOn(process.stderr, "write");
+    const { host } = await started({ env: { ...process.env,
+      KAOIRO_TEST_CONFLICT_NOTICE: "1" } });
+    const first = host.setModel("muse-wonder");
+    const second = host.setEffort("low");
+    const prompt = host.send("after both switches");
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+    await expect(prompt).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(diagnostic.mock.calls.some(([text]) =>
+      String(text).includes("config notification differs"))).toBe(true));
+    expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-wonder", effort: "low" });
+  });
+
+  it("ignores the previous switch notification during the next switch", async () => {
+    const diagnostic = vi.spyOn(process.stderr, "write");
+    const { host } = await started({ env: { ...process.env,
+      KAOIRO_TEST_DELAYED_SELECTION: "1" } });
+    const first = host.setModel("muse-wonder");
+    const second = host.setEffort("low");
+    const prompt = host.send("after both switches");
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+    await expect(prompt).resolves.toBeUndefined();
+    expect(diagnostic.mock.calls.some(([text]) =>
+      String(text).includes("config notification differs"))).toBe(true);
+    expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-wonder", effort: "low" });
+  });
+
+  it("ignores an unsolicited selection update", async () => {
+    const { host } = await started();
+    await host.send("partial-update");
+    expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-spark-1.3", effort: "high" });
+    await expect(host.send("next")).resolves.toBeUndefined();
+  });
+
   it.each(["KAOIRO_TEST_HANG_SWITCH", "KAOIRO_TEST_DELAY_SWITCH"])(
     "stops and rejects a queued prompt on switch timeout: %s", async (key) => {
       const { host, run } = await started({ switchTimeoutMs: 100,
@@ -770,38 +818,14 @@ describe("muse host", () => {
     },
   );
 
-  it.each(["KAOIRO_TEST_SWITCH_UNSAFE_MODE", "KAOIRO_TEST_SWITCH_OTHER",
-    "KAOIRO_TEST_SWITCH_RPC_REJECT"])(
-    "stops a switch and queued prompt on uncertain response: %s", async (key) => {
-      const { host, run } = await started({ env: { ...process.env, [key]: "1" } });
-      const switching = host.setModel("muse-wonder");
-      const prompt = expect(host.send("must not run")).rejects.toThrow();
-      await expect(switching).rejects.toThrow();
-      await prompt;
-      await expect(run).rejects.toThrow();
-      expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
-    },
-  );
-
-  it("continues queued prompts when the response confirms the old value", async () => {
-    const { host } = await started({ env: { ...process.env,
-      KAOIRO_TEST_SWITCH_UNCHANGED: "1" } });
-    const switching = host.setModel("muse-wonder");
-    const prompt = host.send("after rejection");
-    await expect(switching).rejects.toThrow(/rejected/);
-    await expect(prompt).resolves.toBeUndefined();
-    expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
-  });
-
-  it.each(["model", "effort"] as const)(
-    "stops a rejected %s switch when the other axis changed", async (axis) => {
-      const path = join(tmpdir(), `muse-switch-pair-${axis}-${process.pid}.jsonl`);
+  it.each(["KAOIRO_TEST_SWITCH_UNSAFE_MODE", "KAOIRO_TEST_SWITCH_UNSAFE_NOTICE"])(
+    "stops a queued prompt for an unsafe mode: %s", async (key) => {
+      const path = join(tmpdir(), `muse-unsafe-switch-${key}-${process.pid}.jsonl`);
       rmSync(path, { force: true });
       try {
         const { host, run } = await started({ env: { ...process.env,
-          KAOIRO_TEST_SWITCH_OTHER_AXIS: "1", KAOIRO_TEST_MUSE_PROMPTS_FILE: path } });
-        const switching = axis === "model"
-          ? host.setModel("muse-wonder") : host.setEffort("low");
+          [key]: "1", KAOIRO_TEST_MUSE_PROMPTS_FILE: path } });
+        const switching = host.setModel("muse-wonder");
         const prompt = expect(host.send("must not run")).rejects.toThrow();
         await expect(switching).rejects.toThrow();
         await prompt;
@@ -811,54 +835,26 @@ describe("muse host", () => {
     },
   );
 
-  it.each(["model", "effort"] as const)(
-    "stops a rejected %s switch when the other axis is missing", async (axis) => {
-      const { host, run } = await started({ env: { ...process.env,
-        KAOIRO_TEST_SWITCH_MISSING_AXIS: "1" } });
-      const switching = axis === "model"
-        ? host.setModel("muse-wonder") : host.setEffort("low");
-      const prompt = expect(host.send("must not run")).rejects.toThrow();
-      await expect(switching).rejects.toThrow();
-      await prompt;
-      await expect(run).rejects.toThrow();
-    },
-  );
-
-  it.each(["model", "effort"] as const)(
-    "stops a rejected %s switch after another-axis notification", async (axis) => {
-      const { host, run } = await started({ env: { ...process.env,
-        KAOIRO_TEST_SWITCH_OTHER_AXIS_NOTICE: "1" } });
-      const switching = axis === "model"
-        ? host.setModel("muse-wonder") : host.setEffort("low");
-      const prompt = expect(host.send("must not run")).rejects.toThrow();
-      await expect(switching).rejects.toThrow();
-      await prompt;
-      await expect(run).rejects.toThrow();
-    },
-  );
-
-  it.each(["model", "effort"] as const)(
-    "stops a rejected %s switch when the previous other axis is unknown", async (axis) => {
-      const missing = axis === "model" ? "thought_level" : "model";
-      const { host, run } = await started({ env: { ...process.env,
-        KAOIRO_TEST_START_MISSING_AXIS: missing, KAOIRO_TEST_SWITCH_UNCHANGED: "1" } });
-      const switching = axis === "model"
-        ? host.setModel("muse-wonder") : host.setEffort("low");
-      const prompt = expect(host.send("must not run")).rejects.toThrow();
-      await expect(switching).rejects.toThrow();
-      await prompt;
-      await expect(run).rejects.toThrow();
-    },
-  );
-
-  it("stops when a conflicting notification precedes an old-value response", async () => {
-    const { host, run } = await started({ env: { ...process.env,
-      KAOIRO_TEST_SWITCH_CONFLICTING_NOTICE: "1" } });
+  it.each([
+    ["KAOIRO_TEST_SWITCH_UNCHANGED", "muse-spark-1.3"],
+    ["KAOIRO_TEST_SWITCH_OTHER", "third-model"],
+    ["KAOIRO_TEST_SWITCH_MISSING_REQUESTED", undefined],
+    ["KAOIRO_TEST_SWITCH_RPC_REJECT", undefined],
+  ])("reports one rejection using only the response: %s", async (key, returned) => {
+    const { host, envelopes } = await started({ env: { ...process.env, [key]: "1" } });
     const switching = host.setModel("muse-wonder");
-    const prompt = expect(host.send("must not run")).rejects.toThrow();
-    await expect(switching).rejects.toThrow();
-    await prompt;
-    await expect(run).rejects.toThrow();
+    const prompt = host.send("after rejection");
+    await expect(switching).rejects.toThrow(/rejected/);
+    await expect(prompt).resolves.toBeUndefined();
+    const errors = envelopes.map((e) => e.ext?.switch_error).filter(Boolean);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ kind: "model", requested: "muse-wonder" });
+    expect((errors[0] as { rolled_back_to?: string }).rolled_back_to).toBe(returned);
+    if (key === "KAOIRO_TEST_SWITCH_MISSING_REQUESTED") {
+      expect(host.statusExtSnapshot().model).toBeUndefined();
+    } else if (returned) {
+      expect(host.statusExtSnapshot().model).toBe(returned);
+    }
   });
 
   it("rejects permission-mode and permission switching explicitly", async () => {

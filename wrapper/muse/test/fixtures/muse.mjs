@@ -59,6 +59,7 @@ let sleepingPrompt;
 let mcpClient;
 let connecting = Promise.resolve();
 let deferredServers;
+let delayedSelection;
 
 async function connectMcp(servers) {
   if (process.env.KAOIRO_TEST_MUSE_NO_MCP) return;
@@ -148,6 +149,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (process.env.KAOIRO_TEST_SWITCH_UNCHANGED) {
           return reply(msg.id, { configOptions: configOptions() });
         }
+        if (process.env.KAOIRO_TEST_SWITCH_PARTIAL_NOTICE_REJECT) {
+          update({ sessionUpdate: "config_option_update",
+            configOptions: configOptions().filter(option => option.category !== "model") });
+          return reply(msg.id, { configOptions: configOptions() });
+        }
         if (process.env.KAOIRO_TEST_SWITCH_OTHER_AXIS) {
           if (msg.params.configId === "model") effort = "low";
           else model = "muse-wonder";
@@ -167,6 +173,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             configOptions: configOptions().filter(option => option.category !== missing),
           });
         }
+        if (process.env.KAOIRO_TEST_SWITCH_MISSING_REQUESTED) {
+          const missing = msg.params.configId === "model" ? "model" : "thought_level";
+          return reply(msg.id, {
+            configOptions: configOptions().filter(option => option.category !== missing),
+          });
+        }
         if (process.env.KAOIRO_TEST_SWITCH_CONFLICTING_NOTICE) {
           const old = model;
           model = "third-model";
@@ -182,6 +194,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
         const { configId, value } = msg.params;
+        const beforeSwitch = configOptions();
         if (configId === "model" && MODELS.some((m) => m.value === value)) model = value;
         else if (configId === "effort" && EFFORTS.some((e) => e.value === value)) effort = value;
         else {
@@ -197,8 +210,38 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             })),
           }] });
         }
-        reply(msg.id, { configOptions: configOptions() });
-        update({ sessionUpdate: "config_option_update", configOptions: configOptions() });
+        if (process.env.KAOIRO_TEST_SWITCH_UNSAFE_NOTICE) {
+          update({ sessionUpdate: "config_option_update", configOptions: [
+            ...configOptions(), { id: "mode", name: "Mode", category: "mode",
+              type: "select", currentValue: "denyUnmatched", options: MODES.map(m => ({
+                value: m.id, name: m.name,
+              })) },
+          ] });
+          return reply(msg.id, { configOptions: configOptions() });
+        }
+        if (process.env.KAOIRO_TEST_DELAYED_SELECTION) {
+          if (delayedSelection) {
+            update({ sessionUpdate: "config_option_update", configOptions: delayedSelection });
+          }
+          delayedSelection = beforeSwitch;
+          return reply(msg.id, { configOptions: configOptions() });
+        }
+        const partial = configOptions().filter(option => option.category !== "model");
+        const partialMode = process.env.KAOIRO_TEST_SWITCH_PARTIAL;
+        const responseOptions = ["response", "response-with-notice", "both"]
+          .includes(partialMode) ? partial : configOptions();
+        const noticeOptions = ["notice", "both"].includes(partialMode)
+          ? partial : configOptions();
+        const sendNotice = () => update({ sessionUpdate: "config_option_update",
+          configOptions: process.env.KAOIRO_TEST_CONFLICT_NOTICE
+            ? noticeOptions.map(option => option.category === "thought_level"
+              ? { ...option, currentValue: "high" } : option) : noticeOptions });
+        if (partialMode !== "response" && process.env.KAOIRO_TEST_NOTICE_FIRST) sendNotice();
+        reply(msg.id, { configOptions: responseOptions });
+        if (partialMode !== "response" && !process.env.KAOIRO_TEST_NOTICE_FIRST) {
+          if (process.env.KAOIRO_TEST_CONFLICT_NOTICE) setTimeout(sendNotice, 20);
+          else sendNotice();
+        }
         break;
       }
       case "session/prompt": {
@@ -227,6 +270,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           return fail(msg.id, "fixture first prompt failure");
         }
         const lastLine = text.split("\n").pop();
+        if (lastLine === "partial-update") {
+          effort = "low";
+          update({ sessionUpdate: "config_option_update",
+            configOptions: configOptions().filter(option => option.category !== "model") });
+          return finish(msg.id, "updated");
+        }
         if (lastLine === "unsafe-mode") {
           update({ sessionUpdate: "current_mode_update", currentModeId: "allow-all" });
           return;
