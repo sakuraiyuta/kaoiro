@@ -19,6 +19,7 @@ HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); 
 
 const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
+  sendInterrupt: vi.fn(),
   reconnect: (() => {}) as () => void,
   moveAgent: (async () => ({ closedCount: 0, movedCount: 1 })) as () => Promise<unknown>,
 }));
@@ -34,7 +35,7 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         reconnect: () => captured.reconnect(),
         notifyOnline: () => {},
         sendInstruction: () => {},
-        sendInterrupt: () => {},
+        sendInterrupt: captured.sendInterrupt,
         stop: async () => {},
         restore: async () => {},
         deleteAgent: async () => {},
@@ -104,6 +105,7 @@ const button = (label: string) =>
 
 beforeEach(() => {
   captured.handlers = null;
+  captured.sendInterrupt.mockClear();
   captured.reconnect = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
     if (String(input).includes("/session/ticket")) return { ok: true, status: 200, json: async () => ({ ticket: "t-1" }) };
@@ -192,6 +194,7 @@ describe("grid room folding", () => {
     expect(tile("Bravo").hidden).toBe(true);
     expect(tile("Bravo").inert).toBe(true);
     expect(tile("Alpha").hidden).toBe(false);
+    expect(captured.sendInterrupt).not.toHaveBeenCalled();
     expect(toggle("r1").getAttribute("aria-expanded")).toBe("false");
     document.querySelector<HTMLButtonElement>("button[aria-label='Alpha の詳細を開く']")!.click();
     await tick();
@@ -215,10 +218,11 @@ describe("grid room folding", () => {
     const h = await mountApp("operator");
     h.onSnapshot({ "h.a": envelope("h.a", "Alpha"),
       "h.b": { ...envelope("h.b", "Bravo"), state: "waiting_question" },
-      "h.c": { ...envelope("h.c", "Offline"), state: "disconnected" } });
-    h.onRoomsSnapshot?.(snapshot({ ...RAW, memberships: { ...RAW.memberships, "h.c": "r1" } }));
+      "h.c": { ...envelope("h.c", "Offline"), state: "disconnected" },
+      "h.d": { ...envelope("h.d", "Delta"), state: "error" } });
+    h.onRoomsSnapshot?.(snapshot({ ...RAW, memberships: { ...RAW.memberships, "h.c": "r1", "h.d": "r1" } }));
     await tick(); toggle("r1").click(); toggle("r2").click(); await tick();
-    expect(header("r1").querySelector(".count")?.textContent).toContain("1");
+    expect(header("r1").querySelector(".count")?.textContent).toContain("2");
     expect(header("r1").querySelector(".state-lamp")?.getAttribute("data-state")).toBe("waiting_question");
     expect(header("r2").querySelector(".state-lamp")?.getAttribute("data-state")).toBe("idle");
   });
