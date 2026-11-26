@@ -26,6 +26,7 @@
   import RoomSeparator from "./lib/RoomSeparator.svelte";
   import AgentStripRoom from "./lib/AgentStripRoom.svelte";
   import { roomLamp } from "./lib/agentStripRooms";
+  import { loadRoomFold, saveRoomFold } from "./lib/roomFold";
   import Modal from "./lib/Modal.svelte";
   import { executeBulkCleanup } from "./lib/bulkCleanup";
   import { copyRoomView, roomCleanupTargets, sameRoomSnapshot, sameRoomTargets, type RoomCleanupTargets } from "./lib/roomCleanup";
@@ -716,6 +717,28 @@
   // offline section lists only rooms that hold a tile.
   const liveGroups = $derived(rooms.group(sorted, (envelope) => envelope.agent_id, true));
   const offlineGroups = $derived(rooms.group(offlineEntries, (tile) => tile.id, false));
+
+  let foldedGridRooms = $state(new Set(loadRoomFold()));
+  $effect(() => {
+    const view = rooms.view;
+    if (view.kind !== "loaded") return;
+    untrack(() => {
+      const valid = new Set(view.rooms.map((room) => `room:${room.id}`));
+      const next = new Set([...foldedGridRooms].filter(
+        (key) => !key.startsWith("room:") || valid.has(key),
+      ));
+      if (next.size !== foldedGridRooms.size) {
+        foldedGridRooms = next;
+        saveRoomFold([...next]);
+      }
+    });
+  });
+  function toggleGridRoom(key: string): void {
+    const next = new Set(foldedGridRooms);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    foldedGridRooms = next;
+    saveRoomFold([...next]);
+  }
 
   const stripGroups = $derived(liveGroups.filter((group) => group.items.length > 0));
   const selectedStripKey = $derived.by(() => {
@@ -2460,6 +2483,9 @@
               <RoomSeparator
                 {room}
                 count={group.items.length}
+                open={!foldedGridRooms.has(group.key)}
+                lamp={roomLamp(group.items)}
+                onToggle={() => toggleGridRoom(group.key)}
                 reorder={room !== "unknown" && rooms.view.kind === "loaded"
                   ? {
                       up: rooms.canMoveRoom(room.id, -1) ? () => rooms.moveRoom(room.id, -1) : null,
@@ -2479,7 +2505,9 @@
               />
             {/if}
             {#each group.items as envelope, index (envelope.agent_id)}
-              <li style:--stagger="{index * 60}ms">
+              <li style:--stagger="{index * 60}ms"
+                hidden={group.room !== null && foldedGridRooms.has(group.key)}
+                inert={group.room !== null && foldedGridRooms.has(group.key)}>
                 <AgentCard
                   {envelope}
                   {manifest}

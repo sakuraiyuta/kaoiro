@@ -10,6 +10,7 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLocale } from "../src/lib/i18n/index.svelte";
 import type { Envelope, KaoiroHandlers } from "../src/lib/protocol";
+import { ROOM_FOLD_STORAGE_KEY } from "../src/lib/roomFold";
 import { ROOM_ORDER_STORAGE_KEY } from "../src/lib/roomOrder";
 import { parseRoomsSnapshot } from "../src/lib/rooms";
 
@@ -119,6 +120,7 @@ afterEach(async () => {
   component = null;
   document.body.innerHTML = "";
   localStorage.removeItem(ROOM_ORDER_STORAGE_KEY);
+  localStorage.removeItem(ROOM_FOLD_STORAGE_KEY);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -169,6 +171,89 @@ describe("the grid", () => {
     await tick();
 
     expect(kinds()).toEqual(["card:h.a", "card:h.b"]);
+  });
+});
+
+describe("grid room folding", () => {
+  const header = (id: string) => document.querySelector<HTMLElement>(
+    `.live-dashboard .room-header[data-room="${id}"]`,
+  )!;
+  const toggle = (id: string) => header(id).querySelector<HTMLButtonElement>(
+    ".grid-room-toggle",
+  )!;
+  const tile = (name: string) => document.querySelector<HTMLButtonElement>(
+    `button[aria-label="${name} の詳細を開く"]`,
+  )!.closest("li")!;
+
+  it("folds only the chosen room for a viewer and preserves navigation", async () => {
+    await mountApp("viewer");
+    expect(toggle("r1").getAttribute("aria-expanded")).toBe("true");
+    toggle("r1").click(); await tick();
+    expect(tile("Bravo").hidden).toBe(true);
+    expect(tile("Bravo").inert).toBe(true);
+    expect(tile("Alpha").hidden).toBe(false);
+    expect(toggle("r1").getAttribute("aria-expanded")).toBe("false");
+    document.querySelector<HTMLButtonElement>("button[aria-label='Alpha の詳細を開く']")!.click();
+    await tick();
+    expect(document.querySelector("button[aria-label='次のエージェント Bravo へ']")).not.toBeNull();
+  });
+
+  it("persists a folded room and restores it after rename", async () => {
+    await mountApp("operator");
+    toggle("r1").click(); await tick();
+    expect(JSON.parse(localStorage.getItem(ROOM_FOLD_STORAGE_KEY)!)).toContain("room:r1");
+    await unmount(component!); component = null; document.body.innerHTML = "";
+    captured.handlers = null;
+    await mountApp("operator", { ...RAW, rooms: [RAW.rooms[0], { id: "r1", name: "New" }] });
+    expect(tile("Bravo").hidden).toBe(true);
+    expect(toggle("r1").getAttribute("aria-label")).toContain("New");
+    toggle("r1").click(); await tick();
+    expect(tile("Bravo").hidden).toBe(false);
+  });
+
+  it("uses live members for count and lamp and supports empty rooms", async () => {
+    const h = await mountApp("operator");
+    h.onSnapshot({ "h.a": envelope("h.a", "Alpha"),
+      "h.b": { ...envelope("h.b", "Bravo"), state: "waiting_question" },
+      "h.c": { ...envelope("h.c", "Offline"), state: "disconnected" } });
+    h.onRoomsSnapshot?.(snapshot({ ...RAW, memberships: { ...RAW.memberships, "h.c": "r1" } }));
+    await tick(); toggle("r1").click(); toggle("r2").click(); await tick();
+    expect(header("r1").querySelector(".count")?.textContent).toContain("1");
+    expect(header("r1").querySelector(".state-lamp")?.getAttribute("data-state")).toBe("waiting_question");
+    expect(header("r2").querySelector(".state-lamp")?.getAttribute("data-state")).toBe("idle");
+  });
+
+  it("offers lobby and unconfirmed controls and prunes missing room keys", async () => {
+    localStorage.setItem(ROOM_FOLD_STORAGE_KEY, JSON.stringify(["room:gone", "unknown"]));
+    const h = await mountApp("viewer", { rooms: [RAW.rooms[0]], memberships: {} });
+    expect(toggle("lobby")).not.toBeNull();
+    h.onRoomsSnapshot?.(snapshot({ rooms: [RAW.rooms[0]], memberships: {},
+      snapshot_incomplete: true }));
+    await tick();
+    expect(toggle("unknown")).not.toBeNull();
+    expect(JSON.parse(localStorage.getItem(ROOM_FOLD_STORAGE_KEY)!)).toContain("unknown");
+    toggle("unknown").click(); await tick();
+    expect(JSON.parse(localStorage.getItem(ROOM_FOLD_STORAGE_KEY)!)).not.toContain("room:gone");
+    expect(JSON.parse(localStorage.getItem(ROOM_FOLD_STORAGE_KEY)!)).not.toContain("unknown");
+  });
+
+  it("does not prune preferences before a room snapshot", async () => {
+    localStorage.setItem(ROOM_FOLD_STORAGE_KEY, JSON.stringify(["room:gone", "unknown"]));
+    await mountApp("viewer", null);
+    expect(JSON.parse(localStorage.getItem(ROOM_FOLD_STORAGE_KEY)!)).toEqual(["room:gone", "unknown"]);
+  });
+
+  it("opens by default when saved data is malformed", async () => {
+    localStorage.setItem(ROOM_FOLD_STORAGE_KEY, "{");
+    await mountApp("operator");
+    expect(tile("Bravo").hidden).toBe(false);
+  });
+
+  it.each(["ja", "en"] as const)("names the room in %s", async (locale) => {
+    setLocale(locale); await mountApp("viewer");
+    expect(toggle("r1").getAttribute("aria-label")).toContain("Review");
+    expect(toggle("r1").getAttribute("aria-expanded")).toBe("true");
+    setLocale("ja");
   });
 });
 

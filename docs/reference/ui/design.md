@@ -434,6 +434,14 @@ on a smartphone.
   all follow it. The offline section has no reorder buttons. A room the saved
   list does not name goes last, and an id the server no longer lists is ignored.
   The lobby can move too. With nothing saved, the order is the server's.
+- Each live-grid room header has a disclosure for viewers and operators,
+  including a lone lobby and the unconfirmed group. Closed tiles are hidden
+  and inert; the header shows the live count and the strip's aggregate lamp.
+  Folding changes rendering without filtering the groups used for detail
+  navigation. The browser stores folded group keys in `kaoiro.roomFold.v1`;
+  absent keys start open and renamed rooms retain their state. Once the room
+  list is loaded, keys for deleted rooms are removed; the unconfirmed-group
+  preference is retained. The offline section is unaffected.
 - Room names and agent names are shown as the operator typed them. All other text is
   in the i18n area `rooms`.
 

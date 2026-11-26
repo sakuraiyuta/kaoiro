@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { KnownState } from "./expression";
   import { msg } from "./i18n/index.svelte";
   import { roomName, type Room } from "./rooms";
 
@@ -8,9 +9,12 @@
   // deleted; a group of unconfirmed rooms is not a room). `reorder` adds the
   // up/down pair (this browser's display order, not a room change, so anyone
   // may use it); a `null` side is the end of the list and is shown disabled.
-  let { room, count, onRename, onDelete, onCleanup, cleanupDisabled = false, reorder }: {
+  let { room, count, onRename, onDelete, onCleanup, cleanupDisabled = false, reorder, open = true, lamp = "idle", onToggle }: {
     room: Room | "unknown";
     count: number;
+    open?: boolean;
+    lamp?: KnownState;
+    onToggle?: (() => void) | undefined;
     onRename?: (() => void) | undefined;
     onDelete?: (() => void) | undefined;
     onCleanup?: (() => void) | undefined;
@@ -22,7 +26,15 @@
 </script>
 
 <li class="room-header" data-room={room === "unknown" ? "unknown" : room.id}>
+  {#if onToggle}
+    <button type="button" class="grid-room-toggle" aria-expanded={open}
+      aria-label={msg().rooms.stripToggle({ name: title, open, count, state: msg().rooms.stripStates[lamp] })}
+      onclick={onToggle}>{open ? "−" : "+"}</button>
+  {/if}
   <h3>{title}</h3>
+  {#if onToggle && !open}
+    <span class="state-lamp" data-state={lamp} aria-hidden="true"></span>
+  {/if}
   <span class="count">{msg().rooms.memberCount({ n: count })}</span>
   {#if reorder !== undefined}
     <button
@@ -73,6 +85,18 @@
     border-top: 1px solid var(--line);
     overflow-wrap: anywhere;
   }
+
+  .state-lamp { width: 0.55rem; height: 0.55rem; border-radius: 50%;
+    background: var(--tone, var(--c-idle)); }
+  .state-lamp[data-state="waiting_permission"] { --tone: var(--c-waiting_permission); }
+  .state-lamp[data-state="waiting_question"] { --tone: var(--c-waiting_question); }
+  .state-lamp[data-state="waiting_input"] { --tone: var(--c-waiting_input); }
+  .state-lamp[data-state="error"] { --tone: var(--c-error); }
+  .state-lamp[data-state="tool_running"] { --tone: var(--c-tool_running); }
+  .state-lamp[data-state="thinking"] { --tone: var(--c-thinking); }
+  .state-lamp[data-state="sending"] { --tone: var(--c-sending); }
+  .state-lamp[data-state="done"] { --tone: var(--c-done); }
+  .state-lamp[data-state="disconnected"] { --tone: var(--c-disconnected); }
 
   h3 {
     margin: 0;
