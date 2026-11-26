@@ -39,10 +39,17 @@ it.each([
   });
   try {
     await vi.waitFor(() => expect(host?.state).toBe("waiting_input"), { timeout: 5_000 });
-    await host.send("hello");
     const warnings = envelopes.filter((e) => e.type === "log" &&
       e.payload.kind === "system" && String(e.payload.text).includes("ignores the configured effort"));
     expect(warnings).toHaveLength(warned ? 1 : 0);
+    if (warned) {
+      const stateIndex = envelopes.findIndex((e) =>
+        e.type === "state_change" && e.state === "waiting_input");
+      expect(stateIndex).toBeGreaterThanOrEqual(0);
+      expect(envelopes.indexOf(warnings[0])).toBe(stateIndex + 1);
+      expect(methods).not.toContain("session/prompt");
+    }
+    await host.send("hello");
     expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
     expect(methods).not.toContain("session/set_config_option");
   } finally {

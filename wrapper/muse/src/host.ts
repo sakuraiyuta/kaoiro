@@ -277,11 +277,6 @@ export class MuseHost implements EngineAdapter {
         "the approval mode is selected through ACP at session start",
       );
     }
-    if (typeof config.effort === "string" && config.effort !== "") {
-      this.#options.send(makeLog(config, this.state, new Date().toISOString(), {
-        kind: "system", text: "muse ignores the configured effort; using its default",
-      }));
-    }
     try {
       this.#starting = true;
       await this.#start();
@@ -293,6 +288,11 @@ export class MuseHost implements EngineAdapter {
         }
         this.#started = true;
         this.#state("waiting_input");
+        if (typeof config.effort === "string" && config.effort !== "") {
+          this.#options.send(makeLog(config, this.state, new Date().toISOString(), {
+            kind: "system", text: "muse ignores the configured effort; using its default",
+          }));
+        }
         if (prompt !== undefined) void this.send(prompt).catch(() => {});
         void this.#drain();
       }
