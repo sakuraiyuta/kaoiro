@@ -30,6 +30,7 @@ export const launchDialog = {
   persona: "Persona",
   cwd: "Working directory",
   engine: "Engine",
+  museExperimental: "Muse (experimental)",
   room: "Room",
   model: "Model",
   defaultOption: "Default",

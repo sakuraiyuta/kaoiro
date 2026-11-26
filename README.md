@@ -88,8 +88,8 @@ screenshots show the Japanese interface.
   the full transcript.
 - **Tuning mid-session** — model switches are supported on Claude Code and
   Antigravity, on Codex when its model catalog is available, and on Grok Build
-  and Muse when they report a switchable selection. Effort switches are available on
-  Claude Code, Codex, Grok Build and Muse when advertised, but not Antigravity.
+  when it reports a switchable selection. Effort switches are available on
+  Claude Code, Codex and Grok Build when advertised, but not Antigravity or Muse.
   Permission-mode switching and file uploads follow each engine's declared
   capabilities (`ext.session_capabilities`); prompts and interrupts share one
   control channel across engines.
@@ -201,6 +201,15 @@ engine is selectable at launch. Engine-specific differences are represented by
 `ext.session_capabilities` in the envelope, so the UI does not branch on engine
 names. Additional engines can use the same adapter boundary
 ([extensions](docs/architecture/extensions.md)). Codex uses the app-server backend ([backend design](docs/architecture/codex-backends.md)).
+
+The kaoiro Muse engine is experimental. On a real Muse build, the effect of
+`--model` is unmeasured; reported model and effort come from ACP responses.
+With workspace trust enabled, real-provider `tools/call`, approval enforcement
+during tool execution, and MCP after cold resume are unmeasured. Recovery from
+a runner-detected failure to the same session ID and persona retention after
+compaction are also unmeasured. Server retention of the effort warning has not
+been checked in a Muse-specific integration test. A runner restart or crash
+before delivery is recorded may cause the persona to be sent again.
 
 ## Documentation
 

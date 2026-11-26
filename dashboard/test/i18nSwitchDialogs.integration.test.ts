@@ -97,6 +97,30 @@ describe("dialogs and settings repaint on setLocale", () => {
     expect(text(body, '.actions button[type="submit"]')).toBe("Launch");
   });
 
+  it("LaunchDialog: only Muse is marked experimental in both locales", async () => {
+    const body = await render(LaunchDialog, {
+      hosts: [{
+        host_id: "host-a",
+        personas: [{ id: "fuji", name: "Fuji", sprite_set: "fuji" }],
+        cwd_allowlist: ["/workspace"],
+        capabilities: ["muse", "grok", "codex"],
+      }],
+      connection: { getLaunchDefaults: async () => ({}) } as unknown as KaoiroConnection,
+      sessions: null,
+      onClose: () => {},
+    });
+    const labels = () => Object.fromEntries(
+      ["muse", "grok", "codex"].map((id) => {
+        const option = body.querySelector<HTMLOptionElement>(`option[value="${id}"]`)!;
+        return [option.value, option.textContent?.trim()];
+      }),
+    );
+    expect(labels()).toEqual({ muse: "Muse (実験的)", grok: "Grok Build", codex: "codex" });
+    setLocale("en");
+    await tick();
+    expect(labels()).toEqual({ muse: "Muse (experimental)", grok: "Grok Build", codex: "codex" });
+  });
+
   it("DeviceApproval: entry view and the unavailable error", async () => {
     const body = await render(DeviceApproval, {
       initialCode: null,

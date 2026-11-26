@@ -645,7 +645,7 @@
           }}>
             {#if !engine}<option value="">{msg().launchDialog.selectAgain}</option>{/if}
             {#each engines as e (e)}
-              <option value={e}>{e === "grok" ? "Grok Build" : e === "muse" ? "Muse" : e}</option>
+              <option value={e}>{e === "grok" ? "Grok Build" : e === "muse" ? msg().launchDialog.museExperimental : e}</option>
             {/each}
           </select>
         </label>

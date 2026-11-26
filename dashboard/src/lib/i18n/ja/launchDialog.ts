@@ -26,6 +26,7 @@ export const launchDialog = {
   persona: "ペルソナ",
   cwd: "作業ディレクトリ",
   engine: "エンジン",
+  museExperimental: "Muse (実験的)",
   room: "部屋",
   model: "モデル",
   defaultOption: "既定",

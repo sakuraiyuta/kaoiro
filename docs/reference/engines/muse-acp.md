@@ -7,6 +7,15 @@ last_updated: 2026-11-25
 
 # Muse ACP engine
 
+The kaoiro Muse engine is experimental. The effect of `--model` on a real
+Muse build is unmeasured; reported model and effort come from ACP responses.
+With workspace trust enabled, real-provider `tools/call`, approval enforcement
+during tool execution, and MCP after cold resume are unmeasured. Recovery from
+a runner-detected failure to the same session ID and persona retention after
+compaction are also unmeasured. Server retention of the effort warning has not
+been checked in a Muse-specific integration test. A runner restart or crash
+before delivery is recorded may cause the persona to be sent again.
+
 The `muse` engine requires Muse Code on `PATH`, logged in with
 `muse login`. The wrapper launches `muse acp` once (plus `--model <id>`
 when a launch pick names a model, and `--trust-workspace` only on the
