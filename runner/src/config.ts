@@ -726,9 +726,8 @@ export function buildRegister(
   if (capabilities.includes("muse")) {
     engines.push({
       id: "muse",
-      // No register-time probe yet: the default entry alone, replaced by
-      // the session's own config options once the wrapper starts
-      // (docs/reference/engines/muse-acp.md). Muse exposes no launch
+      // No register-time catalog probe: only the default entry is offered.
+      // Muse exposes no launch
       // permission axes; its approval mode lives inside the ACP session.
       models: [{ value: "default", display_name: "Account default" }],
     });

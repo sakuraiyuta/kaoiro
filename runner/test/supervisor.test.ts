@@ -173,6 +173,47 @@ function harness(
   };
 }
 
+describe("Muse launch effort validation", () => {
+  it.each([
+    { effort: "low" },
+    { effort: "" },
+    { resume_snapshot: { effort: "high", effort_source: "config" } },
+    { effort: "low", resume_snapshot: { effort: "high", effort_source: "default" } },
+  ])("rejects before session discovery and launch: %o", (extra) => {
+    const sessionExists = vi.fn(() => true);
+    const launch = vi.fn(() => new FakeChild());
+    const results: SpawnResult[] = [];
+    const sup = new Supervisor({ hostId: "lab-pc-1", cwdAllowlist: allowlist,
+      wrapperServerUrl: "ws://localhost:4000/wrapper", launch, sessionExists,
+      sendResult: (result) => results.push(result), sendSessions() {},
+      sendResetResult() {}, sendStopAgent() {}, listSessions: () => [] });
+    sup.handleSpawn({ ...spawnMsg, engine: "muse", resume_session_id: "existing",
+      request_id: "request-1", ...extra });
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ ok: false, request_id: "request-1" });
+    expect(sessionExists).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {}, { resume_snapshot: { effort: "high", effort_source: "default" } },
+  ])("discovers and launches when no effort is specified: %o", (extra) => {
+    const sessionExists = vi.fn(() => true);
+    const launch = vi.fn(() => new FakeChild());
+    const results: SpawnResult[] = [];
+    const sup = new Supervisor({ hostId: "lab-pc-1", cwdAllowlist: allowlist,
+      wrapperServerUrl: "ws://localhost:4000/wrapper", launch, sessionExists,
+      sendResult: (result) => results.push(result), sendSessions() {},
+      sendResetResult() {}, sendStopAgent() {}, listSessions: () => [] });
+    sup.handleSpawn({ ...spawnMsg, engine: "muse", resume_session_id: "existing", ...extra });
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ ok: true });
+    expect(sessionExists).toHaveBeenCalledOnce();
+    expect(launch).toHaveBeenCalledOnce();
+    sup.stopAll();
+  });
+});
+
 describe("Antigravity launch authorization", () => {
   const message = { ...spawnMsg, engine: "antigravity" };
   const executable = { ok: true, path: process.execPath } as const;

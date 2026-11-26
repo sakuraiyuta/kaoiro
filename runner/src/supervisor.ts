@@ -831,6 +831,15 @@ export class Supervisor {
       return;
     }
     const resume = parsed.resumeSessionId;
+    const effectiveParsed = resume !== undefined || parsed.applyResumeSnapshot
+      ? applyResumeSnapshot(parsed, parsed.resumeSnapshot, parsed.engine)
+      : parsed;
+    if (parsed.engine === "muse" &&
+      ((isObject(payload) && "effort" in payload) ||
+        effectiveParsed.effort !== undefined)) {
+      this.#fail(agentId, "error", requestId);
+      return;
+    }
     if (resume === undefined) {
       // Fresh spawn: the ordinary rule is "never re-apply the snapshot"
       // (藤 D1) — a resume_snapshot ride only reaches the wrapper's
@@ -844,21 +853,14 @@ export class Supervisor {
       // we run applyResumeSnapshot exactly like the resume path — no T3
       // (no session file to check) and no F4 (no session id to lock), so
       // this flows straight into #launchSpawn.
-      const freshParsed = parsed.applyResumeSnapshot
-        ? applyResumeSnapshot(parsed, parsed.resumeSnapshot, parsed.engine)
-        : parsed;
-      this.#launchSpawn(agentId, freshParsed);
+      this.#launchSpawn(agentId, effectiveParsed);
       return;
     }
 
     // Resume operation: the snapshot is the SSOT for privilege axes, so
     // overwrite parsed's engine-relevant fields from it before launch
     // (ADR-0014 F1 追補, 藤 D1/D2). Absent / invalid → safe engine default.
-    const resumedParsed = applyResumeSnapshot(
-      parsed,
-      parsed.resumeSnapshot,
-      parsed.engine,
-    );
+    const resumedParsed = effectiveParsed;
 
     // T3: Codex scans its date tree asynchronously (#97); Claude and test
     // injections may still answer synchronously. Preserve that fast path so

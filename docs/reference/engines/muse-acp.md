@@ -139,9 +139,8 @@ Declared unsupported, each rejected explicitly rather than silently:
 - Session reset (`supports_session_reset: false`).
 - Dashboard history replay on resume: the wrapper registers no hydration
   replayer, so a resumed agent starts with an empty dashboard history.
-- The launch catalog probe: the runner offers the account `default` model
-  entry until the session reports its own config options; there is no
-  short-lived catalog probe for Muse yet.
+- The launch catalog probe: the runner offers only the account `default`
+  model entry; an explicitly provided launch model is passed with `--model`.
 
 Session enumeration for the resume picker is not one of the limits: the
 runner probes a short-lived `muse acp` with ACP `session/list {cwd}`
