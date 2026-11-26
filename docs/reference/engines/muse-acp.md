@@ -8,7 +8,8 @@ last_updated: 2026-11-25
 # Muse ACP engine
 
 The kaoiro Muse engine is experimental. The effect of `--model` on a real
-Muse build is unmeasured; reported model and effort come from ACP responses.
+Muse build is unmeasured; the effective model and effort are reported only
+from ACP responses, not verified as effective values.
 With workspace trust enabled, real-provider `tools/call`, approval enforcement
 during tool execution, and MCP after cold resume are unmeasured. Recovery from
 a runner-detected failure to the same session ID and persona retention after
