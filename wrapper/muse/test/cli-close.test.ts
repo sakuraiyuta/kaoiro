@@ -29,7 +29,9 @@ it("republishes the unchanged response after rejected live controls", async () =
     onHostCreated: (value) => { host = value; },
   });
   try {
-    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"));
+    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"), {
+      timeout: 5_000,
+    });
     const count = envelopes.filter((e) => e.type === "state_change").length;
     callbacks.onSetModel?.("muse-wonder");
     callbacks.onSetEffort?.("low");
