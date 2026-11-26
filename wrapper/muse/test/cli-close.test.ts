@@ -46,7 +46,7 @@ it.each([
       const stateIndex = envelopes.findIndex((e) =>
         e.type === "state_change" && e.state === "waiting_input");
       expect(stateIndex).toBeGreaterThanOrEqual(0);
-      expect(envelopes.indexOf(warnings[0])).toBe(stateIndex + 1);
+      expect(envelopes.findIndex((e) => warnings.includes(e))).toBe(stateIndex + 1);
       expect(methods).not.toContain("session/prompt");
     }
     await host.send("hello");
