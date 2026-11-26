@@ -46,7 +46,9 @@ export async function runMuseCli(
   argv: string[] = process.argv.slice(2),
 ) {
   const { configPath } = (dependencies.parseCliArgs ?? parseCliArgs)(argv);
-  const config = (dependencies.loadConfig ?? loadConfig)(configPath);
+  const config = (dependencies.loadConfig ?? loadConfig)(configPath, {
+    museEffortWarning: true,
+  });
   const resumeSessionId = config.resume_session_id;
   const buildInfo = (dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo)(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),

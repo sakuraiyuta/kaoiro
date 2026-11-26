@@ -835,8 +835,8 @@ export class Supervisor {
       ? applyResumeSnapshot(parsed, parsed.resumeSnapshot, parsed.engine)
       : parsed;
     if (parsed.engine === "muse" &&
-      ((isObject(payload) && "effort" in payload) ||
-        effectiveParsed.effort !== undefined)) {
+      (parsed.permissionMode !== undefined || parsed.sandbox !== undefined ||
+        parsed.approval !== undefined || parsed.networkAccess !== undefined)) {
       this.#fail(agentId, "error", requestId);
       return;
     }

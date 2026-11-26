@@ -216,7 +216,10 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
  * Validates parsed JSON as a wrapper config. Missing or ill-typed fields throw
  * immediately (fail fast). fs-independent so tests can call it directly.
  */
-export function parseConfig(raw: unknown): WrapperConfig {
+export function parseConfig(
+  raw: unknown,
+  options: { museEffortWarning?: boolean } = {},
+): WrapperConfig {
   if (!isObject(raw)) {
     throw new ConfigError("config must be an object");
   }
@@ -401,7 +404,11 @@ export function parseConfig(raw: unknown): WrapperConfig {
   if (raw.model !== undefined) {
     config.model = nonEmptyString(raw.model, "model");
   }
-  if (raw.effort !== undefined) {
+  if (options.museEffortWarning) {
+    if (typeof raw.effort === "string" && raw.effort !== "") {
+      config.effort = raw.effort;
+    }
+  } else if (raw.effort !== undefined) {
     config.effort = nonEmptyString(raw.effort, "effort");
   }
   // Resume-relayed provenance of model/effort (ADR-0014 F1 追補 P1,
@@ -683,7 +690,10 @@ export function parseConfig(raw: unknown): WrapperConfig {
  * The path is read as-is; callers must supply a trusted, statically-known path
  * (e.g. an operator-provided config location), not untrusted external input.
  */
-export function loadConfig(path: string): WrapperConfig {
+export function loadConfig(
+  path: string,
+  options: { museEffortWarning?: boolean } = {},
+): WrapperConfig {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -698,7 +708,7 @@ export function loadConfig(path: string): WrapperConfig {
     throw new ConfigError(`config file is not valid JSON: ${path}`, { cause });
   }
 
-  return parseConfig(raw);
+  return parseConfig(raw, options);
 }
 
 export { ConfigError };

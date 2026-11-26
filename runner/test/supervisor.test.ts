@@ -173,12 +173,10 @@ function harness(
   };
 }
 
-describe("Muse launch effort validation", () => {
+describe("Muse launch permission validation", () => {
   it.each([
-    { effort: "low" },
-    { effort: "" },
-    { resume_snapshot: { effort: "high", effort_source: "config" } },
-    { effort: "low", resume_snapshot: { effort: "high", effort_source: "default" } },
+    { permission_mode: "default" }, { sandbox: "read-only" },
+    { approval: "never" }, { network_access: false },
   ])("rejects before session discovery and launch: %o", (extra) => {
     const sessionExists = vi.fn(() => true);
     const launch = vi.fn(() => new FakeChild());
@@ -195,22 +193,46 @@ describe("Muse launch effort validation", () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {}, { resume_snapshot: { effort: "high", effort_source: "default" } },
-  ])("discovers and launches when no effort is specified: %o", (extra) => {
-    const sessionExists = vi.fn(() => true);
-    const launch = vi.fn(() => new FakeChild());
-    const results: SpawnResult[] = [];
-    const sup = new Supervisor({ hostId: "lab-pc-1", cwdAllowlist: allowlist,
-      wrapperServerUrl: "ws://localhost:4000/wrapper", launch, sessionExists,
-      sendResult: (result) => results.push(result), sendSessions() {},
-      sendResetResult() {}, sendStopAgent() {}, listSessions: () => [] });
-    sup.handleSpawn({ ...spawnMsg, engine: "muse", resume_session_id: "existing", ...extra });
-    expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({ ok: true });
-    expect(sessionExists).toHaveBeenCalledOnce();
-    expect(launch).toHaveBeenCalledOnce();
-    sup.stopAll();
+  it.each([{ effort: "low" }, {}])("allows discovery and launch: %o", (extra) => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({ ...spawnMsg, engine: "muse", resume_session_id: "existing", ...extra });
+    expect(h.results[0]).toMatchObject({ ok: true });
+    expect(h.resumes).toEqual(["existing"]);
+    h.sup.stopAll();
+  });
+});
+
+describe("Muse snapshot permission axes", () => {
+  const snapshot = { permission_mode: "plan", sandbox: "read-only",
+    approval: "never", network_access: false };
+  const expectSnapshotOnly = (cfg: WrapperConfig) => {
+    expect(cfg.resume_snapshot).toEqual(snapshot);
+    for (const key of ["permission_mode", "sandbox", "approval", "network_access"]) {
+      expect(cfg).not.toHaveProperty(key);
+    }
+  };
+  it.each([false, true])("restores without applying permission axes: %s", (fresh) => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({ ...spawnMsg, engine: "muse", resume_snapshot: snapshot,
+      ...(fresh ? { apply_resume_snapshot: true } : { resume_session_id: "existing" }) });
+    expect(h.results[0]).toMatchObject({ ok: true });
+    expectSnapshotOnly(h.configs[0]!);
+    h.sup.stopAll();
+  });
+  it.each(["switch", "reset"])("keeps permission axes inside snapshot on %s", (operation) => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({ ...spawnMsg, engine: "muse" });
+    if (operation === "switch") {
+      h.sup.handleSwitchSession({ agent_id: spawnMsg.agent_id,
+        resume_session_id: "existing", resume_snapshot: snapshot });
+    } else {
+      h.sup.handleResetSession({ agent_id: spawnMsg.agent_id, mode: "new",
+        request_id: "reset-1", resume_snapshot: snapshot });
+    }
+    h.children[0]!.exit();
+    expect(h.configs).toHaveLength(2);
+    expectSnapshotOnly(h.configs[1]!);
+    h.sup.stopAll();
   });
 });
 

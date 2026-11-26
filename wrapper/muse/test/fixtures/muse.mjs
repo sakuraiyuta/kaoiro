@@ -5,7 +5,7 @@
 // connects to the kaoiro MCP server it is handed (listing its tools into
 // KAOIRO_TEST_MUSE_TOOLS_FILE when that is set).
 import { createInterface } from "node:readline";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -93,6 +93,9 @@ function finish(id, text, stopReason = "end_turn") {
 createInterface({ input: process.stdin }).on("line", (line) => {
   void (async () => {
     const msg = JSON.parse(line);
+    if (msg.method && process.env.KAOIRO_TEST_ACP_METHODS_FILE) {
+      appendFileSync(process.env.KAOIRO_TEST_ACP_METHODS_FILE, `${msg.method}\n`);
+    }
     if (msg.method === undefined && waiters.has(msg.id)) {
       const resolve = waiters.get(msg.id);
       waiters.delete(msg.id);

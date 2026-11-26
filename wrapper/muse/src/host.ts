@@ -271,14 +271,16 @@ export class MuseHost implements EngineAdapter {
     if (config.sandbox) refused.push("sandbox");
     if (config.approval) refused.push("approval");
     if (config.network_access !== undefined) refused.push("network_access");
-    if (config.effort !== undefined) {
-      throw new Error("muse launch does not accept effort");
-    }
     if (refused.length > 0) {
       throw new Error(
         `muse launch does not accept ${refused.join(", ")}: ` +
         "the approval mode is selected through ACP at session start",
       );
+    }
+    if (typeof config.effort === "string" && config.effort !== "") {
+      this.#options.send(makeLog(config, this.state, new Date().toISOString(), {
+        kind: "system", text: "muse ignores the configured effort; using its default",
+      }));
     }
     try {
       this.#starting = true;

@@ -746,31 +746,6 @@ describe("muse host", () => {
     },
   );
 
-  it.each([undefined, "fixture-session"])(
-    "rejects launch effort before native start: %s", async (resumeSessionId) => {
-      const path = join(tmpdir(), `muse-effort-rejected-${process.pid}.json`);
-      rmSync(path, { force: true });
-      const host = new MuseHost({ config: { ...config, effort: "low" },
-        cwd: process.cwd(), personaPrompt: "persona", send: () => {},
-        decidePermission: async () => ({ allow: true }), executable,
-        ...(resumeSessionId ? { resumeSessionId } : {}),
-        env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
-      hosts.push(host);
-      try {
-        let settled = false;
-        const failure = host.run().catch((error: Error) => {
-          settled = true;
-          return error;
-        });
-        await vi.waitFor(() => expect(settled || existsSync(path)).toBe(true));
-        expect(existsSync(path)).toBe(false);
-        expect(await failure).toMatchObject({
-          message: expect.stringMatching(/does not accept effort/),
-        });
-      } finally { rmSync(path, { force: true }); }
-    },
-  );
-
   it("passes the launch model to native argv", async () => {
     const path = join(tmpdir(), `muse-model-argv-${process.pid}.json`);
     rmSync(path, { force: true });

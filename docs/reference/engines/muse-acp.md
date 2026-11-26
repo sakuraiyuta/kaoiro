@@ -124,9 +124,11 @@ with the `allow_once` / `reject_once` option; a pending request publishes
 `waiting_permission` and pauses the turn watchdog until it is answered),
 user questions through the kaoiro `ask_user_question` tool, normal peer
 messages, and context usage from ACP `usage_update` (`ext.context`). The
-model can be selected only at launch; effort uses Muse's default and an
-explicit launch effort is rejected. Reported model and effort values come
-from the `session/new` or `session/resume` response, not later notifications,
+model can be selected only at launch; Muse ignores a non-empty configured
+effort and logs a warning. Effort uses Muse's default. A snapshot effort
+discarded by the runner does not reach the wrapper and produces no warning.
+Reported model and effort values come from the `session/new` or
+`session/resume` response, not later notifications,
 and are not a claim about the agent's effective values. Cold resume is
 supported when the agent advertises `sessionCapabilities.resume`.
 

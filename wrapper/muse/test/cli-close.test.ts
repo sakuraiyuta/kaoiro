@@ -1,11 +1,56 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ServerLink, ServerLinkOptions } from "@kaoiro/wrapper-core";
 import type { Envelope } from "@kaoiro/agent-common";
 import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
 import { runMuseCli } from "../src/cli.js";
 import { MuseHost } from "../src/host.js";
+
+it.each([
+  ["high", true], [" ", true], ["x".repeat(257), true],
+  ["", false], [42, false], [undefined, false],
+])("loads effort %j and warns=%s", async (effort, warned) => {
+  const root = mkdtempSync(join(tmpdir(), "muse-effort-cli-"));
+  const path = join(root, "config.json");
+  const launch = join(root, "launch.json");
+  writeFileSync(path, JSON.stringify({ agent_id: "muse-test", server_url: "ws://localhost",
+    persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", effort }));
+  const envelopes: Envelope[] = [];
+  const methods: string[] = [];
+  let host!: MuseHost;
+  const work = runMuseCli({
+    parseCliArgs: () => ({ configPath: path }),
+    loadWrapperBuildInfo: () => ({ revision: "unknown", dirty: false,
+      built_at: "unknown", version: "unknown", channel: "dev" }),
+    createServerLink: (_url, _id, options) => {
+      queueMicrotask(() => options.onPersonaPrompt?.("persona"));
+      return { send: (envelope: Envelope) => envelopes.push(envelope), close() {},
+        setSessionId() {}, reportDisconnectIntent: async () => {} } as unknown as ServerLink;
+    },
+    createHost: (options) => new MuseHost({ ...options,
+      executable: fileURLToPath(new URL("./fixtures/muse.mjs", import.meta.url)),
+      env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: launch } }),
+    onMetadata: (event) => { if (event.direction === "out" && event.method) methods.push(event.method); },
+    onHostCreated: (value) => { host = value; },
+  });
+  try {
+    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"), { timeout: 5_000 });
+    await host.send("hello");
+    const warnings = envelopes.filter((e) => e.type === "log" &&
+      e.payload.kind === "system" && String(e.payload.text).includes("ignores the configured effort"));
+    expect(warnings).toHaveLength(warned ? 1 : 0);
+    expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
+    expect(methods).not.toContain("session/set_config_option");
+  } finally {
+    host?.close();
+    await work;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 it("republishes the unchanged response after rejected live controls", async () => {
   let host!: MuseHost;

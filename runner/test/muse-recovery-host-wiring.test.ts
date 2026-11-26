@@ -7,6 +7,98 @@ import { expect, it, vi } from "vitest";
 import { makeLauncher } from "../src/spawn.js";
 import { Supervisor } from "../src/supervisor.js";
 
+it.each([
+  ["spawn", "low", 1], ["spawn", undefined, 0],
+  ["restore", "low", 1], ["restore", undefined, 0],
+  ["restore-default", "low", 0],
+])("starts %s with effort %s and %i warning", async (operation, effort, warnings) => {
+  const root = mkdtempSync(join(tmpdir(), "muse-spawn-effort-"));
+  const ready = join(root, "ready");
+  const result = join(root, "resumed.json");
+  const launch = join(root, "native-launch.json");
+  const methods = join(root, "native-methods");
+  vi.stubEnv("KAOIRO_TEST_LAUNCH_FILE", launch);
+  vi.stubEnv("KAOIRO_TEST_ACP_METHODS_FILE", methods);
+  vi.stubEnv("MUSE_RECOVERY_RESULT", result);
+  vi.stubEnv("MUSE_SWITCH_READY", ready);
+  vi.stubEnv("MUSE_HOST_SCENARIO", "switch-effort");
+  vi.stubEnv("MUSE_HOST_FAKE", fileURLToPath(
+    new URL("../../wrapper/muse/test/fixtures/muse.mjs", import.meta.url)));
+  const driver = fileURLToPath(
+    new URL("./fixtures/muse-recovery-host-driver.mjs", import.meta.url));
+  const results: unknown[] = [];
+  const supervisor = new Supervisor({ hostId: "fixture", cwdAllowlist: [root],
+    wrapperServerUrl: "ws://fixture/wrapper", launch: makeLauncher([process.execPath, driver]),
+    sendResult: (value) => results.push(value), sendSessions() {},
+    sendResetResult() {}, sendStopAgent() {}, listSessions: () => [], sessionExists: () => true });
+  try {
+    supervisor.handleSpawn({ version: "0", agent_id: "fixture.muse", cwd: root,
+      persona: { id: "p", name: "P", sprite_set: "p" }, engine: "muse",
+      ...(operation.startsWith("restore") ? { resume_session_id: "fixture-session",
+        ...(effort ? { resume_snapshot: { effort,
+          effort_source: operation === "restore-default" ? "default" : "config" } } : {}) }
+        : (effort ? { effort } : {})) });
+    const output = operation.startsWith("restore") ? result : ready;
+    await vi.waitFor(() => expect(existsSync(output)).toBe(true), { timeout: 10_000 });
+    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ warnings });
+    expect(results).toContainEqual(expect.objectContaining({ ok: true }));
+    expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
+    const calls = readFileSync(methods, "utf8").split("\n");
+    expect(calls).toContain(operation.startsWith("restore") ? "session/resume" : "session/new");
+    expect(calls).not.toContain("session/set_config_option");
+  } finally {
+    supervisor.stopAll();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it.each([" ", "x".repeat(257)])(
+  "switches to a session with ignored effort %j", async (effort) => {
+    const root = mkdtempSync(join(tmpdir(), "muse-switch-effort-"));
+    const ready = join(root, "ready");
+    const result = join(root, "resumed.json");
+    const launch = join(root, "native-launch.json");
+    const methods = join(root, "native-methods");
+    vi.stubEnv("KAOIRO_TEST_LAUNCH_FILE", launch);
+    vi.stubEnv("KAOIRO_TEST_ACP_METHODS_FILE", methods);
+    vi.stubEnv("MUSE_RECOVERY_RESULT", result);
+    vi.stubEnv("MUSE_SWITCH_READY", ready);
+    vi.stubEnv("MUSE_HOST_SCENARIO", "switch-effort");
+    vi.stubEnv("MUSE_HOST_FAKE", fileURLToPath(
+      new URL("../../wrapper/muse/test/fixtures/muse.mjs", import.meta.url)));
+    const driver = fileURLToPath(
+      new URL("./fixtures/muse-recovery-host-driver.mjs", import.meta.url));
+    const results: unknown[] = [];
+    const supervisor = new Supervisor({ hostId: "fixture", cwdAllowlist: [root],
+      wrapperServerUrl: "ws://fixture/wrapper", launch: makeLauncher([process.execPath, driver]),
+      sendResult: (value) => results.push(value), sendSessions() {},
+      sendResetResult() {}, sendStopAgent() {}, listSessions: () => [], sessionExists: () => true });
+    try {
+      supervisor.handleSpawn({ version: "0", agent_id: "fixture.muse",
+        persona: { id: "p", name: "P", sprite_set: "p" }, cwd: root, engine: "muse" });
+      await vi.waitFor(() => expect(existsSync(ready)).toBe(true), { timeout: 10_000 });
+      supervisor.handleSwitchSession({ agent_id: "fixture.muse",
+        resume_session_id: "fixture-session", request_id: "switch-effort",
+        resume_snapshot: { effort, effort_source: "config" } });
+      await vi.waitFor(() => expect(existsSync(result)).toBe(true), { timeout: 10_000 });
+      expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({
+        resume: "fixture-session", warnings: 1, mode: { id: "promptUnmatched" },
+      });
+      expect(results).not.toContainEqual(expect.objectContaining({ ok: false }));
+      expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
+      const calls = readFileSync(methods, "utf8").split("\n");
+      expect(calls).toContain("session/new");
+      expect(calls).toContain("session/resume");
+      expect(calls).not.toContain("session/set_config_option");
+    } finally {
+      supervisor.stopAll();
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000,
+);
+
 it("refuses runner recovery after watchdog cancel followed by interrupt", async () => {
   const root = mkdtempSync(join(tmpdir(), "kaoiro-muse-watchdog-recovery-"));
   const result = join(root, "blocked.json");

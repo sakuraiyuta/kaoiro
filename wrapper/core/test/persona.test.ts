@@ -10,6 +10,12 @@ const valid = {
   server_url: "ws://localhost:4000/wrapper",
 };
 
+it("keeps the default effort validation when Muse handling is not requested", () => {
+  for (const effort of ["", " ", "x".repeat(257), 42, null]) {
+    expect(() => parseConfig({ ...valid, effort })).toThrow(ConfigError);
+  }
+});
+
 // issue #167 (follow-up to #160): parseConfig copies WrapperConfig's optional
 // fields by hand, one `if (raw.x !== undefined)` block per field — exactly
 // the allow-list shape that let transition_id's copy line go missing once
