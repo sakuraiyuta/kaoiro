@@ -189,12 +189,14 @@ describe("grid room folding", () => {
 
   it("folds only the chosen room for a viewer and preserves navigation", async () => {
     await mountApp("viewer");
+    const move = vi.spyOn(captured, "moveAgent");
     expect(toggle("r1").getAttribute("aria-expanded")).toBe("true");
     toggle("r1").click(); await tick();
     expect(tile("Bravo").hidden).toBe(true);
     expect(tile("Bravo").inert).toBe(true);
     expect(tile("Alpha").hidden).toBe(false);
     expect(captured.sendInterrupt).not.toHaveBeenCalled();
+    expect(move).not.toHaveBeenCalled();
     expect(toggle("r1").getAttribute("aria-expanded")).toBe("false");
     document.querySelector<HTMLButtonElement>("button[aria-label='Alpha の詳細を開く']")!.click();
     await tick();
