@@ -757,8 +757,16 @@ describe("muse host", () => {
         env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
       hosts.push(host);
       try {
-        await expect(host.run()).rejects.toThrow(/does not accept effort/);
+        let settled = false;
+        const failure = host.run().catch((error: Error) => {
+          settled = true;
+          return error;
+        });
+        await vi.waitFor(() => expect(settled || existsSync(path)).toBe(true));
         expect(existsSync(path)).toBe(false);
+        expect(await failure).toMatchObject({
+          message: expect.stringMatching(/does not accept effort/),
+        });
       } finally { rmSync(path, { force: true }); }
     },
   );
