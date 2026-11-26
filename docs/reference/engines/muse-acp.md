@@ -123,19 +123,16 @@ is resident, cancellation (`session/cancel`), operator permission requests
 with the `allow_once` / `reject_once` option; a pending request publishes
 `waiting_permission` and pauses the turn watchdog until it is answered),
 user questions through the kaoiro `ask_user_question` tool, normal peer
-messages, and context usage from ACP `usage_update` (`ext.context`). Live
-model and effort switching are supported when the session's config options
-offer a `model` and a `thought_level` select: switches are serialized
-with prompts in one work queue, values are validated against the session's
-options, and the source metadata is written only for an applied switch.
-Reported model and effort values come from the last correlated session or
-switch response; they are not a claim about the agent's effective values.
-Unsolicited changes are not reflected in these reported values. A rejected
-switch reports `switch_error` and the queue continues. Cold resume is
+messages, and context usage from ACP `usage_update` (`ext.context`). The
+model can be selected only at launch; effort uses Muse's default and an
+explicit launch effort is rejected. Reported model and effort values come
+from the `session/new` or `session/resume` response, not later notifications,
+and are not a claim about the agent's effective values. Cold resume is
 supported when the agent advertises `sessionCapabilities.resume`.
 
 Declared unsupported, each rejected explicitly rather than silently:
 
+- Live model and effort switching.
 - Permission-mode switching and the two-axis permission selector (see
   Approval mode above).
 - Attachments (`supports_attachments: false`).

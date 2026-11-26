@@ -45,26 +45,19 @@ describe("updateEvents", () => {
 });
 
 describe("parseSelection", () => {
-  it("reads the catalog and current values by ACP category", () => {
+  it("reads current values by ACP category", () => {
     const selection = parseSelection([
       { id: "m", name: "Model", category: "model", type: "select", currentValue: "a",
         options: [{ value: "a", name: "A" }, { value: "b", name: "B" }] },
       { id: "e", name: "Effort", category: "thought_level", type: "select", currentValue: "high",
         options: [{ value: "low", name: "low" }, { value: "high", name: "high" }] },
     ] as never);
-    expect(selection.models).toEqual([
-      { value: "a", display_name: "A" },
-      { value: "b", display_name: "B" },
-    ]);
     expect(selection.model).toBe("a");
-    expect(selection.modelConfigId).toBe("m");
-    expect(selection.effortLevels).toEqual(["low", "high"]);
     expect(selection.effort).toBe("high");
-    expect(selection.effortConfigId).toBe("e");
   });
 
   it("tolerates a session with no config options", () => {
-    expect(parseSelection(undefined)).toEqual({ models: [], effortLevels: [] });
+    expect(parseSelection(undefined)).toEqual({});
   });
 });
 

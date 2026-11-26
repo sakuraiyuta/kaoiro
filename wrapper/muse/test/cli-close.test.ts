@@ -1,10 +1,50 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
-import type { ServerLink } from "@kaoiro/wrapper-core";
+import type { ServerLink, ServerLinkOptions } from "@kaoiro/wrapper-core";
+import type { Envelope } from "@kaoiro/agent-common";
 import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
 import { runMuseCli } from "../src/cli.js";
 import { MuseHost } from "../src/host.js";
+
+it("republishes the unchanged response after rejected live controls", async () => {
+  let host!: MuseHost;
+  let callbacks!: ServerLinkOptions;
+  const envelopes: Envelope[] = [];
+  const work = runMuseCli({
+    parseCliArgs: () => ({ configPath: "unused" }),
+    loadConfig: () => ({ agent_id: "muse-test", server_url: "ws://localhost",
+      persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P" }),
+    loadWrapperBuildInfo: () => ({ revision: "unknown", dirty: false,
+      built_at: "unknown", version: "unknown", channel: "dev" }),
+    createServerLink: (_url, _id, options) => {
+      callbacks = options;
+      queueMicrotask(() => callbacks.onPersonaPrompt?.("persona"));
+      return { send: (envelope: Envelope) => envelopes.push(envelope), close() {},
+        setSessionId() {},
+        reportDisconnectIntent: async () => {} } as unknown as ServerLink;
+    },
+    createHost: (options) => new MuseHost({ ...options,
+      executable: fileURLToPath(new URL("./fixtures/muse.mjs", import.meta.url)) }),
+    onHostCreated: (value) => { host = value; },
+  });
+  try {
+    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"));
+    const count = envelopes.filter((e) => e.type === "state_change").length;
+    callbacks.onSetModel?.("muse-wonder");
+    callbacks.onSetEffort?.("low");
+    await vi.waitFor(() => expect(envelopes.filter((e) => e.type === "state_change"))
+      .toHaveLength(count + 2));
+    const states = envelopes.filter((e) => e.type === "state_change").slice(-2);
+    for (const state of states) {
+      expect(state.ext).toMatchObject({ model: "muse-spark-1.3", effort: "high",
+        session_capabilities: { supports_model_switch: false, supports_effort_switch: false } });
+    }
+  } finally {
+    host?.close();
+    await work;
+  }
+});
 
 it("leaves the CLI after close interrupts a pending listener", async () => {
   let release!: () => void;

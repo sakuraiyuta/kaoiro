@@ -59,8 +59,6 @@ let sleepingPrompt;
 let mcpClient;
 let connecting = Promise.resolve();
 let deferredServers;
-let delayedSelection;
-let postSwitchNotice;
 
 async function connectMcp(servers) {
   if (process.env.KAOIRO_TEST_MUSE_NO_MCP) return;
@@ -144,114 +142,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       case "session/load":
         reply(msg.id, { configOptions: configOptions() });
         break;
-      case "session/set_config_option": {
-        if (process.env.KAOIRO_TEST_HANG_SWITCH) break;
-        if (process.env.KAOIRO_TEST_SWITCH_RPC_REJECT) return fail(msg.id, "rejected");
-        if (process.env.KAOIRO_TEST_SWITCH_UNCHANGED) {
-          return reply(msg.id, { configOptions: configOptions() });
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_PARTIAL_NOTICE_REJECT) {
-          update({ sessionUpdate: "config_option_update",
-            configOptions: configOptions().filter(option => option.category !== "model") });
-          return reply(msg.id, { configOptions: configOptions() });
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_OTHER_AXIS) {
-          if (msg.params.configId === "model") effort = "low";
-          else model = "muse-wonder";
-          return reply(msg.id, { configOptions: configOptions() });
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_OTHER_AXIS_NOTICE) {
-          const oldModel = model, oldEffort = effort;
-          if (msg.params.configId === "model") effort = "low";
-          else model = "muse-wonder";
-          update({ sessionUpdate: "config_option_update", configOptions: configOptions() });
-          model = oldModel; effort = oldEffort;
-          return reply(msg.id, { configOptions: configOptions() });
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_MISSING_AXIS) {
-          const missing = msg.params.configId === "model" ? "thought_level" : "model";
-          return reply(msg.id, {
-            configOptions: configOptions().filter(option => option.category !== missing),
-          });
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_MISSING_REQUESTED) {
-          const missing = msg.params.configId === "model" ? "model" : "thought_level";
-          return reply(msg.id, {
-            configOptions: configOptions().filter(option => option.category !== missing),
-          });
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_CONFLICTING_NOTICE) {
-          const old = model;
-          model = "third-model";
-          update({ sessionUpdate: "config_option_update", configOptions: configOptions() });
-          model = old;
-          return reply(msg.id, { configOptions: configOptions() });
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_OTHER) {
-          model = "third-model";
-          return reply(msg.id, { configOptions: configOptions() });
-        }
-        if (process.env.KAOIRO_TEST_DELAY_SWITCH) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-        const { configId, value } = msg.params;
-        const beforeSwitch = configOptions();
-        if (configId === "model" && MODELS.some((m) => m.value === value)) model = value;
-        else if (configId === "effort" && EFFORTS.some((e) => e.value === value)) effort = value;
-        else {
-          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id,
-            error: { code: -32602, message: "Invalid params" } }) + "\n");
-          break;
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_UNSAFE_MODE) {
-          return reply(msg.id, { configOptions: [...configOptions(), {
-            id: "mode", name: "Mode", category: "mode", type: "select",
-            currentValue: "denyUnmatched", options: MODES.map(m => ({
-              value: m.id, name: m.name,
-            })),
-          }] });
-        }
-        if (process.env.KAOIRO_TEST_SWITCH_UNSAFE_NOTICE) {
-          update({ sessionUpdate: "config_option_update", configOptions: [
-            ...configOptions(), { id: "mode", name: "Mode", category: "mode",
-              type: "select", currentValue: "denyUnmatched", options: MODES.map(m => ({
-                value: m.id, name: m.name,
-              })) },
-          ] });
-          return reply(msg.id, { configOptions: configOptions() });
-        }
-        if (process.env.KAOIRO_TEST_DELAYED_SELECTION) {
-          if (delayedSelection) {
-            update({ sessionUpdate: "config_option_update", configOptions: delayedSelection });
-            await new Promise((resolve) => setTimeout(resolve, 250));
-          }
-          delayedSelection = beforeSwitch;
-          return reply(msg.id, { configOptions: configOptions() });
-        }
-        const partial = configOptions().filter(option => option.category !== "model");
-        const partialMode = process.env.KAOIRO_TEST_SWITCH_PARTIAL;
-        const responseOptions = ["response", "response-with-notice", "both"]
-          .includes(partialMode) ? partial : configOptions();
-        const noticeOptions = ["notice", "both"].includes(partialMode)
-          ? partial : configOptions();
-        const sendNotice = () => update({ sessionUpdate: "config_option_update",
-          configOptions: process.env.KAOIRO_TEST_CONFLICT_NOTICE
-            ? noticeOptions.map(option => option.category === "thought_level"
-              ? { ...option, currentValue: "high" } : option) : noticeOptions });
-        if (partialMode !== "response" && process.env.KAOIRO_TEST_NOTICE_FIRST) sendNotice();
-        reply(msg.id, { configOptions: responseOptions });
-        if (partialMode !== "response" && !process.env.KAOIRO_TEST_NOTICE_FIRST) {
-          if (process.env.KAOIRO_TEST_CONFLICT_NOTICE) {
-            if (configId === "effort") postSwitchNotice = sendNotice;
-          } else sendNotice();
-        }
-        break;
-      }
       case "session/prompt": {
-        if (postSwitchNotice) {
-          postSwitchNotice();
-          postSwitchNotice = undefined;
-        }
         if (deferredServers) {
           await connectMcp(deferredServers);
           await connecting;
@@ -282,6 +173,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           update({ sessionUpdate: "config_option_update",
             configOptions: configOptions().filter(option => option.category !== "model") });
           return finish(msg.id, "updated");
+        }
+        if (lastLine === "unsafe-config-mode") {
+          update({ sessionUpdate: "config_option_update", configOptions: [
+            ...configOptions(), { id: "mode", name: "Mode", category: "mode",
+              type: "select", currentValue: "allow-all", options: MODES.map(m => ({
+                value: m.id, name: m.name,
+              })) },
+          ] });
+          return finish(msg.id, "unsafe mode accepted");
         }
         if (lastLine === "unsafe-mode") {
           update({ sessionUpdate: "current_mode_update", currentModeId: "allow-all" });

@@ -211,11 +211,17 @@ export async function runMuseCli(
       if (host) void host.interrupt().catch(() => host?.close());
     },
     onSetModel: (value: string) => {
-      if (host) void host.setModel(value).catch(() => controlFailure("model switching", "failed"));
+      if (host) void host.setModel(value).catch(() => {
+        controlFailure("model switching");
+        host?.republishState();
+      });
       else controlFailure("model switching", "is not ready");
     },
     onSetEffort: (level: string) => {
-      if (host) void host.setEffort(level).catch(() => controlFailure("effort switching", "failed"));
+      if (host) void host.setEffort(level).catch(() => {
+        controlFailure("effort switching");
+        host?.republishState();
+      });
       else controlFailure("effort switching", "is not ready");
     },
     onSetPermission: (value: PermissionSelection) => {

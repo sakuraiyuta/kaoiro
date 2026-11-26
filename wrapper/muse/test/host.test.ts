@@ -731,79 +731,63 @@ describe("muse host", () => {
     } finally { rmSync(path, { force: true }); }
   });
 
-  it("switches the model and effort through the session config options", async () => {
-    const { host } = await started();
-    expect(host.statusExtSnapshot()).toMatchObject({
-      models: [
-        { value: "muse-spark-1.3", display_name: "Muse Spark 1.3" },
-        { value: "muse-wonder", display_name: "Muse Wonder" },
-      ],
-      session_capabilities: {
-        supports_model_switch: true,
-        supports_effort_switch: true,
-        supports_attachments: false,
-        supports_permission_mode_switch: false,
-      },
-    });
-    await host.setModel("muse-wonder");
-    expect(host.statusExtSnapshot()).toMatchObject({
-      model: "muse-wonder", model_source: "config",
-    });
-    await host.setEffort("low");
-    expect(host.statusExtSnapshot()).toMatchObject({
-      effort: "low", effort_source: "config",
-    });
-    await expect(host.setModel("no-such-model")).rejects.toThrow();
-    await expect(host.setEffort("no-such-effort")).rejects.toThrow();
+  it.each([undefined, "fixture-session"])(
+    "rejects live selection and reports the session response: %s", async (resumeSessionId) => {
+      const { host } = await started({ ...(resumeSessionId ? { resumeSessionId } : {}) });
+      expect(host.statusExtSnapshot()).toMatchObject({
+        model: "muse-spark-1.3", effort: "high",
+        session_capabilities: { supports_model_switch: false, supports_effort_switch: false },
+      });
+      await expect(host.setModel("muse-wonder")).rejects.toThrow(/unsupported/);
+      await expect(host.setEffort("low")).rejects.toThrow(/unsupported/);
+      await expect(host.send("partial-update")).resolves.toBeUndefined();
+      expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-spark-1.3", effort: "high" });
+      await expect(host.send("next")).resolves.toBeUndefined();
+    },
+  );
+
+  it.each([undefined, "fixture-session"])(
+    "rejects launch effort before native start: %s", async (resumeSessionId) => {
+      const path = join(tmpdir(), `muse-effort-rejected-${process.pid}.json`);
+      rmSync(path, { force: true });
+      const host = new MuseHost({ config: { ...config, effort: "low" },
+        cwd: process.cwd(), personaPrompt: "persona", send: () => {},
+        decidePermission: async () => ({ allow: true }), executable,
+        ...(resumeSessionId ? { resumeSessionId } : {}),
+        env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
+      hosts.push(host);
+      try {
+        await expect(host.run()).rejects.toThrow(/does not accept effort/);
+        expect(existsSync(path)).toBe(false);
+      } finally { rmSync(path, { force: true }); }
+    },
+  );
+
+  it("passes the launch model to native argv", async () => {
+    const path = join(tmpdir(), `muse-model-argv-${process.pid}.json`);
+    rmSync(path, { force: true });
+    try {
+      await started({ config: { ...config, model: "muse-wonder" },
+        env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
+      expect(JSON.parse(readFileSync(path, "utf8")).args)
+        .toEqual(["acp", "--model", "muse-wonder"]);
+    } finally { rmSync(path, { force: true }); }
   });
 
-  it("reports an effort response without a model selector", async () => {
-    const { host } = await started({ env: { ...process.env,
-      KAOIRO_TEST_SWITCH_PARTIAL: "response" } });
-    const switching = host.setEffort("low");
-    const prompt = host.send("after switch");
-    await expect(switching).resolves.toBeUndefined();
-    await expect(prompt).resolves.toBeUndefined();
-    expect(host.statusExtSnapshot().effort).toBe("low");
-    expect(host.statusExtSnapshot().model).toBeUndefined();
-  });
-
-  it("ignores a conflicting notification after a response", async () => {
-    const diagnostic = vi.spyOn(process.stderr, "write");
-    const { host } = await started({ env: { ...process.env,
-      KAOIRO_TEST_CONFLICT_NOTICE: "1" } });
-    const first = host.setModel("muse-wonder");
-    const second = host.setEffort("low");
-    const prompt = host.send("after both switches");
-    await expect(first).resolves.toBeUndefined();
-    await expect(second).resolves.toBeUndefined();
-    await expect(prompt).resolves.toBeUndefined();
-    await vi.waitFor(() => expect(diagnostic.mock.calls.some(([text]) =>
-      String(text).includes("config notification differs"))).toBe(true));
-    expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-wonder", effort: "low" });
-  });
-
-  it("ignores the previous switch notification during the next switch", async () => {
-    const diagnostic = vi.spyOn(process.stderr, "write");
-    const { host } = await started({ env: { ...process.env,
-      KAOIRO_TEST_DELAYED_SELECTION: "1" } });
-    const first = host.setModel("muse-wonder");
-    const second = host.setEffort("low");
-    const prompt = host.send("after both switches");
-    await expect(first).resolves.toBeUndefined();
-    await vi.waitFor(() => expect(diagnostic.mock.calls.some(([text]) =>
-      String(text).includes("config notification differs"))).toBe(true));
-    expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-wonder", effort: "high" });
-    await expect(second).resolves.toBeUndefined();
-    await expect(prompt).resolves.toBeUndefined();
-    expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-wonder", effort: "low" });
-  });
-
-  it("ignores an unsolicited selection update", async () => {
-    const { host } = await started();
-    await host.send("partial-update");
-    expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-spark-1.3", effort: "high" });
-    await expect(host.send("next")).resolves.toBeUndefined();
+  it("stops when a config notification reports an unsafe mode", async () => {
+    const path = join(tmpdir(), `muse-unsafe-config-${process.pid}.jsonl`);
+    rmSync(path, { force: true });
+    try {
+      const { host, run } = await started({ env: { ...process.env,
+        KAOIRO_TEST_MUSE_PROMPTS_FILE: path } });
+      const turn = host.send("unsafe-config-mode");
+      await expect(turn).rejects.toThrow();
+      await expect(run).rejects.toThrow(/approval mode/);
+      await expect(host.send("must not run")).rejects.toThrow();
+      const inputs = readFileSync(path, "utf8").trim().split("\n");
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]).toContain("unsafe-config-mode");
+    } finally { rmSync(path, { force: true }); }
   });
 
   it("continues if the selection diagnostic cannot be written", async () => {
@@ -816,58 +800,6 @@ describe("muse host", () => {
       expect(diagnostic).toHaveBeenCalled();
       await expect(host.send("next")).resolves.toBeUndefined();
     } finally { diagnostic.mockRestore(); }
-  });
-
-  it.each(["KAOIRO_TEST_HANG_SWITCH", "KAOIRO_TEST_DELAY_SWITCH"])(
-    "stops and rejects a queued prompt on switch timeout: %s", async (key) => {
-      const { host, run } = await started({ switchTimeoutMs: 100,
-        env: { ...process.env, [key]: "1" } });
-      const switching = host.setModel("muse-wonder");
-      const prompt = expect(host.send("must not run")).rejects.toThrow();
-      await expect(switching).rejects.toThrow();
-      await prompt;
-      await expect(run).rejects.toThrow(/timed out/);
-      expect(host.statusExtSnapshot().model).toBe("muse-spark-1.3");
-    },
-  );
-
-  it.each(["KAOIRO_TEST_SWITCH_UNSAFE_MODE", "KAOIRO_TEST_SWITCH_UNSAFE_NOTICE"])(
-    "stops a queued prompt for an unsafe mode: %s", async (key) => {
-      const path = join(tmpdir(), `muse-unsafe-switch-${key}-${process.pid}.jsonl`);
-      rmSync(path, { force: true });
-      try {
-        const { host, run } = await started({ env: { ...process.env,
-          [key]: "1", KAOIRO_TEST_MUSE_PROMPTS_FILE: path } });
-        const switching = host.setModel("muse-wonder");
-        const prompt = expect(host.send("must not run")).rejects.toThrow();
-        await expect(switching).rejects.toThrow();
-        await prompt;
-        await expect(run).rejects.toThrow();
-        expect(existsSync(path)).toBe(false);
-      } finally { rmSync(path, { force: true }); }
-    },
-  );
-
-  it.each([
-    ["KAOIRO_TEST_SWITCH_UNCHANGED", "muse-spark-1.3"],
-    ["KAOIRO_TEST_SWITCH_OTHER", "third-model"],
-    ["KAOIRO_TEST_SWITCH_MISSING_REQUESTED", undefined],
-    ["KAOIRO_TEST_SWITCH_RPC_REJECT", undefined],
-  ])("reports one rejection using only the response: %s", async (key, returned) => {
-    const { host, envelopes } = await started({ env: { ...process.env, [key]: "1" } });
-    const switching = host.setModel("muse-wonder");
-    const prompt = host.send("after rejection");
-    await expect(switching).rejects.toThrow(/rejected/);
-    await expect(prompt).resolves.toBeUndefined();
-    const errors = envelopes.map((e) => e.ext?.switch_error).filter(Boolean);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({ kind: "model", requested: "muse-wonder" });
-    expect((errors[0] as { rolled_back_to?: string }).rolled_back_to).toBe(returned);
-    if (key === "KAOIRO_TEST_SWITCH_MISSING_REQUESTED") {
-      expect(host.statusExtSnapshot().model).toBeUndefined();
-    } else if (returned) {
-      expect(host.statusExtSnapshot().model).toBe(returned);
-    }
   });
 
   it("rejects permission-mode and permission switching explicitly", async () => {

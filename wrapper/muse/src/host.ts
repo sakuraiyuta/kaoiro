@@ -63,7 +63,6 @@ export interface MuseHostOptions {
   }) => void;
   /** Test seam for the startup deadline (M10). */
   startupTimeoutMs?: number;
-  switchTimeoutMs?: number;
   watchdogTimeoutMs?: number;
 }
 
@@ -71,15 +70,6 @@ interface Turn {
   text: string;
   token: string;
   conversations: string[];
-  resolve: () => void;
-  reject: (error: Error) => void;
-}
-
-type Axis = "model" | "effort";
-
-interface SwitchJob {
-  axis: Axis;
-  value: string;
   resolve: () => void;
   reject: (error: Error) => void;
 }
@@ -94,11 +84,10 @@ class StartupAborted extends Error {
 
 /**
  * The Muse engine host: one resident `muse acp` process, one ACP session,
- * one queued unit of work at a time (a turn or a model/effort switch, in
- * arrival order). Muse Code's ACP support is experimental and
- * plain-standard: this adapter consumes no vendor extensions, passes the
- * kaoiro tools as an HTTP MCP server in `session/new`, routes ACP
- * permission requests to the operator through the permission broker, and
+ * one queued turn at a time in arrival order. Muse Code's ACP support is
+ * experimental and plain-standard: this adapter consumes no vendor
+ * extensions, passes the kaoiro tools as an HTTP MCP server in
+ * `session/new`, routes ACP permission requests to the operator, and
  * selects the session's approval mode through ACP session modes.
  *
  * Declared limits of this adapter (see docs/reference/engines/
@@ -113,14 +102,11 @@ export class MuseHost implements EngineAdapter {
   #session: AcpSession | undefined;
   #toolHost: ToolHost | undefined;
   #sessionId: string | undefined;
-  #selection: MuseSelection = { models: [], effortLevels: [] };
+  #selection: MuseSelection = {};
   #modes: MuseModes | undefined;
-  #modelSource: "default" | "launch" | "config" = "default";
-  #effortSource: "default" | "launch" | "config" = "default";
-  #switchErrorOnce: { kind: Axis; requested: string; reason: string; rolled_back_to?: string } | undefined;
+  #modelSource: "default" | "launch" = "default";
   #context: { used: number; size: number } | undefined;
   #queue: Turn[] = [];
-  #switches: SwitchJob[] = [];
   #active: Turn | undefined;
   #signal: AbortController | undefined;
   #draining = false;
@@ -184,28 +170,17 @@ export class MuseHost implements EngineAdapter {
 
   statusExtSnapshot(): Record<string, unknown> {
     const selection = this.#selection;
-    const switchableModel = selection.models.length > 0 && selection.modelConfigId !== undefined;
-    const switchableEffort = selection.effortLevels.length > 0 && selection.effortConfigId !== undefined;
     const currentMode = this.#modes?.available.find((mode) => mode.id === this.#modes?.current);
     return {
       engine: "muse",
       cwd: this.#options.cwd,
-      models: switchableModel
-        ? selection.models
-        : [{ value: "default", display_name: "Account default" }],
+      models: [{ value: "default", display_name: "Account default" }],
       ...(selection.model
         ? { model: selection.model, model_source: this.#modelSource }
         : {}),
       ...(selection.effort
-        ? { effort: selection.effort, effort_source: this.#effortSource }
+        ? { effort: selection.effort, effort_source: "default" }
         : {}),
-      ...(this.#switches.some((job) => job.axis === "model")
-        ? { pending_model: this.#switches.find((job) => job.axis === "model")!.value }
-        : {}),
-      ...(this.#switches.some((job) => job.axis === "effort")
-        ? { pending_effort: this.#switches.find((job) => job.axis === "effort")!.value }
-        : {}),
-      ...(this.#switchErrorOnce ? { switch_error: this.#switchErrorOnce } : {}),
       ...(this.#modes
         ? {
           approval_mode: {
@@ -223,8 +198,8 @@ export class MuseHost implements EngineAdapter {
         },
       } : {}),
       session_capabilities: {
-        supports_model_switch: switchableModel,
-        supports_effort_switch: switchableEffort,
+        supports_model_switch: false,
+        supports_effort_switch: false,
         supports_permission_switch: false,
         supports_permission_mode_switch: false,
         supports_attachments: false,
@@ -259,7 +234,6 @@ export class MuseHost implements EngineAdapter {
       {},
       this.statusExtSnapshot(),
     );
-    this.#switchErrorOnce = undefined;
     this.#options.send(envelope);
   }
 
@@ -297,6 +271,9 @@ export class MuseHost implements EngineAdapter {
     if (config.sandbox) refused.push("sandbox");
     if (config.approval) refused.push("approval");
     if (config.network_access !== undefined) refused.push("network_access");
+    if (config.effort !== undefined) {
+      throw new Error("muse launch does not accept effort");
+    }
     if (refused.length > 0) {
       throw new Error(
         `muse launch does not accept ${refused.join(", ")}: ` +
@@ -443,12 +420,7 @@ export class MuseHost implements EngineAdapter {
     this.#modeConfig = this.#readModeConfig(session.configOptions);
     this.#modes = parseModes(modes);
     await this.#applyDefaultMode(check);
-    if (config.model && config.model !== "default") {
-      this.#enqueueSwitch("model", config.model, "launch").catch(() => {});
-    }
-    if (config.effort && this.#selection.effort !== config.effort) {
-      this.#enqueueSwitch("effort", config.effort, "launch").catch(() => {});
-    }
+    if (config.model && config.model !== "default") this.#modelSource = "launch";
     if (this.#sessionId !== undefined) this.#options.onSessionId?.(this.#sessionId);
   }
 
@@ -492,12 +464,7 @@ export class MuseHost implements EngineAdapter {
   }
 
   #adoptSelection(next: MuseSelection) {
-    this.#selection = {
-      ...next,
-      models: next.modelConfigId === undefined ? this.#selection.models : next.models,
-      effortLevels: next.effortConfigId === undefined
-        ? this.#selection.effortLevels : next.effortLevels,
-    };
+    this.#selection = next;
   }
 
   #fail(error: Error) {
@@ -522,20 +489,12 @@ export class MuseHost implements EngineAdapter {
     });
   }
 
-  /** One work loop for turns and switches alike, in arrival order within
-   *  each kind: a switch can never slip between a prompt and the switch
-   *  that was requested before it, and switches apply one at a time. */
+  /** Drains queued turns in arrival order. */
   async #drain(): Promise<void> {
     if (this.#draining || !this.#started) return;
     this.#draining = true;
     try {
       while (!this.#closing) {
-        const job = this.#switches[0];
-        if (job) {
-          this.#switches.shift();
-          await this.#applySwitch(job);
-          continue;
-        }
         const turn = this.#queue[0];
         if (!turn) break;
         this.#queue.shift();
@@ -788,9 +747,6 @@ export class MuseHost implements EngineAdapter {
     for (const turn of this.#queue.splice(0)) {
       turn.reject(new Error("muse host closed"));
     }
-    for (const job of this.#switches.splice(0)) {
-      job.reject(new Error("muse host closed"));
-    }
     try {
       const closing = this.#session?.connection.close() as unknown;
       if (closing instanceof Promise) void closing.catch(() => {});
@@ -800,115 +756,12 @@ export class MuseHost implements EngineAdapter {
     if (!this.#process) this.#resolveClosed();
   }
 
-  #enqueueSwitch(
-    axis: Axis,
-    value: string,
-    source: "launch" | "config",
-  ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      this.#switches.push({
-        axis,
-        value,
-        resolve: () => {
-          if (axis === "model") this.#modelSource = source;
-          else this.#effortSource = source;
-          resolve();
-        },
-        reject,
-      });
-      this.#state(this.state);
-      void this.#drain();
-    });
+  async setModel(_value: string): Promise<void> {
+    throw new Error("muse model switching is unsupported");
   }
 
-  /** Applies one switch and reports the last response values. */
-  async #applySwitch(job: SwitchJob): Promise<void> {
-    const { axis, value } = job;
-    const configId = axis === "model"
-      ? this.#selection.modelConfigId
-      : this.#selection.effortConfigId;
-    const current = axis === "model" ? this.#selection.model : this.#selection.effort;
-    if (configId === undefined) {
-      job.reject(new Error(`muse ${axis} switching is unavailable`));
-      return;
-    }
-    if (value === current) {
-      job.resolve();
-      this.#state(this.state);
-      return;
-    }
-    let returned: string | undefined;
-    try {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let response: Awaited<ReturnType<AcpSession["setConfigOption"]>>;
-      try {
-        response = await Promise.race([
-          this.#session!.setConfigOption(configId, value),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              const error = new Error("muse config switch timed out");
-              this.#state("error");
-              this.#fail(error);
-              reject(error);
-            }, this.#options.switchTimeoutMs ?? 30_000);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-      if (this.#closing) throw new Error("muse host closed");
-      if (!this.#checkModeConfig(response.configOptions)) {
-        throw new Error("muse approval mode changed unexpectedly");
-      }
-      const selection = parseSelection(response.configOptions);
-      this.#adoptSelection(selection);
-      returned = axis === "model" ? selection.model : selection.effort;
-      if (returned !== value) {
-        throw new Error("muse switch not applied");
-      }
-      if (axis === "model") this.#context = undefined;
-      job.resolve();
-      this.#state(this.state);
-    } catch {
-      if (this.#closing) {
-        job.reject(new Error(`muse ${axis} switching stopped`));
-        return;
-      }
-      this.#switchErrorOnce = {
-        kind: axis,
-        requested: value,
-        reason: "control_rejected",
-        ...(returned !== undefined ? { rolled_back_to: returned } : {}),
-      };
-      this.#state(this.state);
-      job.reject(new Error(`muse ${axis} switching rejected`));
-    }
-  }
-
-  async setModel(value: string): Promise<void> {
-    if (!this.#selection.models.some((model) => model.value === value)) {
-      this.#switchErrorOnce = {
-        kind: "model",
-        requested: value,
-        reason: "control_rejected",
-      };
-      this.#state(this.state);
-      throw new Error("muse model switching rejected");
-    }
-    await this.#enqueueSwitch("model", value, "config");
-  }
-
-  async setEffort(level: string): Promise<void> {
-    if (!this.#selection.effortLevels.includes(level)) {
-      this.#switchErrorOnce = {
-        kind: "effort",
-        requested: level,
-        reason: "control_rejected",
-      };
-      this.#state(this.state);
-      throw new Error("muse effort switching rejected");
-    }
-    await this.#enqueueSwitch("effort", level, "config");
+  async setEffort(_level: string): Promise<void> {
+    throw new Error("muse effort switching is unsupported");
   }
 
   async setPermission(_selection: PermissionSelection): Promise<void> {
