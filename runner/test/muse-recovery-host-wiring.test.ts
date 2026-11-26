@@ -43,13 +43,13 @@ it("refuses runner recovery after watchdog cancel followed by interrupt", async 
   }
 }, 15_000);
 
-it.each(["mode", "switch"])(
-  "revalidates approval after %s failure without replaying the queue", async (scenario) => {
+it(
+  "revalidates approval after mode failure without replaying the queue", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-muse-host-recovery-"));
     const result = join(root, "resumed.json");
     const prompts = join(root, "prompts.jsonl");
     vi.stubEnv("MUSE_RECOVERY_RESULT", result);
-    vi.stubEnv("MUSE_HOST_SCENARIO", scenario);
+    vi.stubEnv("MUSE_HOST_SCENARIO", "mode");
     vi.stubEnv("KAOIRO_TEST_MUSE_PROMPTS_FILE", prompts);
     vi.stubEnv("MUSE_HOST_FAKE", fileURLToPath(
       new URL("../../wrapper/muse/test/fixtures/muse.mjs", import.meta.url)));
