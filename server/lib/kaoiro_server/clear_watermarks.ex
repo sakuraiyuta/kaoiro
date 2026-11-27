@@ -145,13 +145,6 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @doc """
-  Compatibility accessor for callers that need the display ISO.
-  """
-  def display_for_broadcast(agent_id, server \\ __MODULE__) do
-    get_display(agent_id, server)
-  end
-
-  @doc """
   agent_id => tagged filter bound for every known clear:
   `{:order, {us, seq}}` for tuple entries, `{:iso, display_iso}` for
   legacy pre-M6 entries. Consumers must handle both — the `:order` case

@@ -8,4 +8,3 @@ export {
   parsePermissionPolicy,
   sandboxProfile,
 } from "./grok/policy.js";
-export const GROK_ENGINE = "grok" as const;
