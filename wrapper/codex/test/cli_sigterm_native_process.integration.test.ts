@@ -20,7 +20,7 @@ import {
   taggedProcesses,
   waitForNoTagged,
 } from "./fixtures/owner_tag.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 import { forceKillIfTagged } from "./fixtures/tagged_kill.js";
 
 const isLinux = process.platform === "linux";

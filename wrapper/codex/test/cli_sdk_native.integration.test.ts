@@ -9,7 +9,7 @@ import { expect, it, vi } from "vitest";
 import { CodexHost } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
 import { resolveAppServerBinary } from "../src/app_server_rpc.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 // Only the external peers are scripted; the production CLI factories are used.
 it.each([undefined, "app-server"] as const)("runs the %s production factories against a local provider", async backend => {

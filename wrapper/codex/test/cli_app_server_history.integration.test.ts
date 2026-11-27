@@ -8,7 +8,7 @@ import { ServerLink } from "@kaoiro/wrapper-core";
 import { AppServerSession } from "../src/app_server_session.js";
 import { CodexHost } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 import { MAX_HISTORY } from "../src/history.js";
 
 // The default pinned CLI may contact update services at startup. Local model

@@ -9,7 +9,7 @@ import { ServerLink, readRecoveryCheckpoint } from "@kaoiro/wrapper-core";
 import { AppServerRpc } from "../src/app_server_rpc.js";
 import { AppServerSession } from "../src/app_server_session.js";
 import { runCodexCli } from "../src/cli.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 import { watchdogClock } from "./fixtures/cli_app_server.js";
 
 type Input = { type?: string; role?: string; output?: unknown; content?: { text?: string }[] };

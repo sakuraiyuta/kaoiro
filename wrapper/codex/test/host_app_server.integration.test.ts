@@ -9,7 +9,7 @@ import { ServerLink } from "@kaoiro/wrapper-core";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { CodexHost } from "../src/host.js";
 import { materializeLocalImages } from "../src/upload.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 type Request = { model: string; reasoning: { effort: string }; input: Array<{ type?: string; role?: string; content?: Array<Record<string, unknown>> }> };
 // Real CLI startup can make outward update requests. Analytics/plugins are off;

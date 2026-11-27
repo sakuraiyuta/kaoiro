@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { runGrokCli } from "../src/cli.js";
 import { GrokHost } from "../src/host.js";
 import { groupName } from "../src/history.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 const SESSION = "fixture-session";
 const T0 = 1_760_000_000;

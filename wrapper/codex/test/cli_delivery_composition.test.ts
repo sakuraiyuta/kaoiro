@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { handoffToolResult } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runCodexCli } from "../src/cli.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 const config: WrapperConfig = {
   codex_backend: "app-server",

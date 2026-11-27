@@ -236,7 +236,7 @@ it("does not accept a public backend CLI flag", () => {
 it("reports public app-server startup failure without exec fallback or another Session", async () => {
   const { runCodexCli } = await import("../src/cli.js");
   const { CodexHost } = await import("../src/host.js");
-  const { phoenixLoopback } = await import("./fixtures/phoenix_loopback.js");
+  const { phoenixLoopback } = await import("../../../runner/test/fixtures/phoenix_loopback.js");
   const wire = await phoenixLoopback(() => ({})), signals = process.listeners("SIGINT");
   const session = vi.fn(async () => { throw new Error("Required bridge startup failed"); });
   let host: InstanceType<typeof CodexHost> | undefined;

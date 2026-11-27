@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { expect, it, vi } from "vitest";
 import { ServerLink } from "@kaoiro/wrapper-core";
 import { InterAgentTool, handoffToolResult, type Envelope } from "@kaoiro/agent-common";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 type PhoenixSocket = ReturnType<NonNullable<ConstructorParameters<typeof ServerLink>[3]>>;
 type Channel = ReturnType<PhoenixSocket["channel"]>;

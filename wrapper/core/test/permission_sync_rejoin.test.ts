@@ -1,7 +1,7 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import {expect,it} from "vitest";
 import {ServerLink,PermissionSyncTimeoutError} from "../src/transport.js";
-import {phoenixLoopback} from "../../codex/test/fixtures/phoenix_loopback.js";
+import {phoenixLoopback} from "../../../runner/test/fixtures/phoenix_loopback.js";
 import type {Envelope} from "@kaoiro/protocol";
 
 it("keeps the latest never-sent error through a real long rejoin and restores the ready snapshot once",async()=>{

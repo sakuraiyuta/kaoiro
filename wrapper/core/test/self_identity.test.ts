@@ -2,7 +2,7 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createPhoenixSocket } from "../src/phoenix_socket.js";
 import { ServerLink } from "../src/transport.js";
-import { phoenixLoopback } from "../../grok/test/fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });

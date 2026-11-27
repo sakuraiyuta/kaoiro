@@ -10,7 +10,7 @@ import { expect, it, vi } from "vitest";
 import { CodexHost } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
 import { AppServerRpc, resolveAppServerBinary } from "../src/app_server_rpc.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 const execFileAsync = promisify(execFile);
 

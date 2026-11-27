@@ -2,7 +2,7 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { expect, it, vi } from "vitest";
 import { runAntigravityCli } from "../src/cli.js";
 import type { AntigravityHost } from "../src/host.js";
-import { phoenixLoopback } from "../../grok/test/fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 it("buffers startup rename and applies later revisions through the default host and ServerLink", async () => {
   const server = await phoenixLoopback(() => ({ permission_sync: false }));

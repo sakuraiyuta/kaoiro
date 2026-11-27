@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { ServerLink } from "@kaoiro/wrapper-core";
 import { InterAgentTool } from "@kaoiro/agent-common";
 import type { Envelope } from "@kaoiro/agent-common";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 const config = { agent_id: "self", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://localhost" };

@@ -41,7 +41,7 @@ syncBuiltinESMExports();
 const { resolveAppServerBinary, AppServerRpc } = await import("../wrapper/codex/dist/app_server_rpc.js");
 const { CodexHost } = await import("../wrapper/codex/dist/host.js");
 const { runCodexCli } = await import("../wrapper/codex/dist/cli.js");
-const { phoenixLoopback } = await import("../wrapper/codex/test/fixtures/phoenix_loopback.js");
+const { phoenixLoopback } = await import("../runner/test/fixtures/phoenix_loopback.js");
 let host: InstanceType<typeof CodexHost> | undefined, rpc: InstanceType<typeof AppServerRpc> | undefined, threadId: string | undefined;
 const run = CodexHost.prototype.run;
 CodexHost.prototype.run = function (...args) { host = this;return Reflect.apply(run, this, args); };
