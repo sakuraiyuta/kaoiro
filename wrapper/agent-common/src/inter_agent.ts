@@ -476,9 +476,8 @@ export const MAX_COALESCED_MESSAGES = 10;
 /** Maximum combined byte size (UTF-8, of each envelope's OWN
  *  `formatInboundMessage()` rendering) of one coalesced batch (issue #211
  *  段階3, direction 2). Matches the independently-chosen 16_384 already
- *  used for `MAX_INPUT_BYTES` (permission.ts), `MAX_TASKLIST_ITEMS_JSON_BYTES`
- *  (tasklist.ts), and `MAX_LOG_BYTES` (logpayload.ts) — three unrelated
- *  call sites landed on the same order of magnitude for "a reasonable
+ *  used for `MAX_INPUT_BYTES` (permission.ts) and `MAX_LOG_BYTES`
+ *  (logpayload.ts). Both use the same order of magnitude for "a reasonable
  *  bound on one agent-facing text/JSON blob", which makes it the natural
  *  anchor here too instead of an invented number. Checked against the
  *  FORMATTED text size, since that is what actually reaches the model's

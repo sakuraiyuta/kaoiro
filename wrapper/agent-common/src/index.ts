@@ -68,14 +68,6 @@ export {
   redactCredentials,
   writeRedactedStderr,
 } from "./redact.js";
-export {
-  MAX_TASKLIST_ITEMS,
-  MAX_TASKLIST_ITEMS_JSON_BYTES,
-  MAX_TASKLIST_ITEM_TEXT_BYTES,
-  TASKLIST_TASK_ID,
-  normalizeTasklist,
-} from "./tasklist.js";
-export type { TasklistSourceItem, TasklistSnapshot } from "./tasklist.js";
 export { PendingRegistry } from "./pending.js";
 export {
   computeResumeDrift,
@@ -191,9 +183,6 @@ export type {
   SwitchErrorExt,
   TaskPayload,
   TaskStatus,
-  TasklistItem,
-  TasklistItemStatus,
-  TasklistOmitted,
   WirePersona,
   WrapperConfig,
 } from "./types.js";

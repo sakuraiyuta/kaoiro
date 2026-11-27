@@ -100,7 +100,6 @@
     createTranscriptIdentityIndex,
     activeTaskCountForDetail,
     mergeLiveTranscriptEntry,
-    tasklistForDetail,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -2377,7 +2376,6 @@
             selectedEnvelope,
             activeTaskCountByAgent,
           )}
-          tasklist={tasklistForDetail(selectedEnvelope, tasks)}
           deliveryStatus={deliveries[selectedEnvelope.agent_id] ?? null}
           wrapperBuildInfo={wrapperBuildInfos[selectedEnvelope.agent_id] ?? null}
           statusLine={statusLines.view(selectedEnvelope.agent_id)}

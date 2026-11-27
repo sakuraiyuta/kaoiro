@@ -18,7 +18,6 @@ import { statusLine } from "./statusLine";
 import { statusLineHistoryDialog } from "./statusLineHistoryDialog";
 import { statusLinePanel } from "./statusLinePanel";
 import { taskRing } from "./taskRing";
-import { tasklistFloat } from "./tasklistFloat";
 import { time } from "./time";
 import { untrustedMarkdown } from "./untrustedMarkdown";
 import { ja, type Messages } from "../ja";
@@ -44,7 +43,6 @@ const table = {
   statusLineHistoryDialog,
   statusLinePanel,
   taskRing,
-  tasklistFloat,
   time,
   untrustedMarkdown,
 };
