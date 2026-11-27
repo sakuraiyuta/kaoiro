@@ -656,39 +656,9 @@ interface ChildEntry {
   permissionCeiling?: AntigravityCeiling;
 }
 
-/** Fields the runner's config watcher can hot-swap while the supervisor
- *  keeps running (see cli.ts config-reload dispatch). Applied all-or-none
- *  each reload — the caller passes the FULL current value for every field
- *  (undefined for codex fields means "clear it"), so a config that drops
- *  the `codex` block leaves no stale plan behind. Running children keep
- *  their own launch-time values; only wrappers spawned AFTER the update
- *  see the new ones. */
-export interface SupervisorRuntimeUpdate {
-  cwdAllowlist: string[];
-  wrapperServerUrl: string;
-  codexAuthMode: CodexAuthMode | undefined;
-  codexChatgptPlan: ChatGptPlan | undefined;
-  codexInternalSubagents: boolean | undefined;
-  codexBackend?: WrapperConfig["codex_backend"];
-  codexExtraModels: EngineModelInfo[] | undefined;
-  antigravityExtraModels: EngineModelInfo[] | undefined;
-  antigravityAuth?: AntigravityAuth | undefined;
-  antigravityExecutable?: AgyExecutableResolution | undefined;
-  antigravityProbeTimeoutMs?: number | undefined;
-  antigravityMax?: AntigravityMaxConfig | undefined;
-  behaviourRelay?: BehaviourRelay | undefined;
-  contextWorkBudgetPercent: number | undefined;
-  /** Live getter for the runner's Claude engine-catalog cache (ADR-0039
-   *  F9 追補). Preserved on hot-reload so a config file change does not
-   *  disconnect an existing probe result from future spawns. */
-  getClaudeEngineCatalog:
-    | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
-    | undefined;
-}
-
 export class Supervisor {
   readonly #hostId: string;
-  #cwdAllowlist: string[];
+  readonly #cwdAllowlist: string[];
   readonly #launch: LaunchFn;
   readonly #sendResult: (result: SpawnResult) => void;
   readonly #sendSessions: (sessions: RunnerSessions) => void;
@@ -708,20 +678,20 @@ export class Supervisor {
   readonly #codexHomeProblem: () => string | null;
   readonly #now: () => number;
   readonly #resetTerminationGraceMs: number;
-  #wrapperServerUrl: string;
-  #codexAuthMode: CodexAuthMode | undefined;
-  #codexChatgptPlan: ChatGptPlan | undefined;
-  #codexInternalSubagents: boolean | undefined;
-  #codexBackend: WrapperConfig["codex_backend"];
-  #codexExtraModels: EngineModelInfo[] | undefined;
-  #antigravityExtraModels: EngineModelInfo[] | undefined;
-  #antigravityAuth: AntigravityAuth | undefined;
-  #antigravityExecutable: AgyExecutableResolution | undefined;
-  #antigravityProbeTimeoutMs: number | undefined;
-  #antigravityMax: AntigravityMaxConfig | undefined;
-  #behaviourRelay: BehaviourRelay | undefined;
-  #contextWorkBudgetPercent: number | undefined;
-  #getClaudeEngineCatalog:
+  readonly #wrapperServerUrl: string;
+  readonly #codexAuthMode: CodexAuthMode | undefined;
+  readonly #codexChatgptPlan: ChatGptPlan | undefined;
+  readonly #codexInternalSubagents: boolean | undefined;
+  readonly #codexBackend: WrapperConfig["codex_backend"];
+  readonly #codexExtraModels: EngineModelInfo[] | undefined;
+  readonly #antigravityExtraModels: EngineModelInfo[] | undefined;
+  readonly #antigravityAuth: AntigravityAuth | undefined;
+  readonly #antigravityExecutable: AgyExecutableResolution | undefined;
+  readonly #antigravityProbeTimeoutMs: number | undefined;
+  readonly #antigravityMax: AntigravityMaxConfig | undefined;
+  readonly #behaviourRelay: BehaviourRelay | undefined;
+  readonly #contextWorkBudgetPercent: number | undefined;
+  readonly #getClaudeEngineCatalog:
     | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
     | undefined;
   readonly #children = new Map<string, ChildEntry>();
@@ -773,30 +743,6 @@ export class Supervisor {
     this.#behaviourRelay = options.behaviourRelay;
     this.#contextWorkBudgetPercent = options.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
-  }
-
-  /** Hot-swap runtime config on a config-file reload. Full replacement per
-   *  field — the caller provides the current value for every field, so the
-   *  supervisor never carries stale values from a prior config revision.
-   *  Existing children are untouched. Relaunches preserve the spawn values
-   *  in `entry.parsed`, but use current host-local runtime fields, including
-   *  the Codex backend and wrapperServerUrl. */
-  updateRuntimeConfig(update: SupervisorRuntimeUpdate): void {
-    this.#cwdAllowlist = update.cwdAllowlist;
-    this.#wrapperServerUrl = update.wrapperServerUrl;
-    this.#codexAuthMode = update.codexAuthMode;
-    this.#codexChatgptPlan = update.codexChatgptPlan;
-    this.#codexInternalSubagents = update.codexInternalSubagents;
-    this.#codexBackend = update.codexBackend;
-    this.#codexExtraModels = update.codexExtraModels;
-    this.#antigravityExtraModels = update.antigravityExtraModels;
-    this.#antigravityAuth = update.antigravityAuth;
-    this.#antigravityExecutable = update.antigravityExecutable;
-    this.#antigravityProbeTimeoutMs = update.antigravityProbeTimeoutMs;
-    this.#antigravityMax = update.antigravityMax;
-    this.#behaviourRelay = update.behaviourRelay;
-    this.#contextWorkBudgetPercent = update.contextWorkBudgetPercent;
-    this.#getClaudeEngineCatalog = update.getClaudeEngineCatalog;
   }
 
   /** Handles a server `spawn`: validates, enforces the cwd allow-list, the

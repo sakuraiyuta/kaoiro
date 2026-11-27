@@ -29,21 +29,13 @@ import { storedEngineExecutable } from "./engines.js";
 const LIVE_PROBE_ENGINES: readonly EngineKind[] = ["claude-code"];
 
 export interface RefreshEngineCatalogDeps {
-  /** Live getter so a config hot-reload that changes host_id is reflected
-   *  in the next catalog_result reply (藤 must-fix 2). A fixed string
-   *  captured at handler construction would stamp the OLD host_id after
-   *  reconnect. */
+  /** Host identity established by this runner invocation. */
   getHostId: () => string;
   cache: ClaudeCatalogCache;
   getCurrentConfig: () => RunnerConfig;
   getDeliverySnapshot?: () => AppliedDeliverySnapshot;
   getCodexAuthMode: () => CodexAuthMode;
-  /** Live getter for the runner's memory-only Antigravity catalog probe
-   *  (ADR-0057 F6), same rationale as the getters above: a config reload or
-   *  a later re-probe between two Claude refreshes must reach the next
-   *  rebuilt register. Threaded into `buildRegister`'s 5th argument so a
-   *  Claude-only refresh does not regress Antigravity to the pinned
-   *  snapshot. */
+  /** Preserve the Antigravity catalog observed at startup during Claude refreshes. */
   getAntigravityCatalog: () => EngineModelInfo[] | undefined;
   /** Current process-local `agy --version` observation; passed into every
    *  register rebuild so catalog refresh cannot erase it. */

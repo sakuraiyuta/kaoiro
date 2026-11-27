@@ -12,7 +12,6 @@ const link = {
 await runRunnerCli({
   resolveCodexAuthMode: async () => "unknown",
   createRunnerLink: () => link,
-  watchRunnerConfig: () => ({ close() {} }),
   // No kaoiro entry started this process, and no wrapper is launched here.
   makeLauncher: () => () => { throw new Error("this fixture starts no wrapper"); },
   grokCatalogProbe: { cwd: process.cwd(), executable: process.env.FAKE_EXECUTABLE!, env: process.env },

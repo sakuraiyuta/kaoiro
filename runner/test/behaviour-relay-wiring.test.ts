@@ -1,11 +1,9 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import type { watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WrapperConfig } from "@kaoiro/protocol";
-import { watchRunnerConfig } from "../src/config-watcher.js";
 import { runRunnerCli } from "../src/runner-cli.js";
 import type { RunnerLinkOptions } from "../src/transport.js";
 import type { ManagedChild } from "../src/supervisor.js";
@@ -14,17 +12,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 function harness(root: string, configPath: string) {
   const configs: WrapperConfig[] = [];
   const children: ManagedChild[] = [];
   let callbacks!: RunnerLinkOptions;
-  let fire!: () => void;
-  const fsWatch = ((_dir: string, _options: unknown, listener: (e: string, f: string) => void) => {
-    fire = () => listener("change", "runner.config.json");
-    return { close() {}, on() { return this; } };
-  }) as unknown as typeof watch;
+  let connectedUrl = "";
   const dependencies = {
     makeLauncher: () => (_agent: string, config: WrapperConfig) => {
       configs.push(config);
@@ -33,6 +25,7 @@ function harness(root: string, configPath: string) {
       return child;
     },
     createRunnerLink: (_url: string, _id: string, options: RunnerLinkOptions) => {
+      connectedUrl = _url;
       callbacks = options;
       return {
         sendSpawnResult() {},
@@ -41,16 +34,9 @@ function harness(root: string, configPath: string) {
         sendStopAgent() {},
         sendCatalogResult() {},
         updateRegister() {},
-        reconnect() {},
         close() {},
       };
     },
-    // The real watcher (debounce, parse-error handling); only fs.watch is fake.
-    watchRunnerConfig: (
-      path: string,
-      onReload: Parameters<typeof watchRunnerConfig>[1],
-      onParseError: Parameters<typeof watchRunnerConfig>[2],
-    ) => watchRunnerConfig(path, onReload, onParseError, { watch: fsWatch }),
     installSignalHandlers: false,
   };
   const spawn = (id: string, engine = "claude-code") => ({
@@ -60,17 +46,12 @@ function harness(root: string, configPath: string) {
     cwd: root,
     engine,
   });
-  const reload = async (runtime: { waitForReloads(): Promise<void> }) => {
-    fire();
-    await sleep(350);
-    await runtime.waitForReloads();
-  };
   return {
+    connectedUrl: () => connectedUrl,
     configs,
     children,
     dependencies,
     spawn,
-    reload,
     callbacks: () => callbacks,
     configPath,
     writeConfig: (extra: Record<string, unknown>, capabilities = ["claude-code", "codex"]) =>
@@ -96,7 +77,7 @@ function withRoot<T>(run: (root: string, configPath: string) => Promise<T>): Pro
 }
 
 describe("behaviour settings relay (issue #469)", () => {
-  it("relays file values to Claude wrappers from the next lifetime and rejects an invalid reload", () =>
+  it("relays file values to Claude wrappers from startup settings", () =>
     withRoot(async (root, configPath) => {
       const h = harness(root, configPath);
       const diagnostic = vi.spyOn(process.stderr, "write");
@@ -108,39 +89,6 @@ describe("behaviour settings relay (issue #469)", () => {
         expect(h.configs[0]?.folds_per_turn).toBe(5);
         expect(h.configs[0]).not.toHaveProperty("urgent_overtake_limit");
         expect(h.configs[1]).not.toHaveProperty("folds_per_turn");
-
-        // A valid reload reaches the next spawn only; the running one keeps 5.
-        h.writeConfig({ claude_code: { folds_per_turn: 6, urgent_overtake_limit: 3 } });
-        await h.reload(runtime!);
-        expect(h.configs[0]?.folds_per_turn).toBe(5);
-        h.callbacks().onSpawn?.(h.spawn("b"));
-        expect(h.configs[2]).toMatchObject({ folds_per_turn: 6, urgent_overtake_limit: 3 });
-        expect(
-          diagnostic.mock.calls.some(([s]) =>
-            /behaviour settings for subsequent wrappers: .*claude-code\.folds_per_turn=6/.test(
-              String(s),
-            ),
-          ),
-        ).toBe(true);
-
-        // An invalid value is skipped: the last valid configuration stays.
-        h.writeConfig({ claude_code: { folds_per_turn: 65 } });
-        await h.reload(runtime!);
-        h.callbacks().onSpawn?.(h.spawn("c"));
-        expect(h.configs[3]).toMatchObject({ folds_per_turn: 6, urgent_overtake_limit: 3 });
-
-        // A wrongly typed block is rejected too: an array must not replace
-        // the last valid relay with an empty one.
-        h.writeConfig({ claude_code: [] });
-        await h.reload(runtime!);
-        h.callbacks().onSpawn?.(h.spawn("c2"));
-        expect(h.configs[4]).toMatchObject({ folds_per_turn: 6, urgent_overtake_limit: 3 });
-
-        // Removing the key falls back to the wrapper default (nothing relayed).
-        h.writeConfig({});
-        await h.reload(runtime!);
-        h.callbacks().onSpawn?.(h.spawn("d"));
-        expect(h.configs[5]).not.toHaveProperty("folds_per_turn");
       } finally {
         runtime?.close();
         diagnostic.mockRestore();
@@ -148,7 +96,7 @@ describe("behaviour settings relay (issue #469)", () => {
     }));
 
   it.each(["codex", "antigravity"] as const)(
-    "%s: an array block does not replace the last valid relay",
+    "%s: relays the startup watchdog",
     (block) =>
       withRoot(async (root, configPath) => {
         const h = harness(root, configPath);
@@ -173,10 +121,6 @@ describe("behaviour settings relay (issue #469)", () => {
         try {
           h.callbacks().onSpawn?.(h.spawn("a", block));
           expect(h.configs[0]?.turn_watchdog_inactivity_ms).toBe(90_000);
-          h.writeConfig({ [block]: [] }, capabilities);
-          await h.reload(runtime!);
-          h.callbacks().onSpawn?.(h.spawn("b", block));
-          expect(h.configs[1]?.turn_watchdog_inactivity_ms).toBe(90_000);
         } finally {
           runtime?.close();
           diagnostic.mockRestore();
@@ -207,23 +151,6 @@ describe("behaviour settings relay (issue #469)", () => {
         const shadowed = () => lines.filter((l) => l.includes("is shadowed by"));
         expect(deprecated()).toHaveLength(1);
         expect(shadowed()).toHaveLength(1);
-
-        // file=A/variable=B then file=C/variable=B: no effective change, the
-        // shadow warning still fires, the deprecation line does not repeat.
-        h.writeConfig({ claude_code: { folds_per_turn: 7, urgent_overtake_limit: 3 } });
-        await h.reload(runtime!);
-        expect(shadowed()).toHaveLength(2);
-        expect(deprecated()).toHaveLength(1);
-        h.callbacks().onSpawn?.(h.spawn("b"));
-        expect(h.configs[1]).not.toHaveProperty("folds_per_turn");
-
-        // Unrelated reload: no repeat.
-        h.writeConfig({
-          claude_code: { folds_per_turn: 7, urgent_overtake_limit: 4 },
-        });
-        await h.reload(runtime!);
-        expect(shadowed()).toHaveLength(2);
-        expect(h.configs.length).toBe(2);
       } finally {
         runtime?.close();
         diagnostic.mockRestore();
@@ -252,22 +179,13 @@ describe("behaviour settings relay (issue #469)", () => {
           antigravity_epoch_idle_ms: 3000,
         });
         expect(h.configs[1]).not.toHaveProperty("antigravity_tool_timeout_ms");
-        h.writeConfig(
-          { antigravity: { auth: "google-cloud-sign-in", cli_path: agy,
-            tool_timeout_ms: 2500 } },
-          capabilities,
-        );
-        await h.reload(runtime!);
-        h.callbacks().onSpawn?.(h.spawn("b", "antigravity"));
-        expect(h.configs[2]?.antigravity_tool_timeout_ms).toBe(2500);
-        expect(h.configs[2]).not.toHaveProperty("antigravity_epoch_idle_ms");
       } finally {
         runtime?.close();
         diagnostic.mockRestore();
       }
     }));
 
-  it("log_phoenix_heartbeats applies live to the running link, and a set variable wins", () =>
+  it("log_phoenix_heartbeats is fixed at startup, and a set variable wins", () =>
     withRoot(async (root, configPath) => {
       const h = harness(root, configPath);
       const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -275,12 +193,6 @@ describe("behaviour settings relay (issue #469)", () => {
       const runtime = await runRunnerCli(h.dependencies, [configPath]);
       try {
         const logHeartbeats = h.callbacks().logHeartbeats!;
-        expect(logHeartbeats()).toBe(false);
-        h.writeConfig({ log_phoenix_heartbeats: true });
-        await h.reload(runtime!);
-        expect(logHeartbeats()).toBe(true);
-        h.writeConfig({ log_phoenix_heartbeats: false });
-        await h.reload(runtime!);
         expect(logHeartbeats()).toBe(false);
       } finally {
         runtime?.close();
@@ -296,7 +208,7 @@ describe("behaviour settings relay (issue #469)", () => {
       }
     }));
 
-  it("KAOIRO_RUNNER_SERVER_URL warns like the others, including when only the hidden file value changes", () =>
+  it("KAOIRO_RUNNER_SERVER_URL takes precedence over the file and warns at startup", () =>
     withRoot(async (root, configPath) => {
       vi.stubEnv("KAOIRO_RUNNER_SERVER_URL", "wss://prod.example/runner");
       const h = harness(root, configPath);
@@ -308,22 +220,13 @@ describe("behaviour settings relay (issue #469)", () => {
       h.writeConfig({ server_url: "ws://fixture/runner" });
       const runtime = await runRunnerCli(h.dependencies, [configPath]);
       try {
+        expect(h.connectedUrl()).toBe("wss://prod.example/runner");
         const deprecated = () =>
           lines.filter((l) => l.includes("KAOIRO_RUNNER_SERVER_URL is deprecated"));
         const shadowed = () =>
           lines.filter((l) => l.includes('"server_url" in runner.config.json is shadowed'));
         expect(deprecated()).toHaveLength(1);
         expect(shadowed()).toHaveLength(1);
-        // The effective URL does not move, so nothing else is applied; the
-        // changed file value still gets its warning.
-        h.writeConfig({ server_url: "ws://other/runner" });
-        await h.reload(runtime!);
-        expect(shadowed()).toHaveLength(2);
-        expect(deprecated()).toHaveLength(1);
-        // The same file value again: no repeat.
-        h.writeConfig({ server_url: "ws://other/runner", permission_timeout_ms: 5000 });
-        await h.reload(runtime!);
-        expect(shadowed()).toHaveLength(2);
       } finally {
         runtime?.close();
         diagnostic.mockRestore();

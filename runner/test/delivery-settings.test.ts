@@ -2,7 +2,6 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EngineKind, LaunchDeliveryPolicyMetadata, RunnerRegister } from "@kaoiro/protocol";
 import { buildRegister, parseRunnerConfig } from "../src/config.js";
-import { changedFields } from "../src/config-diff.js";
 import generations from "../../protocol/fixtures/claude-delivery-generations.json" with { type: "json" };
 import { HOST_DELIVERY_ROWS } from "../src/behaviour-settings.js";
 import { buildLaunchDeliveryMetadata, createDeliverySnapshot, deliveryJsonBytes, preflightDeliveryRegister,
@@ -40,7 +39,6 @@ describe("host delivery settings", () => {
     const changed = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(config));
     expect(changed.in_flight_defaults).toEqual({ "claude-code": false, codex: true, antigravity: true, grok: false, muse: false });
     expect(changed.engines?.every(e => Object.values(e.launch_delivery_policy!.mechanisms).every(mode => mode === "none"))).toBe(true);
-    expect(changedFields(base, { ...base, in_flight_delivery: { codex: { default: false } } })).toEqual(["in_flight_delivery"]);
   });
   it("captures immutable configuration inputs", () => {
     const config = parseRunnerConfig(raw);

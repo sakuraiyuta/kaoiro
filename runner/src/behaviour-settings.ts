@@ -1,7 +1,7 @@
 // The runner's behaviour settings (issue #469): the one table that drives the
 // runner.config.json parse, the validation of the deprecated KAOIRO_* variable
-// that overrides each key, the relay of file values to the wrapper, and the
-// reload diff. A variable that is set is never copied into the wrapper
+// that overrides each key, and the relay of file values to the wrapper.
+// A variable that is set is never copied into the wrapper
 // config: the runner relays nothing for that key, so the wrapper reads the
 // inherited variable through its own reader and the two sides cannot
 // disagree about whether it is set.
@@ -449,11 +449,11 @@ export function parseTopLevelBehaviour(
 }
 
 function fileValue(
-  config: RunnerConfig | undefined,
+  config: RunnerConfig,
   row: BehaviourRow,
 ): BehaviourValue | undefined {
   const holder = (
-    row.block === undefined ? config : config?.[row.block]
+    row.block === undefined ? config : config[row.block]
   ) as Record<string, unknown> | undefined;
   const value = holder?.[row.key] as BehaviourValue | undefined;
   return row.falseIsAbsent && value === false ? undefined : value;
@@ -517,29 +517,17 @@ export function computeBehaviourRelay(
   return relay as BehaviourRelay;
 }
 
-/** Deprecation and shadow warnings for the variables that are set. The
- *  deprecation line is emitted once per variable (`seen` carries that state
- *  across reloads). The shadow line is emitted when the file also sets the
- *  key to a different value and the file value is new (startup, or changed
- *  since `previous`), so an edit that a variable hides is never silent. */
-export function behaviourWarnings(
-  previous: RunnerConfig | undefined,
-  next: RunnerConfig,
-  set: readonly SetVariable[],
-  seen: Set<string>,
-): string[] {
+/** Report deprecated environment overrides and conflicting file settings at startup. */
+export function behaviourWarnings(config: RunnerConfig, set: readonly SetVariable[]): string[] {
   const lines: string[] = [];
   for (const { row, value } of set) {
     const path = behaviourConfigPath(row);
-    if (!seen.has(row.env)) {
-      seen.add(row.env);
-      lines.push(
-        `runner: warn - ${row.env} is deprecated; set "${path}" in ` +
-          "runner.config.json (the variable still overrides the file)\n",
-      );
-    }
-    const file = fileValue(next, row);
-    if (file !== undefined && file !== value && file !== fileValue(previous, row)) {
+    lines.push(
+      `runner: warn - ${row.env} is deprecated; set "${path}" in ` +
+        "runner.config.json (the variable still overrides the file)\n",
+    );
+    const file = fileValue(config, row);
+    if (file !== undefined && file !== value) {
       lines.push(
         `runner: warn - "${path}" in runner.config.json is shadowed by ` +
           `${row.env}\n`,
@@ -547,17 +535,6 @@ export function behaviourWarnings(
     }
   }
   return lines;
-}
-
-/** Stable one-line summary of a relay, for the reload receipt. */
-export function describeBehaviourRelay(relay: BehaviourRelay): string {
-  const parts: string[] = [];
-  for (const [engine, fields] of Object.entries(relay)) {
-    for (const [field, value] of Object.entries(fields ?? {})) {
-      parts.push(`${engine}.${field}=${String(value)}`);
-    }
-  }
-  return parts.length === 0 ? "none" : parts.join(", ");
 }
 
 /** Whether Phoenix heartbeat lines are kept: a set variable wins (exactly

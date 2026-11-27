@@ -74,6 +74,7 @@ class FakeChild implements ManagedChild {
 
 function harness(
   opts: {
+    codex?: Pick<SupervisorOptions, "codexAuthMode" | "codexChatgptPlan" | "codexInternalSubagents">;
     cwdAllowlist?: string[];
     sessions?: SessionMeta[] | Promise<SessionMeta[]>;
     exists?: boolean | Promise<boolean>;
@@ -110,6 +111,7 @@ function harness(
   let launchCall = 0;
   const sup = new Supervisor({
     hostId: "lab-pc-1",
+    ...opts.codex,
     ...(opts.externalCatalog && { externalCatalog: opts.externalCatalog }),
     cwdAllowlist: opts.cwdAllowlist ?? allowlist,
     wrapperServerUrl: opts.wrapperServerUrl ?? "ws://localhost:4000/wrapper",
@@ -907,7 +909,7 @@ describe("Supervisor.handleSpawn", () => {
     expect(results[1]).toMatchObject({ ok: false, reason: "error" });
   });
 
-  it("rejects unavailable Antigravity before fresh launch and lets a later reload recover", () => {
+  it("rejects unavailable Antigravity before fresh launch and uses the executable from a fresh start", () => {
     const h = harness({
       antigravityExecutable: { ok: false, reason: "executable_missing" },
       antigravityProbeTimeoutMs: 30_000,
@@ -917,42 +919,17 @@ describe("Supervisor.handleSpawn", () => {
     expect(h.children).toHaveLength(0);
     expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
 
-    h.sup.updateRuntimeConfig({
-      antigravityAuth: "google-cloud-sign-in",
-      cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined, codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined, codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
+    const next = harness({
       antigravityExecutable: { ok: true, path: process.execPath },
       antigravityProbeTimeoutMs: 45_000,
-      contextWorkBudgetPercent: undefined, getClaudeEngineCatalog: undefined,
     });
-    h.sup.handleSpawn(antigravity);
-    expect(h.configs.at(-1)).toMatchObject({
+    next.sup.handleSpawn(antigravity);
+    expect(next.configs[0]).toMatchObject({
       antigravity_cli_path: process.execPath,
       antigravity_probe_timeout_ms: 45_000,
     });
   });
 
-  it("does not replace an existing child when reload makes Antigravity unavailable", () => {
-    const h = harness({ antigravityExecutable: { ok: true, path: process.execPath } });
-    const antigravity = { ...spawnMsg, engine: "antigravity" };
-    h.sup.handleSpawn(antigravity);
-    h.sup.updateRuntimeConfig({
-      antigravityAuth: "google-cloud-sign-in",
-      cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined, codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined, codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      antigravityExecutable: { ok: false, reason: "executable_missing" },
-      antigravityProbeTimeoutMs: undefined,
-      contextWorkBudgetPercent: undefined, getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleRestart({ agent_id: antigravity.agent_id });
-    expect(h.children[0]!.kills).toBe(0);
-    expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
-    expect(h.configs[0]).toMatchObject({ antigravity_cli_path: process.execPath });
-  });
 
   // ADR-0057 F4c Stage B0 (issue #359): a config ceiling narrower than the
   // launch value is a contradiction and rejected fail-closed at spawn.
@@ -1668,33 +1645,6 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("rejects an unavailable Antigravity reset before terminating its old wrapper", () => {
-    const h = harness({ antigravityExecutable: { ok: true, path: process.execPath } });
-    const antigravity = { ...spawnMsg, agent_id: "lab-pc-1.antigravity-a", engine: "antigravity" };
-    h.sup.handleSpawn(antigravity);
-    h.sup.updateRuntimeConfig({
-      antigravityAuth: "google-cloud-sign-in",
-      cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined, codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined, codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      antigravityExecutable: { ok: false, reason: "executable_missing" },
-      antigravityProbeTimeoutMs: undefined,
-      contextWorkBudgetPercent: undefined, getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleResetSession({
-      agent_id: antigravity.agent_id,
-      mode: "new",
-      request_id: "rs_test123",
-      previous_session_id: "sess-old-xyz",
-    });
-    expect(h.children).toHaveLength(1);
-    expect(h.children[0]!.kills).toBe(0);
-    expect(h.resetResults).toEqual([
-      expect.objectContaining({ ok: false, reason: "spawn_failed" }),
-    ]);
   });
 
   // issue #359 M2: a reset_session must not widen the immutable launch ceiling
@@ -2800,243 +2750,23 @@ describe("resume-privilege-restoration apply (藤 D1/D2, P0)", () => {
   });
 });
 
-describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
-  it("新 cwdAllowlist を適用し、旧 cwd の spawn は cwd_not_found で拒否する", () => {
-    const h = harness({ cwdAllowlist: ["/old/path"] });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/new/path"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined,
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/old/path" });
-    expect(h.results.at(-1)).toEqual({
-      version: "0",
-      host_id: "lab-pc-1",
-      agent_id: spawnMsg.agent_id,
-      ok: false,
-      reason: "cwd_not_found",
-    });
-    h.sup.handleSpawn({
-      ...spawnMsg,
-      agent_id: "lab-pc-1.claude-b",
-      cwd: "/new/path",
-    });
-    expect(h.results.at(-1)?.ok).toBe(true);
-  });
-
-  it("新 wrapperServerUrl を fallback として次の spawn の WrapperConfig に流し込む", () => {
-    const h = harness({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://old:4000/wrapper",
-    });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://new:5000/wrapper",
-      codexAuthMode: undefined,
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    // server_url を spawn 側で欠落させると fallback が使われる
-    const { server_url: _drop, ...withoutUrl } = spawnMsg;
-    void _drop;
-    h.sup.handleSpawn({ ...withoutUrl, cwd: "/cwd" });
-    expect(h.configs.at(-1)?.server_url).toBe("ws://new:5000/wrapper");
-  });
-
-  it("作業予算の更新は以降の spawn だけへ relay する", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined,
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: 75,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd" });
-    expect(h.configs.at(-1)?.context_work_budget_percent).toBe(75);
+describe("Supervisor startup settings", () => {
+  it("uses the configured fallback URL and context work budget", () => {
+    const h = harness({ wrapperServerUrl: "ws://other/wrapper", contextWorkBudgetPercent: 75 });
+    const { server_url, ...request } = spawnMsg;
+    h.sup.handleSpawn(request);
+    expect(h.configs[0]).toMatchObject({ server_url: "ws://other/wrapper", context_work_budget_percent: 75 });
   });
 
   it.each(["pro", "prolite", "promax"] as const)(
     "codexChatgptPlan %s を以降の codex spawn の WrapperConfig に載せる",
     (plan) => {
-      const h = harness({ cwdAllowlist: ["/cwd"] });
-      h.sup.updateRuntimeConfig({
-        cwdAllowlist: ["/cwd"],
-        wrapperServerUrl: "ws://localhost:4000/wrapper",
-        codexAuthMode: "chatgpt",
-        codexChatgptPlan: plan,
-        codexInternalSubagents: undefined,
-        codexExtraModels: undefined,
-        antigravityExtraModels: undefined,
-        contextWorkBudgetPercent: undefined,
-        getClaudeEngineCatalog: undefined,
-      });
+      const h = harness({ cwdAllowlist: ["/cwd"], codex: { codexAuthMode: "chatgpt", codexChatgptPlan: plan } });
       h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
       expect(h.configs.at(-1)?.codex_chatgpt_plan).toBe(plan);
       expect(h.configs.at(-1)?.codex_auth_mode).toBe("chatgpt");
     },
   );
-
-  it("swapping codexExtraModels reaches subsequent codex spawns' WrapperConfig (issue #292)", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: "chatgpt",
-      codexChatgptPlan: "pro",
-      codexInternalSubagents: undefined,
-      codexExtraModels: [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
-    expect(h.configs.at(-1)?.codex_extra_models).toEqual([
-      { value: "gpt-6-astra", display_name: "GPT-6-Astra" },
-    ]);
-  });
-
-  it("resetting codexExtraModels to undefined clears it from subsequent codex spawns too", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: "chatgpt",
-      codexChatgptPlan: "pro",
-      codexInternalSubagents: undefined,
-      codexExtraModels: [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: "chatgpt",
-      codexChatgptPlan: "pro",
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
-    expect(h.configs.at(-1)?.codex_extra_models).toBeUndefined();
-  });
-
-  it("swapping antigravityExtraModels reaches subsequent antigravity spawns' WrapperConfig (issue #292)", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      antigravityAuth: "google-cloud-sign-in",
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined,
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: [
-        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
-      ],
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "antigravity" });
-    expect(h.configs.at(-1)?.antigravity_extra_models).toEqual([
-      { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
-    ]);
-  });
-
-  it("resetting antigravityExtraModels to undefined clears it from subsequent antigravity spawns too", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      antigravityAuth: "google-cloud-sign-in",
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined,
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: [
-        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
-      ],
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.updateRuntimeConfig({
-      antigravityAuth: "google-cloud-sign-in",
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined,
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "antigravity" });
-    expect(h.configs.at(-1)?.antigravity_extra_models).toBeUndefined();
-  });
-
-  it("codexChatgptPlan を undefined に戻すと以降の codex spawn からも消える", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: "chatgpt",
-      codexChatgptPlan: "pro",
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: "chatgpt",
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
-    expect(h.configs.at(-1)?.codex_chatgpt_plan).toBeUndefined();
-  });
-
-  it("既存稼働中の child は kill されない (適用は将来の spawn だけ)", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd" });
-    const running = h.last();
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/other"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: undefined,
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    expect(running.kills).toBe(0);
-  });
 
   it("codexInternalSubagents 未指定は effective default=true を codex spawn config に載せる", () => {
     const h = harness({ cwdAllowlist: ["/cwd"] });
@@ -3044,40 +2774,11 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
     expect(h.configs.at(-1)?.codex_internal_subagents).toBe(true);
   });
 
-  it("codexInternalSubagents=false は以降の codex spawn の WrapperConfig に載る", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: "chatgpt",
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: false,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
-    expect(h.configs.at(-1)?.codex_internal_subagents).toBe(false);
+  it.each([false, true])("passes the startup internal-subagent setting %s", enabled => {
+    const h = harness({ codex: { codexInternalSubagents: enabled } });
+    h.sup.handleSpawn({ ...spawnMsg, engine: "codex" });
+    expect(h.configs[0]?.codex_internal_subagents).toBe(enabled);
   });
-
-  it("codexInternalSubagents=true は以降の codex spawn の WrapperConfig に true として載る", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: "chatgpt",
-      codexChatgptPlan: undefined,
-      codexInternalSubagents: true,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
-    expect(h.configs.at(-1)?.codex_internal_subagents).toBe(true);
-  });
-
   it("getClaudeEngineCatalog が返す catalog を claude spawn の WrapperConfig に載せる (ADR-0039 F9)", () => {
     const catalog = [
       { value: "sonnet", display_name: "Sonnet", description: "" },

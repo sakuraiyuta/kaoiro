@@ -113,10 +113,8 @@ describe("log_phoenix_heartbeats", () => {
   it("names the key and warns about shadowing", () => {
     const next: RunnerConfig = { ...base, log_phoenix_heartbeats: true };
     const lines = behaviourWarnings(
-      undefined,
       next,
       readSetVariables(next, { [HEARTBEATS]: "0" }),
-      new Set(),
     ).join("");
     expect(lines).toContain(
       `${HEARTBEATS} is deprecated; set "log_phoenix_heartbeats" in runner.config.json`,
@@ -143,10 +141,9 @@ describe("server_url", () => {
     ).toEqual({});
   });
 
-  it("warns once about deprecation and when the file value differs and is new", () => {
-    const seen = new Set<string>();
+  it("warns once about deprecation and when the file value differs", () => {
     const env = { [SERVER_URL]: "wss://prod.example/runner" };
-    const startup = behaviourWarnings(undefined, base, readSetVariables(base, env), seen);
+    const startup = behaviourWarnings(base, readSetVariables(base, env));
     expect(startup).toHaveLength(2);
     expect(startup[0]).toContain(
       `${SERVER_URL} is deprecated; set "server_url" in runner.config.json`,
@@ -154,12 +151,9 @@ describe("server_url", () => {
     expect(startup[1]).toContain(
       `"server_url" in runner.config.json is shadowed by ${SERVER_URL}`,
     );
-    expect(behaviourWarnings(base, base, readSetVariables(base, env), seen)).toEqual([]);
-    const edited: RunnerConfig = { ...base, server_url: "ws://other:4000/runner" };
-    expect(behaviourWarnings(base, edited, readSetVariables(edited, env), seen)).toHaveLength(1);
     const same: RunnerConfig = { ...base, server_url: "wss://prod.example/runner" };
     expect(
-      behaviourWarnings(undefined, same, readSetVariables(same, env), new Set([SERVER_URL])),
+      behaviourWarnings(same, readSetVariables(same, env)).filter(line => line.includes("shadowed")),
     ).toEqual([]);
   });
 });

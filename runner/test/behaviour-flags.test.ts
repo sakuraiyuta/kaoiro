@@ -50,7 +50,7 @@ describe.each(FLAGS)("%s.%s", (block, engine, key, variable) => {
 
   it("warns that config true is shadowed only when the variable is not 1", () => {
     const lines = (file: RunnerConfig, value: string) =>
-      behaviourWarnings(undefined, file, readSetVariables(file, { [variable]: value }), new Set());
+      behaviourWarnings(file, readSetVariables(file, { [variable]: value }));
     const shadowed = `"${block}.${key}" in runner.config.json is shadowed by ${variable}`;
     expect(lines(withFile(true), "0").join("")).toContain(shadowed);
     expect(lines(withFile(true), "1").join("")).not.toContain("shadowed");
@@ -75,6 +75,6 @@ describe.each([
     const env = { [variable]: "0", [`${variable}_PERSONAS`]: "other" };
     expect(readSetVariables(file, env)).toEqual([]);
     expect(computeBehaviourRelay(file, env)).toEqual({});
-    expect(behaviourWarnings(undefined, file, readSetVariables(file, env), new Set())).toEqual([]);
+    expect(behaviourWarnings(file, readSetVariables(file, env))).toEqual([]);
   });
 });

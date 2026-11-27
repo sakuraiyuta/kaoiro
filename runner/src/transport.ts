@@ -212,7 +212,6 @@ export class PhoenixHeartbeatLogFilter {
   }
 
   shouldWrite(kind: string, message: string, data: unknown): boolean {
-    // Evaluated per line so a reloaded runner.config.json takes effect live.
     const include = this.#includeHeartbeats;
     if (typeof include === "function" ? include() : include) return true;
 
@@ -315,7 +314,7 @@ export function createPhoenixWireLogger(
 export class RunnerLink {
   #socket: Socket;
   #channel: Channel;
-  #hostId: string;
+  readonly #hostId: string;
   #register: RunnerRegister;
   #retireWire: () => void;
   #recoveryStep = 0;
@@ -367,11 +366,6 @@ export class RunnerLink {
   #wire(serverUrl: string, hostId: string): {
     socket: Socket; channel: Channel; retire: () => void;
   } {
-    // Capture the host id for THIS wire() call: reconnect() (below) reassigns
-    // this.#hostId synchronously while the old socket's teardown callbacks
-    // (onError/onClose) fire asynchronously — reading the live field would
-    // mislabel the OLD socket's closure with the NEW host id.
-    const wiredHostId = hostId;
     const channelTopic = `runner:${hostId}`;
     let active = true;
     let failedChannel = false;
@@ -413,12 +407,12 @@ export class RunnerLink {
     // isConnected()==false and the server marks the host dead.
     socket.onError((error) => {
       process.stderr.write(
-        `runner: socket error host=${wiredHostId}: ${String(error)}\n`,
+        `runner: socket error host=${hostId}: ${String(error)}\n`,
       );
     });
     socket.onClose((event) => {
       process.stderr.write(
-        `runner: socket closed host=${wiredHostId} code=${event.code} reason=${JSON.stringify(event.reason)}\n`,
+        `runner: socket closed host=${hostId} code=${event.code} reason=${JSON.stringify(event.reason)}\n`,
       );
       if (!active || event.code !== 1000 || !failedChannel ||
           recoveryTimer !== undefined) return;
@@ -427,7 +421,7 @@ export class RunnerLink {
         recoveryTimer = undefined;
         if (!active) return;
         this.#recoveryStep = Math.min(this.#recoveryStep + 1, 2);
-        this.#replaceConnection(serverUrl, wiredHostId, this.#register);
+        this.#replaceConnection(serverUrl);
       }, [1_000, 2_000, 5_000][this.#recoveryStep]);
     });
 
@@ -510,13 +504,8 @@ export class RunnerLink {
     this.#channel.push("catalog_result", result);
   }
 
-  /** Push a new register payload on the current channel. Used on config
-   *  reload when host_id / server_url are UNCHANGED but persona trust /
-   *  capabilities / engines changed. The server's `handle_in("register")`
-   *  upserts the HostRegistry entry (`Map.put`), so a re-push is a valid
-   *  in-place update — no reconnect needed. A disconnected socket is a
-   *  silent no-op: the next auto-reconnect's `onOpen` will read the
-   *  updated `#register` and announce it. */
+  /** Publish a refreshed Claude or Grok catalog. A reconnect uses the
+   *  latest register even if the socket was down at refresh time. */
   updateRegister(register: RunnerRegister): void {
     this.#register = register;
     if (this.#socket.isConnected()) {
@@ -535,27 +524,11 @@ export class RunnerLink {
     }
   }
 
-  /** Close the current socket/channel and open a fresh one under a new
-   *  (serverUrl, hostId, register). Used on config reload when host_id or
-   *  server_url changed. Existing wrappers spawned by the supervisor keep
-   *  their own connections to the OLD wrapper URL — that propagation is a
-   *  deferred item, not attempted here. The server-side old-host entry is
-   *  released by RunnerChannel.terminate when the disconnect propagates
-   *  (`HostRegistry.drop` under owner fencing). */
-  reconnect(serverUrl: string, hostId: string, register: RunnerRegister): void {
-    this.#recoveryStep = 0;
-    this.#replaceConnection(serverUrl, hostId, register);
-  }
-
-  #replaceConnection(
-    serverUrl: string, hostId: string, register: RunnerRegister,
-  ): void {
+  #replaceConnection(serverUrl: string): void {
     this.#retireWire();
     this.#channel.leave();
     this.#socket.disconnect();
-    this.#hostId = hostId;
-    this.#register = register;
-    const wired = this.#wire(serverUrl, hostId);
+    const wired = this.#wire(serverUrl, this.#hostId);
     this.#socket = wired.socket;
     this.#channel = wired.channel;
     this.#retireWire = wired.retire;
