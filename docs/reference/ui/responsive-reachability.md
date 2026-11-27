@@ -109,7 +109,6 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 | Composer | Always | Always (fixed to bottom) | Always | Always |
 | Attachment / slash menu | From composer | On composer | Same | Same |
 | Permission dock / question dock | Pending | Between log and composer | Same | Same |
-| Tasklist float ([#178](https://github.com/sakuraiyuta/kaoiro/issues/178)) | The agent has a tasklist with at least one item | Upper right of log; compact until expanded | Same | Same |
 
 `interrupt` and the two docks are **in-flow elements** placed between the log
 and composer within `.main`, not floating layers. A sheet is in front of them,
@@ -124,11 +123,6 @@ notice for the kaoiro tab. The mark follows the notice and is not cleared by
 opening the tab, so a standing notice (resume drift for the whole session, a
 non-zero lost or uncertain count) marks its tab every time the other tab is
 shown, and a second event of the same kind does not change the mark.
-
-The Tasklist float
-([#178](https://github.com/sakuraiyuta/kaoiro/issues/178)) is implemented in
-`dashboard/src/lib/TasklistFloat.svelte`; its row was not part of phase-31
-acceptance.
 
 ### Handling the blind-spot indicator
 

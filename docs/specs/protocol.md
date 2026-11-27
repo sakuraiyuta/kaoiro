@@ -79,9 +79,9 @@ Moved to [Event types and payloads](../reference/protocol/events.md#types-and-pa
 
 Moved to [Event types and payloads](../reference/protocol/events.md#wrapper-owned-stderr-error-diagnostics).
 
-### `task_type: "tasklist"` addendum (issue #178, ADR-0049 F4)
+### Reserved legacy checklist pair
 
-Moved to [Task and tasklist envelopes](../reference/protocol/tasks.md#task_type-tasklist-addendum-issue-178-adr-0049-f4).
+Moved to [Child task envelopes](../reference/protocol/tasks.md#reserved-legacy-checklist-pair).
 
 ### Directional message types (v0 settled)
 

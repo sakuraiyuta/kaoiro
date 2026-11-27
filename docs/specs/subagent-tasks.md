@@ -15,7 +15,7 @@ Moved to [Subagent visibility](../architecture/subagent-visibility.md#purpose).
 
 ### Source data (SDK messages)
 
-Moved to [Task and tasklist envelopes](../reference/protocol/tasks.md#source-data-sdk-messages).
+Moved to [Child task envelopes](../reference/protocol/tasks.md#source-data-sdk-messages).
 
 ### Entity model
 
@@ -23,15 +23,15 @@ Moved to [Subagent visibility](../architecture/subagent-visibility.md#entity-mod
 
 ### Dedicated envelope type `task`
 
-Moved to [Task and tasklist envelopes](../reference/protocol/tasks.md#dedicated-envelope-type-task).
+Moved to [Child task envelopes](../reference/protocol/tasks.md#dedicated-envelope-type-task).
 
 ### Recipient: operator only
 
-Moved to [Task and tasklist envelopes](../reference/protocol/tasks.md#recipient-operator-only).
+Moved to [Child task envelopes](../reference/protocol/tasks.md#recipient-operator-only).
 
 ### Concurrency and lifecycle
 
-Moved to [Task and tasklist envelopes](../reference/protocol/tasks.md#concurrency-and-lifecycle).
+Moved to [Child task envelopes](../reference/protocol/tasks.md#concurrency-and-lifecycle).
 
 ### Implementation stages (local to this feature)
 
@@ -46,8 +46,8 @@ Moved to [Subagent workflow detection evidence](../evidence/claude/subagent-work
 
 ## Constraints
 
-Moved to [Task and tasklist envelopes](../reference/protocol/tasks.md#constraints).
+Moved to [Child task envelopes](../reference/protocol/tasks.md#constraints).
 
 ## See Also
 
-Moved to [Task and tasklist envelopes](../reference/protocol/tasks.md#see-also).
+Moved to [Child task envelopes](../reference/protocol/tasks.md#see-also).

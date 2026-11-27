@@ -52,6 +52,6 @@ policy can be reconsidered.
 
 ## See Also
 
-- [Task and tasklist envelopes](../reference/protocol/tasks.md).
+- [Child task envelopes](../reference/protocol/tasks.md).
 - [Subagent workflow detection evidence](../evidence/claude/subagent-workflow-detection.md).
 - ADR: [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) (entity model and transport).
