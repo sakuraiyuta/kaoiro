@@ -333,9 +333,7 @@ async function startRunner(
     getCurrentConfig: () => config,
     getDeliverySnapshot: () => appliedDelivery,
     getCodexAuthMode: () => codexAuthMode,
-    // Live getter: threads the already-probed Antigravity catalog into a
-    // Claude-only refresh's rebuilt register, so it does not regress to the
-    // pinned snapshot.
+    // Keep the startup Antigravity catalog when Claude refreshes its own.
     getAntigravityCatalog: () => antigravityCatalog,
     getAntigravityCliVersion: () => antigravityVersion ?? undefined,
     getGrokCatalog: () => grokCatalog.current(),
@@ -349,15 +347,15 @@ async function startRunner(
   });
 
   let appliedRegister: RunnerRegister = external.register(buildRegister(
-      config,
-      antigravityVersion ?? undefined,
-      codexAuthMode,
-      undefined,
-      buildInfo,
-      antigravityCatalog,
-      appliedDelivery,
-      grokCatalog.current(),
-    ), config);
+    config,
+    antigravityVersion ?? undefined,
+    codexAuthMode,
+    undefined,
+    buildInfo,
+    antigravityCatalog,
+    appliedDelivery,
+    grokCatalog.current(),
+  ), config);
 
   link = createRunnerLink(config.server_url, config.host_id, {
     ...(token === undefined || token === "" ? {} : { token }),
@@ -383,34 +381,7 @@ async function startRunner(
   // reconciliation is no longer meaningful — a new pack ingest reaches
   // blacklist-mode hosts without a re-register.
 
-  // issue #646: the Grok catalog probe starts only once the link and the
-  // shutdown path exist, so close() can abort it before stopAll. A newer
-  // refresh aborts the one in flight. Until one answers, the register
-  // carries the last good catalog, else the default entry.
   let closed = false;
-  const refreshGrokCatalog = (): void => {
-    if (closed) return;
-    if (!effectiveCapabilities(config).includes("grok")) {
-      grokCatalog.abort();
-      return;
-    }
-    void grokCatalog.refresh().then((changed) => {
-      if (!changed || closed) return;
-      const next = external.register(buildRegister(
-        config,
-        antigravityVersion ?? undefined,
-        codexAuthMode,
-        claudeCatalog.getStale() ?? undefined,
-        buildInfo,
-        antigravityCatalog,
-        appliedDelivery,
-        grokCatalog.current(),
-      ), config);
-      link.updateRegister(next);
-      appliedRegister = next;
-    });
-  };
-
   const watcher = notifyConfigSaves(configPath, before);
 
   const close = (): void => {
@@ -434,7 +405,25 @@ async function startRunner(
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
   }
-  refreshGrokCatalog();
+  // Start discovery after installing the shutdown path, so an in-flight
+  // probe can be stopped before the runner exits.
+  if (effectiveCapabilities(config).includes("grok")) {
+    void grokCatalog.refresh().then((changed) => {
+      if (!changed || closed) return;
+      const next = external.register(buildRegister(
+        config,
+        antigravityVersion ?? undefined,
+        codexAuthMode,
+        claudeCatalog.getStale() ?? undefined,
+        buildInfo,
+        antigravityCatalog,
+        appliedDelivery,
+        grokCatalog.current(),
+      ), config);
+      link.updateRegister(next);
+      appliedRegister = next;
+    });
+  }
   return {
     supervisor,
     close,

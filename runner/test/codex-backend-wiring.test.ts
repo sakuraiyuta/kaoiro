@@ -25,7 +25,7 @@ it("relays the runner-local backend at startup and preserves running wrappers", 
     },
     createRunnerLink: (_url, _id, options) => {
       callbacks = options;
-      return { sendSpawnResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {}, sendCatalogResult() {}, updateRegister() {}, reconnect() {}, close() {} };
+      return { sendSpawnResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {}, sendCatalogResult() {}, updateRegister() {}, close() {} };
     },
     installSignalHandlers: false,
   }, [configPath]);

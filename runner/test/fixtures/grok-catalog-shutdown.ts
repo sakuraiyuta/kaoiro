@@ -7,7 +7,7 @@ import { runRunnerCli } from "../../src/runner-cli.js";
 
 const link = {
   sendSpawnResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {},
-  sendCatalogResult() {}, updateRegister() {}, reconnect() {}, close() {},
+  sendCatalogResult() {}, updateRegister() {}, close() {},
 };
 await runRunnerCli({
   resolveCodexAuthMode: async () => "unknown",
