@@ -1,9 +1,8 @@
 import type { ThreadItem } from "@openai/codex-sdk";
 import fs from "node:fs";
 import {
-  boundErrorDetail, clipText, logEntryToPayload, normalizeTasklist, writeRedactedStderr,
+  boundErrorDetail, clipText, logEntryToPayload, writeRedactedStderr,
   type AdapterEvent, type LogEntry, type LogPayload, type ResultPayload,
-  type TasklistSnapshot, type TasklistSourceItem,
 } from "@kaoiro/agent-common";
 import { threadEventToEvents, threadEventToLogs } from "./adapter.js";
 import { AppServerConnectionError, rpcObject, type RpcObject } from "./app_server_rpc.js";
@@ -15,7 +14,7 @@ export type AppServerProjection =
   | { kind: "compaction"; phase: "started" | "completed"; itemId: string }
   | { kind: "adapter"; event: AdapterEvent }
   | { kind: "log"; payload: LogPayload }
-  | { kind: "tasklist"; snapshot: TasklistSnapshot }
+  | { kind: "progress" }
   | { kind: "input_item"; itemId: string; clientId: string; phase: "started" | "completed"; text?: string }
   | { kind: "result"; status: "completed" | "failed" | "interrupted"; payload: ResultPayload };
 
@@ -137,16 +136,14 @@ export function appServerItemLogs(item: RpcObject & { id: string }, isComplete: 
   return [];
 }
 
-function plan(value: unknown): TasklistSourceItem[] | null {
-  if (!Array.isArray(value)) return null;
-  const result: TasklistSourceItem[] = [];
+function validPlan(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
   for (const entry of value) {
-    if (!rpcObject(entry) || typeof entry.step !== "string") return null;
-    const s = entry.status;
-    if (s !== "pending" && s !== "inProgress" && s !== "completed") return null;
-    result.push({ text: entry.step, status: s === "inProgress" ? "in_progress" : s });
+    if (!rpcObject(entry) || typeof entry.step !== "string") return false;
+    if (entry.status !== "pending" && entry.status !== "inProgress" &&
+        entry.status !== "completed") return false;
   }
-  return result;
+  return true;
 }
 
 /** One generator owns the raw stream and all per-turn display state. A terminal
@@ -189,11 +186,9 @@ async function* project(turn: AppServerTurn, state: { usage: AppServerUsage | nu
           yield { kind: "adapter", event: { kind: "assistant", blocks: ["thinking"] } };
         }
         break;
-      case "turn/plan/updated": {
-        const items = plan(p.plan);
-        if (items !== null) yield { kind: "tasklist", snapshot: normalizeTasklist(items) };
+      case "turn/plan/updated":
+        if (validPlan(p.plan)) yield { kind: "progress" };
         break;
-      }
       case "item/agentMessage/delta":
       case "item/reasoning/textDelta":
       case "item/reasoning/summaryTextDelta":

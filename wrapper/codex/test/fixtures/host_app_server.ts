@@ -55,17 +55,17 @@ export function appServerHostFixture(overrides: Partial<CodexHostOptions> = {}, 
     Object.assign(child, { exitCode: 0 });child.emit("exit", 0, null);stdout.end();stderr.end();queueMicrotask(() => child.emit("close", 0, null));
   };
   stdin.on("finish", exit);child.kill = vi.fn(() => { exit();return true; });
-  const states: Envelope[] = [], logs: Envelope[] = [], tasks: Envelope[] = [];
+  const states: Envelope[] = [], logs: Envelope[] = [];
   const starts = vi.fn(), ends = vi.fn(), finals = vi.fn(), boundaries = vi.fn();
   const createSession = vi.fn(options => AppServerSession.create({ ...options, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }));
   const host = new CodexHost(launch, { appServerSessionFactory: createSession,
-    appendSystemPrompt: "PERSONA", onState: e => states.push(e), onLog: e => logs.push(e), onTask: e => tasks.push(e),
+    appendSystemPrompt: "PERSONA", onState: e => states.push(e), onLog: e => logs.push(e),
     onTurnStart: starts, onTurnEnd: ends, onTurnFinalized: finals, onTurnBoundary: boundaries, ...overrides });
   const running = options.autoRun === false ? Promise.resolve() : host.run();
   const close = async () => { host.close();await running; };
   const turns = () => sent.filter(r => r.method === "turn/start");
   const until = (count: number) => vi.waitFor(() => expect(turns()).toHaveLength(count));
-  return { close, host, sent, states, logs, tasks, starts, ends, finals, boundaries, createSession, send, terminal, exit, running, turns, until,
+  return { close, host, sent, states, logs, starts, ends, finals, boundaries, createSession, send, terminal, exit, running, turns, until,
     set startReply(value: typeof startReply) { startReply = value; },
     releaseReply() { const release = heldReply;heldReply = null;release?.(); },
     set holdHistory(value: Promise<void>) { holdHistory = value; }, set invalidHistory(value: boolean) { invalidHistory = value; },

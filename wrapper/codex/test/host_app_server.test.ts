@@ -144,15 +144,39 @@ it("reprepares model and effort while settings resolution is pending without dup
   expect(f.starts).toHaveBeenCalledTimes(1);f.terminal();
 });
 
-it("projects logs, task snapshots and one result without re-normalizing omitted counts", async () => {
-  const f = fixture();await f.host.send("A");await f.until(1);
-  for (const text of ["FIRST", "DONE"]) f.send({ method: "item/completed", params: { threadId: "thread", turnId: "turn-1", item: { id: text, type: "agentMessage", text, phase: "final_answer" } } });
-  const plan = Array.from({ length: 205 }, (_, i) => ({ step: `task ${i}`, status: "pending" }));
-  for (let i = 0; i < 2; i++) f.send({ method: "turn/plan/updated", params: { threadId: "thread", turnId: "turn-1", plan } });
-  f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+it("projects logs and one result, and reports only progress for valid plans", async () => {
+  const progress = vi.fn();
+  const f = fixture({ onTurnProgress: progress });
+  await f.host.send("A");
+  await f.until(1);
+  await vi.waitFor(() => expect(progress).toHaveBeenCalledTimes(1));
+  const stateCount = f.states.length;
+  const logCount = f.logs.length;
+  const notification = (plan: unknown, identity = {}) => f.send({
+    method: "turn/plan/updated",
+    params: { threadId: "thread", turnId: "turn-1", plan, ...identity },
+  });
+  const plan = [{ step: "private plan text", status: "inProgress" }];
+  notification(plan, { threadId: "other-thread" });
+  notification(plan, { turnId: "other-turn" });
+  notification([{ step: 1, status: "completed" }]);
+  notification([{ step: "invalid status", status: "future" }]);
+  notification(plan);
+  notification(plan);
+  notification([]);
+
+  await vi.waitFor(() => expect(progress).toHaveBeenCalledTimes(4));
+  expect(f.states).toHaveLength(stateCount);
+  expect(f.logs).toHaveLength(logCount);
+
+  for (const text of ["FIRST", "DONE"]) {
+    f.send({ method: "item/completed", params: { threadId: "thread", turnId: "turn-1",
+      item: { id: text, type: "agentMessage", text, phase: "final_answer" } } });
+  }
+  f.terminal();
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
   expect(f.logs.filter(e => e.type === "log").map(e => e.payload.text)).toEqual(["FIRST", "DONE"]);
-  expect(f.logs.filter(e => e.type === "result")).toHaveLength(1);expect(f.tasks).toHaveLength(1);
-  expect(f.tasks[0]?.payload.omitted).toMatchObject({ count: 155 });
+  expect(f.logs.filter(e => e.type === "result")).toHaveLength(1);
 });
 
 it("keeps queued text after token-fenced interrupt and omits the reset-authorizing terminal", async () => {

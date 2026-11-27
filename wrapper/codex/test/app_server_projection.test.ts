@@ -271,16 +271,36 @@ describe("app-server result and progress projection", () => {
     expect(adapters(out)).toEqual([{ kind: "result", subtype: "success" }]);
   });
 
-  it("retains only textual function outputs and normalizes bounded plan snapshots", async () => {
+  it("retains only textual function outputs", async () => {
     const out = await collect(project([completed(item("functionCallOutput", "f", { name: "external", output: [
-      { type: "input_text", text: "ONE" }, { type: "input_image", image_url: "SECRET" }, { type: "input_text", text: "TWO" },
-    ] })), event("turn/plan/updated", { plan: Array.from({ length: 52 }, (_, i) => ({ step: "x".repeat(400), status: i === 0 ? "inProgress" : "completed" })) }),
-    event("turn/plan/updated", { plan: [{ step: "BAD", status: "future" }] }), terminal()]).events);
+      { type: "input_text", text: "ONE" }, { type: "input_image", image_url: "SECRET" },
+      { type: "input_text", text: "TWO" },
+    ] })), terminal()]).events);
     expect(logs(out)).toEqual([{ kind: "tool_result", tool_use_id: "f", output: "ONE\nTWO" }]);
-    expect(out.filter(e => e.kind === "tasklist")).toEqual([{ kind: "tasklist", snapshot: {
-      items: Array.from({ length: 50 }, (_, i) => ({ text: "x".repeat(256), status: i === 0 ? "in_progress" : "completed" })),
-      omitted: { count: 2, completed: 2 },
-    } }]);
+  });
+
+  it("emits only content-free progress for valid in-turn plan updates", async () => {
+    const plan = Array.from({ length: 52 }, (_, i) => ({
+      step: "x".repeat(400), status: i === 0 ? "inProgress" : "completed",
+    }));
+    const update = (params: Record<string, unknown>) => event("turn/plan/updated", params);
+    const progress = { kind: "progress" };
+    const out = await collect(project([
+      update({ plan, threadId: "other" }),
+      update({ plan, turnId: "other" }),
+      update({ plan: "not an array" }),
+      update({ plan: [null] }),
+      update({ plan: [{ step: 1, status: "pending" }] }),
+      update({ plan: [{ step: "", status: "future" }] }),
+      update({ plan }),
+      update({ plan }),
+      update({ plan: [] }),
+      terminal(),
+    ]).events);
+    expect(out.slice(0, -2)).toEqual([progress, progress, progress]);
+    expect(adapters(out)).toEqual([{ kind: "result", subtype: "success" }]);
+    expect(results(out)).toHaveLength(1);
+    expect(logs(out)).toEqual([]);
   });
 
   it("shares log/result bounds and makeResult error redaction without changing exec", async () => {

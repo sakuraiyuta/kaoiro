@@ -27,9 +27,7 @@ function isToolItem(item: ThreadItem): boolean {
 /**
  * Maps one ThreadEvent to zero or more adapter events (state-machine input).
  * Events with no coarse-state effect (item.updated, todo_list, error items)
- * map to no event. todo_list is instead mapped separately to a tasklist
- * envelope; the stream-fatal `error` event is handled by the host (it also
- * ends the turn on the SDK side).
+ * map to no event. The host handles the stream-fatal `error` event.
  */
 export function threadEventToEvents(event: ThreadEvent): AdapterEvent[] {
   switch (event.type) {
@@ -103,9 +101,7 @@ function mcpResultText(item: Extract<ThreadItem, { type: "mcp_tool_call" }>): st
  * Extracts relayable log entries from one ThreadEvent: assistant speech and
  * tool call / result pairs. item.started carries the tool_use line (input),
  * item.completed the tool_result line (output); agent_message text lands on
- * completion. reasoning / todo_list are not relayed as transcript logs:
- * todo_list travels separately as a tasklist envelope, while thinking stays
- * local, matching the Claude adapter.
+ * completion. Reasoning and planning items do not become transcript logs.
  */
 export function threadEventToLogs(event: ThreadEvent): LogEntry[] {
   if (event.type === "item.started") {
