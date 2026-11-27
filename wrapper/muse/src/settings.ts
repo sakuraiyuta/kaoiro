@@ -1,4 +1,4 @@
-import { resolveDigitsMs } from "@kaoiro/wrapper-core";
+import { resolveStandardTurnWatchdogSettings } from "@kaoiro/wrapper-core";
 
 export interface WatchdogSettings {
   inactivityMs: number;
@@ -24,42 +24,10 @@ export function resolveTurnWatchdogSettings(
     turn_watchdog_abort_grace_ms?: number;
   },
 ) {
-  const inactivity = resolveDigitsMs(
-    env,
-    "KAOIRO_MUSE_TURN_WATCHDOG_INACTIVITY_MS",
-    config?.turn_watchdog_inactivity_ms,
-    30 * 60_000,
-    60_000,
-    2_147_483_647,
-  );
-  const abortGrace = resolveDigitsMs(
-    env,
-    "KAOIRO_MUSE_TURN_WATCHDOG_ABORT_GRACE_MS",
-    config?.turn_watchdog_abort_grace_ms,
-    3_000,
-    1,
-    2_147_483_647,
-  );
-  if (inactivity.value < 30 * 60_000) {
-    const name = inactivity.source === "config"
-      ? "turn_watchdog_inactivity_ms"
-      : "KAOIRO_MUSE_TURN_WATCHDOG_INACTIVITY_MS";
-    warn(
-      `[kaoiro] ${name}=${inactivity.value}ms is below ` +
-      "the 30-minute default; choose the shorter inactivity value " +
-      "deliberately.\n",
-    );
-  }
-  return {
-    settings: {
-      inactivityMs: inactivity.value,
-      abortGraceMs: abortGrace.value,
-    },
-    sources: {
-      inactivityMs: inactivity.source,
-      abortGraceMs: abortGrace.source,
-    },
-  };
+  return resolveStandardTurnWatchdogSettings(env, warn, {
+    inactivity: "KAOIRO_MUSE_TURN_WATCHDOG_INACTIVITY_MS",
+    abortGrace: "KAOIRO_MUSE_TURN_WATCHDOG_ABORT_GRACE_MS",
+  }, config);
 }
 
 export function readTurnWatchdogSettings(

@@ -6,6 +6,7 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // setStatusLine / readStatusLine, fails here and not only in a unit test of
 // InterAgentTool.
 import { describe, expect, it, vi } from "vitest";
+import { testStatusLineContract } from "../../agent-common/test/status_line_contract.js";
 import type { ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
 import { runAntigravityCli } from "../src/cli.js";
 
@@ -61,36 +62,7 @@ async function compose() {
 }
 
 describe("Antigravity CLI status line composition (issue 482)", () => {
-  it("offers both tools on the tool host", async () => {
-    const { descriptors } = await compose();
-
-    expect(descriptors.map((d) => d.name)).toEqual(
-      expect.arrayContaining(["set_status_line", "read_status_line"]),
-    );
-  });
-
-  it("set_status_line reaches the link on its first call and returns the stored size", async () => {
-    const { descriptors, setStatusLine } = await compose();
-
-    const result = await descriptors.find((d) => d.name === "set_status_line")!.handler({ text: "hello" });
-
-    expect(setStatusLine).toHaveBeenCalledWith("hello");
-    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
-      status_line: { bytes: 5, truncated: false, updated_at: "2026-10-03T12:00:00.000001Z" },
-    });
-  });
-
-  it("read_status_line reaches the link with the agent id", async () => {
-    const { descriptors, readStatusLine } = await compose();
-
-    const result = await descriptors.find((d) => d.name === "read_status_line")!.handler({ agent_id: "peer.1" });
-
-    expect(readStatusLine).toHaveBeenCalledWith("peer.1");
-    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({
-      agent_id: "peer.1",
-      status_line: { text: "peer text" },
-    });
-  });
+  testStatusLineContract(compose);
 
   it("does not reach the link with an invalid input", async () => {
     const { descriptors, setStatusLine, readStatusLine } = await compose();

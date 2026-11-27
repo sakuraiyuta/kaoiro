@@ -56,6 +56,39 @@ export function resolveDigitsMs(
   };
 }
 
+export function resolveStandardTurnWatchdogSettings(
+  env: Readonly<Record<string, string | undefined>>,
+  warn: (message: string) => void,
+  names: { inactivity: string; abortGrace: string },
+  config?: {
+    turn_watchdog_inactivity_ms?: number;
+    turn_watchdog_abort_grace_ms?: number;
+  },
+) {
+  const inactivity = resolveDigitsMs(
+    env, names.inactivity, config?.turn_watchdog_inactivity_ms,
+    30 * 60_000, TURN_WATCHDOG_MIN_INACTIVITY_MS, TURN_WATCHDOG_MAX_DELAY_MS,
+  );
+  const abortGrace = resolveDigitsMs(
+    env, names.abortGrace, config?.turn_watchdog_abort_grace_ms,
+    3_000, TURN_WATCHDOG_MIN_ABORT_GRACE_MS, TURN_WATCHDOG_MAX_DELAY_MS,
+  );
+  if (inactivity.value < 30 * 60_000) {
+    const name = inactivity.source === "config"
+      ? "turn_watchdog_inactivity_ms"
+      : names.inactivity;
+    warn(
+      `[kaoiro] ${name}=${inactivity.value}ms is below ` +
+      "the 30-minute default; choose the shorter inactivity value " +
+      "deliberately.\n",
+    );
+  }
+  return {
+    settings: { inactivityMs: inactivity.value, abortGraceMs: abortGrace.value },
+    sources: { inactivityMs: inactivity.source, abortGraceMs: abortGrace.source },
+  };
+}
+
 /** The startup line each wrapper prints from the resolved watchdog object it
  *  hands to its TurnWatchdog, with each value's source. The pid lets an
  *  integration test confirm termination of exactly the process it observed. */
