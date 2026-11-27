@@ -26,6 +26,12 @@ export {
   readDigitsMs,
   resolveDigitsMs,
 } from "./turn_watchdog_settings.js";
+export { TurnWatchdog } from "./turn_watchdog.js";
+export type {
+  TurnWatchdogOptions,
+  TurnWatchdogSettings,
+  TurnWatchdogWarning,
+} from "./turn_watchdog.js";
 export type { ResolvedMs, SettingSource } from "./turn_watchdog_settings.js";
 export type {
   ClaudeSchedulerField,

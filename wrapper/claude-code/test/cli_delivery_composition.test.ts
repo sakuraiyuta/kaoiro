@@ -839,6 +839,34 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       expect(notices[0]!.payload.notice_type).toBe("turn_failure");
     } finally { finishHost(); await running; }
   });
+
+  it("routes conflicting CLI turn starts to one unattributed watchdog stop", async () => {
+    const fallbackStop = vi.fn(() => true);
+    await runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test" }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _id, options) => {
+        queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+        return {
+          send: () => {},
+          close: () => {},
+          currentSessionId: () => null,
+        } as never;
+      },
+      createHost: (_cfg, options) => ({
+        state: "idle",
+        statusExtSnapshot: () => ({}),
+        failStopForWatchdogAttributionUnknown: fallbackStop,
+        run: async () => {
+          options.onTurnStart!({ turnToken: "first", conversationIds: [] });
+          options.onTurnStart!({ turnToken: "second", conversationIds: [] });
+        },
+        close: () => {},
+      }) as never,
+    });
+    expect(fallbackStop).toHaveBeenCalledTimes(1);
+  });
+
   it("connects a real Host watchdog fail-stop to the CLI send decision", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-watchdog-recovery-"));
     const checkpoint = join(root, "checkpoint");

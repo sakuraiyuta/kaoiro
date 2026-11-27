@@ -217,6 +217,7 @@ describe("TurnWatchdog (issue #248)", () => {
     // returns the watchdog to monitoring and cancels the prior grace timer.
     watchdog.progress("turn-a");
     timers.advance(1_000);
+    expect(failStops).toEqual([]);
     timers.advance(60);
     expect(interrupts).toEqual(["turn-a", "turn-a"]);
     expect(warnings.at(-1)).toEqual({
