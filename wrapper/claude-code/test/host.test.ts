@@ -34,7 +34,7 @@ import {
 import type { ProbeOutcome } from "../src/probe-client.js";
 import type {
   Envelope,
-  TasklistSourceItem,
+  ResultPayload,
   WrapperConfig,
 } from "@kaoiro/agent-common";
 import {
@@ -554,8 +554,6 @@ const assistant = (content: unknown, error?: string): SDKMessage =>
   msg({ type: "assistant", message: { content }, error });
 const user = (content: unknown): SDKMessage =>
   msg({ type: "user", message: { content } });
-const taskToolResult = (toolUseId: string): SDKMessage =>
-  user([{ type: "tool_result", tool_use_id: toolUseId, content: "ok" }]);
 const result = (
   subtype: string,
   extra: Record<string, unknown> = {},
@@ -4076,618 +4074,6 @@ describe("AgentHost — query injection", () => {
       now: () => "T",
     });
     await expect(host.run()).resolves.toBeUndefined();
-  });
-});
-
-describe("AgentHost — own tasklist envelopes (issue #188)", () => {
-  it("TaskCreate は対応する tool_result 後にだけ persisted snapshot を読み、完全重複は送らない", async () => {
-    const tasks: Envelope[] = [];
-    const reads: string[] = [];
-    let persisted: TasklistSourceItem[] = [];
-    const queryFn = makeQueryFn(() => {
-      async function* gen(): AsyncGenerator<SDKMessage, void> {
-        yield msg({ type: "system", subtype: "init", session_id: "session-1" });
-        yield assistant([
-          {
-            type: "tool_use",
-            id: "create-1",
-            name: "TaskCreate",
-            input: { subject: "調査", description: "調べる" },
-          },
-        ]);
-        // AssistantMessage は tool 実行より先に届く。ここではまだ読まない。
-        expect(reads).toEqual([]);
-        expect(tasks).toEqual([]);
-
-        persisted = [
-          { text: "調査", status: "in_progress" },
-          { text: "実装", status: "pending" },
-        ];
-        yield taskToolResult("create-1");
-        expect(reads).toEqual(["session-1"]);
-        expect(tasks).toHaveLength(1);
-
-        yield assistant([
-          { type: "tool_use", id: "list-1", name: "TaskList", input: {} },
-        ]);
-        expect(reads).toEqual(["session-1"]);
-        yield taskToolResult("list-1");
-        // 同一 whole-list snapshot は LWW の再送をしない。
-        expect(reads).toEqual(["session-1", "session-1"]);
-        expect(tasks).toHaveLength(1);
-        yield result("success");
-      }
-      return asQuery(gen());
-    });
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn,
-      readTasklist: async (sessionId) => {
-        reads.push(sessionId);
-        return { kind: "updated", items: persisted };
-      },
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(tasks).toHaveLength(1);
-    expect(reads).toEqual(["session-1", "session-1"]);
-    expect(tasks[0]).toMatchObject({
-      type: "task",
-      payload: {
-        agent_id: "test.agent",
-        task_id: "tasklist",
-        task_type: "tasklist",
-        kind: "updated",
-        status: "running",
-        items: [
-          { text: "調査", status: "in_progress" },
-          { text: "実装", status: "pending" },
-        ],
-      },
-    });
-  });
-
-  it("TodoWrite compatibility path は assistant message の whole-list を直接配信する", async () => {
-    const tasks: Envelope[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([
-          {
-            type: "tool_use",
-            name: "TodoWrite",
-            input: {
-              todos: [
-                {
-                  content: "compatibility",
-                  status: "pending",
-                  activeForm: "準備中",
-                },
-              ],
-            },
-          },
-        ]),
-        result("success"),
-      ]),
-      readTasklist: async () => {
-        throw new Error("TodoWrite must not read persisted tasklist");
-      },
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.payload).toMatchObject({
-      task_type: "tasklist",
-      items: [{ text: "compatibility", status: "pending" }],
-    });
-  });
-
-  it("壊れた TodoWrite は warn し、既存 snapshot を更新しない", async () => {
-    const tasks: Envelope[] = [];
-    const warnings: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([
-          {
-            type: "tool_use",
-            name: "TodoWrite",
-            input: { todos: [{ content: "compatibility", status: "unknown" }] },
-          },
-        ]),
-        result("success"),
-      ]),
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(tasks).toEqual([]);
-    expect(warnings).toEqual([
-      "[kaoiro] TodoWrite todo.status is invalid — tasklist update dropped",
-    ]);
-  });
-
-  it("session_id が変われば、既知 tasklist だけを即時に新 session の snapshot へ置換する", async () => {
-    const tasks: Envelope[] = [];
-    const reads: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-old" }),
-        assistant([
-          {
-            type: "tool_use",
-            id: "old-create",
-            name: "TaskCreate",
-            input: { subject: "旧 session task", description: "old" },
-          },
-        ]),
-        taskToolResult("old-create"),
-        msg({ type: "system", subtype: "status", session_id: "session-new" }),
-        result("success"),
-      ]),
-      readTasklist: async (sessionId) => {
-        reads.push(sessionId);
-        return sessionId === "session-old"
-          ? {
-              kind: "updated",
-              items: [{ text: "旧 session task", status: "pending" }],
-            }
-          : { kind: "updated", items: [] };
-      },
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(reads).toEqual(["session-old", "session-new"]);
-    expect(tasks).toHaveLength(2);
-    expect(tasks.at(1)?.payload).toMatchObject({ items: [] });
-  });
-
-  it("terminal result は未解決の TaskCreate を一度 reconcile し、次 turn の再利用 id と join しない", async () => {
-    const reads: string[] = [];
-    const tasks: Envelope[] = [];
-    const warnings: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([
-          { type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} },
-        ]),
-        // tool_result を落としたまま turn が終了する。
-        result("success"),
-        // 次 turn の非 task tool_result が同じ id を使っても旧 join にはならない。
-        assistant([
-          { type: "tool_use", id: "reused-id", name: "Read", input: {} },
-        ]),
-        taskToolResult("reused-id"),
-        result("success"),
-      ]),
-      readTasklist: async (sessionId) => {
-        reads.push(sessionId);
-        return {
-          kind: "updated",
-          items: [{ text: "reconciled", status: "pending" }],
-        };
-      },
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(reads).toEqual(["session-1"]);
-    expect(tasks).toHaveLength(1);
-    expect(warnings).toEqual([
-      "[kaoiro] 1 pending tasklist refresh join(s) reconciled at result",
-    ]);
-  });
-
-  it("conversation_reset は未解決 join を reconcile して以後の id 再利用を切り離す", async () => {
-    const reads: string[] = [];
-    const warnings: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([
-          { type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} },
-        ]),
-        msg({ type: "conversation_reset", new_conversation_id: "reset-1" }),
-        assistant([
-          { type: "tool_use", id: "reused-id", name: "Read", input: {} },
-        ]),
-        taskToolResult("reused-id"),
-        result("success"),
-      ]),
-      readTasklist: async (sessionId) => {
-        reads.push(sessionId);
-        return { kind: "updated", items: [] };
-      },
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(reads).toEqual(["session-1"]);
-    expect(warnings).toEqual([
-      "[kaoiro] 1 pending tasklist refresh join(s) reconciled at conversation_reset",
-    ]);
-  });
-
-  it("interrupt 完了後は未解決 join を reconcile して以後の id 再利用を切り離す", async () => {
-    const reads: string[] = [];
-    const warnings: string[] = [];
-    let armed: () => void;
-    const pendingArmed = new Promise<void>((resolve) => {
-      armed = resolve;
-    });
-    let release: () => void;
-    const hold = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const queryFn = makeQueryFn(() => {
-      async function* gen(): AsyncGenerator<SDKMessage, void> {
-        yield msg({ type: "system", subtype: "init", session_id: "session-1" });
-        yield assistant([
-          { type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} },
-        ]);
-        armed!();
-        await hold;
-        yield assistant([
-          { type: "tool_use", id: "reused-id", name: "Read", input: {} },
-        ]);
-        yield taskToolResult("reused-id");
-        yield result("success");
-      }
-      return asQuery(gen());
-    });
-    const host = new AgentHost(config, {
-      onState: () => {},
-      queryFn,
-      readTasklist: async (sessionId) => {
-        reads.push(sessionId);
-        return { kind: "updated", items: [] };
-      },
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    const done = host.run();
-    await pendingArmed;
-    await host.interrupt();
-    release!();
-    await done;
-
-    expect(reads).toEqual(["session-1"]);
-    expect(warnings).toEqual([
-      "[kaoiro] 1 pending tasklist refresh join(s) reconciled at interrupt",
-    ]);
-  });
-
-  it("close 後も drain 中の TaskCreate の matching tool_result を tasklist に反映する", async () => {
-    const reads: string[] = [];
-    const tasks: Envelope[] = [];
-    const warnings: string[] = [];
-    let armed: () => void;
-    const pendingArmed = new Promise<void>((resolve) => {
-      armed = resolve;
-    });
-    let release: () => void;
-    const hold = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const queryFn = makeQueryFn(() => {
-      async function* gen(): AsyncGenerator<SDKMessage, void> {
-        yield msg({ type: "system", subtype: "init", session_id: "session-1" });
-        yield assistant([
-          { type: "tool_use", id: "create-1", name: "TaskCreate", input: {} },
-        ]);
-        armed!();
-        await hold;
-        // close() は input を閉じるだけで、実行中 turn は drain される。
-        yield taskToolResult("create-1");
-        yield result("success");
-      }
-      return asQuery(gen());
-    });
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn,
-      readTasklist: async (sessionId) => {
-        reads.push(sessionId);
-        return {
-          kind: "updated",
-          items: [{ text: "drained", status: "pending" }],
-        };
-      },
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    const done = host.run();
-    await pendingArmed;
-    host.close();
-    release!();
-    await done;
-
-    expect(reads).toEqual(["session-1"]);
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.payload).toMatchObject({
-      task_type: "tasklist",
-      items: [{ text: "drained", status: "pending" }],
-    });
-    expect(warnings).toEqual([]);
-  });
-
-  it("初回 session_id は tasklist を勝手に hydrate せず、session 変更で同じ表示なら再配信しない", async () => {
-    const tasks: Envelope[] = [];
-    const reads: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-old" }),
-        assistant([
-          {
-            type: "tool_use",
-            id: "old-list",
-            name: "TaskList",
-            input: {},
-          },
-        ]),
-        taskToolResult("old-list"),
-        msg({ type: "system", subtype: "status", session_id: "session-new" }),
-        result("success"),
-      ]),
-      readTasklist: async (sessionId) => {
-        reads.push(sessionId);
-        return {
-          kind: "updated",
-          items: [{ text: "同じ task", status: "pending" }],
-        };
-      },
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(reads).toEqual(["session-old", "session-new"]);
-    expect(tasks).toHaveLength(1);
-  });
-
-  it("session 切替先が invalid なら旧 list を空 snapshot で消して warn する", async () => {
-    const tasks: Envelope[] = [];
-    const warnings: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-old" }),
-        assistant([
-          { type: "tool_use", id: "old-list", name: "TaskList", input: {} },
-        ]),
-        taskToolResult("old-list"),
-        msg({ type: "system", subtype: "status", session_id: "session-new" }),
-        result("success"),
-      ]),
-      readTasklist: async (sessionId) =>
-        sessionId === "session-old"
-          ? {
-              kind: "updated",
-              items: [{ text: "旧 session task", status: "pending" }],
-            }
-          : { kind: "invalid", reason: "Claude task directory is missing" },
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(tasks).toHaveLength(2);
-    expect(tasks.at(-1)?.payload).toMatchObject({ items: [] });
-    expect(warnings).toEqual([
-      "[kaoiro] Claude task directory is missing — tasklist update dropped",
-    ]);
-  });
-
-  it("session 切替先の read が throw しても旧 list を空 snapshot で消す", async () => {
-    const tasks: Envelope[] = [];
-    const warnings: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-old" }),
-        assistant([
-          { type: "tool_use", id: "old-list", name: "TaskList", input: {} },
-        ]),
-        taskToolResult("old-list"),
-        msg({ type: "system", subtype: "status", session_id: "session-new" }),
-        result("success"),
-      ]),
-      readTasklist: async (sessionId) => {
-        if (sessionId === "session-old") {
-          return {
-            kind: "updated",
-            items: [{ text: "旧 session task", status: "pending" }],
-          };
-        }
-        throw new Error("new session source unavailable");
-      },
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(tasks).toHaveLength(2);
-    expect(tasks.at(-1)?.payload).toMatchObject({ items: [] });
-    expect(warnings).toEqual([
-      "[kaoiro] cannot read Claude tasklist: Error: new session source unavailable",
-    ]);
-  });
-
-  it("未知の tasklist 更新形 tool_use は warn し、snapshot を読まない", async () => {
-    const warnings: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([
-          {
-            type: "tool_use",
-            name: "TaskModify",
-            input: { taskId: "1", status: "completed" },
-          },
-        ]),
-        result("success"),
-      ]),
-      readTasklist: async () => {
-        throw new Error("must not read");
-      },
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(warnings).toEqual([
-      "[kaoiro] unrecognized tasklist-like tool_use: name=TaskModify — tasklist may be stale",
-    ]);
-  });
-
-  it("未知 Task* の warning は name ごとに host lifetime で一度だけ出す", async () => {
-    const warnings: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      queryFn: scriptedQuery([
-        assistant([{ type: "tool_use", name: "TaskModify", input: {} }]),
-        assistant([{ type: "tool_use", name: "TaskModify", input: {} }]),
-        assistant([{ type: "tool_use", name: "TaskFuture", input: {} }]),
-        assistant([{ type: "tool_use", name: "TaskFuture", input: {} }]),
-        result("success"),
-      ]),
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(warnings).toEqual([
-      "[kaoiro] unrecognized tasklist-like tool_use: name=TaskModify — tasklist may be stale",
-      "[kaoiro] unrecognized tasklist-like tool_use: name=TaskFuture — tasklist may be stale",
-    ]);
-  });
-
-  it("persisted task schema の破断は warn し、古い list を current として送らない", async () => {
-    const tasks: Envelope[] = [];
-    const warnings: string[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([
-          { type: "tool_use", id: "list-1", name: "TaskList", input: {} },
-        ]),
-        taskToolResult("list-1"),
-        result("success"),
-      ]),
-      readTasklist: async () => ({
-        kind: "invalid",
-        reason: "Claude task file 1.json status is invalid",
-      }),
-      warn: (message) => warnings.push(message),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(tasks).toEqual([]);
-    expect(warnings).toEqual([
-      "[kaoiro] Claude task file 1.json status is invalid — tasklist update dropped",
-    ]);
-  });
-
-  it("51件目以降を omitted で可視化してから送る", async () => {
-    const tasks: Envelope[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([
-          {
-            type: "tool_use",
-            id: "list-1",
-            name: "TaskList",
-            input: {},
-          },
-        ]),
-        taskToolResult("list-1"),
-        result("success"),
-      ]),
-      readTasklist: async () => ({
-        kind: "updated",
-        items: Array.from({ length: 51 }, (_, index) => ({
-          text: `todo ${index + 1}`,
-          status: index === 50 ? "completed" : "pending",
-        })),
-      }),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect((tasks[0]?.payload.items as unknown[] | undefined)?.length).toBe(50);
-    expect(tasks[0]?.payload.omitted).toEqual({ count: 1, completed: 1 });
-  });
-
-  it("空リストも LWW 置換として送り、entity を完了扱いにしない", async () => {
-    const tasks: Envelope[] = [];
-    const host = new AgentHost(config, {
-      onState: () => {},
-      onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([
-          { type: "tool_use", id: "list-1", name: "TaskList", input: {} },
-        ]),
-        taskToolResult("list-1"),
-        result("success"),
-      ]),
-      readTasklist: async () => ({ kind: "updated", items: [] }),
-      now: () => "T",
-    });
-
-    await host.run();
-
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.payload).toMatchObject({
-      kind: "updated",
-      task_id: "tasklist",
-      task_type: "tasklist",
-      status: "running",
-      items: [],
-    });
   });
 });
 
@@ -10587,10 +9973,13 @@ describe("reserved resume receipt", () => {
     let host!: AgentHost, queries = 0, secondRun: Promise<void> | undefined;
     const replacement = deferred(), replacementReady = deferred();
     const intervals = vi.spyOn(globalThis, "setInterval");
+    const { onLog, ...options } = extra;
     host = new AgentHost(config, {
-      onState: () => {}, onLog: e => logs.push(e), enqueueInjection: task => task(),
+      onState: () => {},
+      onLog: e => { logs.push(e); onLog?.(e); },
+      enqueueInjection: task => task(),
       onTurnStart: x => starts.push(x.turnToken), onTurnEnd: x => { if (x.turnToken) ends.push(x.turnToken); },
-      onPushedInputDecision: x => decisions.push(x.kind), onPromptAdmitted: token => admissions.push(token), ...extra,
+      onPushedInputDecision: x => decisions.push(x.kind), onPromptAdmitted: token => admissions.push(token), ...options,
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         if (queries++ > 0) { replacementReady.resolve(); await replacement.promise; return; }
         const input = prompt[Symbol.asyncIterator]();
@@ -10719,29 +10108,71 @@ describe("reserved resume receipt", () => {
     if (why === "terminal") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({ result_index: expect.any(Number), session_id: "s" });
   });
 
-  it.each([false, true])("waits for terminal reduction with a bounded fence (timeout=%s)", async timeout => {
-    vi.useFakeTimers();
-    let current!: Scenario, admission: Promise<unknown> | undefined, duringRead: string | undefined;
-    try {
-      const r = await exercise(async function* (scenario) {
-        current = scenario;
-        await current.hook("N", "native work");
-        yield assistant([{ type: "tool_use", id: "task-write", name: "TaskCreate", input: { subject: "x" } }]);
-        yield result("success", { origin: { kind: "task-notification" } });
-        await admission;
-        if (timeout) expect(duringRead).toBe("error");
-        else { expect(current.host.activeInterAgentTurnToken()).not.toBeNull(); yield result("success"); }
-      }, { readTasklist: async () => {
-        admission = current.hook("note");
-        await Promise.resolve();
-        if (timeout) await vi.advanceTimersByTimeAsync(5_000);
-        duringRead = current.host.state;
-        return { kind: "updated", items: [] };
-      } });
-      expect(r.logs).toContain(timeout ? "terminal_fence_timeout" : "admitted_root");
-      expect(r.events.filter(e => e.event === "resume_receipt_rejected")).toHaveLength(timeout ? 1 : 0);
-    } finally { vi.useRealTimers(); }
+  const foreignResult = () => result("success", {
+    origin: { kind: "task-notification" },
+    result: "foreign terminal for receipt test",
   });
+
+  function armAtForeignResult(arm: () => void): (entry: Envelope) => void {
+    let armed = false;
+    return entry => {
+      if (!armed && entry.type === "result" &&
+          (entry.payload as ResultPayload).text === "foreign terminal for receipt test") {
+        armed = true;
+        arm();
+      }
+    };
+  }
+
+  it.each(["settled", "timer", "late-wake"])(
+    "waits for received terminal reduction with a bounded fence (%s)",
+    async schedule => {
+      vi.useFakeTimers();
+      let now = 0, armed = false, fired = false;
+      let current!: Scenario;
+      let admission: Promise<unknown> | undefined;
+      try {
+        const r = await exercise(async function* (scenario) {
+          current = scenario;
+          await current.hook("N", "native work");
+          yield foreignResult();
+          expect(fired).toBe(true);
+          await admission;
+          if (schedule === "settled") {
+            expect(current.host.activeInterAgentTurnToken()).not.toBeNull();
+            yield result("success");
+          } else {
+            expect(current.host.state).toBe("error");
+            expect(current.host.activeInterAgentTurnToken()).toBeNull();
+          }
+        }, {
+          onLog: armAtForeignResult(() => { armed = true; }),
+          nowMs: () => {
+            if (armed) {
+              // The first clock read after the foreign owner clears happens
+              // before the received result has completed reduction.
+              armed = false;
+              fired = true;
+              admission = current.hook("note");
+              expect(current.host.activeInterAgentTurnToken()).toBeNull();
+              if (schedule === "timer") vi.advanceTimersByTime(5_000);
+              if (schedule === "late-wake") now = 5_000;
+            }
+            return now;
+          },
+          pendingReceiptRootTimeoutMs: 10_000,
+          resumeReceiptIdleFloorMs: 10_000,
+          resumeReceiptMaxWaitMs: 20_000,
+        });
+        const admitted = schedule === "settled";
+        expect(r.events.filter(e => e.event === "resume_receipt_rejected")).toHaveLength(admitted ? 0 : 1);
+        expect(r.events.filter(e => e.event === "admitted_root")).toHaveLength(admitted ? 1 : 0);
+        if (!admitted) expect(r.logs).toContain("terminal_fence_timeout");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["drain", "duplicate", "timeout", "close", "expire", "late", "fence-late", "fold"])("waits separately for an unread terminal: %s", async action => {
     vi.useFakeTimers(); let now=0;
@@ -10888,21 +10319,35 @@ describe("reserved resume receipt", () => {
   });
 
   it.each(["close", "expire", "duplicate"])("settles exactly once when %s releases its terminal fence", async action => {
-    let now = 0;
-    let current!: Scenario, admission: Promise<unknown> | undefined;
+    let now = 0, armed = false, fired = false;
+    let current!: Scenario;
+    let admission: Promise<unknown> | undefined;
     const r = await exercise(async function* (scenario) {
-      current = scenario; await current.hook("N", "native work");
-      yield assistant([{ type: "tool_use", id: "task-write", name: "TaskCreate", input: { subject: "x" } }]);
-      yield result("success", { origin: { kind: "task-notification" } });
+      current = scenario;
+      await current.hook("N", "native work");
+      yield foreignResult();
+      expect(fired).toBe(true);
       await admission;
-      if (action === "duplicate") { expect(current.host.state).not.toBe("error"); yield result("success"); }
-    }, { nowMs: () => now, resumeReceiptMaxWaitMs: 100, readTasklist: async () => {
-      admission = current.hook("note");
-      if (action === "close") current.host.close();
-      else if (action === "expire") now = 100;
-      else admission = Promise.all([admission, current.hook("note")]);
-      return { kind: "updated", items: [] };
-    } });
+      if (action === "duplicate") {
+        expect(current.host.state).not.toBe("error");
+        yield result("success");
+      }
+    }, {
+      resumeReceiptMaxWaitMs: 100,
+      onLog: armAtForeignResult(() => { armed = true; }),
+      nowMs: () => {
+        if (armed) {
+          armed = false;
+          fired = true;
+          admission = current.hook("note");
+          expect(current.host.activeInterAgentTurnToken()).toBeNull();
+          if (action === "close") current.host.close();
+          else if (action === "expire") now = 100;
+          else admission = Promise.all([admission, current.hook("note")]);
+        }
+        return now;
+      },
+    });
     expect(r.events.filter(e => e.event === (action === "close" ? "resume_receipt_cancelled" : "resume_receipt_rejected"))).toHaveLength(action === "duplicate" ? 0 : 1);
     expect(r.events.filter(e => e.event === "admitted_root")).toHaveLength(action === "duplicate" ? 1 : 0);
     expect(r.starts).toHaveLength(action === "duplicate" ? 2 : 1);

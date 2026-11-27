@@ -527,8 +527,7 @@ export async function runClaudeCli(
     link?.send(envelope);
   };
 
-  /** Relays child-task lifecycle and own-tasklist envelopes to the server.
-   *  Both are aggregation data, not this agent's console transcript. */
+  /** Relays child-task lifecycle envelopes to the server. */
   const onTask = (envelope: Envelope): void => {
     link?.send(envelope);
   };
