@@ -7,7 +7,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   GrokProbeAborted, GrokProbeError, killProbeGroup, probeGroupAlive, runGrokProbe,
 } from "../src/grok_acp_probe.js";
-import { GROK_LIST_PAGE_LIMIT, grokSessionExists, listGrokSessions } from "../src/grok_sessions.js";
+import { grokSessionExists, listGrokSessions } from "../src/grok_sessions.js";
 import { listSessions, sessionExists } from "../src/sessions.js";
 
 const FAKE = fileURLToPath(new URL("./fixtures/fake-grok-acp.mjs", import.meta.url));
@@ -106,11 +106,16 @@ describe("grok session discovery over session/list", () => {
 
   it("gives up after the page limit", async () => {
     const pages: Record<string, unknown> = {};
-    for (let i = 0; i <= GROK_LIST_PAGE_LIMIT + 1; i += 1)
-      pages[i === 0 ? "__first__" : `c${i}`] = { sessions: [entry(`s-${i}`)], nextCursor: `c${i + 1}` };
+    for (let i = 0; i < 21; i += 1) {
+      pages[i === 0 ? "__first__" : `c${i}`] = {
+        sessions: [entry(`s-${i}`)],
+        nextCursor: `c${i + 1}`,
+      };
+    }
     const f = fake({ pages });
     expect(await listGrokSessions(CWD, { executable: FAKE, env: f.env })).toEqual([]);
-    expect(f.requests().filter((r) => r.method === "session/list")).toHaveLength(GROK_LIST_PAGE_LIMIT);
+    expect(f.requests().filter((r) => r.method === "session/list"))
+      .toHaveLength(20);
   });
 
   it("finds an id on a later page and stops there", async () => {

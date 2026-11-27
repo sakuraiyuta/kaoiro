@@ -782,7 +782,7 @@ export function listSessions(
 
 /** The T3 existence check: session_id is valid AND exists in the engine's
  *  session store under the bound cwd, gating a resume to that cwd. `signal`
- *  cancels a grok probe (and kills it); the other engines ignore it. */
+ *  cancels Grok and Muse probes; the other engines ignore it. */
 export function sessionExists(
   cwd: string,
   sessionId: string,
