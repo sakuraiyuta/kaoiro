@@ -4,7 +4,6 @@ import {
   BEHAVIOUR_ROWS,
   behaviourWarnings,
   computeBehaviourRelay,
-  describeBehaviourRelay,
   parseBehaviourBlock,
   readSetVariables,
 } from "../src/behaviour-settings.js";
@@ -158,62 +157,42 @@ describe("computeBehaviourRelay", () => {
     ).toEqual({ "claude-code": { urgent_overtake_limit: 3 } });
   });
 
-  it("relays nothing without a file value, and describes it", () => {
+  it("relays nothing without a file value, at startup", () => {
     expect(computeBehaviourRelay(base, {})).toEqual({});
-    expect(describeBehaviourRelay({})).toBe("none");
-    expect(
-      describeBehaviourRelay(computeBehaviourRelay(withFile, {})),
-    ).toBe("claude-code.urgent_overtake_limit=3, claude-code.folds_per_turn=5");
   });
 });
 
 describe("behaviourWarnings", () => {
   const fileA: RunnerConfig = { ...base, claude_code: { folds_per_turn: 5 } };
-  const fileC: RunnerConfig = { ...base, claude_code: { folds_per_turn: 7 } };
   const env = { KAOIRO_CLAUDE_FOLDS_PER_TURN: "9" };
 
   it("warns once per variable about deprecation", () => {
-    const seen = new Set<string>();
     const set = readSetVariables(base, env);
-    const first = behaviourWarnings(undefined, base, set, seen);
+    const first = behaviourWarnings(base, set);
     expect(first).toHaveLength(1);
     expect(first[0]).toContain(
       'KAOIRO_CLAUDE_FOLDS_PER_TURN is deprecated; set "claude_code.folds_per_turn"',
     );
-    expect(behaviourWarnings(base, base, set, seen)).toEqual([]);
   });
 
-  it("warns that a file value is shadowed, and again only when that value changes", () => {
-    const seen = new Set<string>();
+  it("warns that a file value is shadowed, at startup", () => {
     const startup = behaviourWarnings(
-      undefined,
       fileA,
       readSetVariables(fileA, env),
-      seen,
     );
     expect(startup).toHaveLength(2);
     expect(startup[1]).toContain(
       '"claude_code.folds_per_turn" in runner.config.json is shadowed by KAOIRO_CLAUDE_FOLDS_PER_TURN',
     );
-    // Same file again: no repeat.
-    expect(
-      behaviourWarnings(fileA, fileA, readSetVariables(fileA, env), seen),
-    ).toEqual([]);
-    // file=A/variable=B then file=C/variable=B: the effective result is
-    // unchanged, the warning still appears for the new file value.
-    expect(
-      behaviourWarnings(fileA, fileC, readSetVariables(fileC, env), seen),
-    ).toHaveLength(1);
   });
 
   it("does not warn about shadowing when the file equals the variable, or when unset", () => {
     const equal: RunnerConfig = { ...base, claude_code: { folds_per_turn: 9 } };
-    const seen = new Set(["KAOIRO_CLAUDE_FOLDS_PER_TURN"]);
     expect(
-      behaviourWarnings(undefined, equal, readSetVariables(equal, env), seen),
+      behaviourWarnings(equal, readSetVariables(equal, env)).filter(line => line.includes("shadowed")),
     ).toEqual([]);
     expect(
-      behaviourWarnings(undefined, fileA, readSetVariables(fileA, {}), new Set()),
+      behaviourWarnings(fileA, readSetVariables(fileA, {})),
     ).toEqual([]);
   });
 });

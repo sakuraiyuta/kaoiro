@@ -2,7 +2,7 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_AUTH_MODE_UNSET_WARNING,
-  type CodexAuthModeWarningInput,
+  type AuthModeResolveInput,
   resolveCodexAuthMode,
   shouldWarnUnsetCodexAuthMode,
 } from "../src/codex-auth.js";
@@ -66,20 +66,10 @@ describe("shouldWarnUnsetCodexAuthMode", () => {
     expect(CODEX_AUTH_MODE_UNSET_WARNING).toContain("codex.chatgpt_plan");
   });
 
-  it.each<[string, CodexAuthModeWarningInput, boolean]>([
+  it.each<[string, AuthModeResolveInput, boolean]>([
     [
       "Codex disabled on startup",
       { nextCodex: undefined, nextEnabled: false },
-      false,
-    ],
-    [
-      "Codex disabled on reload (on -> off)",
-      {
-        nextCodex: undefined,
-        nextEnabled: false,
-        prevCodex: { auth_mode: "apikey" },
-        prevEnabled: true,
-      },
       false,
     ],
     [
@@ -93,59 +83,9 @@ describe("shouldWarnUnsetCodexAuthMode", () => {
       true,
     ],
     [
-      "steady-state unset reload (enabled + unset -> enabled + unset)",
-      {
-        nextCodex: { chatgpt_plan: "plus" as const },
-        nextEnabled: true,
-        prevCodex: undefined,
-        prevEnabled: true,
-      },
-      false,
-    ],
-    [
-      "off -> on with unset auth_mode",
-      {
-        nextCodex: undefined,
-        nextEnabled: true,
-        prevCodex: undefined,
-        prevEnabled: false,
-      },
-      true,
-    ],
-    [
-      "off -> on with explicit auth_mode",
-      {
-        nextCodex: { auth_mode: "chatgpt" as const },
-        nextEnabled: true,
-        prevCodex: undefined,
-        prevEnabled: false,
-      },
-      false,
-    ],
-    [
       "explicit apikey on startup",
       { nextCodex: { auth_mode: "apikey" as const }, nextEnabled: true },
       false,
-    ],
-    [
-      "explicit chatgpt on reload",
-      {
-        nextCodex: { auth_mode: "chatgpt" as const, chatgpt_plan: "plus" as const },
-        nextEnabled: true,
-        prevCodex: { auth_mode: "apikey" as const },
-        prevEnabled: true,
-      },
-      false,
-    ],
-    [
-      "explicit -> absent reload while Codex stays enabled",
-      {
-        nextCodex: { chatgpt_plan: "plus" as const },
-        nextEnabled: true,
-        prevCodex: { auth_mode: "apikey" as const },
-        prevEnabled: true,
-      },
-      true,
     ],
   ])("%s", (_label, input, expected) => {
     expect(shouldWarnUnsetCodexAuthMode(input)).toBe(expected);

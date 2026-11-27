@@ -10,7 +10,6 @@ const link = {
 await runRunnerCli({
   resolveCodexAuthMode: async () => "unknown",
   createRunnerLink: (_url, _host, value) => { options = value; return link; },
-  watchRunnerConfig: () => ({ close() {} }),
   makeLauncher: () => () => { throw new Error("no wrapper"); },
 }, [process.env.OWN_CONFIG!]);
 options!.onEnumerateSessions?.({ cwd: process.env.OWN_CWD!, engine: "muse" });

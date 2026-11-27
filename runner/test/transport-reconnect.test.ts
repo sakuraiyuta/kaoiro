@@ -86,22 +86,6 @@ describe("runner channel-failure recovery boundaries", () => {
     },
   ));
 
-  it("retires the old endpoint on configuration replacement", async () =>
-    withRunner(async (server, link) => {
-      const next = await startPhoenixOutageServer();
-      try {
-        await failedClose(server);
-        link.reconnect(next.url("/runner"), "new-host",
-          { ...register, host_id: "new-host" });
-        expect(await waitUntil(() => next.count("register") === 1, 2_000))
-          .toBe(true);
-        await delay(1_300);
-        expect(server.count("phx_join")).toBe(1);
-        expect(next.count("register")).toBe(1);
-      } finally { await next.close(); }
-    }),
-  );
-
   it("backs off across automatic generations even after successful joins",
     async () => withRunner(async (server, link) => {
       for (const [index, quietMs] of [500, 1_200, 4_200, 4_200].entries()) {
@@ -111,12 +95,6 @@ describe("runner channel-failure recovery boundaries", () => {
         expect(await waitUntil(() => server.count("register") === index + 2,
           2_000)).toBe(true);
       }
-      link.reconnect(server.url("/runner"), register.host_id, register);
-      expect(await waitUntil(() => server.count("register") === 6, 1_000))
-        .toBe(true);
-      await failedClose(server);
-      expect(await waitUntil(() => server.count("register") === 7, 1_500))
-        .toBe(true);
     }),
     25_000,
   );

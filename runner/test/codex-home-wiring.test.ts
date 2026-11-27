@@ -4,7 +4,6 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SpawnResult, WrapperConfig } from "@kaoiro/protocol";
-import { loadRunnerConfig } from "../src/config.js";
 import { runRunnerCli } from "../src/runner-cli.js";
 import type { RunnerLinkOptions } from "../src/transport.js";
 import { writeFileSync } from "node:fs";
@@ -34,7 +33,6 @@ async function bootRunner() {
       return { sendSpawnResult: (result: SpawnResult) => { results.push(result); }, sendSessions() {}, sendResetResult() {},
         sendStopAgent() {}, sendCatalogResult() {}, updateRegister() {}, reconnect() {}, close() {} };
     },
-    watchRunnerConfig: (path) => { void loadRunnerConfig(path); return { close() {} }; },
     installSignalHandlers: false,
   }, [configPath]);
   const spawn = (id: string, engine: string) => ({ version: "0", agent_id: id, persona: { id: "p", name: "P", sprite_set: "p" }, cwd: root, engine });

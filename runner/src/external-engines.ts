@@ -119,7 +119,6 @@ function diagnostic(id: string, reason: string): void {
 
 export class ExternalEngines {
   readonly #ids = new Set<string>();
-  readonly #skipped = new Set<string>();
   readonly #ready = new Map<string, { command: Command; row: EngineCatalogEntry }>();
 
   static async discover(config: RunnerConfig, path: string, signal: AbortSignal): Promise<ExternalEngines> {
@@ -147,7 +146,6 @@ export class ExternalEngines {
         continue;
       }
       if (config.capabilities && !config.capabilities.includes(id)) {
-        found.#skipped.add(id);
         continue;
       }
       if (++count > 16) { diagnostic(id, "engine_limit"); continue; }
@@ -160,10 +158,6 @@ export class ExternalEngines {
       }
     }
     return found;
-  }
-
-  needsRestart(capabilities: string[] | undefined): boolean {
-    return [...this.#skipped].some(id => !capabilities || capabilities.includes(id));
   }
 
   command(id: string): Command | undefined { return this.#ready.get(id)?.command; }

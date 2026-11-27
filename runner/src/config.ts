@@ -85,7 +85,7 @@ export interface RunnerConfig {
    *  engine's wrapper (issue #469). Omitted = wait for the operator. */
   permission_timeout_ms?: number;
   /** Keep Phoenix's periodic heartbeat push/reply lines in the runner log
-   *  (issue #469). Applied live on reload. Omitted = off. */
+   *  (issue #469). Applied at startup. Omitted = off. */
   log_phoenix_heartbeats?: boolean;
 }
 
@@ -819,10 +819,8 @@ export function isPhoenixHeartbeatLoggingEnabled(
  * editing the gitignored `runner.config.json`. Precedence: env > config
  * file — unset/empty env leaves the config untouched. Re-validates the
  * same `ws://`/`wss://` shape `parseRunnerConfig` enforces on the file
- * value, so a malformed env fails fast at startup/reload instead of
- * reaching `RunnerLink`. Called on both initial load and every config-
- * watcher reload (cli.ts) so the override consistently outranks the file
- * across hot-reloads too.
+ * value, so a malformed env fails fast at startup instead of
+ * reaching `RunnerLink`.
  */
 export function applyServerUrlOverride(config: RunnerConfig): RunnerConfig {
   const override = process.env[SERVER_URL_ENV];

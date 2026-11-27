@@ -148,10 +148,8 @@ describe("permission_timeout_ms (top level, every engine)", () => {
   it("names the top-level key without a block prefix in the warnings", () => {
     const next: RunnerConfig = { ...base, permission_timeout_ms: 5000 };
     const lines = behaviourWarnings(
-      undefined,
       next,
       readSetVariables(next, { [VARIABLE]: "9000" }),
-      new Set(),
     ).join("");
     expect(lines).toContain('set "permission_timeout_ms" in runner.config.json');
     expect(lines).toContain('"permission_timeout_ms" in runner.config.json is shadowed');

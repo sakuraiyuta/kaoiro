@@ -62,7 +62,6 @@ async function start(extra: Record<string, unknown>, environment: Record<string,
       if (changeEnvironment) expect(output).toContain("DELIVERY_ENV_CHANGED"); }, { timeout: 15_000 });
   } catch (error) { await stop(); throw error; }
   return { ...server, child, config, output: () => output, stop,
-    reload: (next: Record<string, unknown>) => writeFileSync(file, JSON.stringify({ ...config, ...next })),
     async wrapper(id: string, engine: "claude-code" | "codex") {
       server.sendSpawn({ version: "0", agent_id: id, cwd: dir, engine, persona: { id: "P", name: "P", sprite_set: "P" } });
       await vi.waitFor(() => expect(server.joins.has(id), output).toBe(true), { timeout: 15_000 });
@@ -92,18 +91,12 @@ describe("built runner and wrapper delivery composition", () => {
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
-  it("uses default constructors and keeps existing declarations while the next lifetime follows reload", async () => {
+  it("publishes the default delivery declaration with default constructors", async () => {
     const h = await start({});
     try {
       const first = await h.wrapper("first", "claude-code");
       expect(declaration(first)).toEqual(metadata(h.registers[0]!, "claude-code").mechanisms);
       expect(declaration(first).inter_agent_early).toBe("fold");
-      h.reload({ in_flight_delivery: { "claude-code": { enabled: false, default: false } } });
-      await vi.waitFor(() => expect(h.registers).toHaveLength(2), { timeout: 10_000 });
-      const next = await h.wrapper("next", "claude-code");
-      expect(declaration(next)).toEqual(metadata(h.registers[1]!, "claude-code").mechanisms);
-      expect(declaration(next).inter_agent_early).toBe("none");
-      expect(declaration(h.joins.get("first")!).inter_agent_early).toBe("fold");
     } finally { await h.stop(); }
   }, 40_000);
   it("applies each wrapper ceiling after enabled legacy variables", async () => {

@@ -1,114 +1,91 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
-import { mkdtempSync, rmSync, type FSWatcher, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdtempSync, renameSync, rmSync, writeFileSync, type watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RunnerConfig } from "../src/config.js";
-import {
-  CONFIG_WATCH_DEBOUNCE_MS,
-  watchRunnerConfig,
-} from "../src/config-watcher.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { configStamp, notifyConfigSaves } from "../src/config-watcher.js";
 
-const validConfig = {
-  host_id: "lab-pc-1",
-  server_url: "ws://localhost:4000/runner",
-  cwd_allowlist: ["/home/user/git/kaoiro"],
-};
+let dir: string;
+let path: string;
+let lines: string[];
+let observer: ReturnType<typeof notifyConfigSaves> | undefined;
 
-describe("watchRunnerConfig", () => {
-  let dir: string;
-  let path: string;
-  let watcher: { close: () => void } | undefined;
-  let emitWatchEvent: ((event: string, filename: string | Buffer | null) => void) | undefined;
-  let nativeWatcher: FSWatcher;
-  let watchFactory: typeof import("node:fs").watch;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    dir = mkdtempSync(join(tmpdir(), "kaoiro-runner-cw-"));
-    path = join(dir, "runner.config.json");
-    writeFileSync(path, JSON.stringify(validConfig));
-    nativeWatcher = {
-      close: vi.fn(),
-      on: vi.fn(),
-    } as unknown as FSWatcher;
-    watchFactory = vi.fn((_dir, _options, listener) => {
-      emitWatchEvent = listener;
-      return nativeWatcher;
-    }) as unknown as typeof import("node:fs").watch;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "runner-config-notice-"));
+  path = join(dir, "runner.json");
+  writeFileSync(path, "{}");
+  lines = [];
+  vi.spyOn(process.stderr, "write").mockImplementation(chunk => {
+    lines.push(String(chunk));
+    return true;
   });
+});
 
-  afterEach(() => {
-    watcher?.close();
-    watcher = undefined;
-    vi.clearAllTimers();
-    vi.useRealTimers();
-    rmSync(dir, { recursive: true, force: true });
-  });
+afterEach(() => {
+  observer?.close();
+  rmSync(dir, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
 
-  function start(
-    onReload: (next: RunnerConfig) => void,
-    onParseError: (error: unknown) => void,
-  ): void {
-    watcher = watchRunnerConfig(path, onReload, onParseError, { watch: watchFactory });
-  }
+function start(before = configStamp(path)) {
+  const native = Object.assign(new EventEmitter(), { close: vi.fn() });
+  let emit!: (event: string, file: string | null) => void;
+  const factory = ((_dir: string, _opts: unknown, listener: typeof emit) => {
+    emit = listener;
+    return native;
+  }) as unknown as typeof watch;
+  observer = notifyConfigSaves(path, before, factory);
+  return { native, emit };
+}
 
-  async function dispatch(filename: string | Buffer | null = "runner.config.json"): Promise<void> {
-    emitWatchEvent?.("change", filename);
-    await vi.advanceTimersByTimeAsync(CONFIG_WATCH_DEBOUNCE_MS);
-  }
+it("ignores siblings and unknown names, then reports the first save only", () => {
+  const { native, emit } = start();
+  expect(lines).toHaveLength(1);
+  const notice = lines[0]!;
+  expect(notice).toContain("after restart");
+  expect(notice).toContain("even with identical bytes, does not re-probe Antigravity");
+  emit("change", "sibling");
+  emit("rename", null);
+  expect(lines).toEqual([notice]);
+  expect(native.close).not.toHaveBeenCalled();
+  writeFileSync(path, "private-fixture-value");
+  emit("rename", "runner.json");
+  expect(lines).toEqual([notice, notice]);
+  expect(native.close).toHaveBeenCalledTimes(1);
+  emit("change", "runner.json");
+  observer?.close();
+  expect(lines).toEqual([notice, notice]);
+  expect(native.close).toHaveBeenCalledTimes(1);
+});
 
-  it("ファイル更新後 debounce 待ちで onReload に新 config を渡す", async () => {
-    const onReload = vi.fn<(next: RunnerConfig) => void>();
-    const onParseError = vi.fn();
-    start(onReload, onParseError);
-    const next = { ...validConfig, host_id: "lab-pc-2" };
-    writeFileSync(path, JSON.stringify(next));
-    await dispatch();
-    expect(onReload).toHaveBeenCalledTimes(1);
-    expect(onReload.mock.calls[0]?.[0]).toMatchObject({ host_id: "lab-pc-2" });
-    expect(onParseError).not.toHaveBeenCalled();
-  });
+it("observes an actual atomic replacement with identical bytes", async () => {
+  observer = notifyConfigSaves(path, configStamp(path));
+  const notice = lines[0];
+  writeFileSync(join(dir, "replacement"), "{}");
+  renameSync(join(dir, "replacement"), path);
+  await vi.waitFor(() => expect(lines).toEqual([notice, notice]));
+});
 
-  it("壊れた JSON は onParseError に流し watcher は生存する", async () => {
-    const onReload = vi.fn();
-    const onParseError = vi.fn();
-    start(onReload, onParseError);
-    writeFileSync(path, "{not json");
-    await dispatch();
-    expect(onReload).not.toHaveBeenCalled();
-    expect(onParseError).toHaveBeenCalledTimes(1);
-    // 続けて有効な内容で保存 → 正しく onReload が呼ばれる (fail-soft の検証)
-    writeFileSync(path, JSON.stringify({ ...validConfig, host_id: "lab-pc-3" }));
-    await dispatch();
-    expect(onReload).toHaveBeenCalledTimes(1);
-    expect(onReload.mock.calls[0]?.[0]).toMatchObject({ host_id: "lab-pc-3" });
-  });
+it("keeps watching after detecting an edit during startup", () => {
+  const before = configStamp(path);
+  writeFileSync(path, "during-startup");
+  const { emit } = start(before);
+  expect(lines).toEqual([lines[0], lines[0]]);
+  emit("change", "runner.json");
+  expect(lines).toHaveLength(3);
+});
 
-  it("debounce 窓内の連続 write は onReload 一回に束ねる", async () => {
-    const onReload = vi.fn();
-    const onParseError = vi.fn();
-    start(onReload, onParseError);
-    for (let i = 0; i < 5; i += 1) {
-      writeFileSync(path, JSON.stringify({ ...validConfig, host_id: `h${i}` }));
-      emitWatchEvent?.("change", "runner.config.json");
-    }
-    await vi.advanceTimersByTimeAsync(CONFIG_WATCH_DEBOUNCE_MS);
-    expect(onReload).toHaveBeenCalledTimes(1);
-    // 最後の書き込み内容が反映される
-    expect(onReload.mock.calls[0]?.[0]?.host_id).toBe("h4");
-  });
-
-  it("close 後は以降の write イベントで onReload を呼ばない", async () => {
-    const onReload = vi.fn();
-    const onParseError = vi.fn();
-    start(onReload, onParseError);
-    const activeWatcher = watcher;
-    expect(activeWatcher).toBeDefined();
-    activeWatcher?.close();
-    watcher = undefined;
-    writeFileSync(path, JSON.stringify({ ...validConfig, host_id: "post" }));
-    await dispatch();
-    expect(onReload).not.toHaveBeenCalled();
-  });
+it("reports unavailable observation without exposing a filesystem error", () => {
+  const before = configStamp(path);
+  rmSync(path);
+  const { native } = start(before);
+  expect(lines).toEqual([lines[0], lines[0], expect.stringContaining("unavailable")]);
+  native.emit("error", new Error("private-fixture-value"));
+  expect(native.close).toHaveBeenCalledTimes(1);
+  expect(lines.at(-1)).toContain("only after restart");
+  expect(lines.join("")).not.toContain("private-fixture-value");
+  rmSync(dir, { recursive: true });
+  observer = notifyConfigSaves(path, undefined);
+  expect(lines.at(-1)).toContain("unavailable");
 });

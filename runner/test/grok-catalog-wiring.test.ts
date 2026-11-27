@@ -7,12 +7,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EngineModelInfo, RunnerRegister } from "@kaoiro/protocol";
 import type { RunnerLinkOptions } from "../src/transport.js";
-import { GrokCatalog } from "../src/grok-catalog.js";
 import { runRunnerCli } from "../src/runner-cli.js";
-import { loadRunnerConfig } from "../src/config.js";
 
 // The register-time Grok catalog in the runner (issue #646): published when
-// the probe answers, kept across a Claude refresh, superseded by a reload,
+// the probe answers, kept across a Claude refresh,
 // and aborted by shutdown with its process group.
 
 const FAKE = fileURLToPath(new URL("./fixtures/fake-grok-acp.mjs", import.meta.url));
@@ -75,14 +73,9 @@ async function start(
     cwd_allowlist: [root], capabilities: ["claude-code", "grok"], context_work_budget_percent: budget, ...configFields });
   writeFileSync(configPath, JSON.stringify(config(50)));
   let link: FakeRunnerLink | undefined;
-  let triggerReload: (() => void) | undefined;
   const runtime = await runRunnerCli({
     resolveCodexAuthMode: async () => "unknown",
     createRunnerLink: (_url, _host, options) => (link = new FakeRunnerLink(options)),
-    watchRunnerConfig: (path, onReload) => {
-      triggerReload = () => onReload(loadRunnerConfig(path));
-      return { close: () => {} };
-    },
     grokCatalogProbe: { cwd: root, executable: FAKE,
       env: { ...process.env, FAKE_GROK_SCENARIO: scenarioPath, FAKE_GROK_PIDS: pids } },
     installSignalHandlers: false,
@@ -90,11 +83,6 @@ async function start(
   }, [configPath]);
   return {
     runtime: runtime!, link: link!, scenarioPath, pids,
-    reload: async (budget: number) => {
-      writeFileSync(configPath, JSON.stringify(config(budget)));
-      triggerReload!();
-      await runtime!.waitForReloads();
-    },
     leader: async () => {
       await vi.waitFor(() => expect(existsSync(pids)).toBe(true));
       return Number(readFileSync(pids, "utf8").split(" ")[0]);
@@ -136,20 +124,6 @@ describe("grok catalog in the runner register", () => {
     }
   }, 10_000);
 
-  it("aborts the probe in flight on a reload, group and all, and publishes the new one", async () => {
-    const h = await start({ initHang: true, spawnChild: true });
-    try {
-      const first = await h.leader();
-      rmSync(h.pids);
-      writeFileSync(h.scenarioPath, JSON.stringify({ initMeta: modelState }));
-      await h.reload(51);
-      await vi.waitFor(() => expect(groupAlive(first)).toBe(false), { timeout: 3_000 });
-      await vi.waitFor(() => expect(h.link.updatedRegisters.map(grokModels)).toContainEqual(["default", "grok-4.7"]));
-    } finally {
-      h.runtime.close();
-    }
-  }, 10_000);
-
   it("publishes nothing from a probe that shutdown aborts, and ends its group", async () => {
     const h = await start({ initHang: true, spawnChild: true });
     const leader = await h.leader();
@@ -180,40 +154,6 @@ describe("grok catalog in the runner register", () => {
       await vi.waitFor(() => expect(groupAlive(leader!)).toBe(false), { timeout: 2_000 });
     } finally {
       if (leader! > 1 && groupAlive(leader!)) process.kill(-leader!, "SIGKILL");
-    }
-  }, 15_000);
-
-  it("starts and publishes nothing after close, even from a reload that was waiting", async () => {
-    let calls = 0;
-    let entered!: () => void;
-    let release!: () => void;
-    const waiting = new Promise<void>((resolve) => { entered = resolve; });
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    const refresh = vi.spyOn(GrokCatalog.prototype, "refresh");
-    const h = await start({ initHang: true }, {
-      resolveCodexAuthMode: async () => {
-        calls += 1;
-        if (calls > 1) {
-          entered();
-          await gate;
-        }
-        return "unknown";
-      },
-    });
-    try {
-      await h.leader();
-      const reloading = h.reload(51);
-      await waiting;
-      h.runtime.close();
-      const atClose = refresh.mock.calls.length;
-      const registers = h.link.updatedRegisters.length;
-      release();
-      await reloading;
-      expect(refresh.mock.calls.length).toBe(atClose);
-      expect(h.link.updatedRegisters).toHaveLength(registers);
-    } finally {
-      release();
-      h.runtime.close();
     }
   }, 15_000);
 

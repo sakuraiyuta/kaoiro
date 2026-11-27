@@ -116,7 +116,6 @@ describe("external engine registration", () => {
 
   it("skips an unselected external command before discovery", async () => {
     const { root, found } = await discover([valid], ["claude-code"]);
-    expect(found.needsRestart(["sample"])).toBe(true);
     expect(found.command("sample")).toBeUndefined();
     expect(() => readFileSync(join(root, "argv"))).toThrow();
   });
