@@ -793,51 +793,18 @@ describe("runner credential (issue #1169)", () => {
           }
         }
 
-        // Reload 1: adding explicit auth_mode populates the standard Codex catalog without calling codex.
-        const beforeApikey = endpoint.runnerRegisters.length;
-        writeFileSync(
-          configPath,
-          JSON.stringify({ ...baseConfig, codex: { auth_mode: "apikey" } }),
-        );
-        if (
-          !(await waitUntil(
-            () => endpoint.runnerRegisters.slice(beforeApikey).some((r) => (codexModelsOf(r)?.length ?? 0) > 0),
-            30_000,
-          ))
-        ) {
-          problems.push("reload(apikey): expected non-empty codex models register");
+        // Saving host settings keeps the credential-bearing connection and startup catalog.
+        writeFileSync(configPath, JSON.stringify({
+          ...baseConfig, codex: { auth_mode: "apikey" },
+        }));
+        if (!(await waitUntil(() => output.split("Runner config saves take effect").length >= 3, 10_000))) {
+          problems.push("save: missing restart reminder");
         }
-        if (warningCount() !== 1) {
-          problems.push(`reload(apikey): expected warning count to stay 1, got ${warningCount()}`);
+        if (endpoint.runnerRegisters.some(r => (codexModelsOf(r)?.length ?? 0) > 0)) {
+          problems.push("save: startup Codex catalog changed");
         }
-        if (codexRecords().length > 0) {
-          problems.push(`reload(apikey): unexpected codex child ${JSON.stringify(codexRecords())}`);
-        }
-
-        // Reload 2: removing auth_mode returns to empty standard catalog with guidance and still never calls codex.
-        const beforeRemoval = endpoint.runnerRegisters.length;
-        writeFileSync(configPath, JSON.stringify(baseConfig));
-        if (
-          !(await waitUntil(
-            () =>
-              endpoint.runnerRegisters
-                .slice(beforeRemoval)
-                .some((r) => {
-                  const models = codexModelsOf(r);
-                  return Array.isArray(models) && models.length === 0;
-                }),
-            30_000,
-          ))
-        ) {
-          problems.push("reload(unset): expected empty codex models register");
-        }
-        if (!(await waitUntil(() => warningCount() >= 2, 30_000))) {
-          problems.push(`reload(unset): expected 2nd guidance warning, got ${warningCount()}`);
-        } else if (warningCount() !== 2) {
-          problems.push(`reload(unset): expected 2 guidance warnings, got ${warningCount()}`);
-        }
-        if (codexRecords().length > 0) {
-          problems.push(`reload(unset): unexpected codex child ${JSON.stringify(codexRecords())}`);
+        if (warningCount() !== 1 || codexRecords().length !== 0) {
+          problems.push("save: unexpected Codex guidance or process");
         }
 
         // A dropped socket reconnects the way a server restart does: the same

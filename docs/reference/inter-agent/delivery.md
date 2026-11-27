@@ -524,7 +524,7 @@ is resolved with the backend (and, for Claude, its legacy opt-ins) before wrappe
 A false ceiling declares no in-flight mechanism on Claude/Codex; Antigravity
 continues to omit its declaration. The register's launch metadata and the next
 wrapper use the same applied snapshot. Live policy can narrow this declaration
-but cannot widen it. Config reload changes subsequent wrapper lifetimes only.
+but cannot widen it. Restart the host runner to apply changes to its ceiling.
 
 ### Permission synchronization expiry before dispatch
 

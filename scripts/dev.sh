@@ -50,8 +50,7 @@ fi
 runner_config="$root/runner/runner.config.json"
 if [[ ! -f "$runner_config" ]]; then
   echo "dev: generating $runner_config with server_url=ws://localhost:4000/runner" \
-    "(gitignored; edit to taste — server_url and the" \
-    "other settings hot-reload, so a change applies without a restart)"
+    "(gitignored; restart the runner to apply saved settings)"
   cat >"$runner_config" <<JSON
 {
   "host_id": "dev-host",

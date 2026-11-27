@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerLinkOptions } from "../src/transport.js";
-import { loadRunnerConfig } from "../src/config.js";
+import * as runnerConfig from "../src/config.js";
 import { runRunnerCli } from "../src/runner-cli.js";
 import type { ManagedChild } from "../src/supervisor.js";
 import type { RunnerRegister, WrapperConfig } from "@kaoiro/protocol";
@@ -320,11 +320,10 @@ describe("runner CLI Antigravity config wiring", () => {
       antigravity: { auth: "google-cloud-sign-in", extra_models: extras("antigravity", generation) },
     }));
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const loadConfig = vi.fn(loadRunnerConfig);
+    const loadConfig = vi.spyOn(runnerConfig, "loadRunnerConfig");
     let link!: FakeRunnerLink;
     const launch = vi.fn((_id: string, _config: WrapperConfig) => new FakeChild());
     const start = (probe: () => Promise<never[]>) => runRunnerCli({
-      loadRunnerConfig: loadConfig,
       resolveAgyExecutable: () => ({ ok: true, path: process.execPath }),
       resolveAntigravityCatalog: probe, resolveAgyVersion: async () => null,
       createRunnerLink: (_url, _host, options) => (link = new FakeRunnerLink(options)),
@@ -361,6 +360,7 @@ describe("runner CLI Antigravity config wiring", () => {
       checkSnapshot("next-start");
     } finally {
       runtime?.close();
+      loadConfig.mockRestore();
       stderr.mockRestore();
     }
   });

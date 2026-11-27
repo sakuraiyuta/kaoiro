@@ -121,7 +121,7 @@ themselves in the meantime:
   A matching Codex entry retains its curated `minimal_client_version` unless
   the declaration explicitly supplies a replacement.
 - The declaration is host-wide (every agent on that runner), takes effect
-  on the next spawn after a runner restart or config hot-reload, and does
+  on the next spawn after a runner restart, and does
   not bypass entitlement — a model the account is not actually entitled to
   still fails with the upstream 400/404, surfaced as the existing
   `switch_error` rollback (or a launch failure for a fresh spawn).

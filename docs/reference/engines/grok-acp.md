@@ -429,9 +429,8 @@ discovery, sending `initialize` only, which creates no session. The probe
 starts once the runner's server link and shutdown path exist. Until it
 answers, the catalog is the last good reading, else the `default` entry
 alone, so for a few seconds after the runner starts the launch dialog offers
-`default` only. A success re-broadcasts the register. A config reload aborts
-the probe in flight and starts another, a Claude catalog refresh keeps the
-Grok catalog, and shutdown aborts the probe before it stops the agents.
+`default` only. A success re-broadcasts the register. A Claude catalog refresh
+preserves the Grok catalog. Shutdown aborts the probe before stopping agents.
 
 The reading is `_meta.modelState`, validated whole: every `modelId` matches
 `[A-Za-z0-9._:-]{1,128}`, is unique and is not `default`; every model has a

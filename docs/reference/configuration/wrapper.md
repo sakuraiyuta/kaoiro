@@ -99,8 +99,8 @@ Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
   wrapper rejects explicit `"exec"` with pre-retirement migration guidance. The
   protocol type still includes `"exec"` for legacy producer compatibility; it
   is not an accepted current configuration value. It is not accepted from `spawn` or a
-  resume snapshot and is not a wire capability. Reload affects subsequent
-  wrapper lifetimes, including resumes; existing wrappers retain their backend.
+  resume snapshot and is not a wire capability. Wrapper launches use the
+  backend from the runner's startup configuration.
 
 - `codex_extra_models` / `antigravity_extra_models` (`EngineModelInfo[]`)
   — the operator's `codex.extra_models` / `antigravity.extra_models`

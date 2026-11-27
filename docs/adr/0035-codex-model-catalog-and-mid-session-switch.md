@@ -11,6 +11,10 @@ related_adrs: [32, 34, 37, 39, 40]
 
 # ADR-0035 — Restore the Codex model catalog and define the mid-session switch contract
 
+Host configuration activation in this record is superseded by
+[issue #1287](https://github.com/sakuraiyuta/kaoiro/issues/1287). See
+[Applying host configuration](../reference/configuration/runner.md#applying-host-configuration).
+
 ## Status
 
 Accepted (2026-07-11, approved by マスター). Implementation is

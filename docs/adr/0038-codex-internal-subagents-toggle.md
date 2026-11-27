@@ -11,6 +11,10 @@ related_adrs: [32, 33]
 
 # ADR-0038 — Runner toggle for Codex internal sub-agents and the named-peer routing contract
 
+Host configuration activation in this record is superseded by
+[issue #1287](https://github.com/sakuraiyuta/kaoiro/issues/1287). See
+[Applying host configuration](../reference/configuration/runner.md#applying-host-configuration).
+
 ## Status
 
 Accepted (2026-07-15, approved by マスター. Delegated to クロエ through kaoiro

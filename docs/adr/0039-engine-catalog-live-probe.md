@@ -11,6 +11,10 @@ related_adrs: [23, 32, 35, 37, 40]
 
 # ADR-0039 — Make the LaunchDialog model catalog live with a short-lived SDK probe + runner memory cache (Option E)
 
+Host configuration activation in this record is superseded by
+[issue #1287](https://github.com/sakuraiyuta/kaoiro/issues/1287). See
+[Applying host configuration](../reference/configuration/runner.md#applying-host-configuration).
+
 ## Status
 
 Accepted (2026-07-15, approved by マスター). Implementation is

@@ -128,4 +128,6 @@ pnpm -C runner test
 pnpm -C runner build
 ```
 
-See [Runner development](../docs/contributing/runner-development.md) for dev.sh hot reload.
+See [Runner development](../docs/contributing/runner-development.md) for source watching.
+Follow the [host restart procedure](../docs/reference/configuration/runner.md#applying-host-configuration)
+to apply changes to the runner configuration.

@@ -11,6 +11,10 @@ related_adrs: [14, 17, 23, 32, 33, 34, 35, 36, 39]
 
 # ADR-0057 — Add a Google Antigravity adapter as the third engine, driving the agy CLI headless with a hook-based permission gate
 
+Host configuration activation in this record is superseded by
+[issue #1287](https://github.com/sakuraiyuta/kaoiro/issues/1287). See
+[Applying host configuration](../reference/configuration/runner.md#applying-host-configuration).
+
 ## Status
 
 Accepted (issue #181). Implementation is
