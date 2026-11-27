@@ -1593,10 +1593,8 @@ export class ServerLink {
    * Map insertion order is a least-recently-updated queue. A wrapper can miss
    * a completion when a child crashes, so this cache may not grow without
    * bound while the process lives: `#rememberActiveTask` evicts its oldest
-   * entry to the documented count/byte ceilings. `tasklist` is retained in
-   * preference to ordinary child tasks because it is the parent agent's sole
-   * current todo snapshot; an overflow writes one bounded stderr warning
-   * instead of silently claiming reconnect recovery is complete. */
+   * entry to the documented count/byte ceilings. Overflow writes a bounded
+   * warning. */
   readonly #activeTasks = new Map<string, ActiveTaskCacheEntry>();
   #activeTaskCacheBytes = 0;
   #activeTaskCacheOverflowWarned = false;
@@ -1989,9 +1987,8 @@ export class ServerLink {
 
     // Re-announce the latest state and active tasks after a reconnect: the
     // server keeps them in memory only, and WrapperChannel discards TaskStates
-    // when the old connection terminates. A tasklist's wrapper-side exact
-    // snapshot dedupe must not prevent this restoration. On the first open
-    // both caches are empty (no-op); on reconnects pushes are buffered by the
+    // when the old connection terminates. On the first open both caches are
+    // empty. On reconnects pushes are buffered by the
     // client until the channel rejoins. send() stamps a fresh seq.
     this.#protectReplyBasis = options.interAgentReplyBasis === "v1";
     const invalidateReplyBasis = (terminal = false, releaseWaiters = false) => {
@@ -2637,21 +2634,9 @@ export class ServerLink {
       this.#activeTasks.size > MAX_ACTIVE_TASK_CACHE_ENTRIES ||
       this.#activeTaskCacheBytes > MAX_ACTIVE_TASK_CACHE_BYTES
     ) {
-      // `tasklist` is a single parent-owned snapshot, unlike the potentially
-      // stale child entries that made this cache need a lifecycle bound. Keep
-      // it when any ordinary task is available to evict; if it is the only
-      // entry it is necessarily within the per-envelope byte ceiling above.
-      let oldest: [string, ActiveTaskCacheEntry] | undefined;
-      for (const entry of this.#activeTasks.entries()) {
-        if (!oldest) oldest = entry;
-        if (entry[0] !== "tasklist") {
-          oldest = entry;
-          break;
-        }
-      }
-      if (!oldest) break;
+      const taskId = this.#activeTasks.keys().next().value;
+      if (taskId === undefined) break;
 
-      const [taskId] = oldest;
       this.#dropActiveTask(taskId);
       evicted = true;
     }

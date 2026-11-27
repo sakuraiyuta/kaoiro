@@ -1,9 +1,58 @@
 import { test, expect } from "@playwright/test";
 import { resolve } from "node:path";
-import { deliveryLoopback, deliveryView } from "../test/deliveryPolicyLoopback";
+import {
+  deliveryAgent, deliveryLoopback, deliveryView,
+} from "../test/deliveryPolicyLoopback";
 let loop: Awaited<ReturnType<typeof deliveryLoopback>>;
 test.beforeEach(async () => { loop = await deliveryLoopback(resolve("../server/priv/static")); });
 test.afterEach(async ({ page }) => { await page.close(); await loop.close(); });
+
+for (const [width, height] of [[1440, 1000], [390, 844]]) {
+  test(`built App keeps child dots with an old server at ${width}`, async ({
+    page,
+  }) => {
+    const task = (task_id: string, task_type: string, kind = "started") => ({
+      ...deliveryAgent, type: "task",
+      payload: {
+        agent_id: deliveryAgent.agent_id, task_id, task_type, kind,
+        status: kind === "completed" ? "completed" : "running",
+      },
+    });
+    const checklist = task("tasklist", "tasklist", "updated");
+    const legacy = {
+      ...checklist, payload: {
+        ...checklist.payload,
+        items: [{ text: "Old server checklist", status: "in_progress" }],
+      },
+    };
+    const child = task("child", "local_agent");
+    loop.state.tasks = { "host.p": { tasklist: legacy, child } };
+    await page.setViewportSize({ width, height });
+    await page.goto(loop.url);
+    await expect(page.locator(".card .task-ring")).toHaveCount(1);
+
+    await page.locator('button[aria-label$="の詳細を開く"]')
+      .first().dispatchEvent("click");
+    if (width === 390) await page.locator(".sheet .handle .toggle").click();
+    const dots = page.locator(".portrait .task-ring");
+    await expect(dots).toHaveCount(1);
+    await expect(dots.first()).toBeVisible();
+    await expect(page.locator(".tasklist-float")).toHaveCount(0);
+
+    loop.send("envelope", legacy);
+    loop.send("envelope", task("child", "local_agent", "completed"));
+    await expect(dots).toHaveCount(0);
+    await expect(page.locator(".tasklist-float")).toHaveCount(0);
+
+    loop.send("envelope", child);
+    await expect(dots).toHaveCount(1);
+    loop.send("envelope", {
+      ...deliveryAgent, state: "disconnected", ts: "2026-10-09T00:01:00Z",
+    });
+    await expect(dots).toHaveCount(0);
+  });
+}
+
 for (const [width, height] of [[1440, 1000], [844, 900], [390, 844]]) {
   test(`built App policy controls remain readable and focusable at ${width}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height }); await page.goto(loop.url);

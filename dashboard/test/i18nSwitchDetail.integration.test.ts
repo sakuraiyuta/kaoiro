@@ -8,7 +8,6 @@ import "./isolation.setup";
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
-import TasklistFloat from "../src/lib/TasklistFloat.svelte";
 import {
   describeResetRequester,
   disconnectLabel,
@@ -258,51 +257,6 @@ describe("AgentDetail repaints on setLocale", () => {
     await pick(en.agentDetail.sandboxChange);
     expect(text(row(target, en.agentDetail.permissionRequestError))).toBe(
       en.agentDetail.permissionError.forbidden,
-    );
-  });
-});
-
-describe("TasklistFloat repaints on setLocale", () => {
-  it("aria-labels, the toggle, item status and the omitted line", async () => {
-    const target = document.createElement("div");
-    document.body.append(target);
-    mounted.push(
-      mount(TasklistFloat, {
-        target,
-        props: {
-          agentId: "host-a.p",
-          tasklist: {
-            items: [{ text: "first", status: "in_progress" }],
-            omitted: { count: 3, completed: 1 },
-          },
-        },
-      }),
-    );
-    await tick();
-    const float = () => target.querySelector<HTMLElement>(".tasklist-float")!;
-    const action = () => target.querySelector<HTMLElement>(".tasklist-action")!;
-
-    expect(float().getAttribute("aria-label")).toBe(ja.tasklistFloat.listAria);
-    expect(text(action())).toBe(ja.tasklistFloat.expand);
-    target.querySelector<HTMLButtonElement>(".tasklist-toggle")!.click();
-    await tick();
-    expect(text(action())).toBe(ja.tasklistFloat.collapse);
-    expect(text(target.querySelector(".sr-only"))).toBe("進行中:");
-    expect(text(target.querySelector(".tasklist-omitted"))).toBe("以下 3 件省略 (うち完了 1 件)");
-    expect(target.querySelector(".tasklist-items")?.getAttribute("aria-label")).toBe(
-      ja.tasklistFloat.detailAria,
-    );
-
-    setLocale("en");
-    await tick();
-    expect(float().getAttribute("aria-label")).toBe("Current todo list");
-    expect(text(action())).toBe("Collapse");
-    expect(text(target.querySelector(".sr-only"))).toBe("In progress:");
-    expect(text(target.querySelector(".tasklist-omitted"))).toBe(
-      en.tasklistFloat.omitted({ count: 3, completed: 1 }),
-    );
-    expect(target.querySelector(".tasklist-items")?.getAttribute("aria-label")).toBe(
-      "Todo details",
     );
   });
 });

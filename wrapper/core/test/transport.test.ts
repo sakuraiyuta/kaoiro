@@ -260,7 +260,7 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
     mock.onOpen = null;
   });
 
-  it("再接続後に active tasklist を fresh seq で再送し、server 側を復元する", () => {
+  it("replays an active child with a fresh sequence after reconnect", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     const state = {
       version: "0", agent_id: "a.agent",
@@ -268,21 +268,20 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
       display_name: "あお",
       ts: "T", type: "state_change", state: "idle", payload: {}, ext: {},
     } as Envelope;
-    const tasklist = {
+    const child = {
       ...state,
       type: "task",
       payload: {
         agent_id: "a.agent",
-        task_id: "tasklist",
-        task_type: "tasklist",
+        task_id: "child-1",
+        task_type: "local_agent",
         kind: "updated",
         status: "running",
-        items: [{ text: "調査", status: "in_progress" }],
       },
     } as Envelope;
 
     link.send(state);
-    link.send(tasklist);
+    link.send(child);
     // WrapperChannel.terminate/2 discards TaskStates on the old connection.
     mock.pushes = [];
     mock.onOpen?.();
@@ -293,7 +292,7 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
     ]);
     expect(mock.pushes[1]?.payload).toMatchObject({
       seq: 4,
-      payload: { task_id: "tasklist", task_type: "tasklist" },
+      payload: { task_id: "child-1", task_type: "local_agent" },
     });
   });
 
@@ -326,45 +325,47 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
     expect(mock.pushes).toEqual([]);
   });
 
-  it("未完了の終端 event がなくても reconnect cache を bound し、tasklist を優先して残す", () => {
+  it("evicts the oldest updated children and bounds reconnect warnings", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
-    const base = {
-      version: "0", agent_id: "a.agent",
-      persona: { id: "ao", name: "あお", sprite_set: "ao" },
-      display_name: "あお",
-      ts: "T", type: "task", state: "thinking", ext: {},
-    };
+    try {
+      const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+      const base = {
+        version: "0", agent_id: "a.agent",
+        persona: { id: "ao", name: "ao", sprite_set: "ao" },
+        display_name: "ao",
+        ts: "T", type: "task", state: "thinking", ext: {},
+      };
+      function sendChild(index: number, kind: "started" | "updated") {
+        link.send({
+          ...base,
+          payload: {
+            agent_id: "a.agent", task_id: `child-${index}`, task_type: "local_agent",
+            kind, status: "running",
+          },
+        } as Envelope);
+      }
 
-    link.send({
-      ...base,
-      payload: {
-        agent_id: "a.agent", task_id: "tasklist", task_type: "tasklist",
-        kind: "updated", status: "running", items: [{ text: "調査", status: "pending" }],
-      },
-    } as Envelope);
-    for (let index = 1; index <= MAX_ACTIVE_TASK_CACHE_ENTRIES; index += 1) {
-      link.send({
-        ...base,
-        payload: {
-          agent_id: "a.agent", task_id: `child-${index}`, task_type: "local_agent",
-          kind: "started", status: "running",
-        },
-      } as Envelope);
+      for (let index = 1; index <= MAX_ACTIVE_TASK_CACHE_ENTRIES; index += 1) {
+        sendChild(index, "started");
+      }
+      sendChild(1, "updated");
+      sendChild(MAX_ACTIVE_TASK_CACHE_ENTRIES + 1, "started");
+      sendChild(MAX_ACTIVE_TASK_CACHE_ENTRIES + 2, "started");
+
+      mock.pushes = [];
+      mock.onOpen?.();
+      const replayedIds = mock.pushes.map(
+        ({ payload }) => (payload as Envelope).payload.task_id,
+      );
+
+      expect(replayedIds).toHaveLength(MAX_ACTIVE_TASK_CACHE_ENTRIES);
+      expect(replayedIds[0]).toBe("child-4");
+      expect(replayedIds).toContain("child-1");
+      expect(replayedIds).toContain(`child-${MAX_ACTIVE_TASK_CACHE_ENTRIES + 2}`);
+      expect(stderr).toHaveBeenCalledOnce();
+    } finally {
+      stderr.mockRestore();
     }
-
-    mock.pushes = [];
-    mock.onOpen?.();
-    const replayedIds = mock.pushes.map(
-      ({ payload }) => (payload as Envelope).payload.task_id,
-    );
-
-    expect(replayedIds).toHaveLength(MAX_ACTIVE_TASK_CACHE_ENTRIES);
-    expect(replayedIds).toContain("tasklist");
-    expect(replayedIds).not.toContain("child-1");
-    expect(replayedIds).toContain(`child-${MAX_ACTIVE_TASK_CACHE_ENTRIES}`);
-    expect(stderr).toHaveBeenCalledOnce();
-    stderr.mockRestore();
   });
 
   it("JSON byte ceiling も reconnect cache に適用する", () => {

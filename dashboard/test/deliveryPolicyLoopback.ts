@@ -31,13 +31,20 @@ export async function deliveryLoopback(staticRoot?: string) {
   const frames: unknown[][] = [];
   let peer: { send: (data: string) => void; close: () => void } | undefined;
   let joinRef: unknown = null;
-  const state = { operator: true, marker: "v1" as unknown, automatic: true, policy: { ...deliveryView }, hosts: deliveryHosts };
+  const state = {
+    operator: true, marker: "v1" as unknown, automatic: true,
+    policy: { ...deliveryView }, hosts: deliveryHosts,
+    tasks: undefined as Record<string, unknown> | undefined,
+  };
   function send(event: string, payload: unknown) { peer?.send(JSON.stringify([joinRef, null, "agents:lobby", event, payload])); }
   function reply(frame: unknown[], response: unknown, status = "ok") {
     peer?.send(JSON.stringify([frame[0], frame[1], frame[2], "phx_reply", { status, response }]));
   }
   function snapshot() {
     send("snapshot", { version: "0", agents: { "host.p": { ...deliveryAgent, ext: { engine: "codex", delivery_policy: state.policy } } } });
+    if (state.tasks !== undefined) {
+      send("task_snapshot", { version: "0", tasks: state.tasks });
+    }
     if (state.operator) send("hosts", { version: "0", hosts: state.hosts });
   }
   wss.on("connection", (ws) => {

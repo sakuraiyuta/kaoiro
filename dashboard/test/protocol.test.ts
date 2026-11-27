@@ -52,8 +52,6 @@ import {
   activeTaskCountForDetail,
   createTranscriptIdentityIndex,
   mergeLiveTranscriptEntry,
-  tasklistForAgent,
-  tasklistForDetail,
   resetTranscriptHistory,
   resolveLaunchDefaultEffort,
   resumeDriftFrom,
@@ -765,17 +763,10 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #170)", () => {
   });
 
   it("parseTasks は snapshot outer agent/task key と envelope/payload の不一致を拒否する", () => {
-    const foreignTasklist = {
+    const foreignChild = {
       ...base,
       agent_id: "host-b.p",
-      payload: {
-        ...validPayload,
-        agent_id: "host-b.p",
-        task_id: "tasklist",
-        task_type: "tasklist",
-        kind: "updated" as const,
-        items: [{ text: "別 agent の todo", status: "pending" as const }],
-      },
+      payload: { ...validPayload, agent_id: "host-b.p" },
     };
     const mismatchedTaskId = {
       ...base,
@@ -789,7 +780,7 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #170)", () => {
     expect(
       parseTasks({
         "host-a.p": {
-          tasklist: foreignTasklist,
+          t2: { ...foreignChild, payload: { ...foreignChild.payload, task_id: "t2" } },
           "outer-t1": mismatchedTaskId,
           t1: mismatchedPayloadAgent,
         },
@@ -1059,25 +1050,6 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #170)", () => {
       expect(computeActiveTaskCountByAgent({})).toEqual({});
     });
 
-    it("親自身の tasklist は child activity に数えず、通常 task だけを数える (issue #178)", () => {
-      const child = { ...base, payload: validPayload };
-      const tasklist = {
-        ...base,
-        payload: {
-          ...validPayload,
-          task_id: "tasklist",
-          task_type: "tasklist",
-          kind: "updated" as const,
-          status: "running" as const,
-          items: [{ text: "調査", status: "in_progress" as const }],
-        },
-      };
-      let tasks = applyTaskEnvelope({}, child);
-      tasks = applyTaskEnvelope(tasks, tasklist);
-
-      expect(computeActiveTaskCountByAgent(tasks)).toEqual({ "host-a.p": 1 });
-    });
-
     // M2 の本体: agent_id="__proto__" は plain {} 上の bracket 代入
     // (counts[agentId] = n) では own property にならず、count が消える
     // (リングが点かない) — Object.create(null) でないと再発する。
@@ -1097,105 +1069,34 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #170)", () => {
     });
   });
 
-  describe("tasklistForAgent (issue #178)", () => {
-    it("LWW tasklist を items/omitted とともに取り出す", () => {
-      const tasklist = {
-        ...base,
-        payload: {
-          ...validPayload,
-          task_id: "tasklist",
-          task_type: "tasklist",
-          kind: "updated" as const,
-          status: "running" as const,
-          items: [
-            { text: "調査", status: "in_progress" as const },
-            { text: "実装", status: "completed" as const },
-          ],
-          omitted: { count: 3, completed: 2 },
-        },
-      };
-      const tasks = applyTaskEnvelope({}, tasklist);
-
-      expect(tasklistForAgent(tasks, "host-a.p")).toEqual({
-        items: [
-          { text: "調査", status: "in_progress" },
-          { text: "実装", status: "completed" },
-        ],
-        omitted: { count: 3, completed: 2 },
-      });
-    });
-
-    it("連続 LWW 更新で non-empty から items: [] へ置換する", () => {
-      const nonEmpty = {
-        ...base,
-        payload: {
-          ...validPayload,
-          task_id: "tasklist",
-          task_type: "tasklist",
-          kind: "updated" as const,
-          items: [{ text: "完了前", status: "pending" as const }],
-        },
-      };
-      const empty = {
-        ...base,
-        payload: {
-          ...validPayload,
-          task_id: "tasklist",
-          task_type: "tasklist",
-          kind: "updated" as const,
-          items: [],
-        },
-      };
-      let tasks = applyTaskEnvelope({}, nonEmpty);
-      tasks = applyTaskEnvelope(tasks, empty);
-
-      expect(tasklistForAgent(tasks, "host-a.p")).toEqual({ items: [] });
-    });
-
-    it("片側だけの予約・不正 omitted は todo として描画しない", () => {
-      const malformedReservation = {
-        ...base,
-        payload: {
-          ...validPayload,
-          task_id: "tasklist",
-          task_type: "local_agent",
-          kind: "updated" as const,
-          items: [],
-        },
-      };
-      const malformedOmitted = {
-        ...base,
-        payload: {
-          ...validPayload,
-          task_id: "tasklist",
-          task_type: "tasklist",
-          kind: "updated" as const,
-          items: [],
-          omitted: { count: 1, completed: 2 },
-        },
-      };
-
-      expect(tasklistForAgent(applyTaskEnvelope({}, malformedReservation), "host-a.p")).toBeNull();
-      expect(tasklistForAgent(applyTaskEnvelope({}, malformedOmitted), "host-a.p")).toBeNull();
-    });
+  it.each(["live", "snapshot"])("filters the reserved checklist pair on %s input", source => {
+    const id = base.agent_id;
+    const child = { ...base, payload: validPayload };
+    const legacy = {
+      ...base,
+      payload: {
+        ...validPayload,
+        kind: "updated",
+        task_id: "tasklist",
+        task_type: "tasklist",
+        items: [{ text: "retired checklist", status: "pending" }],
+      },
+    };
+    const tasks = source === "live"
+      ? applyTaskEnvelope(applyTaskEnvelope({}, child), legacy)
+      : parseTasks({ [id]: { t1: child, tasklist: legacy } });
+    expect(tasks).toEqual({ [id]: { t1: child } });
+    expect(computeActiveTaskCountByAgent(tasks)).toEqual({ [id]: 1 });
   });
 
-  describe("tasklistForDetail", () => {
-    it("disconnected では stale tasklist table があっても float state を返さない", () => {
-      const tasklist = {
-        ...base,
-        payload: {
-          ...validPayload,
-          task_id: "tasklist",
-          task_type: "tasklist",
-          kind: "updated" as const,
-          items: [{ text: "stale", status: "pending" as const }],
-        },
-      };
-      const tasks = applyTaskEnvelope({}, tasklist);
-
-      expect(tasklistForDetail({ ...base, state: "disconnected" }, tasks)).toBeNull();
-    });
+  it.each([
+    ["tasklist", "local_agent"],
+    ["t1", "tasklist"],
+  ])("keeps the previous child behavior for a one-sided reservation %s/%s", (taskId, taskType) => {
+    const id = base.agent_id;
+    const child = { ...base, payload: { ...validPayload, task_id: taskId, task_type: taskType } };
+    expect(applyTaskEnvelope({}, child)).toEqual({ [id]: { [taskId]: child } });
+    expect(parseTasks({ [id]: { [taskId]: child } })).toEqual({ [id]: { [taskId]: child } });
   });
 
   // issue #170 follow-up (2026-08-10, マスター指摘): AgentDetail 用の

@@ -38,9 +38,6 @@ export type {
   SwitchErrorExt,
   TaskPayload,
   TaskStatus,
-  TasklistItem,
-  TasklistItemStatus,
-  TasklistOmitted,
 } from "@kaoiro/protocol";
 
 /** SDKResultMessage.subtype (docs/reference/engines/claude-events.md). */

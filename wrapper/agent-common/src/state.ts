@@ -287,7 +287,7 @@ export function makeResult(
   };
 }
 
-/** Wraps a child-task lifecycle or own-tasklist update into the common
+/** Wraps a child-task lifecycle update into the common
  *  envelope v0 (issues #170/#178, ADR-0019 F2 / ADR-0047 / ADR-0049).
  *  `state` is the agent's CURRENT state at emit time, stamped unmodified — a task
  *  envelope must never itself drive or imply a `KaoiroState` transition

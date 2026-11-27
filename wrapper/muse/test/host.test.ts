@@ -63,6 +63,17 @@ describe("muse host", () => {
     });
   });
 
+  it("relays the in-progress ACP plan entry as a system log", async () => {
+    const { host, envelopes } = await started();
+    await host.send("plan-update");
+    const logs = envelopes.filter((e) =>
+      e.type === "log" && e.payload.kind === "system" &&
+      typeof e.payload.text === "string" && e.payload.text.startsWith("Plan: "),
+    );
+    expect(logs.map((e) => e.payload.text)).toEqual(["Plan: Write the reply"]);
+    expect(envelopes.some((e) => e.type === "task")).toBe(false);
+  });
+
   it("prepends the persona to the first turn only", async () => {
     const promptsFile = join(tmpdir(), `kaoiro-muse-prompts-${process.pid}.jsonl`);
     rmSync(promptsFile, { force: true });

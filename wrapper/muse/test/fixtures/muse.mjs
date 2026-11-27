@@ -228,6 +228,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           finish(msg.id, JSON.stringify(result));
           break;
         }
+        if (lastLine === "plan-update") {
+          update({ sessionUpdate: "plan", entries: [
+            { content: "Read the prompt", status: "completed", priority: "high" },
+            { content: "Write the reply", status: "in_progress", priority: "high" },
+            { content: "Review", status: "pending", priority: "medium" },
+          ] });
+        }
         update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } });
         update({ sessionUpdate: "tool_call", toolCallId: "echo-tool", title: "echo",
           status: "in_progress", kind: "other" });
