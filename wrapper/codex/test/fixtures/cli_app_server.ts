@@ -12,7 +12,7 @@ import { CodexHost, type CodexHostOptions } from "../../src/host.js";
 import { AppServerSession } from "../../src/app_server_session.js";
 import { runCodexCli } from "../../src/cli.js";
 import type { RpcObject } from "../../src/app_server_rpc.js";
-import { phoenixLoopback } from "./phoenix_loopback.js";
+import { phoenixLoopback } from "../../../../runner/test/fixtures/phoenix_loopback.js";
 
 export function watchdogClock() {
   let now = 0, next = 0;

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 // The built CLI and pinned app-server use their default constructors. The
 // external provider/wire are scripted; the RPC observer forwards unchanged.

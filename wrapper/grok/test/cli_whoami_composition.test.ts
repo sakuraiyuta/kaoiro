@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { runGrokCli } from "../src/cli.js";
 import { GrokHost } from "../src/host.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 import { expectWhoamiDirectoryName, expectWhoamiDirectoryNameUnavailable } from "../../agent-common/test/whoami_contract.js";
 
 it("whoami uses current directory names and never stale config across rename or unavailability", async () => {

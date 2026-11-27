@@ -4,7 +4,7 @@ import type { ServerLink, ServerLinkOptions } from "@kaoiro/wrapper-core";
 import type { Envelope, ToolDescriptor } from "@kaoiro/agent-common";
 import { expect, it, vi } from "vitest";
 import { runGrokCli } from "../src/cli.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 const config = {
   agent_id: "test.grok", display_name: "Grok",

@@ -8,7 +8,7 @@ import type { Envelope, PermissionControlExt, PermissionSyncMessage } from "@kao
 import { ServerLink } from "@kaoiro/wrapper-core";
 import { runGrokCli } from "../src/cli.js";
 import { GrokHost } from "../src/host.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 // Projection shape: server/test/kaoiro_server/permission_settings_state_test.exs.
 function joinSync(control: PermissionControlExt): PermissionSyncMessage {

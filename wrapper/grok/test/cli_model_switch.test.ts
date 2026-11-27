@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { runGrokCli } from "../src/cli.js";
 import { GrokHost } from "../src/host.js";
-import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { phoenixLoopback } from "../../../runner/test/fixtures/phoenix_loopback.js";
 
 const scratch: string[] = [];
 const cwd = () => { const path = mkdtempSync(join(homedir(), ".kaoiro-grok-model-")); scratch.push(path); return path; };
