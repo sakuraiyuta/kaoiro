@@ -690,8 +690,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # look newer than the envelope the server actually accepted.
       received_at = DateTime.utc_now() |> DateTime.to_iso8601()
 
-      case inter_agent do
-        {:accept, to, escalate, reservation, work_result, authority} ->
+      case {inter_agent, envelope} do
+        {{:accept, to, escalate, reservation, work_result, authority}, _} ->
           accept_inter_agent(
             envelope,
             agent_id,
@@ -704,7 +704,16 @@ defmodule KaoiroServerWeb.WrapperChannel do
             socket
           )
 
-        :not_inter_agent ->
+        {:not_inter_agent,
+         %{
+           "type" => "task",
+           "payload" => %{"task_id" => "tasklist", "task_type" => "tasklist"}
+         }} ->
+          record_session_identity(envelope)
+          maybe_patch_boundary_to_session_id(envelope, agent_id)
+          {:reply, :ok, socket}
+
+        {:not_inter_agent, _} ->
           store_and_broadcast(envelope, agent_id, received_at, socket)
       end
     else
@@ -2388,7 +2397,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # pointer (ADR-0014 F1, issue #49). Only fires once the wrapper has
   # reported a real session_id; cwd / engine ride along from ext when
   # present (engine keeps restore relaunching the same engine, ADR-0032).
-  defp record_session_pointer(%{"agent_id" => agent_id, "session_id" => sid} = envelope)
+  defp record_session_identity(%{"agent_id" => agent_id, "session_id" => sid} = envelope)
        when is_binary(sid) and sid != "" do
     cwd =
       case envelope do
@@ -2407,11 +2416,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end
 
     SessionPointers.record_session(agent_id, sid, cwd, engine)
-    record_snapshot_from_ext(agent_id, envelope)
-    record_permission_observation(agent_id, envelope)
   end
 
+  defp record_session_identity(_envelope), do: :ok
+
   defp record_session_pointer(envelope) do
+    record_session_identity(envelope)
+
     # session_id が乗らない envelope でも ext.effective (ADR-0014 F1 追補,
     # phase-15 D8) が来ていれば snapshot だけ更新する。record_snapshot は
     # 未知 agent で no-op なので、pointer が seed される前 (spawn 直後)
@@ -2876,10 +2887,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp require_task_kind_status(_payload), do: {:error, "invalid value: payload.kind"}
 
-  # `tasklist` is one reserved entity per parent agent. Guard the reservation
-  # both ways: accepting only the task_type -> task_id half would let an
-  # ordinary child task deliberately use the fixed tasklist key and replace
-  # the parent's todo snapshot in TaskStates.
+  # Keep both legacy reservations so neither side of the pair becomes a
+  # current child task.
   defp validate_tasklist_payload(
          %{
            "task_type" => "tasklist",
@@ -2890,9 +2899,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
        ),
        do: validate_tasklist_contents(payload)
 
-  # A tasklist is an LWW snapshot, not a child task lifecycle. In particular,
-  # `completed` would erase this entity from TaskStates and make an empty list
-  # indistinguishable from absent state, while `started` has no semantic role.
+  # Preserve the old reply for a reserved pair with a child lifecycle kind.
   defp validate_tasklist_payload(%{"task_type" => "tasklist", "task_id" => "tasklist"}),
     do: {:error, "tasklist requires payload.kind=updated and payload.status=running"}
 
@@ -2904,10 +2911,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp validate_tasklist_payload(_payload), do: :ok
 
-  # An empty array is valid: it is the LWW update that says this parent has no
-  # todo items right now. `omitted`, when present, is a structured aggregate
-  # rather than a fake display item so the dashboard can retain an honest
-  # completed/total count even after wrapper-side truncation.
+  # Validate even discarded snapshots before applying their session identity.
   defp validate_tasklist_contents(%{"items" => items} = payload) when is_list(items) do
     with :ok <- validate_tasklist_item_count(items),
          :ok <- validate_tasklist_items(items),
