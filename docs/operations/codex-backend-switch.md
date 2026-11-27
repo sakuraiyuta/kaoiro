@@ -11,8 +11,8 @@ the read-only Supervisor work observation RPC and backend switching CLI were
 removed in [issue #1247](https://github.com/sakuraiyuta/kaoiro/issues/1247)
 following the [operator decision in issue #1246](https://github.com/sakuraiyuta/kaoiro/issues/1246#issuecomment-7111070280).
 
-- Runner and wrapper configuration accept omitted or `"app-server"` values only;
-  explicit `"exec"` is rejected at startup and reload
+- The runner and wrapper each validate their configuration at startup.
+  Omit the backend or use `"app-server"`. Both reject an explicit `"exec"`
   ([runner configuration](../reference/configuration/runner.md#codex-backend)).
 - To restart a Codex peer in a new session, use the dashboard reset or launch
   controls.

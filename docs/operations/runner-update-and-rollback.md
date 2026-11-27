@@ -64,11 +64,11 @@ script. To reinstall an older tarball, use its own tools or
 For a bundled tarball, follow [Re-acquire an engine pin](#re-acquire-an-engine-pin)
 after switching to confirm its pins are present before launching its engines.
 
-#For host configuration edits, [drain, restart and restore the host](../reference/configuration/runner.md#applying-host-configuration).
+For host configuration edits, [drain, restart and restore the host](../reference/configuration/runner.md#applying-host-configuration).
 For a startup-risk runner release, follow the [high-risk release procedure](high-risk-change-release.md).
 Every supervised engine is affected. Use plain shell as the standby.
 
-## Re-acquire an engine pin
+### Re-acquire an engine pin
 
 On the runner host, apply the intended `capabilities` before acquisition.
 When repairing a damaged version, remove only that version's store directory

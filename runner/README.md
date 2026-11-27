@@ -6,9 +6,9 @@
 
 ## 現状
 
-- runner config(JSON)を読み、サーバへ接続して**ホスト登録**(register)と
-  **生存通知**(heartbeat)を行う(4-4a)。config はホットリロードに対応
-  (`config-watcher.ts`)。
+- At startup, the runner reads its host configuration, connects to the server,
+  registers the host and sends heartbeats. To apply saved changes, follow the
+  [host restart procedure](../docs/reference/configuration/runner.md#applying-host-configuration).
 - operator 指示で wrapper を **spawn / stop / restart** する監督ループ(4-4b)、
   当該 cwd 配下の **session 列挙 + resume**(4-5、T3 実在検証 + F4 ローカルロック)、
   稼働中 agent の resume 先差し替え(`switch_session`)。
