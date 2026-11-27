@@ -1,3 +1,4 @@
+import "./isolation.setup";
 import { expect, it, type Mock } from "vitest";
 
 export function installDialogShim(): void {
