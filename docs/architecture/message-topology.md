@@ -47,7 +47,7 @@ For the envelope's terms, outer frame keys, and wire shape, see
 - [Attachment rendering by engine](../reference/engines/attachment-rendering.md).
 - [Runner control and launch](../reference/protocol/runner-control.md).
 - [Wrapper configuration](../reference/configuration/wrapper.md).
-- [Task and tasklist envelopes](../reference/protocol/tasks.md).
+- [Child task envelopes](../reference/protocol/tasks.md).
 - [Subagent visibility](subagent-visibility.md).
 - [Persona delivery](../reference/protocol/persona-delivery.md).
 - [Personality-prompt injection](personality-injection.md).

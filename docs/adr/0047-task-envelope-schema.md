@@ -67,7 +67,8 @@ The SDK-side fields available differ by kind
 
 Initial values are `subagent` | `workflow`. Do not make it a closed enum; allow
 values to be added by addenda (`tasklist` was decided as an addition in
-[ADR-0049](0049-tasklist-on-task-envelope.md)).
+[ADR-0049](0049-tasklist-on-task-envelope.md), since retired by
+[ADR-0079](0079-retire-agent-checklist-projection.md)).
 Receivers must not discard an unknown `task_type`; fall back to a generic task
 display (forward compatibility).
 

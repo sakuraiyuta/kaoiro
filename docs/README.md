@@ -74,7 +74,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [0046](adr/0046-persona-cache-relocation.md) | Externalize the extraction cache from the persona ingestion directory | accepted |
 | [0047](adr/0047-task-envelope-schema.md) | Formal name and payload schema for the task envelope | accepted |
 | [0048](adr/0048-task-aggregation-delivery.md) | Server aggregation, progress throttling, and snapshots for tasks | accepted |
-| [0049](adr/0049-tasklist-on-task-envelope.md) | Carrying Tasklist (todo) on the task envelope | accepted |
+| [0049](adr/0049-tasklist-on-task-envelope.md) | Carrying Tasklist (todo) on the task envelope | superseded |
 | [0050](adr/0050-principal-model-and-graded-access-control.md) | Principal model — separate user/agent types, three role levels, and additive per-pair permissions | accepted |
 | [0051](adr/0051-history-restart-resilience.md) | Restart-resilient display history — reconnect replay, IA sidecar, and epoch replacement | accepted |
 | [0052](adr/0052-responsive-three-tier-layout.md) | Convert the dashboard to an equal three-size responsive layout | accepted |
@@ -104,6 +104,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [0076](adr/0076-single-kaoiro-entry-point.md) | One kaoiro entry point and the run verb | accepted |
 | [0077](adr/0077-antigravity-authentication.md) | Declare Antigravity authentication before launch | accepted |
 | [0078](adr/0078-antigravity-over-acp.md) | Host Antigravity over ACP with one agy process per prompt | accepted |
+| [0079](adr/0079-retire-agent-checklist-projection.md) | Retire the per-agent checklist projection | accepted |
 <!-- adr-index:end -->
 
 Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh docs` (the script lives in the skill, not in this repository). Do not edit inside the markers manually.
@@ -118,7 +119,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 ## Protocol documentation
 
 - Architecture and design intent: [message topology](architecture/message-topology.md), [permission control (two-axis model)](architecture/security-boundaries.md#permission-control-two-axis-model), [session capability advertisement](architecture/extensions.md#session-capability-advertisement), [session ownership and continuity](architecture/system-overview.md#session-ownership-and-continuity), [attachments](architecture/attachments.md), [subagent visibility](architecture/subagent-visibility.md).
-- Exact contracts: [envelope](reference/protocol/envelope.md), [event types and payloads](reference/protocol/events.md), [channels and directional messages](reference/protocol/channels.md), [versioning policy](reference/protocol/versioning.md), [permission requests](reference/protocol/permission-requests.md), [permission state](reference/protocol/permission-state.md), [permission synchronization and audit](reference/protocol/permission-sync-audit.md), [model and effort state](reference/protocol/model-effort.md), [session capabilities](reference/protocol/capabilities.md), [session lifecycle](reference/protocol/session-lifecycle.md), [state machine](reference/protocol/state-machine.md), [attachment wire contract](reference/protocol/attachments.md), [attachment rendering by engine](reference/engines/attachment-rendering.md), [runner control and launch](reference/protocol/runner-control.md), [launch contract between the runner and a wrapper](reference/protocol/launch-contract.md), [wrapper configuration](reference/configuration/wrapper.md), and [task and tasklist envelopes](reference/protocol/tasks.md).
+- Exact contracts: [envelope](reference/protocol/envelope.md), [event types and payloads](reference/protocol/events.md), [channels and directional messages](reference/protocol/channels.md), [versioning policy](reference/protocol/versioning.md), [permission requests](reference/protocol/permission-requests.md), [permission state](reference/protocol/permission-state.md), [permission synchronization and audit](reference/protocol/permission-sync-audit.md), [model and effort state](reference/protocol/model-effort.md), [session capabilities](reference/protocol/capabilities.md), [session lifecycle](reference/protocol/session-lifecycle.md), [state machine](reference/protocol/state-machine.md), [attachment wire contract](reference/protocol/attachments.md), [attachment rendering by engine](reference/engines/attachment-rendering.md), [runner control and launch](reference/protocol/runner-control.md), [launch contract between the runner and a wrapper](reference/protocol/launch-contract.md), [wrapper configuration](reference/configuration/wrapper.md), and [child task envelopes](reference/protocol/tasks.md).
 - Dated evidence: [subagent workflow detection](evidence/claude/subagent-workflow-detection.md).
 - Connection authentication: [authentication and authorization](reference/security/authentication-authorization.md#socket-authentication-serverlibkaoiro_serverauthex).
 

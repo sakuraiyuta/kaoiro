@@ -96,8 +96,8 @@ injecting the terminal notice into an SDK turn (see
   conversation from each block.
 - **Cap count and total size.** A batch has at most **10 messages** (the same
   order as `MAX_ATTACHMENTS_PER_INSTRUCTION`) and formatted text totals at most
-  **16,384 bytes** (the wrapper's `MAX_INPUT_BYTES`,
-  `MAX_TASKLIST_ITEMS_JSON_BYTES`, and `MAX_LOG_BYTES`). Overflow is **not
+  **16,384 bytes** (the wrapper's `MAX_INPUT_BYTES` and `MAX_LOG_BYTES`).
+  Overflow is **not
   dropped**; defer it to the next batch/turn. A single oversized message still
   delivers by itself; the first item is always included regardless of the cap.
 

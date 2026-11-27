@@ -1,7 +1,7 @@
 ---
 title: Protocol versioning policy
 status: accepted
-last_updated: 2026-11-24
+last_updated: 2026-11-28
 description: The flat outer-version stamping policy and the staged completion inventory for every wrapper/server/client/runner route.
 ---
 
@@ -159,6 +159,16 @@ and the inbound rendering table retain all fifteen names. The eight legacy
 compatibility; they do not affect server decisions and have no removal date.
 This is a coordinated server/wrapper release, following the [paired update and rollback
 procedure](../../operations/runner-update-and-rollback.md#coordinated-server-and-wrapper-updates).
+
+## Retired checklist projection
+
+[Issue #1284](https://github.com/sakuraiyuta/kaoiro/issues/1284) keeps
+`version: "0"` for this retirement by explicit operator decision. Old
+wrappers can still send the [reserved legacy checklist pair](tasks.md#reserved-legacy-checklist-pair).
+The server validates it and preserves session identity handling before
+acknowledging and discarding it. The dashboard ignores the pair from older
+servers. Keep these paths while supporting v2026.11.26.1 combinations or
+third-party v0 producers.
 
 ## Related protocol topics
 

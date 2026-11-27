@@ -16,7 +16,7 @@ and [rate-limit refresh evidence](../../evidence/codex-app-server/rate-limit-ref
 iterator owning the raw notification stream. Known items reuse the SDK-item
 adapter (`adapter.ts`) for progress and bounded log payloads; file-change
 starts and textual function outputs have explicit app-server mappings. Unknown item kinds are ignored.
-Plan snapshots use `normalizeTasklist`. Started/completed item ids are deduplicated
+Started/completed item ids are deduplicated
 within a turn; unrelated thread/turn notifications cannot affect its projection.
 Deltas affect progress only, while completed assistant messages each yield a
 transcript row. Two final answers therefore remain two rows, including when the
@@ -91,12 +91,12 @@ Duplicate item notifications are suppressed. `thread/compacted` is treated as
 a redundant companion, not a requirement or a substitute for missing item
 evidence.
 
-`turn/plan/updated` becomes a whole-list `task_type=tasklist` snapshot of the
-agent itself, not a transcript log. Each `step` is an item text, and
-`pending` / `inProgress` / `completed` map to `pending` / `in_progress` /
-`completed`. A plan with a malformed entry is dropped, and a snapshot equal to
-the last one sent is not sent again
-([task envelopes](../protocol/tasks.md#task_type-tasklist-addendum-issue-178-adr-0049-f4)).
+`turn/plan/updated` supplies content-free watchdog progress for the owned
+thread and turn. Each entry must have a string `step` and a status of
+`pending`, `inProgress` or `completed`. Valid empty and repeated updates
+also report progress. The wrapper emits no task, log or state change for
+this notification. Native planning continues
+([ADR-0079](../../adr/0079-retire-agent-checklist-projection.md)).
 
 Every `state_change`, from the first idle announcement on, carries
 `ext.session_capabilities` built from the catalog and the permission state at

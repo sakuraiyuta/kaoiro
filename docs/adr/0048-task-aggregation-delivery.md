@@ -40,7 +40,8 @@ be avoided.
 The server retains child tasks in a flat task table rather than as a collection
 under the parent agent entity, with each task referring to its parent `agent_id`.
 This keeps parent and child lifetime management independent and allows tasks with
-different `task_type` values (future tasklists and
+different `task_type` values (the checklist, later retired by
+[ADR-0079](0079-retire-agent-checklist-projection.md), and
 [ADR-0047](0047-task-envelope-schema.md) F4) to share one table. Because the
 lifecycle is bound to the parent session (ADR-0019 F1), discard linked tasks when
 the parent agent leaves.

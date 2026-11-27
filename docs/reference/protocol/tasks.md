@@ -1,12 +1,12 @@
 ---
-title: Task and tasklist envelopes
-description: The dedicated task envelope for subagent/workflow lifecycle, its task_type = "tasklist" addendum for an agent's own todo, and their operator-only delivery.
+title: Child task envelopes
+description: Child task lifecycle envelopes, operator-only delivery, and legacy checklist compatibility.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-28
 related: [protocol]
 ---
 
-# Task and tasklist envelopes
+# Child task envelopes
 
 ### Source data (SDK messages)
 
@@ -44,7 +44,7 @@ schema is settled in [ADR-0047](../../adr/0047-task-envelope-schema.md):
 - `task_type` is an extensible enum. Measured SDK values are `local_agent` /
   `local_workflow` / `local_bash` (they differ from ADR-0047 F4's illustrative
   `subagent`/`workflow`, but raw SDK values pass through without a renaming layer;
-  see that ADR's addendum). Future additions such as task lists are possible.
+  see that ADR's addendum).
   Receivers fall back to a generic display for unknown values.
 
 [Event types and payloads](events.md#types-and-payload-v0-settled) includes it
@@ -60,47 +60,27 @@ always emitted immediately regardless of both interval and threshold (the
 cold-start branch of `#shouldEmitTaskUpdate`), so the operator does not wait the
 first three seconds for progress immediately after launch.
 
-### `task_type: "tasklist"` addendum (issue #178, ADR-0049 F4)
+### Reserved legacy checklist pair
 
-In addition to the general `task` rules, an agent's own todo is always the single entity
-`{ agent_id, task_id: "tasklist", task_type: "tasklist" }`. The reserved word is bidirectional:
-when `task_type` is `tasklist`, `task_id` must be `tasklist`, and vice versa.
-The server rejects either mismatch. This prevents child task IDs from being used for this
-entity and prevents child tasks from using the reserved ID.
+[ADR-0079](../../adr/0079-retire-agent-checklist-projection.md) retired the
+per-agent checklist from v2026.11.26.1. Reserve both `task_id: "tasklist"`
+and `task_type: "tasklist"`. The server rejects either one-sided match and
+requires `kind: "updated"` and `status: "running"` for the pair. It validates
+legacy `items` and `omitted` as before, including the 50-item limit,
+256 UTF-8 bytes per item, 16,384 bytes of JSON for `items` and the ordinary
+ingress bounds. Valid legacy envelopes advance session identity and pending
+boundary markers under the existing admission rules, then receive a bare
+success acknowledgement without task storage, history or fan-out.
+The dashboard also ignores this pair in live input and join snapshots from
+older servers. See [the v0 exception](versioning.md#retired-checklist-projection).
 
-The payload is `{ kind: "updated", status: "running", items, omitted? }`.
-`items` is a whole-list snapshot of `{ text: string, status: "pending" | "in_progress" | "completed" }`,
-with the latest snapshot replacing the whole list (LWW). Do not send `kind: "completed"`
-when all items are complete. `items: []` is a valid replacement meaning that the current
-todo is empty; retain the entity until its parent wrapper leaves. The dashboard must not
-show a float for an empty list (avoiding a meaningless `0/0`), but must not delete the
-entity from state.
+### Reconnect replay
 
-The wrapper sends at most 50 items in source order, normalizing each `text` to at most
-256 UTF-8 bytes and the `items` JSON to at most 16,384 bytes. If later source items exist,
-it must include `omitted: { count, completed }`, so the operator can see that the detail is
-partial and how many items are complete overall. The server defensively validates the same
-limits and rejects violations; normal over-limit input is made displayable by wrapper normalization.
-
-`tasklist` is outside the three-second/token/tool-name throttle used for child-task
-`kind=updated`. Todo changes have no later token/tool signal to flush, so that throttle
-could permanently lose updates. The wrapper de-duplicates only consecutive snapshots with
-identical content and sends changed snapshots immediately. Claude Code's default source
-since SDK 0.3.228 is the `TaskCreate`/`TaskUpdate`/`TaskList` tool triggers ([ADR-0049](../../adr/0049-tasklist-on-task-envelope.md)
-addendum); `TodoWrite`, which maps `content` and the three-valued status directly, remains
-only the `CLAUDE_CODE_ENABLE_TASKS=0` compatibility fallback. `activeForm` is Claude-local UI text; the wire item
-settled by ADR-0049 contains only text and status, so it is not sent. Showing it later
-requires a protocol extension rather than an implicit field addition. Codex
-`todo_list.completed: boolean` maps `false -> pending` and `true -> completed`.
-Both cover only the parent thread's list. On socket reconnect, wrapper transport resends
-active `task` entities with a fresh seq, so they can be restored even after the old channel
-terminates and purges the server task table, without tasklist content de-duplication blocking it.
-The resend cache is capped at `5,000` entities / JSON `6,000,000` bytes. This prevents
-crashed/killed child tasks that never send `completed` from remaining forever; on overflow,
-the least recently updated child entities leave the cache and the wrapper warns on stderr.
-The parent `tasklist` snapshot is retained while any other eviction target exists. This is
-a local-memory bound for reconnects, not a substitute for server-side TaskStates ingress/byte
-bounds across multiple wrappers.
+Wrapper transport resends active child tasks with a fresh sequence number
+after socket rejoin. The cache holds at most 5,000 entities and 6,000,000
+bytes of JSON. If it fills, the wrapper evicts the least recently updated
+entries and emits a bounded warning on stderr. Server-side task storage
+enforces its own bounds.
 
 ### Recipient: operator only
 

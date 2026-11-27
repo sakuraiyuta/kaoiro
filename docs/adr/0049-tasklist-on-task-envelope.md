@@ -1,10 +1,10 @@
 ---
 title: Carrying Tasklist (todo) on the task envelope
-status: accepted
+status: superseded
 date: 2026-08-04
 opened: 2026-08-04
 supersedes: []
-superseded_by: null
+superseded_by: 79
 related_specs: [protocol, subagent-tasks, codex-exec-events]
 related_adrs: [47]
 ---
@@ -13,9 +13,7 @@ related_adrs: [47]
 
 ## Status
 
-Accepted (2026-08-04, decided in consultation with マスター; kaoiro issue #178).
-This is the first application of the `task_type` extension planned by F4 of
-[ADR-0047](0047-task-envelope-schema.md).
+Superseded by [ADR-0079](0079-retire-agent-checklist-projection.md).
 
 ## Context
 
