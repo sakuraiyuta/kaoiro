@@ -4,18 +4,11 @@
 // process it started.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { acpProbesSettled, trackAcpProbe } from "./acp_probe.js";
+import { trackAcpProbe } from "./acp_probe.js";
 
 export const GROK_PROBE_DEADLINE_MS = 10_000;
 const KILL_GRACE_MS = 1_000;
 const GROUP_POLL_MS = 25;
-/** Room for one probe's teardown: two grace periods and some slack. */
-export const GROK_PROBE_SETTLE_MS = 2 * KILL_GRACE_MS + 500;
-
-/** The shared probe registry (acp_probe.ts): Grok and Muse probes settle
- *  on the same tracking and deadline, so shutdown waits for both. */
-export const grokProbesSettled = acpProbesSettled;
-
 export class GrokProbeError extends Error {
   constructor(
     readonly reason: "spawn" | "deadline" | "exit" | "protocol" | "rpc",
