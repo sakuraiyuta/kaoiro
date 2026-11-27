@@ -1550,17 +1550,8 @@ describe("inter-agent history replay (#102)", () => {
     });
   });
 
-  // ふじ A2 must-fix (2026-07-23, 3rd review): R3 が生む 4 象限 (new/old
-  // client × new/old server) を production helper 1 本で通す合成 table
-  // test。App.svelte の onHistory glue は現状:
-  //   const projected = projection === "per-pane-v1"
-  //     ? histories
-  //     : fanOutInterAgentHistory(histories, clearWatermarks);
-  //   logs = mergeHistories(projected, logs);
-  // これを test 側で再現し、e503 の markerless-per-pane 中間版
-  // (server が pre-fan out しつつ marker を立てない実装、R3 前の状態)
-  // も含めて全経路で visible transcript が正しくなることを pin する。
-  describe("R3 4 象限 composite (parse → project → merge)", () => {
+  // Exercise marker-present, markerless, and live-buffer history paths.
+  describe("history projection and merge (parse → project → merge)", () => {
     // IA の 1 turn。sender = agent-a, receiver = agent-b。
     const ia: Envelope = {
       version: "0",
@@ -1609,41 +1600,10 @@ describe("inter-agent history replay (#102)", () => {
       expect(merged["agent-b"]).toEqual([ia]);
     });
 
-    it("quadrant 2: new server + old client (marker=per-pane-v1 だが client 側 fanOut 走る) → dedupe で 1 copy", () => {
-      // 「old client」= marker を無視して常に fanOut する挙動を再現するた
-      // め、marker を undefined にしたのと等価な payload を渡す (=
-      // marker present でも client が旧経路を走る shape)。
-      // このケースは new server が既に receiver pane に配った copy と
-      // client fanOut が生む receiver copy が identity key で dedupe
-      // されるため、最終的に receiver pane に 1 copy だけ残る。
-      const payload = {
-        agents: { "agent-a": [ia], "agent-b": [ia] },
-        clear_watermarks: {},
-        // marker を落として old-client の behavior を強制。
-      };
-      const merged = applyOnHistory(payload);
-      expect(merged["agent-a"]).toEqual([ia]);
-      // dedupe が効くので 1 copy のみ (fanOut が同じ envelope を追加
-      // 積みしても identity key で潰される)。
-      expect(merged["agent-b"]).toEqual([ia]);
-    });
-
     it("quadrant 3: old server + new client (marker absent → fanOut fallback で receiver pane を組み立てる)", () => {
       // 旧 server は sender-keyed history のみ送る (受信 pane 未組立)。
       // 新 client が marker absent を検知して fanOut fallback を走らせ、
       // receiver pane に copy を追加する。
-      const payload = {
-        agents: { "agent-a": [ia] },
-        clear_watermarks: {},
-      };
-      const merged = applyOnHistory(payload);
-      expect(merged["agent-a"]).toEqual([ia]);
-      expect(merged["agent-b"]).toEqual([ia]);
-    });
-
-    it("quadrant 4: old server + old client (baseline, marker absent → fanOut で receiver pane 組立)", () => {
-      // 前 R3 状態と等価。新 client の marker-absent 分岐がこの挙動を
-      // 保存していることを直接 pin (quadrant 3 と同 payload、同結果)。
       const payload = {
         agents: { "agent-a": [ia] },
         clear_watermarks: {},

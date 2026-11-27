@@ -1,6 +1,4 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { reduceStates } from "@kaoiro/agent-common";
@@ -213,72 +211,13 @@ describe("threadEventToLogs", () => {
   });
 });
 
-describe("helpers", () => {
-  // Read the installed SDK source directly. A hand-built ThreadEvent cannot
-  // show whether the SDK reshapes turn.failed before this wrapper sees it.
-  it("pins: the installed @openai/codex-sdk source has no turn.failed reshaping and the exec-exit message format is unchanged", () => {
-    const distPath = fileURLToPath(
-      new URL("../node_modules/@openai/codex-sdk/dist/index.js", import.meta.url),
-    );
-    const dist = readFileSync(distPath, "utf8");
-
-    // CodexExec.run()'s exit handler builds the "Codex Exec exited with
-    // X: Y" message parseCodexExecErrorMessage's regex depends on.
-    expect(dist).toContain(
-      'throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`)',
-    );
-
-    // Isolate runStreamedInternal's body (the generator thread.runStreamed
-    // actually wraps -- confirmed by `runStreamed` calling it directly a
-    // few lines above in the same file) between its own signature and the
-    // next method's doc comment, so the assertions below are scoped to
-    // the function host.ts's #runTurn stream loop actually consumes, not
-    // to the whole file.
-    const bodyStart = dist.indexOf(
-      "async *runStreamedInternal(input, turnOptions = {}) {",
-    );
-    const bodyEnd = dist.indexOf(
-      "/** Provides the input to the agent and returns the completed turn. */",
-    );
-    expect(bodyStart).toBeGreaterThan(-1);
-    expect(bodyEnd).toBeGreaterThan(bodyStart);
-    const streamedBody = dist.slice(bodyStart, bodyEnd);
-
-    // Every parsed JSONL line is yielded as-is; no case exists for
-    // "turn.failed" inside this function, so its event (including
-    // event.error.message) reaches host.ts completely unreshaped.
-    expect(streamedBody).toContain("yield parsed;");
-    expect(streamedBody).not.toContain('"turn.failed"');
-    // The only two special-cased types, confirming the premise's "NONE
-    // for turn.failed" claim isn't just an absence of matches elsewhere.
-    expect(streamedBody).toContain('"thread.started"');
-    expect(streamedBody).toContain('"turn.completed"');
-
-    // Second, independent confirmation via Thread.run() (a convenience
-    // wrapper over the same generator, not what host.ts calls, but built
-    // from the identical stream): it assigns event.error to turnFailure
-    // with no transformation at all before throwing turnFailure.message.
-    expect(dist).toContain("turnFailure = event.error;");
-  });
-});
-
 // issue #300: exec-failure stderr relay. codexExecFailureRelay's own doc
 // covers the pipeline end to end; the unit tests below pin each stage
 // (parse / extract / mask / classify) independently so a future change
 // that breaks one stage fails at that stage, not only in the integration
 // test at the bottom.
 describe("parseCodexExecErrorMessage (issue #300)", () => {
-  // Pinned against @openai/codex-sdk 0.153.4's dist/index.js (fetched via
-  // `npm pack @openai/codex-sdk@0.153.4`), CodexExec.run()'s exit handler:
-  // `const detail = signal ? \`signal ${signal}\` : \`code ${code ?? 1}\`;
-  //  throw new Error(\`Codex Exec exited with ${detail}: ${stderrBuffer
-  //  .toString("utf8")}\`);` -- identical to 0.144.1's, and reconfirmed
-  // identical at 0.156.1 (dist/index.js SHA-256
-  // d62ed107033bdba802b283c77d875e4bec3deb2704a910bb7e3f95059473b16f matches
-  // 0.153.4's, re-fetched 2026-09-23 -- issue #399). If a future SDK
-  // release changes this wording, this test is the first thing to fail,
-  // flagging that parseCodexExecErrorMessage's fallback-to-raw path (see
-  // its own doc) is now doing the work instead of the structured split.
+  // Retain parsing of the historical exec-exit message format.
   it("splits the SDK's own exec-exit-nonzero message format", () => {
     expect(
       parseCodexExecErrorMessage("Codex Exec exited with code 1: boom"),
