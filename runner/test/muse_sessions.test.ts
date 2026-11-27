@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { MuseProbeAborted } from "../src/muse_acp_probe.js";
 import { listMuseSessions, museSessionExists } from "../src/muse_sessions.js";
 import { listSessions, sessionExists } from "../src/sessions.js";
 
@@ -125,6 +126,17 @@ describe("muse session discovery over session/list", () => {
     const before = requests().length;
     await expect(museSessionExists(CWD, "bad id!", { executable: FAKE, env })).resolves.toBe(false);
     expect(requests().length).toBe(before);
+  });
+
+  it("propagates a pre-aborted listing", async () => {
+    await expect(listMuseSessions(CWD, { signal: AbortSignal.abort() }))
+      .rejects.toBeInstanceOf(MuseProbeAborted);
+  });
+
+  it("propagates a pre-aborted existence check for a valid id", async () => {
+    const options = { signal: AbortSignal.abort() };
+    await expect(museSessionExists(CWD, "sess-1", options))
+      .rejects.toBeInstanceOf(MuseProbeAborted);
   });
 
   it("dispatches through sessions.ts for the muse engine", async () => {

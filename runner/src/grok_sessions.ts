@@ -4,69 +4,19 @@
 
 import type { SessionMeta } from "@kaoiro/protocol";
 import {
+  ACP_SESSION_LIST_PAGE_LIMIT,
+  isValidAcpSessionId,
+  walkAcpSessionPages,
+} from "./acp_session_pages.js";
+import {
   GrokProbeAborted,
   runGrokProbe,
-  type GrokProbeCall,
   type GrokProbeOptions,
 } from "./grok_acp_probe.js";
 
-export const GROK_LIST_PAGE_LIMIT = 20;
-const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
+export const GROK_LIST_PAGE_LIMIT = ACP_SESSION_LIST_PAGE_LIMIT;
 
 export type GrokDiscoveryOptions = Omit<GrokProbeOptions, "cwd">;
-
-const record = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-
-/** One page's entries under `cwd`, or a throw when the page is malformed. A
- *  malformed entry fails the page: a partial list is never authoritative. */
-function readPage(result: unknown, cwd: string): {
-  sessions: SessionMeta[];
-  cursor: string | undefined;
-} {
-  const page = record(result);
-  if (!page || !Array.isArray(page.sessions)) throw new Error("malformed session/list page");
-  const sessions: SessionMeta[] = [];
-  for (const raw of page.sessions) {
-    const entry = record(raw);
-    if (!entry || typeof entry.sessionId !== "string" || typeof entry.cwd !== "string")
-      throw new Error("malformed session/list entry");
-    if (entry.cwd !== cwd || !SESSION_ID_PATTERN.test(entry.sessionId)) continue;
-    sessions.push({
-      session_id: entry.sessionId,
-      ...(typeof entry.title === "string" && entry.title !== "" ? { summary: entry.title } : {}),
-      ...(typeof entry.updatedAt === "string" && entry.updatedAt !== "" ? { mtime: entry.updatedAt } : {}),
-    });
-  }
-  const next = page.nextCursor;
-  if (next !== undefined && next !== null && (typeof next !== "string" || next === ""))
-    throw new Error("malformed session/list cursor");
-  return { sessions, cursor: typeof next === "string" ? next : undefined };
-}
-
-/** Pages `session/list {cwd}`; `found` may stop the walk early. Throws when
- *  the page limit is reached before the last page. */
-async function walk(
-  call: GrokProbeCall,
-  cwd: string,
-  found?: (session: SessionMeta) => boolean,
-): Promise<{ sessions: SessionMeta[]; hit: boolean }> {
-  const sessions: SessionMeta[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < GROK_LIST_PAGE_LIMIT; page += 1) {
-    const result = await call("session/list", cursor === undefined ? { cwd } : { cwd, cursor });
-    const read = readPage(result, cwd);
-    for (const session of read.sessions) {
-      if (found?.(session)) return { sessions, hit: true };
-      sessions.push(session);
-    }
-    if (read.cursor === undefined) return { sessions, hit: false };
-    cursor = read.cursor;
-  }
-  throw new Error("session/list page limit reached");
-}
 
 function warn(cwd: string, error: unknown): void {
   process.stderr.write(
@@ -81,7 +31,9 @@ export async function listGrokSessions(
   options: GrokDiscoveryOptions = {},
 ): Promise<SessionMeta[]> {
   try {
-    return (await runGrokProbe({ ...options, cwd }, (call) => walk(call, cwd))).sessions;
+    const { sessions } = await runGrokProbe({ ...options, cwd }, (call) =>
+      walkAcpSessionPages(call, cwd));
+    return sessions;
   } catch (error) {
     if (error instanceof GrokProbeAborted) throw error;
     warn(cwd, error);
@@ -96,10 +48,11 @@ export async function grokSessionExists(
   sessionId: string,
   options: GrokDiscoveryOptions = {},
 ): Promise<boolean> {
-  if (!SESSION_ID_PATTERN.test(sessionId)) return false;
+  if (!isValidAcpSessionId(sessionId)) return false;
   try {
-    return (await runGrokProbe({ ...options, cwd },
-      (call) => walk(call, cwd, (session) => session.session_id === sessionId))).hit;
+    const { hit } = await runGrokProbe({ ...options, cwd }, (call) =>
+      walkAcpSessionPages(call, cwd, (row) => row.session_id === sessionId));
+    return hit;
   } catch (error) {
     if (error instanceof GrokProbeAborted) throw error;
     warn(cwd, error);
