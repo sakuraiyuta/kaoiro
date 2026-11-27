@@ -526,12 +526,6 @@ export async function runCodexCli(
     printLog(envelope);
     replayer.sendLiveLog(envelope);
   };
-  // Tasklist snapshots, like child task envelopes, are dashboard-only relay
-  // data rather than this agent's console transcript.
-  const onTask = (envelope: Envelope): void => {
-    link?.send(envelope);
-  };
-
   let resolvePersonaPrompt!: (prompt: string) => void;
   let rejectPersonaPrompt!: (reason: Error) => void;
   const personaPromptPromise = new Promise<string>((resolve, reject) => {
@@ -1100,7 +1094,6 @@ export async function runCodexCli(
     } : {}),
     onState,
     onLog,
-    onTask,
     prepareInput: (turnToken) => {
       const prepared = interAgentTurns.prepareInput(turnToken);
       if (prepared === undefined) return undefined;

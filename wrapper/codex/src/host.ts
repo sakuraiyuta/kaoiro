@@ -26,8 +26,8 @@ import type {
   WrapperPermissionLifecycleMessage,
 } from "@kaoiro/protocol";
 import { DeliveryPolicyController, PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
-import { initialMachineState, makeAttachRejected, makeInstructionRejected, makeLog, makeResult, makeStateChange, makeTask, stepState, TASKLIST_TASK_ID } from "@kaoiro/agent-common";
-import type { AdapterEvent, EffectiveStatusSnapshot, EngineAdapter, Envelope, KaoiroState, MachineState, ModelSource, PendingPermissionExt, PendingQuestionExt, PermissionMode, AttachRejectedPayload, InstructionRejectedPayload, ResolvedSnapshotExt, ResultPayload, SwitchErrorExt, TaskPayload, TasklistSnapshot, ToolDescriptor, WhoamiSnapshot, WrapperConfig } from "@kaoiro/agent-common";
+import { initialMachineState, makeAttachRejected, makeInstructionRejected, makeLog, makeResult, makeStateChange, stepState } from "@kaoiro/agent-common";
+import type { AdapterEvent, EffectiveStatusSnapshot, EngineAdapter, Envelope, KaoiroState, MachineState, ModelSource, PendingPermissionExt, PendingQuestionExt, PermissionMode, AttachRejectedPayload, InstructionRejectedPayload, ResolvedSnapshotExt, ResultPayload, SwitchErrorExt, ToolDescriptor, WhoamiSnapshot, WrapperConfig } from "@kaoiro/agent-common";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
 import { clipText, computeResumeDrift, effectiveStatusEnvelopeFields, effectiveStatusWhoamiFields } from "@kaoiro/agent-common";
 import { codexExecFailureRelay } from "./adapter.js";
@@ -230,9 +230,6 @@ export interface CodexHostOptions {
   onState: (envelope: Envelope) => void;
   /** Invoked per relayable log line (assistant text / tool call / result). */
   onLog?: (envelope: Envelope) => void;
-  /** Invoked for the parent agent's whole-list todo snapshot (issue #178,
-   * ADR-0049). It is distinct from transcript logs and child-task progress. */
-  onTask?: (envelope: Envelope) => void;
   /** Settles only this token's conversations. SDK failures carry free-form
    * detail; unstarted cancellations carry a structured reason. The CLI maps
    * both through the shared safe classifier before resolving peer notices. */
@@ -493,9 +490,6 @@ export class CodexHost implements EngineAdapter {
   #droppedTempCleanup: Promise<void> = Promise.resolve();
   /** Invalidates an older turn's asynchronous account-default refresh. */
   #modelResolutionGeneration = 0;
-  /** Exact last tasklist wire content. This de-duplicates repeated SDK
-   * snapshots without applying the child-task time/token throttle. */
-  #lastTasklistJson: string | null = null;
   /** Latest per-window rate-limit snapshot (mirrors AgentHost's #rateLimits).
    *  Populated when a session id becomes known and after each terminal
    *  ThreadEvent — Codex has no in-stream rate_limit event, unlike Claude. */
@@ -1431,7 +1425,6 @@ export class CodexHost implements EngineAdapter {
           this.#options.onTurnProgress?.({ turnToken });
           if (event.kind === "adapter") this.#apply(event.event);
           if (event.kind === "log") this.#options.onLog?.(makeLog(this.#config, this.#machine.state, this.#now(), event.payload));
-          if (event.kind === "tasklist") this.#emitTasklistSnapshot(event.snapshot);
         },
       });
       if (this.#watchdogFailStopped) return;
@@ -2132,24 +2125,6 @@ export class CodexHost implements EngineAdapter {
       ext.permission_control = permission.control;
     }
     return ext;
-  }
-
-  #emitTasklistSnapshot(snapshot: TasklistSnapshot): void {
-    const encoded = JSON.stringify(snapshot);
-    if (encoded === this.#lastTasklistJson) return;
-    this.#lastTasklistJson = encoded;
-
-    const onTask = this.#options.onTask;
-    if (onTask === undefined) return;
-    const payload: Omit<TaskPayload, "agent_id"> = {
-      kind: "updated",
-      task_id: TASKLIST_TASK_ID,
-      task_type: "tasklist",
-      status: "running",
-      items: snapshot.items,
-      ...(snapshot.omitted !== undefined ? { omitted: snapshot.omitted } : {}),
-    };
-    onTask(makeTask(this.#config, this.#machine.state, this.#now(), payload));
   }
 
   #emitResult(payload: {
