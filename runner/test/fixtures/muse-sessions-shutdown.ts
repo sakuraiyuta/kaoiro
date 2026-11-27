@@ -5,7 +5,7 @@ import type { RunnerLinkOptions } from "../../src/transport.js";
 let options: RunnerLinkOptions;
 const link = {
   sendSpawnResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {},
-  sendCatalogResult() {}, updateRegister() {}, reconnect() {}, close() {},
+  sendCatalogResult() {}, updateRegister() {}, close() {},
 };
 await runRunnerCli({
   resolveCodexAuthMode: async () => "unknown",

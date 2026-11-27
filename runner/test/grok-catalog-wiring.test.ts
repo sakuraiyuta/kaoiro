@@ -37,7 +37,6 @@ class FakeRunnerLink {
   updateRegister(register: RunnerRegister): void {
     this.updatedRegisters.push(register);
   }
-  reconnect(): void {}
   close(): void {}
 }
 
