@@ -6,7 +6,8 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 // composes the real CLI around a stand-in link and calls the tools the way the
 // SDK MCP server would, so a missing provider fails here and not only in a unit
 // test that builds its own `InterAgentTool`.
-import { describe, expect, it, vi } from "vitest";
+import { describe, vi } from "vitest";
+import { testStatusLineContract } from "../../agent-common/test/status_line_contract.js";
 import type { ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { buildKaoiroMcpServer, kaoiroToolDescriptors } from "../src/inter_agent_sdk.js";
@@ -60,34 +61,6 @@ async function compose() {
 }
 
 describe("Claude CLI status line composition (issue 482)", () => {
-  it("offers both tools", async () => {
-    const { descriptors } = await compose();
+  testStatusLineContract(compose);
 
-    expect(descriptors.map((d) => d.name)).toEqual(
-      expect.arrayContaining(["set_status_line", "read_status_line"]),
-    );
-  });
-
-  it("set_status_line reaches the link on its first call and returns the stored size", async () => {
-    const { descriptors, setStatusLine } = await compose();
-
-    const result = await descriptors.find((d) => d.name === "set_status_line")!.handler!({ text: "hello" });
-
-    expect(setStatusLine).toHaveBeenCalledWith("hello");
-    expect(JSON.parse(result.content[0]!.text)).toEqual({
-      status_line: { bytes: 5, truncated: false, updated_at: "2026-10-03T12:00:00.000001Z" },
-    });
-  });
-
-  it("read_status_line reaches the link with the agent id", async () => {
-    const { descriptors, readStatusLine } = await compose();
-
-    const result = await descriptors.find((d) => d.name === "read_status_line")!.handler!({ agent_id: "peer.1" });
-
-    expect(readStatusLine).toHaveBeenCalledWith("peer.1");
-    expect(JSON.parse(result.content[0]!.text)).toMatchObject({
-      agent_id: "peer.1",
-      status_line: { text: "peer text" },
-    });
-  });
 });

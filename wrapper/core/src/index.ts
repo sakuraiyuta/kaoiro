@@ -25,6 +25,7 @@ export {
   formatTurnWatchdogLine,
   readDigitsMs,
   resolveDigitsMs,
+  resolveStandardTurnWatchdogSettings,
 } from "./turn_watchdog_settings.js";
 export { TurnWatchdog } from "./turn_watchdog.js";
 export type {
