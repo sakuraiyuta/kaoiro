@@ -118,8 +118,9 @@ specified in `packageManager`; installation through
 [Corepack](https://nodejs.org/api/corepack.html) is recommended), and
 Elixir (`~> 1.15`) with Phoenix.
 
-Start every layer (server, dashboard, and runner) together with hot reload and
-watching:
+Start the server, dashboard and runner together with source watching.
+[Host configuration changes](docs/reference/configuration/runner.md#applying-host-configuration)
+take effect when the runner restarts.
 
 ```sh
 ./scripts/dev.sh

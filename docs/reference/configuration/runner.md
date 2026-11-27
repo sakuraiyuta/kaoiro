@@ -1,10 +1,37 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-11-24
+last_updated: 2026-11-28
 ---
 
 # Runner configuration
+
+## Applying host configuration
+
+The runner reads `runner.config.json` once per process. Registration,
+reconnections and all wrapper launches (including resumes and crash relaunches)
+use that startup configuration. A save takes effect at the next runner start.
+This includes server URL, allowed directories, capabilities, model declarations
+and permission or delivery ceilings. A tighter restriction applies only after
+the old runner stops. Server-managed settings follow their own activation rules.
+
+1. Keep the last working file. Review the complete new configuration, drain
+   work on this host and confirm its agents are idle.
+2. Save the file and restart the runner in a maintenance window. Stopping the
+   runner stops every supervised agent on this host. Pending work and approvals
+   may be interrupted. Muse loses its per-child recovery checkpoint.
+3. Check the new invocation in the service journal and the new host registration
+   in the dashboard. Verify the edited field in the host details or with a
+   controlled launch, then restore the intended agents explicitly.
+4. If the new file prevents startup, restore the last working file, restart and
+   repeat the registration and launch checks before restoring agents.
+
+The journal prints a reminder at startup and when the first matching save is
+observed, including an atomic replacement. Detection is best effort. A save
+through a symlink target can escape the directory watch. Silence does not
+confirm activation. Dashboard-only operators need the host maintainer to
+schedule a restart. Saving identical bytes also leaves Antigravity's startup
+model catalog and CLI version in place.
 
 ## Coverage
 
@@ -68,19 +95,12 @@ This stops inheritance and nothing else:
 - A value that a login shell profile or an engine's own configuration exports
   again does not come from the runner, and the runner does not remove it.
 
-`server_url` is a `runner.config.json` key and hot-reloads (the runner reconnects
-when it changes). The environment variable `KAOIRO_RUNNER_SERVER_URL`
-(**deprecated; it still takes precedence over the config file**, issue #135)
-replaces the file value when it is set and not empty. It must begin with `ws://`
-or `wss://`, and an invalid format fails fast at startup / config reload. The
-runner warns once per process that the variable is deprecated, and warns again
-whenever the file value changes while a different variable value hides it.
-Because hot reload keeps the same precedence, rewriting `server_url` in
-`runner.config.json` while the variable is set does not change the actual
-destination. Move the value into `server_url` and remove the variable from
-`runner.env` to silence the warnings (see
-[Runner install](../../operations/runner-install.md)). The variable is not
-relayed to wrappers; they get their URL from the runner's own `server_url`.
+The deprecated `KAOIRO_RUNNER_SERVER_URL` overrides `server_url` at startup
+when non-empty and must begin with `ws://` or `wss://`. An invalid override
+fails startup. The runner warns when the variable is set and when it hides a
+different file value. Move the destination into the file and remove the variable
+from `runner.env` before restarting. Wrappers receive the runner's effective
+URL. See [Runner install](../../operations/runner-install.md).
 
 ## Engine store
 
@@ -93,7 +113,7 @@ Antigravity and Grok are not store pins. The launch shim supplies the store
 location. Acquiring a different pin leaves the running release's choice
 unchanged.
 
-Configuration reload, switch and rollback do not acquire pins. Keep pins
+Runner restart, switch and rollback do not acquire pins. Keep pins
 used by retained rollback targets. When enabling an engine later or replacing
 a damaged version, follow the [re-acquisition procedure][engine-reacquisition].
 
@@ -106,7 +126,7 @@ Claude's context window, defaulting to `60`. Because the wrapper derives the
 token denominator from `maxTokens` returned by the SDK for each model, the
 working budget is 600k for a 1M window and 120k for a 200k window. It accepts
 only finite numbers satisfying `0 < value <= 100`, and changes take effect
-starting from the next spawn after hot reload. The raw window utilization and
+on the first spawn after a runner restart. The raw window utilization and
 this working budget ratio are reported together with their denominators in the
 dashboard and wrapper context notifications (issue #254).
 
@@ -142,12 +162,10 @@ in-flight mechanism even with an explicit true ceiling. `default` seeds a new
 server policy row when launch has no explicit choice; it never rewrites a stored
 row and cannot enable a mechanism beyond the ceiling.
 
-Only this new block is strict: unknown engine/key names, non-object blocks,
-arrays, null and non-boolean values reject startup. An invalid reload retains
-the last applied configuration. Existing engine blocks retain their parsing
-rules. A successful reload publishes one snapshot for the next wrapper config,
-register defaults and launch metadata; an awaited catalog refresh reads the
-latest applied snapshot. Existing wrappers keep their launch declaration.
+Unknown engine/key names, non-object blocks, arrays, null and non-boolean
+values in the delivery block reject startup. Existing engine blocks retain
+their parsing rules. Wrapper config, register defaults, launch metadata and
+catalog refreshes use the same startup delivery settings.
 
 The removed inputs `KAOIRO_CLAUDE_PHASE2_DELIVERY`,
 `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS`, `KAOIRO_CODEX_OPERATOR_STEER` and
@@ -169,8 +187,7 @@ changes require restarting the runner and restarting the affected wrappers.
 Muse does not start MCP servers in untrusted workspaces, so using kaoiro's
 tools requires this opt-in for a workspace the operator trusts. Enabling it
 also loads that workspace's skills and rules.
-Reloading runner configuration or restarting only a wrapper does not reload
-`runner.env` into the runner's environment.
+The service launcher reads `runner.env` each time it starts the runner.
 
 Behaviour settings of the runner and its wrappers live in `runner.config.json`
 (issue #469). A deprecated `KAOIRO_*` variable still overrides the key; it
@@ -182,20 +199,14 @@ Precedence is variable, then `runner.config.json`, then the default. The
 runner does not copy a variable into the wrapper config: when a variable is
 set (not undefined and not the empty string), the runner relays nothing for
 that key and the wrapper reads the inherited variable through its own reader.
-A set variable is validated at runner start and on every reload with the
-wrapper's own grammar, so an invalid one (including a whitespace-only value)
-stops the runner at start, naming the variable, and a reload that would enable
-an engine with an invalid variable is skipped. Variables of an engine not in
-`capabilities` are neither read nor validated.
+At startup, the runner validates variables for enabled engines with the
+wrapper's own grammar. An invalid value (including whitespace alone) stops
+startup and identifies the variable. Variables for disabled engines are ignored.
 
-A numeric value in `runner.config.json` must be a JSON number; strings, booleans and
-`null` are rejected (`log_phoenix_heartbeats` must be a JSON boolean, `server_url`
-a string), and an invalid file value skips the reload (the last valid
-configuration stays). A change reaches wrappers launched after the reload
-(spawn, resume, restart, reset, crash relaunch); running wrappers keep their
-launch-time values. The runner logs `runner: behaviour settings for subsequent
-wrappers: ...` when the relayed values change, and warns when a file value is
-hidden by a variable.
+Numeric settings in `runner.config.json` require JSON numbers.
+`log_phoenix_heartbeats` requires a JSON boolean and `server_url` a string.
+Invalid values reject startup. The runner warns when a variable hides a file
+value. All wrapper launches use the settings from that runner invocation.
 
 | Variable | Config key | Type | Range | Default | Reader | Precedence |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -269,17 +280,16 @@ Operator procedure, verification and rollback:
 ## Codex backend
 
 Codex uses `app-server`. Omit `codex.backend` or specify `"app-server"`.
-Explicit `"exec"` is rejected at runner startup and on reload; direct wrapper
+Explicit `"exec"` is rejected at runner startup. Direct wrapper
 configuration rejects `codex_backend: "exec"` too. The refusal explains the
 pre-retirement preparation procedure. Startup rejects the entire runner, including
 other engines and hosts whose `capabilities` excludes Codex. There is no warning-only release,
 automatic conversion, fallback, reset, or cross-backend resume.
 
-A rejected reload keeps the last applied configuration and existing children.
 The runner relays only its local selection as `codex_backend`; environment
 variables, command-line backend flags, dashboard selectors, spawn payloads and
-resume snapshots cannot select a backend. New wrapper lifetimes use the valid
-local setting; a reload never rewrites a running child's selection.
+resume snapshots cannot select a backend. Wrapper lifetimes use the backend
+selected at runner startup.
 
 To restart a Codex peer in a new session, use the dashboard reset or launch
 controls; no backend-switching CLI remains. See
@@ -302,8 +312,8 @@ establish them.
   `"unknown"` and logs a guidance warning: the standard Codex model catalog is
   empty while any declared `codex.extra_models` remain. To advertise the
   standard catalog, set `"apikey"`, or set `"chatgpt"` together with
-  `chatgpt_plan`. Reloading updates the runner register and subsequent wrapper
-  launches; running wrappers pick up the new catalog on their next launch.
+  `chatgpt_plan`. Restart the runner to publish the catalog and use it for
+  wrapper launches.
   This is only declarative metadata for catalog selection; the runner neither
   attaches nor modifies credentials, and never infers `auth_mode` from
   `chatgpt_plan`. A misdeclaration drifts the catalog from actual entitlements,
@@ -348,10 +358,6 @@ config (`~/.codex/config.toml`, etc.). Because the effective value (= configured
 ?? true) is always written into the per-run config, the runner's intent takes
 precedence regardless of global settings (only `false` actually disables, while
 `true` / omission is also explicitly injected).
-
-**live reload**: modifying the config takes effect only for spawns after the
-change. Running wrapper processes retain their launch-time values and do not
-change immediately.
 
 ## Antigravity configuration
 
@@ -422,11 +428,9 @@ settings (phase-34 Stage B6, issue #292).
   }
   ```
 
-**live reload**: same semantics as the Codex block above — a config change
-reaches only spawns after the reload. A reload resolves the path again, so a
-fixed executable can recover without a config-text change. A catalog snapshot
-fallback merely preserves model choices; it does not prove that a wrapper can
-start.
+The runner resolves the executable at startup. After repairing it, restart the
+runner to probe again. A fallback catalog preserves model choices. Verify that
+the next wrapper can launch.
 
 ## Grok runner configuration
 
@@ -476,6 +480,5 @@ filters external rows **before execution**. A capability alone supplies no
 command. Duplicates disable every row with that ID. A bad row or declaration
 is reported by ID (or array index) and omitted. An invalid configuration
 file still fails validation. Discovery occurs once at startup. Restart to
-add, edit or repair a command. Reload may narrow the advertised set or
-reselect an already discovered row. Catalog refresh and reconnect reuse the
-startup declarations. See the [launch contract](../protocol/launch-contract.md).
+add, edit or repair a command. Catalog refresh and reconnect reuse the startup
+declarations. See the [launch contract](../protocol/launch-contract.md).

@@ -354,6 +354,8 @@ export function nextSteps(result: SetupResult, token: string): string[] {
     );
   }
   steps.push(
+    "For an existing host, drain its agents before restarting the runner.",
+    "Verify the new registration, then restore the intended agents.",
     "2. Start it: deploy/kaoiro-runner-launch.sh",
     "3. To run it as a service, install the systemd unit / launchd agent",
     "   from deploy/ — see runner/README.md「常駐化」.",

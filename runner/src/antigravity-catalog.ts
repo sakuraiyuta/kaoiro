@@ -1,9 +1,6 @@
 // ADR-0057 F6: `agy models` register-time probe for the Antigravity engine
-// launch catalog. Quota-free CLI call, run once at register time (and on
-// config reload). Unlike Claude (ADR-0039 Option E) this engine carries no
-// TTL cache or manual refresh — it is deliberately absent from
-// LIVE_PROBE_ENGINES (engine_catalog_refresh.ts), so a fresh probe simply
-// runs on the next register.
+// launch catalog. The runner probes once at startup. Catalog refresh and
+// socket reconnection reuse the result for the lifetime of the process.
 
 import { execFile } from "node:child_process";
 import type { EngineModelInfo } from "@kaoiro/protocol";

@@ -193,7 +193,7 @@ production environment**. Why both are required:
 - `HostRegistry.register/4` **overwrites** the entry keyed by `host_id` (also
   replacing `runner_pid`), and `drop/3` on disconnect **deletes the entry** by
   matching pid. Because the real runner does not re-register while maintaining
-  its socket (`updateRegister` fires only on config reload or an engine catalog refresh), **connecting even
+  its socket (`updateRegister` fires only on an engine catalog refresh), **connecting even
   momentarily with the same host_id deletes the real host's registration**. If
   `host_id` differs, overwriting does not occur even if `server_url` is mistaken
 
@@ -255,16 +255,16 @@ When the `antigravity` capability is selected during `kaoiro-runner-setup.sh`
 (`runner/src/setup.ts`), the wizard presence-checks the `agy` executable
 on `PATH` (`runner/src/setup.ts:205-220`). If `agy` is not found, the wizard throws
 `ConfigError` with an install hint and fails closed rather than writing an
-unverified configuration. On runner process startup and configuration reload,
+unverified configuration. At runner startup,
 the runner probes `agy --version` (`runner/src/antigravity-version.ts`,
 `runner/src/runner-cli.ts`). At startup, if resolved, it writes
 `runner: antigravity agy version <version>` to stderr and advertises the version
 in the `RunnerRegister` payload under `antigravity_cli_version`
 (`runner/src/config.ts`) for server and dashboard visibility
 (issue #410). This startup version probe is for operator reporting and observability
-only; failure to resolve a version does not gate runner startup. A version
-change detected during configuration reload emits a stderr warning
-(`runner: warn — antigravity agy version changed`).
+only. An unavailable CLI version is omitted from the host registration.
+To refresh the version and catalog after an upstream update, follow the
+[host restart procedure](../reference/configuration/runner.md#applying-host-configuration).
 
 ### Antigravity session index
 

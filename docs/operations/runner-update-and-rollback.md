@@ -50,7 +50,7 @@ Managed engine behavior depends on the release and operation.
 | Bootstrap with acquisition | Fetches enabled pins before the first switch. A failed download prevents activation. |
 | `switch` | Changes the selected release without acquisition. |
 | `--rollback` | Restores the previous release link without acquisition. Its next managed spawn needs that release's pin in the store. |
-| Configuration reload that enables an engine | Does not acquire pins. Fetch the newly enabled pin before launching that engine from a bundled release. |
+| Runner restart that enables an engine | Does not acquire pins. Fetch the newly enabled pin before launching that engine from a bundled release. |
 
 For old-layout releases, the switch guard hashes the binary inside the
 release. For bundled releases it compares the recorded native identity.
@@ -64,7 +64,11 @@ script. To reinstall an older tarball, use its own tools or
 For a bundled tarball, follow [Re-acquire an engine pin](#re-acquire-an-engine-pin)
 after switching to confirm its pins are present before launching its engines.
 
-### Re-acquire an engine pin
+#For host configuration edits, [drain, restart and restore the host](../reference/configuration/runner.md#applying-host-configuration).
+For a startup-risk runner release, follow the [high-risk release procedure](high-risk-change-release.md).
+Every supervised engine is affected. Use plain shell as the standby.
+
+## Re-acquire an engine pin
 
 On the runner host, apply the intended `capabilities` before acquisition.
 When repairing a damaged version, remove only that version's store directory
