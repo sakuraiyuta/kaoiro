@@ -134,7 +134,7 @@ The runner's Phoenix wire log omits periodic heartbeat pushes and corresponding
 replies by default. Other transport / reconnect / error / control messages
 continue to be emitted as before. Set `"log_phoenix_heartbeats": true` in
 `runner.config.json` only when full logging is required for connection-level
-investigation; the change applies to the next log line, with no restart. The
+investigation. The change takes effect at the next runner start. The
 deprecated variable `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` still overrides the
 key (exactly `1` keeps heartbeats; any other set value omits them). For
 temporary dogfood investigation, launching with
@@ -227,7 +227,7 @@ value. All wrapper launches use the settings from that runner invocation.
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | 1..2147483647 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CODEX_APPROVAL_AXIS` | `codex.approval_axis` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | set variable beats file; only `1` or file `true` is global, else the persona list |
 | `KAOIRO_RUNNER_SERVER_URL` | `server_url` | string | `ws://` or `wss://` URL | required in the file | the runner (`applyServerUrlOverride`) | variable > file |
-| `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` | `log_phoenix_heartbeats` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | the runner (live, per log line) | variable > file > default |
+| `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` | `log_phoenix_heartbeats` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | the runner at startup | variable > file > default |
 
 The turn watchdog interrupts a turn whose SDK stream has been silent for
 `turn_watchdog_inactivity_ms`, then stops the wrapper if the interrupt has not
