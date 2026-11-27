@@ -17,6 +17,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResetRequestReplyReasons
+  alias KaoiroServer.SessionStarts
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TestTimeouts
   alias KaoiroServer.TokenDenylist
@@ -63,6 +64,109 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       "payload" => payload,
       "ext" => %{}
     }
+  end
+
+  defp legacy_tasklist_payload(agent_id) do
+    %{
+      "kind" => "updated",
+      "agent_id" => agent_id,
+      "task_id" => "tasklist",
+      "task_type" => "tasklist",
+      "status" => "running",
+      "items" => []
+    }
+  end
+
+  defp append_pending_boundary(socket, agent_id) do
+    assert_reply push(socket, "envelope", envelope(agent_id, "idle")), :ok
+
+    marker =
+      Map.merge(envelope(agent_id, "idle"), %{
+        "type" => "session_boundary",
+        "payload" => %{"mode" => "new", "request_id" => "legacy-reset", "to_session_id" => nil}
+      })
+
+    assert :ok = AgentStates.append_boundary(agent_id, marker)
+  end
+
+  defp assert_rejected_legacy_tasklists(socket, agent_id, cases) do
+    SessionPointers.record(agent_id, "before", "/launch", "claude-code")
+    prior_pointer = SessionPointers.get(agent_id)
+    assert {:ok, boundary} = SessionStarts.advance_transition(agent_id, nil)
+    append_pending_boundary(socket, agent_id)
+    prior_history = AgentStates.histories()[agent_id]
+
+    for {{message, reason}, index} <- Enum.with_index(cases) do
+      ref = push(socket, "envelope", Map.put(message, "session_id", "rejected-#{index}"))
+      assert_reply ref, :error, %{reason: ^reason}
+    end
+
+    assert SessionPointers.get(agent_id) == prior_pointer
+    assert SessionStarts.get(agent_id) == boundary
+    assert AgentStates.histories()[agent_id] == prior_history
+    assert :sys.get_state(AgentStates).agents[agent_id].pending_boundary_patch == "legacy-reset"
+    assert TaskStates.snapshot() == %{}
+  end
+
+  defp assert_legacy_session_reopen(scenario) do
+    Process.flag(:trap_exit, true)
+    agent_id = "test.tasklist-#{scenario}"
+
+    if scenario != :first,
+      do: SessionPointers.record(agent_id, "before", "/launch", "claude-code")
+
+    socket = join_wrapper(agent_id)
+
+    prior_boundary =
+      if scenario == :pending do
+        assert {:ok, pending} =
+                 SessionStarts.advance_transition(agent_id, nil, "before", SessionStarts)
+
+        append_pending_boundary(socket, agent_id)
+        pending
+      end
+
+    message =
+      agent_id
+      |> task_envelope(legacy_tasklist_payload(agent_id))
+      |> Map.put("session_id", "after")
+
+    assert_reply push(socket, "envelope", message), :ok
+
+    case scenario do
+      :first ->
+        assert SessionStarts.get(agent_id) == nil
+
+      :changed ->
+        assert {{_, _}, _, "after"} = SessionStarts.get(agent_id)
+
+      :pending ->
+        {order, display, nil} = prior_boundary
+        assert SessionStarts.get(agent_id) == {order, display, "after"}
+
+        [marker] =
+          Enum.filter(AgentStates.histories()[agent_id], &(&1["type"] == "session_boundary"))
+
+        assert marker["payload"]["to_session_id"] == "after"
+        assert :sys.get_state(AgentStates).agents[agent_id].pending_boundary_patch == nil
+    end
+
+    :ok = close(socket)
+    assert %{session_id: "after"} = SessionPointers.get(agent_id)
+    boundary = SessionStarts.get(agent_id)
+
+    for store <- [SessionPointers, SessionStarts] do
+      assert :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, store)
+      assert {:ok, _} = Supervisor.restart_child(KaoiroServer.Supervisor, store)
+    end
+
+    assert %{session_id: "after"} = SessionPointers.get(agent_id)
+    assert SessionStarts.get(agent_id) == boundary
+
+    replay = join_wrapper(agent_id)
+    assert_reply push(replay, "envelope", message), :ok
+    assert %{session_id: "after"} = SessionPointers.get(agent_id)
+    assert SessionStarts.get(agent_id) == boundary
   end
 
   defp production_reply_frame_bytes(topic, payload) do
@@ -1365,22 +1469,11 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert TaskStates.snapshot() == %{}
     end
 
-    # issue #178 / ADR-0049 F4: tasklist は child task と同じ `task` wire を
-    # 通るが、task_id/task_type の固定された単一 entity。予約を片方向だけに
-    # すると、child が task_id=tasklist を名乗って parent の todo snapshot を
-    # 上書きできてしまうため、両方向の拒否を frame boundary で固定する。
-    test "tasklist の予約 task_id/task_type を双方向で検証する" do
+    test "rejects both unmatched reservations and child lifecycle kinds on the reserved pair" do
       agent_id = "test.tasklist-reserved"
       socket = join_wrapper(agent_id)
 
-      base_payload = %{
-        "kind" => "updated",
-        "agent_id" => agent_id,
-        "task_id" => "tasklist",
-        "task_type" => "tasklist",
-        "status" => "running",
-        "items" => []
-      }
+      base_payload = legacy_tasklist_payload(agent_id)
 
       cases = [
         {Map.put(base_payload, "task_id", "child-1"),
@@ -1393,29 +1486,17 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
          "tasklist requires payload.kind=updated and payload.status=running"}
       ]
 
-      for {payload, expected_reason} <- cases do
-        ref = push(socket, "envelope", task_envelope(agent_id, payload))
-        assert_reply ref, :error, %{reason: ^expected_reason}
-      end
+      frames =
+        Enum.map(cases, fn {payload, reason} -> {task_envelope(agent_id, payload), reason} end)
 
-      assert TaskStates.snapshot() == %{}
+      assert_rejected_legacy_tasklists(socket, agent_id, frames)
     end
 
-    # The server mirrors every wrapper-side tasklist bound. The exact cases
-    # deliberately sit beside limit+1: `>=` regressions would make a valid
-    # operator-visible snapshot disappear just as surely as a missing cap
-    # would let one consume the task snapshot budget.
-    test "tasklist の件数・text・JSON byte 境界を防御的に検証する" do
+    test "accepts legacy list bounds without storing or broadcasting a checklist" do
       agent_id = "test.tasklist-bounds"
       socket = join_wrapper(agent_id)
-
-      base_payload = %{
-        "kind" => "updated",
-        "agent_id" => agent_id,
-        "task_id" => "tasklist",
-        "task_type" => "tasklist",
-        "status" => "running"
-      }
+      @endpoint.subscribe("agents:lobby")
+      base_payload = legacy_tasklist_payload(agent_id)
 
       fifty_items =
         Enum.map(1..50, fn index ->
@@ -1442,9 +1523,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         assert_reply ref, :ok
       end
 
-      assert %{^agent_id => %{"tasklist" => stored}} = TaskStates.snapshot()
-      assert stored["payload"]["items"] == json_at_limit
-      assert stored["payload"]["omitted"] == %{"count" => 1, "completed" => 1}
+      assert TaskStates.snapshot() == %{}
+      refute_broadcast "envelope", %{"type" => "task", "agent_id" => ^agent_id}
 
       json_over_limit = tasklist_items_with_quote_count(2_034)
       assert byte_size(Jason.encode!(json_over_limit)) == 16_385
@@ -1472,15 +1552,103 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
          "invalid value: payload.omitted"}
       ]
 
-      for {payload, expected_reason} <- rejected_cases do
-        ref = push(socket, "envelope", task_envelope(agent_id, payload))
-        assert_reply ref, :error, %{reason: ^expected_reason}
-      end
+      frames =
+        Enum.map(rejected_cases, fn {payload, reason} ->
+          {task_envelope(agent_id, payload), reason}
+        end)
 
-      # Every rejected update was stopped before TaskStates/broadcast. The
-      # last accepted LWW snapshot is still exactly the same.
-      assert %{^agent_id => %{"tasklist" => unchanged}} = TaskStates.snapshot()
-      assert unchanged == stored
+      valid = task_envelope(agent_id, base_payload)
+
+      assert_rejected_legacy_tasklists(socket, agent_id, [
+        {Map.put(valid, "agent_id", "different"), "agent_id does not match topic"},
+        {put_in(valid, ["payload", "agent_id"], "different"),
+         "payload.agent_id does not match topic"},
+        {put_in(valid, ["ext", "padding"], String.duplicate("x", 65_536)), "envelope too large"}
+        | frames
+      ])
+    end
+
+    test "acknowledges discard without changing the parent or the following child lifecycle" do
+      agent_id = "test.tasklist-discard"
+      socket = join_wrapper(agent_id)
+      @endpoint.subscribe("agents:lobby")
+      assert_reply push(socket, "envelope", envelope(agent_id, "idle")), :ok
+      assert_broadcast "envelope", %{"agent_id" => ^agent_id, "type" => "state_change"}
+      parent = AgentStates.get_envelope(agent_id)
+      history = AgentStates.histories()[agent_id]
+      activity = AgentActivity.get(agent_id)
+
+      message = task_envelope(agent_id, legacy_tasklist_payload(agent_id))
+      ref = push(socket, "envelope", message)
+
+      assert_receive %Phoenix.Socket.Reply{ref: ^ref, status: :ok, payload: reply},
+                     TestTimeouts.durable_reply()
+
+      assert reply == %{}
+      assert AgentStates.get_envelope(agent_id) == parent
+      assert AgentStates.histories()[agent_id] == history
+      assert AgentActivity.get(agent_id) == activity
+      assert TaskStates.snapshot() == %{}
+      refute_broadcast "envelope", %{"type" => "task", "agent_id" => ^agent_id}
+
+      for {kind, status} <- [
+            {"started", "running"},
+            {"updated", "running"},
+            {"completed", "completed"}
+          ] do
+        child = %{
+          "kind" => kind,
+          "status" => status,
+          "agent_id" => agent_id,
+          "task_id" => "child-1",
+          "task_type" => "local_agent"
+        }
+
+        assert_reply push(socket, "envelope", task_envelope(agent_id, child)), :ok
+        assert_broadcast "envelope", %{"type" => "task", "payload" => ^child}
+
+        if status == "running" do
+          assert %{^agent_id => %{"child-1" => %{"payload" => ^child}}} = TaskStates.snapshot()
+        else
+          assert TaskStates.snapshot() == %{}
+        end
+      end
+    end
+
+    for scenario <- [:first, :changed, :pending] do
+      test "a legacy checklist alone preserves the #{scenario} session identity after reopen" do
+        assert_legacy_session_reopen(unquote(scenario))
+      end
+    end
+
+    for keep_launch? <- [true, false] do
+      test "a legacy checklist obeys external pointer admission (launch retained: #{keep_launch?})" do
+        id = "test.tasklist-external-#{unquote(keep_launch?)}"
+        engine = "sample-engine"
+        SessionPointers.record(id, nil, "/launch", engine)
+        assert %{engine: ^engine} = SessionPointers.get(id)
+        socket = join_wrapper(id)
+        assert :sys.get_state(socket.channel_pid).assigns.external_engine == engine
+
+        unless unquote(keep_launch?) do
+          assert :ok = SessionPointers.delete(id)
+        end
+
+        message =
+          id
+          |> task_envelope(legacy_tasklist_payload(id))
+          |> Map.put("session_id", "external-sid")
+          |> Map.put("ext", %{"engine" => "claude-code", "cwd" => "/claimed"})
+
+        assert_reply push(socket, "envelope", message), :ok
+
+        if unquote(keep_launch?) do
+          assert %{engine: ^engine, cwd: "/launch", session_id: "external-sid"} =
+                   SessionPointers.get(id)
+        else
+          assert SessionPointers.get(id) == nil
+        end
+      end
     end
   end
 
@@ -1687,7 +1855,6 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   #     (fresh spawn 直後の IA が誤って hidden 化しないこと)
   describe "session start 記録 trigger (#106)" do
     alias KaoiroServer.ClearWatermarks
-    alias KaoiroServer.SessionStarts
     alias KaoiroServer.SessionPointers, as: SP
 
     setup do
