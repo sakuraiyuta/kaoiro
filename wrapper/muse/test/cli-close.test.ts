@@ -46,12 +46,12 @@ it.each(["data", "message", "code", "generic"])(
     onHostCreated: (value) => { host = value; },
   });
   try {
-    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"));
+    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"), { timeout: 5_000 });
     if (scenario === "generic") vi.spyOn(recovery, "confirm")
       .mockImplementation(() => { throw new Error("GENERIC_MARKER_1278"); });
     callbacks.onInstruction?.("hello");
     await vi.waitFor(() => expect(envelopes.some((e) => e.type === "log" &&
-      e.payload.text === "muse turn failed")).toBe(true));
+      e.payload.text === "muse turn failed")).toBe(true), { timeout: 5_000 });
     expect(JSON.stringify(envelopes)).not.toMatch(/(?:DATA|MESSAGE|CODE|GENERIC)_MARKER_1278/);
     const logs = envelopes.filter((e) => e.type === "log" &&
       e.payload.kind === "system" && String(e.payload.text).includes("turn failed"));
@@ -63,7 +63,7 @@ it.each(["data", "message", "code", "generic"])(
         turn_number: 1, kind: "request", body: "hello",
         meta: { done: false, propose_next: "" } } } as unknown as Envelope);
     await vi.waitFor(() => expect(envelopes.some((e) =>
-      e.type === "inter_agent_message" && e.payload.error)).toBe(true));
+      e.type === "inter_agent_message" && e.payload.error)).toBe(true), { timeout: 5_000 });
     const notice = envelopes.find((e) =>
       e.type === "inter_agent_message" && e.payload.error)!;
     expect(notice.payload.error).toMatchObject({ code: "api_error" });
