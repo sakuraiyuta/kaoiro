@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { MuseHost, type MuseHostOptions } from "../src/host.js";
 import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
+import { classifyInterAgentError } from "@kaoiro/agent-common";
+import { RequestError } from "@agentclientprotocol/sdk";
 
 const executable = fileURLToPath(
   new URL("./fixtures/muse.mjs", import.meta.url),
@@ -47,6 +49,80 @@ async function started(options: Partial<MuseHostOptions> = {}) {
 }
 
 describe("muse host", () => {
+  it("masks the error envelope and keeps peer detail generic", async () => {
+    const turns: NonNullable<MuseHostOptions["onTurnEnd"]> extends
+      (turn: infer T) => void ? T[] : never = [];
+    const message = "rate limit https://user:s3cr3t@example.test/v1?token=abcd1234#fragment " +
+      "/home/operator/.config/credentials Authorization: Bearer secret123456";
+    const { host, envelopes } = await started({
+      env: { ...process.env, KAOIRO_TEST_MUSE_PROMPT_ERROR: JSON.stringify({
+        code: -32603, message, data: { marker: "DATA_MARKER_1278" },
+      }) },
+      onTurnEnd: (turn) => turns.push(turn),
+    });
+    await expect(host.send("fail", undefined, ["conversation"])).rejects.toBeInstanceOf(RequestError);
+    const result = envelopes.find((e) => e.type === "result")!;
+    expect(result.payload).toMatchObject({ is_error: true,
+      error_code: "muse_turn_failed" });
+    expect(result.payload.error_summary).toBeUndefined();
+    expect(result.payload.error_subtype).toBeUndefined();
+    const detail = String(result.payload.error_detail);
+    expect(detail).toContain("-32603");
+    expect(detail).toContain("[URL]");
+    expect(detail).toContain("[PATH]");
+    for (const secret of ["secret123456", "s3cr3t", "abcd1234",
+      "/home/operator/.config", "DATA_MARKER_1278"]) {
+      expect(JSON.stringify({ result, envelopes, turns })).not.toContain(secret);
+    }
+    expect(turns[0]!.error?.detail).toBe("muse turn failed");
+    expect(classifyInterAgentError(turns[0]!.error!).code).toBe("api_error");
+  });
+
+  it.each([
+    [{ code: -32603, message: "" }, "-32603", "reason unavailable"],
+    [{ code: -32603, message: "界".repeat(200) }, "-32603", "界"],
+    [{ code: -32603, message: { marker: "MESSAGE_MARKER_1278" } },
+      "-32600", "Invalid request"],
+    [{ code: { marker: "CODE_MARKER_1278" }, message: "failure" },
+      "-32600", "Invalid request"],
+  ])("bounds and validates ACP errors %#", async (wireError, code, reason) => {
+    const turns: unknown[] = [];
+    const { host, envelopes } = await started({
+      env: { ...process.env,
+        KAOIRO_TEST_MUSE_PROMPT_ERROR: JSON.stringify(wireError) },
+      onTurnEnd: (turn) => turns.push(turn),
+    });
+    const error = await host.send("fail").catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(RequestError);
+    expect((error as RequestError).code).toBe(Number(code));
+    const result = envelopes.find((e) => e.type === "result")!;
+    const detail = String(result.payload.error_detail);
+    expect(detail).toContain(code);
+    expect(detail).toContain(reason);
+    expect(Buffer.byteLength(detail)).toBeLessThanOrEqual(256);
+    if (reason === "界") {
+      expect(Buffer.byteLength(detail)).toBeGreaterThan(253);
+      expect(detail.length).toBeLessThan(200);
+    }
+    expect(detail).not.toContain("\ufffd");
+    expect(JSON.stringify({ envelopes, turns })).not.toMatch(/(?:MESSAGE|CODE)_MARKER_1278/);
+  });
+
+  it("does not disclose generic exception message or stack", async () => {
+    const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+    const recovery = new RecoveryReporter(config, undefined, () => {});
+    const turns: unknown[] = [];
+    const { host, envelopes } = await started({ recovery,
+      onTurnEnd: (turn) => turns.push(turn) });
+    vi.spyOn(recovery, "confirm").mockImplementation(() => {
+      throw new Error("GENERIC_MARKER_1278");
+    });
+    await expect(host.send("hello")).rejects.toThrow("GENERIC_MARKER_1278");
+    const result = envelopes.find((e) => e.type === "result")!;
+    expect(result.payload.error_detail).toBe("muse turn failed (reason unavailable)");
+    expect(JSON.stringify({ envelopes, turns })).not.toContain("GENERIC_MARKER_1278");
+  });
+
   it("runs a text turn and publishes the reply, the result and context usage", async () => {
     const { host, envelopes } = await started();
     await host.send("hello");

@@ -21,7 +21,10 @@ import {
   type WrapperConfig,
 } from "@kaoiro/agent-common";
 import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
-import { formatTurnWatchdogLine, type RecoveryReporter } from "@kaoiro/wrapper-core";
+import {
+  clipUtf8Head, formatTurnWatchdogLine, redactCredentials,
+  type RecoveryReporter,
+} from "@kaoiro/wrapper-core";
 import { AcpSession } from "./acp/session.js";
 import { connectAcp } from "./acp/connection.js";
 import { MuseLaunchError } from "./muse/errors.js";
@@ -75,6 +78,18 @@ interface Turn {
 }
 
 const STARTUP_TIMEOUT_MS = 30_000;
+
+function turnErrorDetail(cause: unknown): string {
+  const fallback = "muse turn failed (reason unavailable)";
+  if (!(cause instanceof acp.RequestError)) return fallback;
+  const code = typeof cause.code === "number" && Number.isFinite(cause.code)
+    ? `(${cause.code}) ` : "";
+  const message = cause.message || fallback;
+  const masked = message
+    .replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"']+/g, "[URL]")
+    .replace(/(?:~\/|\.\.\/|\.\/|\/|[A-Za-z]:[\\/]|\\\\)[^\s"']+/g, "[PATH]");
+  return clipUtf8Head(redactCredentials(`${code}${masked}`), 256);
+}
 
 class StartupAborted extends Error {
   constructor() {
@@ -574,6 +589,7 @@ export class MuseHost implements EngineAdapter {
           text: "",
           is_error: true,
           error_code: "muse_turn_failed",
+          error_detail: turnErrorDetail(cause),
         }),
       );
       turn.reject(error);

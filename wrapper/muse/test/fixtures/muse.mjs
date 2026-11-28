@@ -146,6 +146,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         reply(msg.id, { configOptions: configOptions() });
         break;
       case "session/prompt": {
+        if (process.env.KAOIRO_TEST_MUSE_PROMPT_ERROR) {
+          const error = JSON.parse(process.env.KAOIRO_TEST_MUSE_PROMPT_ERROR);
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error }) + "\n");
+          return;
+        }
         if (deferredServers) {
           await connectMcp(deferredServers);
           await connecting;

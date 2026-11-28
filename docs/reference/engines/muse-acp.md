@@ -24,6 +24,13 @@ operator's explicit opt-in below), initializes one ACP session
 (`session/new`, or `session/resume` for a cold resume) and uses
 `session/prompt` for each queued turn. It does not launch `muse` per turn.
 
+A failed turn shows its ACP error message and numeric code, when available,
+in the operator timeline's collapsed error details. The wrapper masks
+credential-shaped text, URLs, and path tokens and limits the detail to 256
+UTF-8 bytes. This pattern-based masking cannot recognize every secret. ACP
+error data and generic exception messages are not relayed. The shape of a
+real provider's `no_allowance` error has not been measured.
+
 `muse acp` is experimental upstream. It speaks ACP version 1 over stdio and
 translates to the same Muse Code host as `muse serve`. The gate that
 enables it is open by default upstream; the wrapper passes the operator's

@@ -10,6 +10,70 @@ import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
 import { runMuseCli } from "../src/cli.js";
 import { MuseHost } from "../src/host.js";
 
+it.each(["data", "message", "code", "generic"])(
+  "keeps the failed instruction and peer notice generic: %s", async (scenario) => {
+  let host!: MuseHost;
+  let callbacks!: ServerLinkOptions;
+  const { RecoveryReporter } = await import("@kaoiro/wrapper-core");
+  const recovery = new RecoveryReporter({ agent_id: "muse-test",
+    server_url: "ws://localhost", persona: { id: "p", name: "P", sprite_set: "p" },
+    display_name: "P" }, undefined, () => {});
+  const wireError = scenario === "message"
+    ? { code: -32603, message: { marker: "MESSAGE_MARKER_1278" } }
+    : scenario === "code"
+      ? { code: { marker: "CODE_MARKER_1278" }, message: "rate limit" }
+      : { code: -32603, message: "rate limit", data: "DATA_MARKER_1278" };
+  const envelopes: Envelope[] = [];
+  const work = runMuseCli({
+    parseCliArgs: () => ({ configPath: "unused" }),
+    loadConfig: () => ({ agent_id: "muse-test", server_url: "ws://localhost",
+      persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P" }),
+    loadWrapperBuildInfo: () => ({ revision: "unknown", dirty: false,
+      built_at: "unknown", version: "unknown", channel: "dev" }),
+    createServerLink: (_url, _id, options) => {
+      callbacks = options;
+      queueMicrotask(() => callbacks.onPersonaPrompt?.("persona"));
+      return { send: (e: Envelope) => envelopes.push(e), close() {},
+        deliveryIncarnation: () => null, deliveryGeneration: () => null,
+        acknowledgeInterAgentDelivery: () => {},
+        setSessionId() {}, reportDisconnectIntent: async () => {} } as unknown as ServerLink;
+    },
+    createHost: (options) => new MuseHost({ ...options, recovery,
+      executable: fileURLToPath(new URL("./fixtures/muse.mjs", import.meta.url)),
+      env: { ...process.env, ...(scenario === "generic" ? {} : {
+        KAOIRO_TEST_MUSE_PROMPT_ERROR: JSON.stringify(wireError),
+      }) } }),
+    onHostCreated: (value) => { host = value; },
+  });
+  try {
+    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"));
+    if (scenario === "generic") vi.spyOn(recovery, "confirm")
+      .mockImplementation(() => { throw new Error("GENERIC_MARKER_1278"); });
+    callbacks.onInstruction?.("hello");
+    await vi.waitFor(() => expect(envelopes.some((e) => e.type === "log" &&
+      e.payload.text === "muse turn failed")).toBe(true));
+    expect(JSON.stringify(envelopes)).not.toMatch(/(?:DATA|MESSAGE|CODE|GENERIC)_MARKER_1278/);
+    const logs = envelopes.filter((e) => e.type === "log" &&
+      e.payload.kind === "system" && String(e.payload.text).includes("turn failed"));
+    expect(logs.map((e) => e.payload.text)).toEqual(["muse turn failed"]);
+    callbacks.onInterAgentMessage?.({ version: "0", agent_id: "peer",
+      persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "Peer",
+      ts: "2026-11-28T00:00:00Z", type: "inter_agent_message", state: "thinking",
+      payload: { to: "muse-test", conversation_id: "test-conversation",
+        turn_number: 1, kind: "request", body: "hello",
+        meta: { done: false, propose_next: "" } } } as unknown as Envelope);
+    await vi.waitFor(() => expect(envelopes.some((e) =>
+      e.type === "inter_agent_message" && e.payload.error)).toBe(true));
+    const notice = envelopes.find((e) =>
+      e.type === "inter_agent_message" && e.payload.error)!;
+    expect(notice.payload.error).toMatchObject({ code: "api_error" });
+    expect(JSON.stringify(notice)).not.toMatch(/(?:DATA|MESSAGE|CODE|GENERIC)_MARKER_1278/);
+  } finally {
+    host?.close();
+    await work;
+  }
+});
+
 it.each([
   ["high", true], [" ", true], ["x".repeat(257), true],
   ["", false], [42, false], [undefined, false],
