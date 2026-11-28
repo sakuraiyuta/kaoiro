@@ -5,7 +5,8 @@
 // connects to the kaoiro MCP server it is handed (listing its tools into
 // KAOIRO_TEST_MUSE_TOOLS_FILE when that is set).
 import { createInterface } from "node:readline";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -109,6 +110,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           protocolVersion: 1,
           agentCapabilities: {
             loadSession: true,
+            ...(process.env.KAOIRO_TEST_MUSE_PROMPT_CAPS ? {
+              promptCapabilities: JSON.parse(process.env.KAOIRO_TEST_MUSE_PROMPT_CAPS),
+            } : {}),
             mcpCapabilities: { http: true, sse: false },
             sessionCapabilities: { list: {}, resume: {}, close: {} },
           },
@@ -146,6 +150,24 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         reply(msg.id, { configOptions: configOptions() });
         break;
       case "session/prompt": {
+        const capture = process.env.KAOIRO_TEST_MUSE_BLOCKS_FILE;
+        if (capture) {
+          const prompt = msg.params.prompt;
+          const blocks = prompt.map(block => {
+            if (block.type === "image") {
+              const { data, ...fields } = block;
+              return { ...fields,
+                checksum: createHash("sha256").update(data).digest("hex") };
+            }
+            if (block.type === "text") {
+              return { type: "text", bytes: Buffer.byteLength(block.text) };
+            }
+            return block;
+          });
+          appendFileSync(capture, JSON.stringify({
+            blocks, bytes: Buffer.byteLength(JSON.stringify(prompt)),
+          }) + "\n");
+        }
         if (process.env.KAOIRO_TEST_MUSE_PROMPT_ERROR) {
           const error = JSON.parse(process.env.KAOIRO_TEST_MUSE_PROMPT_ERROR);
           process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error }) + "\n");
@@ -258,6 +280,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             status: "in_progress" });
         }
         if (process.env.KAOIRO_TEST_IGNORE_CANCEL) break;
+        const hold = process.env.KAOIRO_TEST_HOLD_CANCEL_FILE;
+        while (hold && !existsSync(hold)) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
         if (sleepingPrompt !== undefined) {
           const id = sleepingPrompt;
           sleepingPrompt = undefined;

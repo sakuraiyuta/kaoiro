@@ -301,3 +301,61 @@ describe("AgentDetail composer while a send is pending (issue #1107)", () => {
     expect(sendButton(target).textContent).toBe("送信");
   });
 });
+
+describe("Composer attachment categories", () => {
+  it.each([
+    [undefined, ["screen.png", "script.js", "notes.txt", "unknown"]],
+    [["image"], ["screen.png"]],
+    [["text"], ["script.js", "notes.txt"]],
+    [["image", "text"], ["screen.png", "script.js", "notes.txt"]],
+    [["pdf"], []],
+  ])("uses the advertised categories for picker, paste and drop: %j", async (
+    categories, expected,
+  ) => {
+    const { target, props } = await render(fakeConnection().conn);
+    const current = envelope("host-a.a");
+    props.envelope = {
+      ...current,
+      ext: { session_capabilities: {
+        ...CAPS.session_capabilities,
+        ...(categories ? { attachment_types: categories } : {}),
+      } },
+    };
+    await settle();
+    const files = [
+      new File(["image"], "screen.png", { type: "image/png" }),
+      new File(["js"], "script.js", { type: "application/javascript" }),
+      new File(["text"], "notes.txt", { type: "text/plain" }),
+      new File(["unknown"], "unknown"),
+    ];
+    const input = target.querySelector<HTMLInputElement>('input[type="file"]')!;
+    expect(input.disabled).toBe(expected.length === 0);
+    for (const eventName of ["change", "paste", "drop"]) {
+      const event = new Event(eventName, { bubbles: true, cancelable: true });
+      if (eventName === "change") {
+        Object.defineProperty(input, "files", { configurable: true, value: files });
+        input.dispatchEvent(event);
+      } else if (eventName === "paste") {
+        Object.defineProperty(event, "clipboardData", { value: { files } });
+        textarea(target).dispatchEvent(event);
+      } else {
+        Object.defineProperty(event, "dataTransfer", {
+          value: { types: ["Files"], files },
+        });
+        input.dispatchEvent(event);
+      }
+      await settle();
+      const rendered = [...target.querySelectorAll<HTMLElement>(".staged-name")];
+      expect(rendered.map(element => element.title.split(" (")[0]))
+        .toEqual(expected);
+      for (const remove of target.querySelectorAll<HTMLButtonElement>(".staged button")) {
+        remove.click();
+        flushSync();
+      }
+    }
+    expect(input.accept.includes("text/*"))
+      .toBe(categories === undefined || categories.includes("text"));
+    expect(input.accept.includes("image/"))
+      .toBe(categories === undefined || categories.includes("image"));
+  });
+});

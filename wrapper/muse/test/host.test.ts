@@ -942,9 +942,9 @@ describe("muse host", () => {
     })).rejects.toThrow(/unsupported/);
   });
 
-  it("rejects attachments explicitly", async () => {
+  it("rejects unstaged attachment IDs", async () => {
     const { host } = await started();
-    await expect(host.send("hi", ["upload-1"])).rejects.toThrow(/unsupported/);
+    await expect(host.send("hi", ["upload-1"])).rejects.toThrow(/must be staged/);
   });
 
   it("resumes a stored session and refuses an unknown one", async () => {

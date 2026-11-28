@@ -244,6 +244,8 @@ export const agentDetail = {
   composerPlaceholder:
     "Send an instruction… (Ctrl+Enter to send, / for commands, drag and drop or paste to send images and other files)",
   attachImagesTitle: "Attach images (multiple allowed)",
+  attachTextTitle: "Attach text and code files (multiple allowed)",
+  attachImagesAndTextTitle: "Attach images, text and code files (multiple allowed)",
   attachFilesTitle:
     "Attach files (images / text / code / PDF / Office, multiple allowed)",
   attachUnsupportedTitle: "Not supported in this session",

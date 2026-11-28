@@ -941,7 +941,7 @@ export interface SessionCapabilities {
   supports_attachments: boolean;
   /** Absent means unrestricted for backwards compatibility; present is the
    * closed set of types this session accepts. */
-  attachment_types?: Array<"image">;
+  attachment_types?: Array<"image" | "text">;
   supports_user_input_dialog: boolean;
   /** Optional constraint: dialog only fires in these permission_mode /
    *  sandbox contexts. Absent / empty = unconditional (matches on=true).
@@ -1098,9 +1098,9 @@ export function sessionCapabilitiesFrom(
     }
   }
   if (Array.isArray(r.attachment_types)) {
-    const types: Array<"image"> = [];
+    const types: Array<"image" | "text"> = [];
     for (const type of r.attachment_types) {
-      if (type === "image") types.push(type);
+      if (type === "image" || type === "text") types.push(type);
     }
     // A present-but-invalid / empty list is intentionally retained as an
     // empty restriction: fail closed rather than widening a malformed stamp.

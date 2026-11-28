@@ -71,6 +71,39 @@ describe("upload intake", () => {
     ]);
     expect(intake.stage(["bad"])).toBeUndefined();
   });
+  it("keeps Grok's full-size declaration, indexed chunks and byte views", () => {
+    const { intake, envelopes } = created();
+    intake.attachOpen({ upload_id: "large", filename: "large", mime: "text/plain",
+      size: 128 * 1024 * 1024, chunks: 2048 });
+    expect(rejections(envelopes)).toEqual([]);
+    const id = "2048";
+    intake.attachOpen({
+      upload_id: id, filename: id, mime: "text/plain", size: 2048, chunks: 2048,
+    });
+    for (let index = 2047; index >= 0; index -= 1) {
+      const frame = chunkPayload(id, index, Uint8Array.of(1));
+      intake.attachChunk(frame);
+      frame[frame.length - 1] = 2;
+    }
+    intake.attachClose(id);
+    const record = intake.stage([id]);
+    const chunks = record?.uploads[0]?.chunks;
+    expect(chunks?.size).toBe(2048);
+    expect(chunks?.get(0)?.[0]).toBe(2);
+    expect(rejections(envelopes)).toEqual([]);
+  });
+
+  it("keeps all 20 pending slots when a record is staged", () => {
+    const { intake, envelopes } = created();
+    upload(intake, "staged", "a.txt", "text/plain", bytes("hello"));
+    expect(intake.stage(["staged"])).toBeDefined();
+    for (let i = 0; i < 20; i += 1) {
+      intake.attachOpen({
+        upload_id: `u${i}`, filename: "x", mime: "text/plain", size: 1, chunks: 1,
+      });
+    }
+    expect(rejections(envelopes)).toEqual([]);
+  });
   it("refuses the 21st open upload", () => {
     const { intake, envelopes } = created();
     for (let i = 0; i <= MAX_INFLIGHT_UPLOADS; i += 1)

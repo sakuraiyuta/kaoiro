@@ -2337,10 +2337,11 @@ describe("sessionCapabilitiesFrom (ADR-0034 F1/F2)", () => {
       ext: { session_capabilities: {
         supports_attachments: true,
         supports_user_input_dialog: true,
-        attachment_types: ["image", "pdf"],
+        attachment_types: ["image", "text", "pdf"],
       } },
     };
-    expect(sessionCapabilitiesFrom(envelope)?.attachment_types).toEqual(["image"]);
+    expect(sessionCapabilitiesFrom(envelope)?.attachment_types)
+      .toEqual(["image", "text"]);
     expect(sessionCapabilitiesFrom({ ...envelope, ext: { session_capabilities: {
       supports_attachments: true, supports_user_input_dialog: true, attachment_types: ["pdf"],
     } } })?.attachment_types).toEqual([]);

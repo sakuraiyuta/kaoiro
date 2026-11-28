@@ -16,6 +16,7 @@ import {
   type ToolDescriptor,
   type WhoamiSnapshot,
 } from "@kaoiro/agent-common";
+import { UploadIntake } from "@kaoiro/agent-common/dist/upload.js";
 import {
   loadConfig,
   loadWrapperBuildInfo,
@@ -69,6 +70,12 @@ export async function runMuseCli(
   const deliveries = new Map<string, Envelope[]>();
   const send = (envelope: Envelope) => link?.send(envelope);
   const cwd = dependencies.cwd ?? process.cwd();
+  const intake = new UploadIntake({
+    config,
+    send,
+    state: () => host?.state ?? "idle",
+    acceptsMime: (mime) => host?.acceptsAttachmentMime(mime) === true,
+  });
   const permission = new PermissionBroker({
     config,
     send,
@@ -195,21 +202,27 @@ export async function runMuseCli(
     },
     onPersonaPrompt: resolvePersona,
     onInstruction: (text: string, attachments?: string[]) => {
+      const staged = attachments?.length ? intake.stage(attachments) : undefined;
+      if (attachments?.length && !staged) return;
       chain = chain
         .then(async () => {
           await hostReady;
-          await host!.send(text, attachments);
+          if (!staged?.dropped) await host!.send(text, staged);
         })
         .catch(() => {
           turnFailure();
         });
     },
+    onAttachOpen: (meta) => intake.attachOpen(meta),
+    onAttachChunk: (payload) => intake.attachChunk(payload),
+    onAttachClose: (id) => intake.attachClose(id),
     onPermissionDecision: (
       decision: Parameters<PermissionBroker["resolve"]>[0],
     ) => permission.resolve(decision),
     onQuestionResponse: (answer: Parameters<QuestionBroker["resolve"]>[0]) =>
       question.resolve(answer),
     onInterrupt: () => {
+      intake.interrupt();
       if (host) void host.interrupt().catch(() => host?.close());
     },
     onSetModel: (value: string) => {
@@ -315,6 +328,7 @@ export async function runMuseCli(
         cwd,
         personaPrompt: rules,
         recovery,
+        intake,
         ...(resumeSessionId ? { resumeSessionId } : {}),
         send,
         toolDescriptors: [
@@ -372,6 +386,7 @@ export async function runMuseCli(
     question.close();
     permission.close();
     interAgent.close();
+    intake.close();
     host?.close();
     await host?.closed;
     try {

@@ -15,7 +15,11 @@ cannot represent.
 
 - Shape (`SessionCapabilitiesExt`):
   - `supports_attachments: boolean` — whether attachments are accepted (false disables the Composer attach button and shows a “not supported in this session” tooltip).
-  - `attachment_types?: ("image")[]` — optional attachment restriction. **Absent preserves legacy behavior with no type restriction**; when present, only listed types are allowed. SDK block names are not exposed. Codex advertises `supports_attachments: true, attachment_types: ["image"]`, limiting picker/paste/drop to images; Claude omits the field and accepts all legacy types.
+  - `attachment_types?: ("image" | "text")[]` — optional attachment restriction. **Absent preserves legacy behavior with no type restriction**; when present, only listed types are allowed. SDK block names are not exposed. Codex advertises `supports_attachments: true, attachment_types: ["image"]`, limiting picker/paste/drop to images. Claude omits the field and accepts all
+    legacy types. Muse derives its categories from native ACP prompt capabilities.
+    `"text"` covers `text/*` and the application MIME types defined in
+    [ADR-0034 F6][text-category]. Restricted Composer filtering uses the browser's
+    reported MIME; a source file with an empty or unrecognized MIME is refused.
   - `supports_user_input_dialog: boolean` — availability of `ask_user_question`.
   - `user_input_modes?: string[]` — conditions when dialog firing is limited to a mode or sandbox (empty/absent = unconditional).
 - **Stamp timing**: from the first `state_change` immediately after spawn (do not wait for a session-init event; Codex `thread.started` may not occur before the first turn, so waiting would show a false fail-closed default).
@@ -93,3 +97,5 @@ full topic index.
 ## Input-bound inter-agent replies
 
 See [the reply-basis contract](../inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.
+
+[text-category]: ../../adr/0034-session-capabilities-advertisement.md#muse-text-attachment-category

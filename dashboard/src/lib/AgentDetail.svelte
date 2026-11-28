@@ -1453,16 +1453,37 @@
     sessionCaps?.supports_attachments === true &&
       (attachmentTypes === undefined || attachmentTypes.length > 0),
   );
+  const allowsImageAttachments = $derived(attachmentTypes?.includes("image"));
+  const allowsTextAttachments = $derived(attachmentTypes?.includes("text"));
   const imagesOnlyAttachments = $derived(
-    attachmentTypes !== undefined &&
-      attachmentTypes.length === 1 &&
-      attachmentTypes[0] === "image",
+    allowsImageAttachments && !allowsTextAttachments,
   );
+  const textAttachmentTypes = [
+    "text/*", "application/json", "application/xml", "application/yaml",
+    "application/x-yaml", "application/javascript", "application/typescript",
+    "application/sql",
+  ];
+  const legacyAttachmentTypes = [
+    "image/png", "image/jpeg", "image/webp", "image/gif",
+    ...textAttachmentTypes, "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ];
   const attachmentAccept = $derived(
-    attachmentTypes === undefined
-      ? "image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-      : "image/*",
+    (attachmentTypes === undefined ? legacyAttachmentTypes : [
+      ...(allowsImageAttachments ? ["image/*"] : []),
+      ...(allowsTextAttachments ? textAttachmentTypes : []),
+    ]).join(","),
   );
+  const attachmentTitle = $derived.by(() => {
+    const labels = msg().agentDetail;
+    if (!attachmentsSupported) return labels.attachUnsupportedTitle;
+    if (attachmentTypes === undefined) return labels.attachFilesTitle;
+    if (imagesOnlyAttachments) return labels.attachImagesTitle;
+    return allowsImageAttachments
+      ? labels.attachImagesAndTextTitle : labels.attachTextTitle;
+  });
   const dialogAvailability = $derived(
     userInputDialogAvailability(sessionCaps, displayPermLabel),
   );
@@ -2944,7 +2965,11 @@
     const allowed = attachmentTypes;
     const accepted = allowed === undefined
       ? picked
-      : picked.filter((file) => allowed.includes("image") && file.type.startsWith("image/"));
+      : picked.filter((file) =>
+        (allowsImageAttachments && file.type.startsWith("image/")) ||
+        (allowsTextAttachments && (file.type.startsWith("text/") ||
+          textAttachmentTypes.includes(file.type))),
+      );
     const rejectedByType = picked.length - accepted.length;
     if (rejectedByType > 0) {
       actionError = imagesOnlyAttachments
@@ -2987,7 +3012,7 @@
   // bleed across to another agent (the spec calls out "複数 agent 間で
   // 曖昧にならない"). The spec also says client は規範を持たない — so we do
   // Type restrictions are capability-derived in addStagedFiles(), so picker,
-  // drop, and paste all share the same fail-closed image-only guard.
+  // drop, and paste all share the same capability guard.
   let dropActive = $state(false);
   // dragenter / dragleave fire for every child crossing too, so a single
   // boolean would flicker. Counter pattern keeps the highlight stable
@@ -4847,9 +4872,7 @@
             <label
               class="attach"
               class:attach-disabled={!attachmentsSupported}
-              title={attachmentsSupported
-                ? (imagesOnlyAttachments ? msg().agentDetail.attachImagesTitle : msg().agentDetail.attachFilesTitle)
-                : msg().agentDetail.attachUnsupportedTitle}
+              title={attachmentTitle}
             >
               <input
                 type="file"

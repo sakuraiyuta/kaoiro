@@ -157,6 +157,15 @@ are added, expand the protocol vocabulary first. Treating an absent field as
 unrestricted preserves compatibility with existing Claude wrappers and rolling
 upgrades.
 
+#### Muse text attachment category
+
+The closed vocabulary includes `"image"` and `"text"`. The text category
+covers `text/*` and the application MIME types JSON, XML, YAML
+(`application/yaml` or `application/x-yaml`), JavaScript, TypeScript and SQL.
+A restricted Composer uses the browser's reported MIME for the category
+hint. An empty MIME matches no category. The exact acceptance policy
+belongs to the engine adapter (F7).
+
 ### F7 — Absorb the attachment-capability publish decision (2026-08-03)
 
 The old open-question `file-upload-capability-publish` (opened 2026-06-27,
@@ -190,7 +199,7 @@ where “see the rejection and resend” is possible has not disappeared; it sim
 no longer occurs at the category level. That is the accurate interpretation.
 
 **Remaining room**: expand the closed vocabulary of `attachment_types` beyond
-`"image"` (for example, `"text"` / `"pdf"`). As F6 states, the process for
+`"image"` and `"text"` (for example, `"pdf"`). As F6 states, the process for
 expanding protocol vocabulary first is already defined, so do not track this as a
 separate open question; handle it as an F6 addendum when needed.
 

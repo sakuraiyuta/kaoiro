@@ -780,9 +780,8 @@ export type ModelSource = "launch" | "env" | "config" | "default";
  *  never accept it. */
 export type DisplayedModelSource = ModelSource | "fallback";
 
-/** Engine-neutral attachment category. The initial closed vocabulary is
- * image only; adapters map it to their SDK representation internally. */
-export type AttachmentType = "image";
+/** Engine-neutral attachment category, mapped internally to SDK blocks. */
+export type AttachmentType = "image" | "text";
 
 /** state_change.ext.session_capabilities shape (ADR-0034 F1/F2). Advertised
  *  by the adapter from the first state_change onward (spawn-direct — the

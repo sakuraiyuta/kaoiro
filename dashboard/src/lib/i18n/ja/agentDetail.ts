@@ -239,6 +239,8 @@ export const agentDetail = {
   composerPlaceholder:
     "指示を送る…(Ctrl+Enter で送信、/ でコマンド候補、ドラッグドロップ・ペーストで画像等ファイル送信)",
   attachImagesTitle: "画像を添付(複数可)",
+  attachTextTitle: "テキスト・コードを添付(複数可)",
+  attachImagesAndTextTitle: "画像・テキスト・コードを添付(複数可)",
   attachFilesTitle:
     "ファイル添付(画像 / テキスト / コード / PDF / Office、複数可)",
   attachUnsupportedTitle: "このセッションでは未対応",

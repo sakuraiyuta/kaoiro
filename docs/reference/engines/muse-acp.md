@@ -194,7 +194,6 @@ Declared unsupported, each rejected explicitly rather than silently:
 - Live model and effort switching.
 - Permission-mode switching and the two-axis permission selector (see
   Approval mode above).
-- Attachments (`supports_attachments: false`).
 - Session reset (`supports_session_reset: false`).
 - Dashboard history replay on resume: the wrapper registers no hydration
   replayer, so a resumed agent starts with an empty dashboard history.
@@ -207,6 +206,40 @@ runner-side probes (Grok and Muse) share one tracking registry
 (`runner/src/acp_probe.ts`), and runner shutdown waits for both before
 exiting.
 
+## Prompt attachments
+
+A ready session advertises `image` and `text` categories according to the
+native `image` and `embeddedContext` capabilities. Each file can use the
+common 128 MiB upload ceiling. The instruction leads the ACP prompt,
+followed by one block per unique attachment in submission order.
+
+- **PNG** uses an inline base64 `image` block. The wrapper checks the
+  header and a limit of 3,583,490 raw bytes before encoding. Larger PNGs
+  or a bad PNG header refuse the instruction with `unfittable_image`.
+- **Text and code** use an inline `text/plain` resource. The wrapper
+  decodes UTF-8 with replacement and sends up to 262,144 UTF-8 bytes
+  including any truncation note. When it omits a tail, the operator's
+  conversation records original and sent sizes before the prompt.
+  Restricted Composer filtering uses the browser's MIME. A file with an
+  empty or unrecognized MIME is refused even if its name suggests code.
+- **Combined** UTF-8 JSON for the text instruction and all fitted blocks
+  is limited to 5,045,354 bytes. An oversize batch is refused before a
+  prompt. PDF, Office and image formats other than PNG are unsupported.
+
+Interrupt and shutdown discard pending uploads and attachment batches
+waiting for dispatch. With Muse Code 1.4.25, Ember read a synthetic
+3840×2160 desktop PNG and a 256 KiB text resource in one provider
+prompt. The limits reflect those fixture shapes; other models, including
+the default Spark, and provider maxima are unmeasured.
+[Capacity measurement][muse-attachment-evidence]
+
+With native Muse session logging enabled, a separate isolated echo run
+left the 3840×2160 PNG as a 2048×1152 asset with mode `0600` after child
+exit. The 256 KiB text resource remained in Muse's session JSONL. A
+separate restart and `session/load` replayed text markers from the
+4 KiB control. These are Muse's local copies. Exact provider-bound image
+encoding and provider-side retention were unmeasured.
+
 ## Login and failure modes
 
 A host that is not logged in cannot open a session: `session/new` fails
@@ -214,3 +247,5 @@ with the upstream "log in to Muse before opening a session" error and the
 wrapper start fails with it. Run `muse login` on the runner host. A build
 with the ACP gate closed exits with code 5 before `initialize`; the
 wrapper reports the child exit as a launch failure.
+
+[muse-attachment-evidence]: https://github.com/sakuraiyuta/kaoiro/issues/1303#issuecomment-7241510803

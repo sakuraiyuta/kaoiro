@@ -38,6 +38,12 @@ written when the turn starts (the issue 1143 addendum to ADR-0025 F3). It
 does not fit images or PDFs; its total limit is 33,488,896 bytes of
 serialized blocks (the issue 1143 addendum to F10). See the
 [Grok engine reference](grok-acp.md#prompt-content-blocks-and-attachments).
+The **Muse adapter** advertises negotiated image and text categories in
+`attachment_types`. It sends supported PNG and text/code as inline ACP
+blocks, with measured fit limits in the
+[Muse engine reference](muse-acp.md#prompt-attachments).
+Grok and Muse share the in-memory intake in
+`wrapper/agent-common/src/upload.ts`.
 The **Antigravity adapter** advertises no attachments and refuses an
 instruction that carries any with `attachments_unsupported`.
 Protocol limits (128 MB / 20 in flight / five-minute TTL) are common to every

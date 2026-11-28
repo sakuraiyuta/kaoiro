@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
+import type { AttachmentType } from "@kaoiro/protocol";
 import {
   clipText,
   initialMachineState,
@@ -20,6 +21,11 @@ import {
   type ToolDescriptor,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
+import {
+  isTextMime,
+  type StagedRecord,
+  type UploadIntake,
+} from "@kaoiro/agent-common/dist/upload.js";
 import { ToolHost } from "@kaoiro/agent-common/dist/toolhost.js";
 import {
   clipUtf8Head, formatTurnWatchdogLine, redactCredentials,
@@ -40,6 +46,7 @@ import {
   type MuseSelection,
 } from "./muse/usage.js";
 import { resolveMuseSettings, type MuseSettings } from "./settings.js";
+import { attachmentPrompt } from "./upload.js";
 
 export interface MuseHostOptions {
   config: WrapperConfig;
@@ -47,6 +54,7 @@ export interface MuseHostOptions {
   personaPrompt: string;
   send: (envelope: Envelope) => void;
   toolDescriptors?: ToolDescriptor[];
+  intake?: UploadIntake;
   decidePermission: (
     name: string,
     input: Record<string, unknown>,
@@ -73,6 +81,7 @@ export interface MuseHostOptions {
 
 interface Turn {
   text: string;
+  attachments?: StagedRecord;
   token: string;
   conversations: string[];
   resolve: () => void;
@@ -110,7 +119,7 @@ class StartupAborted extends Error {
  * Declared limits of this adapter (see docs/reference/engines/
  * muse-acp.md): no kaoiro permission-mode or two-axis permission
  * switching (the ACP approval mode is the agent's own selector, set once
- * at startup), no attachments, no session reset, and no dashboard history
+ * at startup), no session reset, and no dashboard history
  * replay. Each is rejected explicitly rather than silently ignored.
  */
 export class MuseHost implements EngineAdapter {
@@ -120,6 +129,7 @@ export class MuseHost implements EngineAdapter {
   #toolHost: ToolHost | undefined;
   #sessionId: string | undefined;
   #selection: MuseSelection = {};
+  #attachmentTypes: AttachmentType[] = [];
   #modes: MuseModes | undefined;
   #modelSource: "default" | "launch" = "default";
   #context: { used: number; size: number } | undefined;
@@ -182,8 +192,16 @@ export class MuseHost implements EngineAdapter {
     return this.#active?.token ?? null;
   }
 
+  acceptsAttachmentMime(mime: string): boolean {
+    if (!this.#started || this.#closing) return false;
+    return (mime === "image/png" && this.#attachmentTypes.includes("image")) ||
+      (isTextMime(mime) && this.#attachmentTypes.includes("text"));
+  }
+
   statusExtSnapshot(): Record<string, unknown> {
     const selection = this.#selection;
+    const attachmentTypes = this.#started && !this.#closing
+      ? this.#attachmentTypes : [];
     const currentMode = this.#modes?.available.find((mode) => mode.id === this.#modes?.current);
     return {
       engine: "muse",
@@ -213,7 +231,8 @@ export class MuseHost implements EngineAdapter {
         supports_effort_switch: false,
         supports_permission_switch: false,
         supports_permission_mode_switch: false,
-        supports_attachments: false,
+        supports_attachments: attachmentTypes.length > 0,
+        attachment_types: [...attachmentTypes],
         supports_user_input_dialog: true,
         supports_session_reset: false,
         supports_context_usage: true,
@@ -401,6 +420,12 @@ export class MuseHost implements EngineAdapter {
     );
     const initialized = await session.initialize();
     check();
+    const capabilities = initialized.agentCapabilities?.promptCapabilities;
+    this.#attachmentTypes = [];
+    if (capabilities?.image === true) this.#attachmentTypes.push("image");
+    if (capabilities?.embeddedContext === true) {
+      this.#attachmentTypes.push("text");
+    }
     if (initialized.agentCapabilities?.mcpCapabilities?.http !== true) {
       throw new MuseLaunchError("muse does not support HTTP MCP servers");
     }
@@ -494,16 +519,30 @@ export class MuseHost implements EngineAdapter {
 
   send(
     text: string,
-    attachments?: readonly string[],
+    attachments?: readonly string[] | StagedRecord,
     conversations: string[] = [],
     token: string = randomUUID(),
   ): Promise<void> {
-    if (attachments !== undefined && attachments.length > 0) {
-      return Promise.reject(new Error("muse attachments are unsupported"));
+    const record = attachments && "uploads" in attachments
+      ? attachments : undefined;
+    if (attachments && "length" in attachments && attachments.length > 0) {
+      return Promise.reject(
+        new Error("muse attachment IDs must be staged by the upload intake"),
+      );
     }
-    if (this.#closing) return Promise.reject(new Error("muse host is closing"));
+    if (record?.dropped) return Promise.resolve();
+    if (this.#closing) {
+      if (record) {
+        record.refuse("interrupted");
+        return Promise.resolve();
+      }
+      return Promise.reject(new Error("muse host is closing"));
+    }
     return new Promise<void>((resolve, reject) => {
-      this.#queue.push({ text, token, conversations, resolve, reject });
+      this.#queue.push({
+        text, token, conversations, resolve, reject,
+        ...(record ? { attachments: record } : {}),
+      });
       void this.#drain();
     });
   }
@@ -525,6 +564,31 @@ export class MuseHost implements EngineAdapter {
   }
 
   async #execute(turn: Turn): Promise<void> {
+    const record = turn.attachments;
+    let prompt: string | acp.ContentBlock[] = turn.text;
+    let shortened: string[] = [];
+    if (record) {
+      if (record.dropped) {
+        turn.resolve();
+        return;
+      }
+      let fitted;
+      try {
+        fitted = attachmentPrompt(turn.text, record.uploads);
+      } catch {
+        record.refuse("sdk_error", "attachment rendering failed");
+        turn.resolve();
+        return;
+      }
+      if (!fitted.ok) {
+        record.refuse(fitted.reason, fitted.detail);
+        turn.resolve();
+        return;
+      }
+      prompt = fitted.blocks;
+      shortened = fitted.shortened;
+      record.finish();
+    }
     this.#active = turn;
     this.#signal = new AbortController();
     this.#text = "";
@@ -546,7 +610,16 @@ export class MuseHost implements EngineAdapter {
       why: "the turn failed",
     };
     try {
-      const response = await this.#session!.prompt(turn.text);
+      if (shortened.length > 0) {
+        this.#options.send(makeLog(
+          this.#options.config, this.state, new Date().toISOString(), {
+            kind: "system",
+            text: "Muse shortened text attachments before sending. " +
+              "Only the prefixes will be sent: " + shortened.join(", "),
+          },
+        ));
+      }
+      const response = await this.#session!.prompt(prompt);
       if (this.#closing) throw new Error("muse host closed");
       const interrupted = response.stopReason === "cancelled";
       if (!interrupted && !this.#recoveryConfirmed &&
@@ -585,7 +658,8 @@ export class MuseHost implements EngineAdapter {
           text: "",
           is_error: true,
           error_code: "muse_turn_failed",
-          error_detail: turnErrorDetail(cause),
+          error_detail: record
+            ? "muse turn with attachments failed" : turnErrorDetail(cause),
         }),
       );
       turn.reject(error);
@@ -754,12 +828,14 @@ export class MuseHost implements EngineAdapter {
   close(): void {
     if (this.#closing) return;
     this.#closing = true;
+    this.#options.intake?.close();
     this.#cancelStartup();
     this.#signal?.abort();
     clearTimeout(this.#timer);
     clearTimeout(this.#abortTimer);
     for (const turn of this.#queue.splice(0)) {
-      turn.reject(new Error("muse host closed"));
+      if (turn.attachments?.dropped) turn.resolve();
+      else turn.reject(new Error("muse host closed"));
     }
     try {
       const closing = this.#session?.connection.close() as unknown;

@@ -73,6 +73,9 @@ minutes) (ADR-0025 F4/F6/F7/F13).
 `attach_rejected` / `instruction_rejected` are all **operator-only** (allow-list,
 [ADR-0021](../../adr/0021-role-information-disclosure-policy.md)); remove them entirely for viewers.
 
+Engine-specific rendering and post-upload budgets are described in
+[Attachment rendering by engine](../engines/attachment-rendering.md).
+
 **Fit-to-SDK responsibility**: The wrapper absorbs the gap between the 128 MB protocol
 limit and hard SDK limits (exact image/document block values are confirmed by a pre-
 implementation spike) using image downsize, PDF page extraction, text truncation, and

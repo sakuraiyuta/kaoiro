@@ -1,5 +1,9 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import {PermissionSyncTimeoutError} from "@kaoiro/wrapper-core";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerLink, ServerLinkOptions } from "@kaoiro/wrapper-core";
@@ -7,7 +11,7 @@ import { InterAgentTool, type Envelope, type WrapperConfig } from "@kaoiro/agent
 import { runGrokCli } from "../src/cli.js";
 import { GrokHost } from "../src/host.js";
 import * as events from "../src/grok/events.js";
-import { chunkPayload } from "./upload-support.js";
+import { chunkPayload, DOCX, ooxml, PPTX, XLSX } from "./upload-support.js";
 const config: WrapperConfig = {
   agent_id: "test.grok",
   server_url: "ws://127.0.0.1:1/agent",
@@ -530,6 +534,105 @@ describe("runGrokCli attachments", () => {
       },
     });
     await probe;
+  });
+  it("preserves Grok MIME and text-fit policy through the CLI", async () => {
+    const root = mkdtempSync(join(tmpdir(), "grok-cli-attachments-"));
+    const eventsPath = join(root, "events.jsonl");
+    const envelopes: Envelope[] = [];
+    let callbacks!: ServerLinkOptions;
+    let probe!: Promise<void>;
+
+    function uploadFile(
+      id: string,
+      mime: string,
+      bytes: Uint8Array,
+    ) {
+      const chunkSize = 64 * 1024;
+      const chunks = Math.ceil(bytes.byteLength / chunkSize);
+      callbacks.onAttachOpen?.({
+        upload_id: id, filename: id, mime, size: bytes.byteLength, chunks,
+      });
+      for (let index = 0; index < chunks; index += 1) {
+        const start = index * chunkSize;
+        callbacks.onAttachChunk?.(chunkPayload(id, index,
+          bytes.subarray(start, start + chunkSize)));
+      }
+      callbacks.onAttachClose?.(id);
+    }
+
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+    const pdf = Buffer.from("%PDF-1.4 fixture");
+    const exact = "Y".repeat(1024 * 1024);
+    const sha = (value: string | Uint8Array) =>
+      createHash("sha256").update(value).digest("hex");
+    try {
+      await runGrokCli({
+        cwd: root,
+        parseCliArgs: () => ({ configPath: "fixture" }),
+        loadConfig: () => ({ ...config }),
+        loadWrapperBuildInfo: () => buildInfo,
+        createHost: options => new GrokHost({ ...options,
+          executable: fileURLToPath(new URL("./fixtures/grok.mjs", import.meta.url)),
+          env: { ...process.env, KAOIRO_TEST_GROK_EVENTS: eventsPath },
+        }),
+        createServerLink: (_url, _id, options) => {
+          callbacks = options;
+          return recordingLink(options, envelopes, [], []);
+        },
+        onHostCreated: host => {
+          probe = (async () => {
+            await vi.waitFor(() => expect(host.state).toBe("waiting_input"),
+              { timeout: 5000 });
+            uploadFile("picture.jpg", "image/jpeg", jpeg);
+            uploadFile("paper.pdf", "application/pdf", pdf);
+            uploadFile("doc.docx", DOCX, ooxml("docx", "DOC_MARK"));
+            uploadFile("book.xlsx", XLSX, ooxml("xlsx", "BOOK_MARK"));
+            uploadFile("slide.pptx", PPTX, ooxml("pptx", "SLIDE_MARK"));
+            uploadFile("exact.txt", "text/plain", Buffer.from(exact));
+            uploadFile("over.txt", "text/plain", Buffer.from(exact + "Z"));
+            callbacks.onInstruction?.("attachment policy", [
+              "picture.jpg", "paper.pdf", "doc.docx", "book.xlsx",
+              "slide.pptx", "exact.txt", "over.txt",
+            ]);
+            await vi.waitFor(() => expect(envelopes.some(e =>
+              e.type === "result" || e.type === "instruction_rejected",
+            )).toBe(true), { timeout: 5000 });
+            expect(rejected(envelopes)).toEqual([]);
+            const prompts = readFileSync(eventsPath, "utf8").trim().split("\n")
+              .map(line => JSON.parse(line))
+              .filter(event => event.event === "prompt_blocks");
+            expect(prompts).toHaveLength(1);
+            const [, image, link, doc, book, slide, atLimit, overLimit] =
+              prompts[0].blocks;
+            expect(image).toMatchObject({
+              type: "image", mimeType: "image/jpeg",
+              dataSha: sha(Buffer.from(jpeg).toString("base64")),
+            });
+            expect(link).toMatchObject({
+              type: "resource_link", mimeType: "application/pdf",
+              fileSha: sha(pdf),
+            });
+            for (const [block, mark] of [
+              [doc, "DOC_MARK"], [book, "BOOK_MARK"], [slide, "SLIDE_MARK"],
+            ]) {
+              expect(block).toMatchObject({
+                type: "resource", mimeType: "text/plain",
+                text: expect.stringContaining(mark),
+              });
+            }
+            expect(atLimit.text.length).toBe(1048576);
+            expect(sha(atLimit.text)).toBe(sha(exact));
+            expect(sha(overLimit.text)).toBe(sha(
+              exact + "\n\n[...truncated, original 1048577 bytes]\n",
+            ));
+          })().finally(() => host.close());
+          void probe.catch(() => {});
+        },
+      });
+      await probe;
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
   it("drops pending uploads when the start fails before the host exists (R3-S3)", async () => {
     const envelopes: Envelope[] = [];
