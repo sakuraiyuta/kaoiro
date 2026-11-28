@@ -16,7 +16,9 @@ it.each([
   ["new", "allow", "cancel", 0],
   ["new", "allow", "fail", 0],
   ["new", "none", "end", 0],
-])("reset %s with %s and %s dispatches %i times", async (mode, answer, end, count) => {
+])("reset %s with %s and %s dispatches %i times", async (
+  mode, answer, end, count,
+) => {
   const root = mkdtempSync(join(tmpdir(), "muse-reset-cli-"));
   const envelopes: Envelope[] = [];
   const resets: string[] = [];
@@ -35,9 +37,12 @@ it.each([
         send: (e: Envelope) => {
           envelopes.push(e);
           timeline.push(e.type);
-          if (e.type === "permission_request" && answer !== "none") queueMicrotask(() =>
-            options.onPermissionDecision?.({ request_id: String(e.payload.request_id),
-              allow: answer === "allow" }));
+          if (e.type === "permission_request" && answer !== "none") {
+            queueMicrotask(() => options.onPermissionDecision?.({
+              request_id: String(e.payload.request_id),
+              allow: answer === "allow",
+            }));
+          }
         },
         requestSessionReset: async (value: string) => {
           timeline.push("reset");
@@ -48,12 +53,15 @@ it.each([
       } as unknown as ServerLink;
     },
     createHost: options => new MuseHost({ ...options, cwd: root,
-      executable: fileURLToPath(new URL("./fixtures/muse.mjs", import.meta.url)),
-      env: { ...process.env, HOME: root, XDG_CONFIG_HOME: join(root, "config") } }),
+      executable: fileURLToPath(
+        new URL("./fixtures/muse.mjs", import.meta.url)),
+      env: { ...process.env, HOME: root,
+        XDG_CONFIG_HOME: join(root, "config") } }),
     onHostCreated: value => { host = value; },
   });
   try {
-    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"), { timeout: 5_000 });
+    await vi.waitFor(() => expect(host?.state).toBe("waiting_input"),
+      { timeout: 5_000 });
     expect(host.statusExtSnapshot().session_capabilities).toMatchObject({
       supports_session_reset: true, session_reset_modes: ["new", "clear"],
     });
@@ -64,9 +72,11 @@ it.each([
     if (count) {
       expect(resets).toEqual([mode]);
       expect(timeline.indexOf("result")).toBeGreaterThanOrEqual(0);
-      expect(timeline.indexOf("result")).toBeLessThan(timeline.indexOf("reset"));
+      expect(timeline.indexOf("result"))
+        .toBeLessThan(timeline.indexOf("reset"));
     }
-    expect(envelopes.filter(e => e.type === "permission_request")).toHaveLength(1);
+    expect(envelopes.filter(e => e.type === "permission_request"))
+      .toHaveLength(1);
   } finally {
     host?.close();
     await work;
