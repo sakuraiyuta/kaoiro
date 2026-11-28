@@ -50,11 +50,13 @@ function started({
   delayed = false,
   hangNew = false,
   watchdog = false,
+  reset = false,
 }: {
   caps?: { image?: boolean; embeddedContext?: boolean };
   delayed?: boolean;
   hangNew?: boolean;
   watchdog?: boolean;
+  reset?: boolean;
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "muse-upload-test-"));
   const capture = join(root, "blocks.jsonl");
@@ -80,6 +82,10 @@ function started({
       if (!delayed) queueMicrotask(() => options.onPersonaPrompt?.("persona"));
       return {
         send: (event: Envelope) => envelopes.push(event),
+        ...(reset ? { requestSessionReset: async () => {
+          queueMicrotask(() => host?.close());
+          return { requestId: "reset-1" };
+        } } : {}),
         setSessionId() {}, close() {}, reportDisconnectIntent: async () => {},
         deliveryIncarnation: () => null, deliveryGeneration: () => null,
       } as unknown as ServerLink;
@@ -409,4 +415,46 @@ describe("Muse CLI attachments", () => {
     expect(t.rejections().map(e => e.payload.reason))
       .toEqual(["interrupted", "interrupted"]);
   });
+
+  it("drops old uploads on reset and rebuilds capabilities", async () => {
+    const old = started({ reset: true });
+    await old.ready();
+    old.callbacks.onInstruction?.("reset:new:end");
+    await vi.waitFor(() => expect(old.envelopes.some(e =>
+      e.type === "permission_request")).toBe(true));
+    old.upload("pending", "text/plain", Buffer.from("pending"));
+    old.upload("staged", "text/plain", Buffer.from("staged"));
+    old.callbacks.onInstruction?.("old staged", ["staged"]);
+    const request = old.envelopes.find(e => e.type === "permission_request")!;
+    old.callbacks.onPermissionDecision?.({
+      request_id: String(request.payload.request_id), allow: true,
+    });
+    await old.work;
+    expect(old.prompts()).toHaveLength(1);
+    expect(old.rejections()).toEqual([
+      expect.objectContaining({ type: "attach_rejected", payload:
+        expect.objectContaining({ upload_id: "pending",
+          reason: "interrupted" }) }),
+      expect.objectContaining({ type: "attach_rejected", payload:
+        expect.objectContaining({ upload_id: "staged",
+          reason: "interrupted" }) }),
+      expect.objectContaining({ type: "instruction_rejected", payload:
+        expect.objectContaining({ attachment_ids: ["staged"],
+          reason: "interrupted" }) }),
+    ]);
+
+    const fresh = started({ caps: { image: false, embeddedContext: true } });
+    await fresh.ready();
+    const ready = fresh.envelopes.find(e => e.type === "state_change" &&
+      e.state === "waiting_input");
+    expect(ready?.ext?.session_capabilities).toMatchObject({
+      supports_attachments: true, attachment_types: ["text"],
+      supports_session_reset: true,
+    });
+    fresh.callbacks.onInstruction?.("old staged", ["staged"]);
+    fresh.callbacks.onInstruction?.("control");
+    await fresh.results(1);
+    expect(fresh.rejections().map(e => e.payload.reason)).toEqual(["timeout"]);
+    expect(fresh.prompts()).toHaveLength(1);
+  }, 15_000);
 });
