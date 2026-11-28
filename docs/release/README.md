@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-11-25
+last_updated: 2026-11-28
 ---
 
 # Release notes
@@ -69,6 +69,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.28.1](v2026.11.28.1.md) | 2026-11-28 | v2026.11.26.1 | Runner configuration applies at startup only, the per-agent checklist view is removed, and Phoenix and Plug security updates. |
 | [v2026.11.26.1](v2026.11.26.1.md) | 2026-11-26 | v2026.11.25.1 | Experimental Muse engine and collapsible rooms in the agent grid. |
 | [v2026.11.25.1](v2026.11.25.1.md) | 2026-11-25 | v2026.11.23.1 | Removed the Codex work query and backend switching tools, the launch dialog build warning, rally and stall monitoring, per-principal work limits, and the runner's Codex state backup and restore. |
 | [v2026.11.23.1](v2026.11.23.1.md) | 2026-11-23 | v2026.11.21.1 | Antigravity requires a declared Google Cloud authentication and runs over ACP with one `agy` process per prompt, without a rate limit gauge; Grok and Antigravity share the ACP client and the HTTP tool host. |
