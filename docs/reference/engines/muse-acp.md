@@ -7,19 +7,17 @@ last_updated: 2026-11-25
 
 # Muse ACP engine
 
-The kaoiro Muse engine is experimental. The effect of `--model` on a real
-Muse build is unmeasured; the effective model and effort are reported only
-from ACP responses, not verified as effective values.
+The kaoiro Muse engine is experimental.
 With workspace trust enabled, real-provider `tools/call`, approval enforcement
 during tool execution, and MCP after cold resume are unmeasured. Recovery from
 a runner-detected failure to the same session ID and persona retention after
-compaction are also unmeasured. Server retention of the effort warning has not
-been checked in a Muse-specific integration test. A runner restart or crash
+compaction are also unmeasured. A runner restart or crash
 before delivery is recorded may cause the persona to be sent again.
 
 The `muse` engine requires Muse Code on `PATH`, logged in with
 `muse login`. The wrapper launches `muse acp` once (plus `--model <id>`
-when a launch pick names a model, and `--trust-workspace` only on the
+when a launch pick names a model, `-c` for an explicit launch effort, and
+`--trust-workspace` only on the
 operator's explicit opt-in below), initializes one ACP session
 (`session/new`, or `session/resume` for a cold resume) and uses
 `session/prompt` for each queued turn. It does not launch `muse` per turn.
@@ -60,6 +58,36 @@ so there is no `muse/wire.ts` injection surface: the mapping in
 `wrapper/muse/src/muse/events.ts` is the protocol's own vocabulary
 (message and thought chunks, tool call rows and completions, plan entries,
 `usage_update`).
+
+## Launch model and effort
+
+The launch dialog starts with Default. After initial registration, a
+Muse-enabled runner opens one short-lived `muse serve --disable-shell
+--disable-write --no-session-log` process. It reads MSP `model/list` after
+the handshake. This probe creates no session and sends no model prompt.
+The runner gives the probe 10 seconds and aborts it during shutdown.
+The Meta `providerCatalog` result provides model IDs and per-model effort
+`variants`. Invalid or unavailable catalogs produce a runner warning.
+
+Before the startup probe publishes a catalog, or when the probe fails,
+only Default is published, so the fresh-spawn API rejects named
+model/effort pairs as stale. Explicit effort with model Default is also a
+spawn failure. In the dialog, Default model and Default effort leave the
+respective overrides out so Muse keeps its own settings.
+
+For a new launch with a named model, the wrapper passes `--model <id>`.
+An explicit effort adds a separate `-c` argument containing
+`model_reasoning_efforts={"<id>":"<tier>"}`. The runner validates the pair
+against the published catalog. The wrapper logs the configured tier and
+reports the ACP model. It does not report ACP `thought_level` as effective
+effort. The selected effort does not carry into resume or restore,
+including fresh restore.
+
+On Muse Code 1.4.25, provider requests used the selected tier on Spark
+1.3 and Spark 1.2 even when ACP reported a different effort. On the
+measured account, Ember in contributor mode failed both with and without
+an explicit effort. The adapter preserves Muse's contributor setting
+and reports the native failure.
 
 ## Approval mode
 
@@ -140,13 +168,9 @@ is resident, cancellation (`session/cancel`), operator permission requests
 with the `allow_once` / `reject_once` option; a pending request publishes
 `waiting_permission` and pauses the turn watchdog until it is answered),
 user questions through the kaoiro `ask_user_question` tool, normal peer
-messages, and context usage from ACP `usage_update` (`ext.context`). The
-model can be selected only at launch; Muse ignores a non-empty configured
-effort and logs a warning. Effort uses Muse's default. A snapshot effort
-discarded by the runner does not reach the wrapper and produces no warning.
-Reported model and effort values come from the `session/new` or
-`session/resume` response, not later notifications,
-and are not a claim about the agent's effective values. Cold resume is
+messages, and context usage from ACP `usage_update` (`ext.context`). See
+[Launch model and effort](#launch-model-and-effort) for launch selection.
+Cold resume is
 supported when the agent advertises `sessionCapabilities.resume`.
 
 Declared unsupported, each rejected explicitly rather than silently:
@@ -158,8 +182,6 @@ Declared unsupported, each rejected explicitly rather than silently:
 - Session reset (`supports_session_reset: false`).
 - Dashboard history replay on resume: the wrapper registers no hydration
   replayer, so a resumed agent starts with an empty dashboard history.
-- The launch catalog probe: the runner offers only the account `default`
-  model entry; an explicitly provided launch model is passed with `--model`.
 
 Session enumeration for the resume picker is not one of the limits: the
 runner probes a short-lived `muse acp` with ACP `session/list {cwd}`

@@ -74,15 +74,12 @@ it.each(["data", "message", "code", "generic"])(
   }
 });
 
-it.each([
-  ["high", true], [" ", true], ["x".repeat(257), true],
-  ["", false], [42, false], [undefined, false],
-])("loads effort %j and warns=%s", async (effort, warned) => {
+it.each(["low", undefined])("loads fresh effort %j", async (effort) => {
   const root = mkdtempSync(join(tmpdir(), "muse-effort-cli-"));
   const path = join(root, "config.json");
   const launch = join(root, "launch.json");
   writeFileSync(path, JSON.stringify({ agent_id: "muse-test", server_url: "ws://localhost",
-    persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", effort }));
+    persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", model: "muse-spark-1.2", effort }));
   const envelopes: Envelope[] = [];
   const methods: string[] = [];
   let host!: MuseHost;
@@ -97,16 +94,18 @@ it.each([
     },
     createHost: (options) => new MuseHost({ ...options,
       executable: fileURLToPath(new URL("./fixtures/muse.mjs", import.meta.url)),
-      env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: launch } }),
+      env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: launch, KAOIRO_TEST_MUSE_EFFORT: "xhigh" } }),
     onMetadata: (event) => { if (event.direction === "out" && event.method) methods.push(event.method); },
     onHostCreated: (value) => { host = value; },
   });
   try {
     await vi.waitFor(() => expect(host?.state).toBe("waiting_input"), { timeout: 5_000 });
     const warnings = envelopes.filter((e) => e.type === "log" &&
-      e.payload.kind === "system" && String(e.payload.text).includes("ignores the configured effort"));
-    expect(warnings).toHaveLength(warned ? 1 : 0);
-    if (warned) {
+      e.payload.kind === "system" && String(e.payload.text).includes("Muse effort configured at launch"));
+    expect(warnings).toHaveLength(effort ? 1 : 0);
+    expect(host.statusExtSnapshot()).not.toHaveProperty("effort");
+    expect(host.statusExtSnapshot()).not.toHaveProperty("effort_source");
+    if (effort) {
       const stateIndex = envelopes.findIndex((e) =>
         e.type === "state_change" && e.state === "waiting_input");
       expect(stateIndex).toBeGreaterThanOrEqual(0);
@@ -114,7 +113,9 @@ it.each([
       expect(methods).not.toContain("session/prompt");
     }
     await host.send("hello");
-    expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
+    const argv = ["acp", "--model", "muse-spark-1.2"];
+    if (effort) argv.push("-c", 'model_reasoning_efforts={"muse-spark-1.2":"low"}');
+    expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(argv);
     expect(methods).not.toContain("session/set_config_option");
   } finally {
     host?.close();
@@ -155,7 +156,8 @@ it("republishes the unchanged response after rejected live controls", async () =
       .toHaveLength(count + 2));
     const states = envelopes.filter((e) => e.type === "state_change").slice(-2);
     for (const state of states) {
-      expect(state.ext).toMatchObject({ model: "muse-spark-1.3", effort: "high",
+      expect(state.ext).not.toHaveProperty("effort");
+      expect(state.ext).toMatchObject({ model: "muse-spark-1.3",
         session_capabilities: { supports_model_switch: false, supports_effort_switch: false } });
     }
   } finally {

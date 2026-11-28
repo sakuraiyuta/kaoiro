@@ -9,8 +9,8 @@ import { Supervisor } from "../src/supervisor.js";
 
 it.each([
   ["spawn", "low", 1], ["spawn", undefined, 0],
-  ["restore", "low", 1], ["restore", undefined, 0],
-  ["restore-default", "low", 0],
+  ["resume", "low", 0], ["resume", undefined, 0],
+  ["fresh-restore", "low", 0],
 ])("starts %s with effort %s and %i warning", async (operation, effort, warnings) => {
   const root = mkdtempSync(join(tmpdir(), "muse-spawn-effort-"));
   const ready = join(root, "ready");
@@ -29,22 +29,32 @@ it.each([
   const results: unknown[] = [];
   const supervisor = new Supervisor({ hostId: "fixture", cwdAllowlist: [root],
     wrapperServerUrl: "ws://fixture/wrapper", launch: makeLauncher([process.execPath, driver]),
+    getMuseCatalog: () => [{
+      value: "muse-spark-1.2", display_name: "Spark", effort_levels: ["low"],
+    }],
     sendResult: (value) => results.push(value), sendSessions() {},
     sendResetResult() {}, sendStopAgent() {}, listSessions: () => [], sessionExists: () => true });
   try {
     supervisor.handleSpawn({ version: "0", agent_id: "fixture.muse", cwd: root,
       persona: { id: "p", name: "P", sprite_set: "p" }, engine: "muse",
-      ...(operation.startsWith("restore") ? { resume_session_id: "fixture-session",
-        ...(effort ? { resume_snapshot: { effort,
-          effort_source: operation === "restore-default" ? "default" : "config" } } : {}) }
-        : (effort ? { effort } : {})) });
-    const output = operation.startsWith("restore") ? result : ready;
+      model: "muse-spark-1.2",
+      ...(operation === "resume" ? { resume_session_id: "fixture-session" } : {}),
+      ...(operation === "fresh-restore" ? { apply_resume_snapshot: true } : {}),
+      ...(operation !== "spawn" ? { resume_snapshot: {
+        model: "muse-spark-1.2", model_source: "launch",
+        ...(effort ? { effort, effort_source: "launch" } : {}),
+      } } : (effort ? { effort } : {})) });
+    const output = operation === "resume" ? result : ready;
     await vi.waitFor(() => expect(existsSync(output)).toBe(true), { timeout: 10_000 });
     expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ warnings });
     expect(results).toContainEqual(expect.objectContaining({ ok: true }));
-    expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
+    const argv = ["acp", "--model", "muse-spark-1.2"];
+    if (operation === "spawn" && effort) {
+      argv.push("-c", 'model_reasoning_efforts={"muse-spark-1.2":"low"}');
+    }
+    expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(argv);
     const calls = readFileSync(methods, "utf8").split("\n");
-    expect(calls).toContain(operation.startsWith("restore") ? "session/resume" : "session/new");
+    expect(calls).toContain(operation === "resume" ? "session/resume" : "session/new");
     expect(calls).not.toContain("session/set_config_option");
   } finally {
     supervisor.stopAll();
@@ -83,7 +93,7 @@ it.each([" ", "x".repeat(257)])(
         resume_snapshot: { effort, effort_source: "config" } });
       await vi.waitFor(() => expect(existsSync(result)).toBe(true), { timeout: 10_000 });
       expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({
-        resume: "fixture-session", warnings: 1, mode: { id: "promptUnmatched" },
+        resume: "fixture-session", warnings: 0, mode: { id: "promptUnmatched" },
       });
       expect(results).not.toContainEqual(expect.objectContaining({ ok: false }));
       expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);

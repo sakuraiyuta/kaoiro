@@ -181,6 +181,7 @@ function externalNeedsSession(parsed: ParsedSpawn, recovery?: RecoverySnapshot):
 
 export interface SupervisorOptions {
   externalCatalog?: (id: string) => EngineCatalogEntry | undefined;
+  getMuseCatalog?: () => EngineModelInfo[] | undefined;
   hostId: string;
   cwdAllowlist: string[];
   launch: LaunchFn;
@@ -367,6 +368,8 @@ export function parseSpawn(
   const model = optionalString(payload.model);
   if (model !== undefined && model !== "") parsed.model = model;
   const effort = optionalString(payload.effort);
+  if (engine === "muse" && payload.effort !== undefined &&
+    typeof payload.effort !== "string") return null;
   if (effort !== undefined && effort !== "") parsed.effort = effort;
   // Claude-only permission_mode passthrough (phase-15 15-12). Closed-enum
   // whitelist, same as the SDK's PermissionMode union; an unknown value is
@@ -511,7 +514,9 @@ export function resolveWrapperConfig(
   // Launch-time picks (ADR-0032 F4bc / ADR-0033 F3). Engines ignore the
   // fields that are not theirs (sandbox on Claude, permission_mode on codex).
   if (parsed.model !== undefined) config.model = parsed.model;
-  if (parsed.effort !== undefined) config.effort = parsed.effort;
+  const useEffort = parsed.engine !== "muse" ||
+    (parsed.resumeSessionId === undefined && !parsed.applyResumeSnapshot);
+  if (useEffort && parsed.effort !== undefined) config.effort = parsed.effort;
   // Resume-snapshot-sourced provenance (ADR-0014 F1 追補 P1, phase-23).
   // parseSpawn does NOT populate these; only applyResumeSnapshot does. The
   // wrapper CLI prefers this over its own env / config source guess so a
@@ -519,7 +524,7 @@ export function resolveWrapperConfig(
   // being relabelled "config". Fresh spawn → both fields absent, CLI
   // fallback unchanged.
   if (parsed.modelSource !== undefined) config.model_source = parsed.modelSource;
-  if (parsed.effortSource !== undefined) {
+  if (useEffort && parsed.effortSource !== undefined) {
     config.effort_source = parsed.effortSource;
   }
   if (parsed.engine === "codex") {
@@ -713,9 +718,11 @@ export class Supervisor {
   #enumerationAbort: AbortController | null = null;
 
   readonly #externalCatalog: SupervisorOptions["externalCatalog"];
+  readonly #getMuseCatalog: SupervisorOptions["getMuseCatalog"];
 
   constructor(options: SupervisorOptions) {
     this.#externalCatalog = options.externalCatalog;
+    this.#getMuseCatalog = options.getMuseCatalog;
     this.#hostId = options.hostId;
     this.#cwdAllowlist = options.cwdAllowlist;
     this.#launch = options.launch;
@@ -783,6 +790,18 @@ export class Supervisor {
     if (parsed.engine === "muse" &&
       (parsed.permissionMode !== undefined || parsed.sandbox !== undefined ||
         parsed.approval !== undefined || parsed.networkAccess !== undefined)) {
+      this.#fail(agentId, "error", requestId);
+      return;
+    }
+    const effort = parsed.effort;
+    if (parsed.engine === "muse" && resume === undefined &&
+      !parsed.applyResumeSnapshot && effort !== undefined &&
+      !this.#getMuseCatalog?.()?.some((row) =>
+        row.value === parsed.model && row.value !== "default" &&
+        row.effort_levels?.includes(effort))) {
+      process.stderr.write(
+        "runner: Muse launch model/effort pair unavailable\n",
+      );
       this.#fail(agentId, "error", requestId);
       return;
     }

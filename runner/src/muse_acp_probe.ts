@@ -1,10 +1,6 @@
-// A short-lived Muse ACP process for questions the runner asks without a
-// session of its own: `initialize`, then one operation. The probe machinery
-// is shared with Grok's (acp_probe.ts): same tracking, same teardown, so
-// runner shutdown waits for Muse probes too. Muse's launch shape is
-// `muse acp`, with the operator's environment passed through unchanged
-// (the experimental ACP gate is on by default upstream and is never
-// forced open here).
+// Short-lived Muse probes use ACP for discovery and MSP for the catalog.
+// Both use the existing probe registry and bounded group teardown.
+// The child inherits the operator's environment and ACP gate settings.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { trackAcpProbe } from "./acp_probe.js";
@@ -37,28 +33,54 @@ export interface MuseProbeOptions {
 
 export type MuseProbeCall = (method: string, params: unknown) => Promise<unknown>;
 
-/** Runs `initialize` and then `operation` against a fresh `muse acp`.
- *  Rejects with MuseProbeAborted when `signal` aborts and with
- *  MuseProbeError for every other failure; the process group gets the
- *  shared bounded teardown either way. */
 export function runMuseProbe<T>(
   options: MuseProbeOptions,
   operation: (call: MuseProbeCall, initialized: unknown) => Promise<T>,
 ): Promise<T> {
-  const running = runMuseProbeInner(options, operation);
+  return runProbe(options, ["acp"], async (call) => {
+    const initialized = await call("initialize", {
+      protocolVersion: 1, clientCapabilities: {},
+    });
+    return operation(call, initialized);
+  });
+}
+
+export function readMuseModelList(options: MuseProbeOptions): Promise<unknown> {
+  return runProbe(
+    options,
+    ["serve", "--disable-shell", "--disable-write", "--no-session-log"],
+    async (call, notify) => {
+      await call("initialize", {
+        clientInfo: { name: "kaoiro", version: "1" },
+      });
+      notify("initialized");
+      return call("model/list", {});
+    },
+  );
+}
+
+type Notify = (method: "initialized") => void;
+
+function runProbe<T>(
+  options: MuseProbeOptions,
+  args: string[],
+  operation: (call: MuseProbeCall, notify: Notify) => Promise<T>,
+): Promise<T> {
+  const running = runMuseProbeInner(options, args, operation);
   trackAcpProbe(running);
   return running;
 }
 
 async function runMuseProbeInner<T>(
   options: MuseProbeOptions,
-  operation: (call: MuseProbeCall, initialized: unknown) => Promise<T>,
+  args: string[],
+  operation: (call: MuseProbeCall, notify: Notify) => Promise<T>,
 ): Promise<T> {
   if (options.signal?.aborted) throw new MuseProbeAborted();
   const env = { ...(options.env ?? process.env) };
   let child: ChildProcessWithoutNullStreams;
   try {
-    child = spawn(options.executable ?? "muse", ["acp"], {
+    child = spawn(options.executable ?? "muse", args, {
       cwd: options.cwd,
       env,
       detached: true,
@@ -146,16 +168,16 @@ async function runMuseProbeInner<T>(
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     return answered;
   };
+  const notify: Notify = (method) => {
+    if (settled) return;
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`);
+  };
   const timer = setTimeout(() => stop(new MuseProbeError("deadline")),
     options.deadlineMs ?? MUSE_PROBE_DEADLINE_MS);
   const onAbort = () => stop(new MuseProbeAborted());
   options.signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    const initialized = await Promise.race([
-      call("initialize", { protocolVersion: 1, clientCapabilities: {} }),
-      failed,
-    ]);
-    return await Promise.race([operation(call, initialized), failed]);
+    return await Promise.race([operation(call, notify), failed]);
   } finally {
     settled = true;
     clearTimeout(timer);

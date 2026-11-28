@@ -668,6 +668,7 @@ export function buildRegister(
   antigravityCatalogOverride?: EngineCatalogEntry["models"],
   deliverySnapshot: AppliedDeliverySnapshot = createDeliverySnapshot(config),
   grokCatalogOverride?: EngineCatalogEntry["models"],
+  museCatalogOverride?: EngineCatalogEntry["models"],
 ): RunnerRegister<EngineKind> {
   const capabilities = effectiveCapabilities(config);
   const engines: EngineCatalogEntry<EngineKind>[] = [];
@@ -726,10 +727,8 @@ export function buildRegister(
   if (capabilities.includes("muse")) {
     engines.push({
       id: "muse",
-      // No register-time catalog probe: only the default entry is offered.
-      // Muse exposes no launch
-      // permission axes; its approval mode lives inside the ACP session.
-      models: [{ value: "default", display_name: "Account default" }],
+      models: museCatalogOverride ??
+        [{ value: "default", display_name: "Account default" }],
     });
   }
   const safeBuildInfo =

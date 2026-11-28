@@ -80,7 +80,7 @@ function connection(overrides: Partial<KaoiroConnection> = {}): KaoiroConnection
   } as unknown as KaoiroConnection;
 }
 
-function host(models: ModelOption[], engine: "claude-code" | "codex" = "codex"): HostInfo {
+function host(models: ModelOption[], engine: "claude-code" | "codex" | "muse" = "codex"): HostInfo {
   return {
     host_id: "host-a",
     personas: [{ id: "fuji", name: "藤", sprite_set: "fuji" }],
@@ -93,7 +93,7 @@ function host(models: ModelOption[], engine: "claude-code" | "codex" = "codex"):
 async function renderLaunch(
   models: ModelOption[],
   conn = connection(),
-  engine: "claude-code" | "codex" = "codex",
+  engine: "claude-code" | "codex" | "muse" = "codex",
 ) {
   const target = document.createElement("div");
   document.body.append(target);
@@ -204,6 +204,51 @@ describe("phase-16 dashboard model switch integration", () => {
       model: "gpt-sol",
       effort: "high",
     }));
+  });
+
+  it.each([false, true])(
+    "uses Muse defaults unless effort is chosen (explicit=%s)", async (explicit) => {
+      const conn = connection({ getLaunchDefaults: vi.fn(async () => ({ fuji: "low" })) });
+      const { target } = await renderLaunch([
+        { value: "default", display_name: "Account default" },
+        { value: "muse-spark-1.2", display_name: "Spark", effort_levels: ["low", "high"] },
+      ], conn, "muse");
+      const model = selectFor(target, "モデル");
+      expect([...model.options].map((o) => o.value)).toEqual(["", "muse-spark-1.2"]);
+      model.value = "muse-spark-1.2";
+      model.dispatchEvent(new Event("change", { bubbles: true }));
+      await tick();
+      const effort = selectFor(target, "effort");
+      expect(effort.value).toBe("");
+      expect([...effort.options].map((o) => o.value)).toEqual(["", "low", "high"]);
+      if (explicit) {
+        effort.value = "low";
+        effort.dispatchEvent(new Event("change", { bubbles: true }));
+        await tick();
+      }
+      target.querySelector("form")!.requestSubmit();
+      await tick();
+      expect(conn.spawn).toHaveBeenCalledWith(expect.objectContaining({
+        engine: "muse", model: "muse-spark-1.2",
+      }));
+      const [payload] = vi.mocked(conn.spawn).mock.calls[0]!;
+      if (explicit) expect(payload.effort).toBe("low");
+      else expect(payload).not.toHaveProperty("effort");
+    },
+  );
+
+  it("submits a default-only Muse catalog without either override", async () => {
+    const { target, conn } = await renderLaunch([
+      { value: "default", display_name: "Account default" },
+    ], connection(), "muse");
+    const model = selectFor(target, "モデル");
+    expect([...model.options].map((o) => o.value)).toEqual([""]);
+    target.querySelector("form")!.requestSubmit();
+    await tick();
+    expect(conn.spawn).toHaveBeenCalledTimes(1);
+    const [payload] = vi.mocked(conn.spawn).mock.calls[0]!;
+    expect(payload).not.toHaveProperty("model");
+    expect(payload).not.toHaveProperty("effort");
   });
 
   it("LaunchDialog offers the Claude bootstrap catalog before spawn (#107)", async () => {

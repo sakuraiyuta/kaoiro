@@ -38,6 +38,8 @@ import {
 import { antigravityAuthProblem } from "./antigravity-auth.js";
 import { resolveAntigravityCatalog } from "./antigravity-catalog.js";
 import { resolveAgyVersion } from "./antigravity-version.js";
+import { probeMuseCatalog } from "./muse-catalog.js";
+import type { MuseProbeOptions } from "./muse_acp_probe.js";
 import { GrokCatalog, probeGrokCatalog, type GrokCatalogProbeOptions } from "./grok-catalog.js";
 import { acpProbesSettled } from "./acp_probe.js";
 import {
@@ -158,6 +160,7 @@ export interface RunnerCliDependencies {
   catalogProbe?: RefreshEngineCatalogDeps["probe"];
   /** The Grok catalog probe's executable and environment, for tests. */
   grokCatalogProbe?: GrokCatalogProbeOptions;
+  museCatalogProbe?: Partial<MuseProbeOptions>;
   installSignalHandlers?: boolean;
 }
 
@@ -287,6 +290,8 @@ async function startRunner(
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
   let link: RunnerLinkLike;
+  let museModels: EngineModelInfo[] | undefined;
+  const museProbe = new AbortController();
   const supervisor = createSupervisor({
     hostId: config.host_id,
     cwdAllowlist: config.cwd_allowlist,
@@ -312,6 +317,7 @@ async function startRunner(
     // finishes between spawns reaches the next child. Empty / null falls
     // back to the bootstrap floor server-side (resolveWrapperConfig).
     getClaudeEngineCatalog: () => claudeCatalog.getStale(),
+    getMuseCatalog: () => museModels,
     launch: createLauncher(undefined, id => external.command(id)),
     externalCatalog: id => appliedRegister.engines?.find(row => row.id === id && row.operations?.spawn),
     sendResult: (result) => link.sendSpawnResult(result),
@@ -337,6 +343,7 @@ async function startRunner(
     getAntigravityCatalog: () => antigravityCatalog,
     getAntigravityCliVersion: () => antigravityVersion ?? undefined,
     getGrokCatalog: () => grokCatalog.current(),
+    getMuseCatalog: () => museModels,
     updateRegister: (register) => {
       const next = external.register(register, config);
       link.updateRegister(next);
@@ -387,12 +394,13 @@ async function startRunner(
   const close = (): void => {
     closed = true;
     grokCatalog.abort();
+    museProbe.abort();
     watcher.close();
     supervisor.stopAll();
     link.close();
   };
   if (dependencies.installSignalHandlers ?? true) {
-    // Grok probes end their process groups with a bounded TERM/KILL
+    // Native probes end their process groups with a bounded TERM/KILL
     // teardown; exiting before it finishes would orphan a member that
     // ignores SIGTERM.
     let shuttingDown = false;
@@ -407,21 +415,35 @@ async function startRunner(
   }
   // Start discovery after installing the shutdown path, so an in-flight
   // probe can be stopped before the runner exits.
-  if (effectiveCapabilities(config).includes("grok")) {
+  const publishCatalogs = () => {
+    const next = external.register(buildRegister(
+      config,
+      antigravityVersion ?? undefined,
+      codexAuthMode,
+      claudeCatalog.getStale() ?? undefined,
+      buildInfo,
+      antigravityCatalog,
+      appliedDelivery,
+      grokCatalog.current(),
+      museModels,
+    ), config);
+    link.updateRegister(next);
+    appliedRegister = next;
+  };
+  const capabilities = effectiveCapabilities(config);
+  if (capabilities.includes("grok")) {
     void grokCatalog.refresh().then((changed) => {
-      if (!changed || closed) return;
-      const next = external.register(buildRegister(
-        config,
-        antigravityVersion ?? undefined,
-        codexAuthMode,
-        claudeCatalog.getStale() ?? undefined,
-        buildInfo,
-        antigravityCatalog,
-        appliedDelivery,
-        grokCatalog.current(),
-      ), config);
-      link.updateRegister(next);
-      appliedRegister = next;
+      if (changed && !closed) publishCatalogs();
+    });
+  }
+  if (capabilities.includes("muse")) {
+    void probeMuseCatalog({
+      cwd: process.cwd(), ...dependencies.museCatalogProbe,
+      signal: museProbe.signal,
+    }).then((models) => {
+      if (!models || closed) return;
+      museModels = models;
+      publishCatalogs();
     });
   }
   return {

@@ -17,7 +17,7 @@ if (process.env.KAOIRO_TEST_LAUNCH_FILE) {
 
 const sid = "fixture-session";
 let model = "muse-spark-1.3";
-let effort = "high";
+let effort = process.env.KAOIRO_TEST_MUSE_EFFORT ?? "high";
 let mode = process.env.KAOIRO_TEST_MODE_CURRENT_UNADVERTISED
   ? "promptUnmatched" : "allow-all";
 const MODES = [

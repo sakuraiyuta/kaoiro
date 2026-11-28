@@ -4,6 +4,18 @@ import { MuseLaunchError } from "./errors.js";
 
 export const SHUTDOWN_GRACE_MS = 3_000;
 
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+export function isMuseModelId(value: unknown): value is string {
+  return typeof value === "string" && MODEL_ID.test(value) &&
+    value.toLowerCase() !== "default";
+}
+
+export function isMuseEffort(value: unknown): value is string {
+  return typeof value === "string" && EFFORTS.has(value);
+}
+
 /** The argument vector for the resident ACP process. `--trust-workspace`
  *  loads the project's own skills and rules, so it is passed only when the
  *  operator opted in (`KAOIRO_MUSE_TRUST_WORKSPACE`); kaoiro's cwd
@@ -12,11 +24,20 @@ export const SHUTDOWN_GRACE_MS = 3_000;
  *  one) sets the process start-up model. Approval flags are refused by
  *  `muse acp`, so none are ever passed; the approval mode is chosen
  *  through ACP instead. */
-export function museAcpArgs(model?: string, trustWorkspace = false): string[] {
+export function museAcpArgs(
+  model?: string, trustWorkspace = false, effort?: string,
+): string[] {
   const args = ["acp"];
   if (trustWorkspace) args.push("--trust-workspace");
   if (model !== undefined && model !== "" && model !== "default") {
     args.push("--model", model);
+  }
+  if (effort !== undefined && effort !== "") {
+    if (!isMuseModelId(model) || !isMuseEffort(effort)) {
+      throw new MuseLaunchError("invalid Muse launch model/effort pair");
+    }
+    const override = JSON.stringify({ [model]: effort });
+    args.push("-c", `model_reasoning_efforts=${override}`);
   }
   return args;
 }

@@ -448,9 +448,9 @@ over ACP `session/list` (see the
 ## Muse runner configuration
 
 Add `muse` to capabilities to expose the Muse engine. The Muse
-Code CLI must be on PATH and logged in (`muse login`); the launch catalog
-offers the account `default` model entry until a session reports its own
-config options. The wrapper passes the operator's environment through
+Code CLI must be on PATH and logged in (`muse login`). The runner loads the
+[launch catalog](../engines/muse-acp.md#launch-model-and-effort) at startup.
+The wrapper passes the operator's environment through
 unchanged. Two environment variables are read by the Muse wrapper
 itself: `KAOIRO_MUSE_TURN_WATCHDOG_INACTIVITY_MS` and
 `KAOIRO_MUSE_TURN_WATCHDOG_ABORT_GRACE_MS` (same ranges and defaults as

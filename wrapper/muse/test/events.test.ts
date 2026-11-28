@@ -68,6 +68,14 @@ describe("process arguments and environment", () => {
     expect(museAcpArgs("muse-wonder")).toEqual(["acp", "--model", "muse-wonder"]);
   });
 
+  it.each([[undefined, "low"], ["default", "low"],
+    ["-invalid", "low"], ["muse-spark-1.2", "invalid"]])(
+    "refuses malformed launch pair %s/%s",
+    (model, effort) => {
+      expect(() => museAcpArgs(model, false, effort)).toThrow(/model\/effort/);
+    },
+  );
+
   it("adds --trust-workspace only on the operator's explicit opt-in", () => {
     expect(museAcpArgs(undefined, true)).toEqual(["acp", "--trust-workspace"]);
     expect(museAcpArgs("muse-wonder", true)).toEqual(

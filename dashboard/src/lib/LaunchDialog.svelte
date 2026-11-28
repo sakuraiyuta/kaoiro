@@ -198,10 +198,12 @@
       : null,
   );
   const effortLevels = $derived(
-    bundled ? selectedModel?.effort_levels ?? [] : [...new Set(selectedModel?.effort_levels)],
+    engine === "muse" && mode === "resume" ? []
+      : bundled ? selectedModel?.effort_levels ?? []
+      : [...new Set(selectedModel?.effort_levels)],
   );
   function defaultEffort(choice: ModelOption | null | undefined): string {
-    const value = choice?.default_effort ?? "";
+    const value = engine === "muse" ? "" : choice?.default_effort ?? "";
     return bundled || choice?.effort_levels?.includes(value) ? value : "";
   }
   function selectTarget() {
@@ -221,11 +223,12 @@
     // evaluation here regardless of any prior pick), so it also clears
     // manualEffortPick — there is no longer a "manual pick for this model"
     // to protect.
-    const preferred = resolveLaunchDefaultEffort({
-      manualPick: false,
-      preferred: launchDefaults[personaId],
-      effortLevels: choice?.effort_levels ?? [],
-    });
+    const preferred = engine === "muse" ? undefined
+      : resolveLaunchDefaultEffort({
+        manualPick: false,
+        preferred: launchDefaults[personaId],
+        effortLevels: choice?.effort_levels ?? [],
+      });
     effort = preferred ?? defaultEffort(choice);
     manualEffortPick = false;
   }
@@ -442,6 +445,10 @@
     }
 
     if (manualEffortPick) return;
+    if (engine === "muse") {
+      effort = "";
+      return;
+    }
 
     const next = resolveLaunchDefaultEffort({
       manualPick: false,
@@ -479,6 +486,8 @@
     busy = true;
     error = null;
     try {
+      const chosenEffort = engine === "muse" &&
+        (mode !== "new" || !effortLevels.includes(effort)) ? "" : effort;
       const trimmed = prompt.trim();
       const customName = name.trim();
       await connection.spawn({
@@ -493,7 +502,7 @@
         engine,
         ...(deliveryEnabled ? { delivery_policy: deliveryChoice } : {}),
         ...(model === "" ? {} : { model }),
-        ...(effort === "" ? {} : { effort }),
+        ...(chosenEffort === "" ? {} : { effort: chosenEffort }),
         // Codex / Antigravity launch permission (ADR-0033 F3, ADR-0057 F4c).
         ...(hasSandboxAxis ? { sandbox } : {}),
         ...(hasSandboxAxis && sandbox === "workspace-write"
@@ -640,8 +649,10 @@
         <label>
           {msg().launchDialog.engine}
           <select value={engine} onchange={e => {
-            if (!bundled || !bundledEngine(e.currentTarget.value)) selectTarget();
-            engine = e.currentTarget.value;
+            const next = e.currentTarget.value;
+            if (!bundled || !bundledEngine(next) ||
+              engine === "muse" || next === "muse") selectTarget();
+            engine = next;
           }}>
             {#if !engine}<option value="">{msg().launchDialog.selectAgain}</option>{/if}
             {#each engines as e (e)}
@@ -682,7 +693,9 @@
             {#if invalidPick === "model"}<option value={undefined} disabled>{msg().launchDialog.selectAgain}</option>{/if}
             <option value="">{msg().launchDialog.defaultOption}</option>
             {#each engineModels as m (m.value)}
-              <option value={m.value}>{m.display_name}</option>
+              {#if engine !== "muse" || m.value !== "default"}
+                <option value={m.value}>{m.display_name}</option>
+              {/if}
             {/each}
           </select>
         </label>
@@ -691,6 +704,10 @@
             {msg().launchDialog.resolvedModelBefore} <code>{selectedResolvedModel}</code> {msg().launchDialog.resolvedModelAfter}
           </p>
         {/if}
+      {/if}
+
+      {#if engine === "muse" && allowSpawn}
+        <p class="note">{msg().launchDialog.museCatalogHint}</p>
       {/if}
 
       {#if canRefresh}
@@ -724,6 +741,10 @@
             {/each}
           </select>
         </label>
+      {/if}
+
+      {#if engine === "muse" && effortLevels.length > 0}
+        <p class="note">{msg().launchDialog.museEffortHint}</p>
       {/if}
 
       {#if showPermissionMode}

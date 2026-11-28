@@ -16,7 +16,9 @@ const reply = (id, body) =>
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   const msg = JSON.parse(line);
-  if (log) appendFileSync(log, `${JSON.stringify({ method: msg.method, params: msg.params ?? {} })}\n`);
+  if (log) {
+    appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2), ...msg })}\n`);
+  }
   if (msg.method === "initialize") {
     if (scenario.initError !== undefined) {
       reply(msg.id, { error: { code: scenario.initError, message: "fixture init error" } });
