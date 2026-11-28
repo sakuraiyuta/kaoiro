@@ -210,6 +210,14 @@ Declared unsupported, each rejected explicitly rather than silently:
 - Live model and effort switching.
 - Permission-mode switching and the two-axis permission selector (see
   Approval mode above).
+Session enumeration for the resume picker is not one of the limits: the
+runner probes a short-lived `muse acp` with ACP `session/list {cwd}`
+(`runner/src/muse_sessions.ts`), the same contract the Grok discovery
+uses, and the resume existence check answers from that listing. The
+runner-side probes (Grok and Muse) share one tracking registry
+(`runner/src/acp_probe.ts`), and runner shutdown waits for both before
+exiting.
+
 ## Dashboard history on resume
 
 After `session/resume`, the wrapper uses `session/load` on the idle resident
@@ -219,14 +227,6 @@ It displays the user and assistant text returned by Muse, up to the latest
 and it does not execute replayed tool calls. If loading fails or times out,
 the wrapper discards the partial snapshot and closes the session; a later
 restart and server join can retry hydration.
-
-Session enumeration for the resume picker is not one of the limits: the
-runner probes a short-lived `muse acp` with ACP `session/list {cwd}`
-(`runner/src/muse_sessions.ts`), the same contract the Grok discovery
-uses, and the resume existence check answers from that listing. The
-runner-side probes (Grok and Muse) share one tracking registry
-(`runner/src/acp_probe.ts`), and runner shutdown waits for both before
-exiting.
 
 ## Prompt attachments
 
