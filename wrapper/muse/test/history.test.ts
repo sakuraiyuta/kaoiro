@@ -22,22 +22,27 @@ afterEach(async () => {
 
 async function start(mode: string, timeout = 1000,
   handler = vi.fn(async () => ({ content: [] }))) {
+  let ready!: () => void;
+  const waitingInput = new Promise<void>(resolve => { ready = resolve; });
   const host = new MuseHost({ config, cwd: process.cwd(), personaPrompt: "test",
-    send: () => {}, decidePermission: async () => ({ allow: true }), executable,
+    send: envelope => {
+      if (envelope.type === "state_change" && envelope.state === "waiting_input") {
+        ready();
+      }
+    },
+    decidePermission: async () => ({ allow: true }), executable,
     resumeSessionId: "fixture-session", historyTimeoutMs: timeout,
     toolDescriptors: [{ name: "past", description: "test",
       inputSchema: { type: "object" }, handler }],
     env: { ...process.env, KAOIRO_TEST_HISTORY: mode } });
   hosts.push(host);
-  void host.run().catch(() => {});
-  await vi.waitFor(() => expect(host.state).toBe("waiting_input"), {
-    timeout: 5_000,
-  });
+  const running = host.run();
+  await Promise.race([waitingInput, running]);
+  expect(host.state).toBe("waiting_input");
   return host;
 }
 
 describe("Muse history", () => {
-  vi.setConfig({ testTimeout: 10_000 });
   it("collects ordered text without executing past tool calls", async () => {
     const handler = vi.fn(async () => ({ content: [] }));
     const host = await start("ok", 1000, handler);
