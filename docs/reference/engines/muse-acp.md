@@ -50,7 +50,8 @@ Startup is bounded: `initialize` / `session/new` / `session/resume`
 together get a 30-second deadline, and a shutdown landing mid-startup
 aborts the remaining steps instead of letting the host and child be
 created afterwards. A history `session/load` has a separate 30-second
-deadline; that limit has not been established for short sessions.
+deadline; if it expires, the host closes. Short-session measurements do not
+validate this deadline for longer sessions.
 
 The ACP client is the shared one in `wrapper/agent-common/src/acp/`. Muse
 Code sends plain ACP session updates and no vendor extensions are consumed,
@@ -153,7 +154,8 @@ can differ between parsers. Workspace and enterprise settings are not checked
 and may be overridden; a user settings file may also change between the check
 and Muse reading it. The persona and footer appear in the process argument
 list and may appear in Muse's internal session log; do not put secrets in them.
-Ordinary ACP transcript replay is distinct from that internal log.
+Dashboard history is restored through ACP `session/load`, not by reading
+that internal log.
 
 The complete JSON-encoded argument is limited to 16,384 UTF-8 bytes; an
 oversized argument stops startup and reports its size and limit. The limit

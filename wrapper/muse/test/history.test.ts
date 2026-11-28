@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MuseHost } from "../src/host.js";
 import { MuseHistoryCollector } from "../src/history.js";
-import type { WrapperConfig } from "@kaoiro/agent-common";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 const config: WrapperConfig = {
   agent_id: "muse-history-test",
   persona: { id: "default", name: "Default", sprite_set: "default" },
@@ -21,11 +21,13 @@ afterEach(async () => {
 });
 
 async function start(mode: string, timeout = 1000,
-  handler = vi.fn(async () => ({ content: [] }))) {
+  handler = vi.fn(async () => ({ content: [] })),
+  onEnvelope: (envelope: Envelope) => void = () => {}) {
   let ready!: () => void;
   const waitingInput = new Promise<void>(resolve => { ready = resolve; });
   const host = new MuseHost({ config, cwd: process.cwd(), personaPrompt: "test",
     send: envelope => {
+      onEnvelope(envelope);
       if (envelope.type === "state_change" && envelope.state === "waiting_input") {
         ready();
       }
@@ -55,6 +57,20 @@ describe("Muse history", () => {
       ["user", "hello world"], ["assistant", "answer"],
     ]);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("routes live updates after a successful history load", async () => {
+    const envelopes: Envelope[] = [];
+    const host = await start("ok", 1000, undefined, e => envelopes.push(e));
+    await new Promise<void>((resolve, reject) => {
+      host.scheduleHistoryReplay(async read => {
+        try { await read(); resolve(); } catch (error) { reject(error); }
+      });
+    });
+    await host.send("after-load");
+    expect(envelopes.some(e => e.type === "log" &&
+      e.payload.kind === "assistant" && e.payload.text === "echo:after-load"))
+      .toBe(true);
   });
 
   it("holds a turn until the load completes", async () => {
