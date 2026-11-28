@@ -299,6 +299,28 @@ describe("Muse CLI attachments", () => {
     })]);
   });
 
+  it("refuses BOM-prefixed text one decoded byte over the limit", async () => {
+    const t = started();
+    await t.ready();
+    t.callbacks.onInstruction?.("control");
+    await t.results(1);
+
+    const bytes = Buffer.from("\ufeff" + "x".repeat(262_144) + "y");
+    expect(bytes.byteLength).toBe(262_148);
+    t.upload("oversize.txt", "text/plain", bytes);
+    t.callbacks.onInstruction?.("oversize", ["oversize.txt"]);
+    t.callbacks.onInstruction?.("after");
+    await t.results(2);
+
+    expect(t.rejections()).toEqual([expect.objectContaining({
+      type: "instruction_rejected",
+      payload: expect.objectContaining({
+        attachment_ids: ["oversize.txt"], reason: "text_too_large",
+      }),
+    })]);
+    expect(t.prompts()).toHaveLength(2);
+  });
+
   it("counts replacement characters toward the decoded text limit", async () => {
     const t = started();
     await t.ready();

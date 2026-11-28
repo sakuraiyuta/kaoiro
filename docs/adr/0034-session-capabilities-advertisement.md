@@ -164,7 +164,8 @@ covers `text/*` and the application MIME types JSON, XML, YAML
 (`application/yaml` or `application/x-yaml`), JavaScript, TypeScript and SQL.
 A restricted Composer uses the browser's reported MIME for the category
 hint. An empty MIME matches no category. The exact acceptance policy
-belongs to the engine adapter (F7).
+belongs to the engine adapter (F7). The text category is introduced
+in [issue #1303](https://github.com/sakuraiyuta/kaoiro/issues/1303).
 
 ### F7 — Absorb the attachment-capability publish decision (2026-08-03)
 

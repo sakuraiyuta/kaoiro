@@ -2,7 +2,7 @@
 title: Muse ACP engine
 description: Resident ACP host for Muse Code's experimental `muse acp`, its capabilities and its declared limits.
 status: draft
-last_updated: 2026-11-28
+last_updated: 2026-11-29
 ---
 
 # Muse ACP engine
@@ -234,6 +234,9 @@ waiting for dispatch. With Muse Code 1.4.25, Ember read a synthetic
 prompt. The limits reflect those fixture shapes; other models, including
 the default Spark, and provider maxima are unmeasured.
 [Capacity measurement][muse-attachment-evidence]
+
+For an outgoing ACP line over 4 MiB, the stderr diagnostic reports
+`oversized_lines: 1` and omits the method name. Muse still receives the line.
 
 With native Muse session logging enabled, a separate isolated echo run
 left the 3840×2160 PNG as a 2048×1152 asset with mode `0600` after child

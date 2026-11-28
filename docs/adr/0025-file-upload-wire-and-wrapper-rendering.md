@@ -146,7 +146,7 @@ whole instruction before sending if the complete decoded text for any
 file exceeds the per-file limit or the fitted blocks exceed the serialized
 prompt budget. The
 [Muse engine reference](../reference/engines/muse-acp.md#prompt-attachments)
-specifies the limits and evidence.
+specifies the limits and evidence for [issue #1303](https://github.com/sakuraiyuta/kaoiro/issues/1303).
 
 ### F11: Extend the meaning of `interrupt`
 
