@@ -30,6 +30,8 @@ it.each([
   ["restore", "low", 1], ["restore", undefined, 0],
   ["restore-default", "low", 0],
 ])("starts %s with effort %s and %i warning", async (operation, effort, warnings) => {
+  expect(process.env.HOME).toBe(settingsRoot);
+  expect(process.env.XDG_CONFIG_HOME).toBe(join(settingsRoot, "config"));
   const root = mkdtempSync(join(tmpdir(), "muse-spawn-effort-"));
   const ready = join(root, "ready");
   const result = join(root, "resumed.json");

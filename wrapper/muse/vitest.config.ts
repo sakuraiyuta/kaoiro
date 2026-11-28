@@ -7,6 +7,7 @@ export default defineConfig({
       "../../scripts/test/fixtures/test-isolation.mjs",
       "./test/settings-isolation.ts",
     ],
+    sequence: { setupFiles: "list" },
     testTimeout: 15_000,
   },
 });

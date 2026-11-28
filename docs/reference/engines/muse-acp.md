@@ -99,16 +99,24 @@ The wrapper passes the server-composed persona and footer at process launch
 as JSON in `-c run.system_prompt_append=...`, and sends user text unchanged
 in ACP prompts. A running process retains its launch value; each new process,
 including cold resume, is supplied the current persona. Existing transcript
-history is not rewritten. Muse Code 1.4.25 with the Meta provider retained
-an unchanged append after manual compaction and cold resume.
+history is not rewritten. In one Muse Code 1.4.25 Meta provider run, the
+append survived manual compaction, a changed append took effect on cold resume,
+and a literal `${...}` inside the append remained literal.
 
-Before spawning Muse, kaoiro reads the user's `settings.json`. If nested
+Before spawning Muse, kaoiro checks `<XDG_CONFIG_HOME>/muse/settings.json`
+when `XDG_CONFIG_HOME` is nonempty; otherwise it checks
+`<HOME>/.config/muse/settings.json`. A relative `XDG_CONFIG_HOME` stops
+startup, as does a missing, empty, or relative `HOME` when the fallback is
+needed. This path selection was measured on Linux; other platforms have not
+been measured. If nested
 `run.system_prompt_append` or the top-level dotted key is present, startup
 stops without reporting its value. Moving those instructions to
 `run.developer_prompt` is one option; it changes their position from system to
 developer instructions. The file is parsed in memory, but kaoiro does not
 extract, use, or pass the developer prompt. Nonregular, unreadable, malformed,
-or over-1-MiB files also stop startup. JSON duplicate-member interpretation
+or over-1-MiB files also stop startup, as do non-object settings or `run`.
+A UTF-8 BOM causes the JSON parse to fail and stops startup. JSON
+duplicate-member interpretation
 can differ between parsers. Workspace and enterprise settings are not checked
 and may be overridden; a user settings file may also change between the check
 and Muse reading it. The persona and footer appear in the process argument
