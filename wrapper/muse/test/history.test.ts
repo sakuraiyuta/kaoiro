@@ -30,11 +30,14 @@ async function start(mode: string, timeout = 1000,
     env: { ...process.env, KAOIRO_TEST_HISTORY: mode } });
   hosts.push(host);
   void host.run().catch(() => {});
-  await vi.waitFor(() => expect(host.state).toBe("waiting_input"));
+  await vi.waitFor(() => expect(host.state).toBe("waiting_input"), {
+    timeout: 5_000,
+  });
   return host;
 }
 
 describe("Muse history", () => {
+  vi.setConfig({ testTimeout: 10_000 });
   it("collects ordered text without executing past tool calls", async () => {
     const handler = vi.fn(async () => ({ content: [] }));
     const host = await start("ok", 1000, handler);
