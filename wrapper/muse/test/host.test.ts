@@ -49,6 +49,60 @@ async function started(options: Partial<MuseHostOptions> = {}) {
 }
 
 describe("muse host", () => {
+  it.each([undefined, "fixture-session"])(
+    "passes the exact launch persona and keeps prompts clean: %s", async (resumeSessionId) => {
+      const path = join(tmpdir(), `muse-persona-args-${process.pid}.json`);
+      const prompts = `${path}.prompts`;
+      const persona = '日本語 😀 "quote" \\ path\n${HOME} ${ \u0000';
+      try {
+        const { host } = await started({ personaPrompt: persona,
+          ...(resumeSessionId ? { resumeSessionId } : {}),
+          env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path,
+            KAOIRO_TEST_MUSE_PROMPTS_FILE: prompts } });
+        await host.send("hello");
+        const args = JSON.parse(readFileSync(path, "utf8")).args as string[];
+        const index = args.indexOf("-c");
+        expect(index).toBeGreaterThanOrEqual(0);
+        const arg = args[index + 1]!;
+        expect(arg.startsWith("run.developer_prompt=")).toBe(true);
+        expect(JSON.parse(arg.slice("run.developer_prompt=".length))).toBe(persona);
+        expect(JSON.parse(readFileSync(prompts, "utf8"))).toBe("hello");
+      } finally {
+        rmSync(path, { force: true });
+        rmSync(prompts, { force: true });
+      }
+    },
+  );
+
+  it.each([16_383, 16_384, 16_385])(
+    "checks encoded UTF-8 argument size %i before spawn", async (size) => {
+      const path = join(tmpdir(), `muse-persona-limit-${process.pid}.json`);
+      const prefix = Buffer.byteLength('run.developer_prompt=""');
+      const persona = "界" + "x".repeat(size - prefix - 3);
+      const envelopes: Envelope[] = [];
+      const host = new MuseHost({ config, cwd: process.cwd(), personaPrompt: persona,
+        send: (e) => envelopes.push(e), decidePermission: async () => ({ allow: true }),
+        executable, env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
+      hosts.push(host);
+      try {
+        const run = host.run();
+        void run.catch(() => {});
+        if (size <= 16_384) {
+          await vi.waitFor(() => expect(host.state).toBe("waiting_input"),
+            { timeout: 5_000 });
+          expect(existsSync(path)).toBe(true);
+        } else {
+          await vi.waitFor(() => expect(["error", "waiting_input"])
+            .toContain(host.state), { timeout: 5_000 });
+          expect(host.state).toBe("error");
+          await expect(run).rejects.toThrow(/16385 bytes.*16384/);
+          expect(existsSync(path)).toBe(false);
+          expect(JSON.stringify(envelopes)).not.toContain(persona);
+        }
+      } finally { rmSync(path, { force: true }); }
+    },
+  );
+
   it("masks the error envelope and keeps peer detail generic", async () => {
     const turns: NonNullable<MuseHostOptions["onTurnEnd"]> extends
       (turn: infer T) => void ? T[] : never = [];
@@ -150,7 +204,7 @@ describe("muse host", () => {
     expect(envelopes.some((e) => e.type === "task")).toBe(false);
   });
 
-  it("prepends the persona to the first turn only", async () => {
+  it("sends only user text on each turn", async () => {
     const promptsFile = join(tmpdir(), `kaoiro-muse-prompts-${process.pid}.jsonl`);
     rmSync(promptsFile, { force: true });
     process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE = promptsFile;
@@ -163,8 +217,7 @@ describe("muse host", () => {
       const prompts = readFileSync(promptsFile, "utf8").trim().split("\n")
         .map((line) => JSON.parse(line) as string);
       expect(prompts).toHaveLength(2);
-      expect(prompts[0]).toContain("PERSONA_AND_FOOTER");
-      expect(prompts[0]).toContain("one");
+      expect(prompts[0]).toBe("one");
       expect(prompts[1]).toBe("two");
     } finally {
       delete process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE;
@@ -172,7 +225,7 @@ describe("muse host", () => {
     }
   });
 
-  it("prepends the persona on a resumed session without delivery evidence", async () => {
+  it("sends only user text on a resumed session", async () => {
     const promptsFile = join(tmpdir(), `kaoiro-muse-prompts-resume-${process.pid}.jsonl`);
     rmSync(promptsFile, { force: true });
     process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE = promptsFile;
@@ -181,15 +234,14 @@ describe("muse host", () => {
       await host.send("hello");
       const prompts = readFileSync(promptsFile, "utf8").trim().split("\n")
         .map((line) => JSON.parse(line) as string);
-      expect(prompts[0]).toContain("PERSONA_AND_FOOTER");
-      expect(prompts[0]).toContain("hello");
+      expect(prompts[0]).toBe("hello");
     } finally {
       delete process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE;
       rmSync(promptsFile, { force: true });
     }
   });
 
-  it("keeps the persona pending when the first prompt fails", async () => {
+  it("sends only user text after a failed prompt", async () => {
     const promptsFile = join(tmpdir(), `kaoiro-muse-prompts-retry-${process.pid}.jsonl`);
     rmSync(promptsFile, { force: true });
     process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE = promptsFile;
@@ -201,9 +253,7 @@ describe("muse host", () => {
       const prompts = readFileSync(promptsFile, "utf8").trim().split("\n")
         .map((line) => JSON.parse(line) as string);
       expect(prompts).toHaveLength(2);
-      expect(prompts[0]).toContain("PERSONA_AND_FOOTER");
-      expect(prompts[1]).toContain("PERSONA_AND_FOOTER");
-      expect(prompts[1]).toContain("two");
+      expect(prompts).toEqual(["one", "two"]);
     } finally {
       delete process.env.KAOIRO_TEST_MUSE_PROMPTS_FILE;
       delete process.env.KAOIRO_TEST_MUSE_FAIL_FIRST_PROMPT;
@@ -211,7 +261,7 @@ describe("muse host", () => {
     }
   });
 
-  it("keeps persona pending after a refusal", async () => {
+  it("sends only user text after a refusal", async () => {
     const path = join(tmpdir(), `kaoiro-muse-refusal-${process.pid}.jsonl`);
     rmSync(path, { force: true });
     try {
@@ -221,8 +271,7 @@ describe("muse host", () => {
       await host.send("next");
       const inputs = readFileSync(path, "utf8").trim().split("\n")
         .map((line) => JSON.parse(line));
-      expect(inputs[0]).toContain("PERSONA_AND_FOOTER");
-      expect(inputs[1]).toContain("PERSONA_AND_FOOTER");
+      expect(inputs).toEqual(["refuse", "next"]);
     } finally {
       rmSync(path, { force: true });
     }
@@ -241,7 +290,7 @@ describe("muse host", () => {
       expect(JSON.parse(readFileSync(checkpoint, "utf8")))
         .toMatchObject({ state: "unbound", muse_persona_delivered: false });
       await host.send("fresh");
-      expect(JSON.parse(readFileSync(prompts, "utf8"))).toContain("PERSONA_AND_FOOTER");
+      expect(JSON.parse(readFileSync(prompts, "utf8"))).toBe("fresh");
     } finally {
       rmSync(checkpoint, { force: true });
       rmSync(prompts, { force: true });
@@ -314,7 +363,7 @@ describe("muse host", () => {
         ]);
         const relevant = Object.fromEntries(Object.entries(launch.env).filter(([key]) =>
           !isolationKeys.has(key)));
-        expect(launch.args).toEqual(["acp"]);
+        expect(launch.args).toContain("acp");
         expect(relevant).toEqual(env);
       } finally {
         rmSync(path, { force: true });
@@ -727,7 +776,7 @@ describe("muse host", () => {
     }
   });
 
-  it("records persona after a resumed first turn and omits it on the next resume", async () => {
+  it("preserves rollback-compatible persona checkpoint state across resume", async () => {
     const checkpoint = join(tmpdir(), `kaoiro-muse-persona-${process.pid}.json`);
     const prompts = join(tmpdir(), `kaoiro-muse-persona-${process.pid}.jsonl`);
     rmSync(checkpoint, { force: true });
@@ -741,6 +790,10 @@ describe("muse host", () => {
       expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toMatchObject({
         state: "unbound", candidate_id: "fixture-session", muse_persona_delivered: false,
       });
+      await first.host.send("fresh");
+      expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toMatchObject({
+        state: "live", session_id: "fixture-session", muse_persona_delivered: false,
+      });
       first.host.close();
       await first.host.closed;
       const candidate = { ...cfg, recovery_resume_kind: "candidate" as const };
@@ -748,7 +801,7 @@ describe("muse host", () => {
         recovery: new RecoveryReporter(candidate, "fixture-session", () => {}, true) });
       await second.host.send("first");
       expect(JSON.parse(readFileSync(checkpoint, "utf8"))).toMatchObject({
-        state: "live", session_id: "fixture-session", muse_persona_delivered: true,
+        state: "live", session_id: "fixture-session", muse_persona_delivered: false,
       });
       second.host.close();
       await second.host.closed;
@@ -757,8 +810,9 @@ describe("muse host", () => {
         recovery: new RecoveryReporter(confirmed, "fixture-session", () => {}, true) });
       await third.host.send("second");
       const inputs = readFileSync(prompts, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-      expect(inputs[0]).toContain("PERSONA_AND_FOOTER");
-      expect(inputs[1]).toBe("second");
+      expect(inputs).toEqual(["fresh", "first", "second"]);
+      expect(JSON.parse(readFileSync(checkpoint, "utf8")))
+        .toMatchObject({ state: "live", muse_persona_delivered: true });
     } finally {
       rmSync(checkpoint, { force: true });
       rmSync(prompts, { force: true });
@@ -813,8 +867,7 @@ describe("muse host", () => {
       await host.send("next");
       const inputs = readFileSync(path, "utf8").trim().split("\n")
         .map((line) => JSON.parse(line));
-      expect(inputs[0]).toContain("PERSONA_AND_FOOTER");
-      expect(inputs[1]).toContain("PERSONA_AND_FOOTER");
+      expect(inputs).toEqual(["sleep", "next"]);
     } finally { rmSync(path, { force: true }); }
   });
 
@@ -839,8 +892,8 @@ describe("muse host", () => {
     try {
       await started({ config: { ...config, model: "muse-wonder" },
         env: { ...process.env, KAOIRO_TEST_LAUNCH_FILE: path } });
-      expect(JSON.parse(readFileSync(path, "utf8")).args)
-        .toEqual(["acp", "--model", "muse-wonder"]);
+      const args = JSON.parse(readFileSync(path, "utf8")).args as string[];
+      expect(args[args.indexOf("--model") + 1]).toBe("muse-wonder");
     } finally { rmSync(path, { force: true }); }
   });
 

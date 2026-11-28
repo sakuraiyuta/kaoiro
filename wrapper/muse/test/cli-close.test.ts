@@ -114,7 +114,8 @@ it.each([
       expect(methods).not.toContain("session/prompt");
     }
     await host.send("hello");
-    expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
+    const args = JSON.parse(readFileSync(launch, "utf8")).args as string[];
+    expect(args[args.indexOf("-c") + 1]).toBe('run.developer_prompt="persona"');
     expect(methods).not.toContain("session/set_config_option");
   } finally {
     host?.close();

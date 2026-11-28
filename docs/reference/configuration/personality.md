@@ -25,6 +25,10 @@ footer composition becomes the prompt.
 | `system-footer.md` | kaoiro default (environment awareness + peer-routing rules + collaborative-behavior guidance + when and how to write the agent's status line with `set_status_line`, [status line](../inter-agent/status-line.md)). When present, replaces the built-in default completely | Use the default text built into the server binary |
 | `user-footer.md` | Free-form operator overlay; an environment-specific file analogous to env | Add nothing |
 
+- Muse receives the composed text in process arguments and its session logs may
+  retain it. Do not put secrets in persona packs or footers. Muse limits the
+  encoded launch argument to 16,384 UTF-8 bytes; footers otherwise have no
+  such bound. See [Muse personality prompt](../engines/muse-acp.md#personality-prompt).
 - Composition order: `personality + system-footer + user-footer`
   (separated by `\n\n`). There is no engine preset in the server
   composition.
@@ -66,6 +70,7 @@ including a resume. Whether the model sees them depends on the engine
 | Claude Code | Compaction or a new session. A resume keeps the system prompt the SDK recorded at the session's first request. |
 | Codex (app-server) | A new thread or compaction. A resumed thread keeps its recorded developer instructions. |
 | Antigravity | The next launch, including a resume. |
+| Muse | The next launch, including a resume. |
 | Claude Code, tool descriptions | Compaction or a new session, for a tool the session has already shown. A resume keeps the description recorded at that point; a tool added later arrives with its current text. |
 
 To make a footer change take effect sooner, send its gist to the running

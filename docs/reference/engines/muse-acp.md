@@ -12,10 +12,8 @@ Muse build is unmeasured; the effective model and effort are reported only
 from ACP responses, not verified as effective values.
 With workspace trust enabled, real-provider `tools/call`, approval enforcement
 during tool execution, and MCP after cold resume are unmeasured. Recovery from
-a runner-detected failure to the same session ID and persona retention after
-compaction are also unmeasured. Server retention of the effort warning has not
-been checked in a Muse-specific integration test. A runner restart or crash
-before delivery is recorded may cause the persona to be sent again.
+a runner-detected failure to the same session ID are also unmeasured. Server retention of the effort warning has not
+been checked in a Muse-specific integration test.
 
 The `muse` engine requires Muse Code on `PATH`, logged in with
 `muse login`. The wrapper launches `muse acp` once (plus `--model <id>`
@@ -95,32 +93,28 @@ cause this warning.
 
 ## Personality prompt
 
-Muse's ACP surface documents no `session/new` system-prompt metadata
-(compare [personality injection](personality-injection.md), where Claude
-Code, Codex, Antigravity and Grok each have a named injection point). Until
-a Muse injection point is documented or measured, the wrapper delivers
-the server-composed persona and footer at the head of a prompt under this
-contract:
+The wrapper passes the server-composed persona and footer at process launch
+as JSON in `-c run.developer_prompt=...`, and sends user text unchanged in
+ACP prompts. A running process retains its launch value; a new launch,
+including a cold resume, receives the current persona. Existing transcript
+history is not rewritten. In Muse Code 1.4.25 the launch setting was measured
+to persist after manual compaction; cold-resume precedence was observed with
+the echo provider. Real-provider cold resume remains unmeasured.
 
-- **First turn of a fresh session:** the persona is prepended.
-- **Retry:** it stays pending until a prompt carrying it ends with `end_turn`;
-  a failed, refused or interrupted turn is retried with the persona attached.
-- **Resume:** the persona is prepended unless the runner has a checkpoint
-  confirming it was delivered to that session. An external session or an
-  older checkpoint has no such confirmation, so the first new prompt carries it.
-- **Compaction:** the persona is not re-supplied after agent-side compaction;
-  retention after compaction has not been measured.
+The launch setting overrides Muse's configured developer prompt for that
+process. Put common kaoiro instructions in `user-footer.md` instead. The
+persona and footer appear in the process argument list and may appear in
+Muse's internal session log; do not put secrets in them. Ordinary ACP
+transcript replay is distinct from that internal log.
 
-A persona-bearing prompt is recorded as delivered only after `end_turn`.
-A crash after native receipt but before the checkpoint write can cause a
-repeat. Runner restart or offline restore also loses the per-child checkpoint;
-the next new prompt carries the current persona again. The original user
-prompt is not replayed. A checkpoint records delivery of the persona at that
-time; it does not track later changes to the server-composed text.
-
-This is provisional: the text is visible in the session transcript.
-Replacing this with a native injection point is the first follow-up when
-upstream documents one.
+The complete JSON-encoded argument is limited to 16,384 UTF-8 bytes; an
+oversized argument stops startup and reports its size and limit. The limit
+leaves about 1.84 times the measured 8,890-byte maximum of bundled personas
+and the system footer, but user footers and overlays are not bounded by
+[ADR-0045](../../adr/0045-footer-file-externalization.md). Other OS command
+line limits may still prevent startup. Muse 1.4.25 was measured; older
+versions may reject the setting. An early Muse child exit does not currently
+produce a `MuseLaunchError` system log in the dashboard.
 
 ## Session recovery
 

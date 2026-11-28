@@ -139,7 +139,6 @@ export class MuseHost implements EngineAdapter {
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   #displayNameRevision = 0;
-  #personaPending: boolean;
   #resumed = false;
   #recoveryConfirmed = false;
   #modeUpdate: string | undefined;
@@ -154,8 +153,6 @@ export class MuseHost implements EngineAdapter {
 
   constructor(options: MuseHostOptions) {
     this.#options = options;
-    this.#personaPending = !(options.resumeSessionId &&
-      options.config.muse_persona_delivered === true);
     this.#closedPromise = new Promise((resolve) => {
       this.#resolveClosed = resolve;
     });
@@ -378,7 +375,8 @@ export class MuseHost implements EngineAdapter {
     check();
     const childProcess = new MuseProcess(
       executable,
-      museAcpArgs(config.model, this.#settings.trustWorkspace),
+      museAcpArgs(config.model, this.#settings.trustWorkspace,
+        this.#options.personaPrompt),
       this.#options.cwd,
       env,
     );
@@ -543,22 +541,16 @@ export class MuseHost implements EngineAdapter {
       authoritative: false,
       why: "the turn failed",
     };
-    const carriesPersona = this.#personaPending;
     try {
-      const promptText = carriesPersona
-        ? `${this.#options.personaPrompt}\n\n${turn.text}`
-        : turn.text;
-      const response = await this.#session!.prompt(promptText);
+      const response = await this.#session!.prompt(turn.text);
       if (this.#closing) throw new Error("muse host closed");
       const interrupted = response.stopReason === "cancelled";
-      const personaDelivered = carriesPersona && response.stopReason === "end_turn";
-      if ((!interrupted && !this.#recoveryConfirmed || personaDelivered) &&
+      if (!interrupted && !this.#recoveryConfirmed &&
         this.#sessionId !== undefined &&
-        this.#options.recovery?.confirm(this.#sessionId, personaDelivered) === false) {
+        this.#options.recovery?.confirm(this.#sessionId) === false) {
         throw this.#options.recovery.failure;
       }
       if (!interrupted) this.#recoveryConfirmed = true;
-      if (personaDelivered) this.#personaPending = false;
       this.#flushAssistantLog();
       settled = interrupted
         ? { authoritative: false, why: "the turn was interrupted" }

@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { MuseLaunchError } from "./errors.js";
 
 export const SHUTDOWN_GRACE_MS = 3_000;
+export const MAX_PERSONA_ARG_BYTES = 16_384;
 
 /** The argument vector for the resident ACP process. `--trust-workspace`
  *  loads the project's own skills and rules, so it is passed only when the
@@ -12,8 +13,17 @@ export const SHUTDOWN_GRACE_MS = 3_000;
  *  one) sets the process start-up model. Approval flags are refused by
  *  `muse acp`, so none are ever passed; the approval mode is chosen
  *  through ACP instead. */
-export function museAcpArgs(model?: string, trustWorkspace = false): string[] {
+export function museAcpArgs(model?: string, trustWorkspace = false,
+  personaPrompt = ""): string[] {
   const args = ["acp"];
+  const personaArg = `run.developer_prompt=${JSON.stringify(personaPrompt)}`;
+  const bytes = Buffer.byteLength(personaArg, "utf8");
+  if (bytes > MAX_PERSONA_ARG_BYTES) {
+    throw new MuseLaunchError(
+      `muse persona argument is ${bytes} bytes (maximum ${MAX_PERSONA_ARG_BYTES})`,
+    );
+  }
+  args.push("-c", personaArg);
   if (trustWorkspace) args.push("--trust-workspace");
   if (model !== undefined && model !== "" && model !== "default") {
     args.push("--model", model);
@@ -39,12 +49,16 @@ export class MuseProcess {
   #closing: Promise<void> | undefined;
 
   constructor(executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-    this.child = spawn(executable, args, {
-      cwd,
-      env,
-      detached: process.platform !== "win32",
-      stdio: "pipe",
-    });
+    try {
+      this.child = spawn(executable, args, {
+        cwd,
+        env,
+        detached: process.platform !== "win32",
+        stdio: "pipe",
+      });
+    } catch {
+      throw new MuseLaunchError("muse spawn failed");
+    }
     this.exited = new Promise((resolve, reject) => {
       this.child.once("error", () =>
         reject(new MuseLaunchError("muse spawn failed")),
