@@ -255,6 +255,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           finish(msg.id, JSON.stringify(result));
           break;
         }
+        if (lastLine.startsWith("reset:")) {
+          await connecting;
+          const [, mode, ending] = lastLine.split(":");
+          const result = await mcpClient.callTool({ name: "request_session_reset",
+            arguments: { mode, reason: "fixture reset" } });
+          if (ending === "fail") return fail(msg.id, "fixture turn failure");
+          finish(msg.id, JSON.stringify(result), ending === "cancel" ? "cancelled" : "end_turn");
+          break;
+        }
         if (lastLine === "plan-update") {
           update({ sessionUpdate: "plan", entries: [
             { content: "Read the prompt", status: "completed", priority: "high" },

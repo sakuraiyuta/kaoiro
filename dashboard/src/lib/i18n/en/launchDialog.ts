@@ -34,7 +34,7 @@ export const launchDialog = {
   museCatalogHint:
     "Muse models are listed when the runner starts. Default uses Muse settings.",
   museEffortHint:
-    "Effort applies to this new launch and is not carried into resume or restore.",
+    "Effort carries into reset only for the same model when passed to the current process. It does not carry into resume or restore.",
   room: "Room",
   model: "Model",
   defaultOption: "Default",

@@ -83,7 +83,8 @@ An explicit effort adds a separate `-c` argument containing
 against the published catalog. The wrapper logs the configured tier and
 reports the ACP model. It does not report ACP `thought_level` as effective
 effort. The selected effort does not carry into resume or restore,
-including fresh restore.
+including fresh restore. Reset carries an effort passed to the current
+process only when the selected model is unchanged.
 
 On Muse Code 1.4.25, provider requests used the selected tier on Spark
 1.3 and Spark 1.2 even when ACP reported a different effort. On the
@@ -164,6 +165,19 @@ exit without a `MuseLaunchError` log,
 or ignore it and run without the persona; neither outcome was measured.
 The 1.4.25 echo provider rejected turns using this setting; Meta succeeded.
 
+## Session reset
+
+Muse supports `new` and `clear` through the runner's fresh relaunch. Both
+start a new session; the server controls the display difference. The
+wrapper asks the operator before every `request_session_reset` call and
+dispatches an approved reservation at its turn boundary. A director may
+also reset a Muse peer. The relaunched wrapper receives the current persona
+and model. An explicit effort survives only when it was passed to the
+previous process and its model matches the reset snapshot. Resume, restore,
+runner restart and rollback do not preserve that effort. The server adopts
+the fresh session ID after the wrapper reports it. See
+[Grok session reset](grok-acp.md#session-reset) for the shared runner path.
+
 ## Session recovery
 
 The wrapper runs the common `RecoveryReporter` (see
@@ -194,7 +208,6 @@ Declared unsupported, each rejected explicitly rather than silently:
 - Live model and effort switching.
 - Permission-mode switching and the two-axis permission selector (see
   Approval mode above).
-- Session reset (`supports_session_reset: false`).
 - Dashboard history replay on resume: the wrapper registers no hydration
   replayer, so a resumed agent starts with an empty dashboard history.
 
