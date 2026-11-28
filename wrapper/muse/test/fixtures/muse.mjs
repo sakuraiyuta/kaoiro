@@ -146,9 +146,31 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         update({ sessionUpdate: "current_mode_update", currentModeId: mode });
         reply(msg.id, {});
         break;
-      case "session/load":
-        reply(msg.id, { configOptions: configOptions() });
+      case "session/load": {
+        if (process.env.KAOIRO_TEST_HISTORY) {
+          if (!msg.params.mcpServers?.length) return fail(msg.id, "missing MCP");
+          update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "hello " } });
+          update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "world" } });
+          update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } });
+          update({ sessionUpdate: "tool_call", toolCallId: "past", title: "past call", kind: "other", status: "completed" });
+          if (process.env.KAOIRO_TEST_HISTORY === "permission") {
+            const id = 737;
+            process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id,
+              method: "session/request_permission", params: { sessionId: sid,
+                toolCall: { toolCallId: "past", title: "past call" },
+                options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }] } }) + "\n");
+            await awaitResponse(id);
+          }
+          if (process.env.KAOIRO_TEST_HISTORY === "error") return fail(msg.id, "load failed");
+          if (process.env.KAOIRO_TEST_HISTORY === "hang") break;
+          if (process.env.KAOIRO_TEST_HISTORY === "delay") {
+            setTimeout(() => reply(msg.id, { configOptions: configOptions(), modes: modes() }), 300);
+            break;
+          }
+        }
+        reply(msg.id, { configOptions: configOptions(), modes: modes() });
         break;
+      }
       case "session/prompt": {
         const capture = process.env.KAOIRO_TEST_MUSE_BLOCKS_FILE;
         if (capture) {

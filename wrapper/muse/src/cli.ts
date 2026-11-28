@@ -8,6 +8,7 @@ import {
   formatInboundMessage,
   InterAgentTool,
   makeLog,
+  makeStateChange,
   mergePendingDisplayNameSync,
   operatorApprovalGated,
   PermissionBroker,
@@ -32,6 +33,7 @@ import {
   type ServerLinkOptions,
 } from "@kaoiro/wrapper-core";
 import { MuseHost, type MuseHostOptions } from "./host.js";
+import { MuseHistoryReplay } from "./history_replay.js";
 
 export interface MuseCliDependencies {
   parseCliArgs?: typeof parseCliArgs;
@@ -73,7 +75,22 @@ export async function runMuseCli(
     ready = resolve;
   });
   const deliveries = new Map<string, Envelope[]>();
-  const send = (envelope: Envelope) => link?.send(envelope);
+  const send = (envelope: Envelope) => replayer.sendLiveLog(envelope);
+  const replayer = new MuseHistoryReplay({
+    schedule: job => host?.scheduleHistoryReplay(job),
+    captureFence: () => link?.captureHistoryReplayFence?.() ?? (() => false),
+    seedState: () => link?.send(makeStateChange(
+      config, host?.state ?? "idle", new Date().toISOString(), {},
+      host?.statusExtSnapshot() ?? {},
+    )),
+    sessionId: () => link?.currentSessionId() ?? null,
+    readSidecar: () => [],
+    sendHistoryReset: id => link?.sendHistoryReset(id),
+    sendEnvelope: envelope => link?.send(envelope),
+    sendReplayIa: (id, items) => link?.sendReplayIa(id, items),
+    sendHistoryReplayComplete: id => link?.sendHistoryReplayComplete(id),
+    ...(resumeSessionId ? { legacyResumeSessionId: resumeSessionId } : {}),
+  });
   const cwd = dependencies.cwd ?? process.cwd();
   const intake = new UploadIntake({
     config,
@@ -223,6 +240,7 @@ export async function runMuseCli(
       stage_reports: false,
     },
     onPersonaPrompt: resolvePersona,
+    onHydration: verdict => replayer.onVerdict(verdict),
     onInstruction: (text: string, attachments?: string[]) => {
       const staged = attachments?.length ? intake.stage(attachments) : undefined;
       if (attachments?.length && !staged) return;
@@ -379,6 +397,7 @@ export async function runMuseCli(
           input: Record<string, unknown>,
           signal?: AbortSignal,
         ) => permission.decide(name, input, signal),
+        onReady: () => replayer.markReady(),
         onSessionId: (id: string) => {
           link?.setSessionId(id);
         },
@@ -424,6 +443,7 @@ export async function runMuseCli(
     clearTimeout(timer);
     process.off("SIGTERM", stop);
     process.off("SIGINT", stop);
+    replayer.close();
     question.close();
     permission.close();
     interAgent.close();

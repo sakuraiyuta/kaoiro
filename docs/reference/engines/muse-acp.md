@@ -49,7 +49,8 @@ See the [Muse Code changelog](https://dev.meta.ai/docs/muse-code/changelog).
 Startup is bounded: `initialize` / `session/new` / `session/resume`
 together get a 30-second deadline, and a shutdown landing mid-startup
 aborts the remaining steps instead of letting the host and child be
-created afterwards.
+created afterwards. A history `session/load` has a separate 30-second
+deadline; that limit has not been established for short sessions.
 
 The ACP client is the shared one in `wrapper/agent-common/src/acp/`. Muse
 Code sends plain ACP session updates and no vendor extensions are consumed,
@@ -209,8 +210,15 @@ Declared unsupported, each rejected explicitly rather than silently:
 - Live model and effort switching.
 - Permission-mode switching and the two-axis permission selector (see
   Approval mode above).
-- Dashboard history replay on resume: the wrapper registers no hydration
-  replayer, so a resumed agent starts with an empty dashboard history.
+## Dashboard history on resume
+
+After `session/resume`, the wrapper uses `session/load` on the idle resident
+connection to rebuild the dashboard history through the hydration handshake.
+It displays the user and assistant text returned by Muse, up to the latest
+200 display entries. It does not restore images or history before compaction,
+and it does not execute replayed tool calls. If loading fails or times out,
+the wrapper discards the partial snapshot and closes the session; a later
+restart and server join can retry hydration.
 
 Session enumeration for the resume picker is not one of the limits: the
 runner probes a short-lived `muse acp` with ACP `session/list {cwd}`

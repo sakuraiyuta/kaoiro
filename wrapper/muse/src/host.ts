@@ -47,6 +47,8 @@ import {
 } from "./muse/usage.js";
 import { resolveMuseSettings, type MuseSettings } from "./settings.js";
 import { attachmentPrompt } from "./upload.js";
+import { MuseHistoryCollector } from "./history.js";
+import type { MuseHistoryJob } from "./history_replay.js";
 
 export interface MuseHostOptions {
   config: WrapperConfig;
@@ -77,6 +79,8 @@ export interface MuseHostOptions {
   /** Test seam for the startup deadline (M10). */
   startupTimeoutMs?: number;
   watchdogTimeoutMs?: number;
+  historyTimeoutMs?: number;
+  onReady?: () => void;
 }
 
 interface Turn {
@@ -119,8 +123,7 @@ class StartupAborted extends Error {
  * Declared limits of this adapter (see docs/reference/engines/
  * muse-acp.md): no kaoiro permission-mode or two-axis permission
  * switching (the ACP approval mode is the agent's own selector, set once
- * at startup), and no dashboard history
- * replay. Each is rejected explicitly rather than silently ignored.
+ * at startup). Unsupported controls are rejected explicitly.
  */
 export class MuseHost implements EngineAdapter {
   #machine: MachineState = initialMachineState();
@@ -134,6 +137,10 @@ export class MuseHost implements EngineAdapter {
   #modelSource: "default" | "launch" = "default";
   #context: { used: number; size: number } | undefined;
   #queue: Turn[] = [];
+  #historyJobs: MuseHistoryJob[] = [];
+  #collector: MuseHistoryCollector | undefined;
+  #loadPermission = false;
+  #mcpServers: acp.McpServer[] = [];
   #active: Turn | undefined;
   #signal: AbortController | undefined;
   #draining = false;
@@ -152,6 +159,7 @@ export class MuseHost implements EngineAdapter {
   #pendingQuestion: PendingQuestionExt | null = null;
   #displayNameRevision = 0;
   #resumed = false;
+  #hadTurn = false;
   #recoveryConfirmed = false;
   #modeUpdate: string | undefined;
   #modeConfig: string | undefined;
@@ -318,6 +326,7 @@ export class MuseHost implements EngineAdapter {
         }
         this.#started = true;
         this.#state("waiting_input");
+        this.#options.onReady?.();
         if (!this.#resumed && config.effort) {
           this.#options.send(makeLog(config, this.state, new Date().toISOString(), {
             kind: "system",
@@ -431,6 +440,7 @@ export class MuseHost implements EngineAdapter {
       throw new MuseLaunchError("muse does not support HTTP MCP servers");
     }
     const mcpServers = [toolHost.mcpServer()];
+    this.#mcpServers = mcpServers;
     const resumeId = this.#options.resumeSessionId;
     let modes: acp.SessionModeState | null | undefined;
     if (resumeId !== undefined) {
@@ -548,12 +558,57 @@ export class MuseHost implements EngineAdapter {
     });
   }
 
+  scheduleHistoryReplay(job: MuseHistoryJob): void {
+    if (this.#closing) return;
+    this.#historyJobs.push(job);
+    void this.#drain();
+  }
+
+  async #readHistory() {
+    if (!this.#resumed && !this.#hadTurn) {
+      return { logs: [], coverage: "full" as const };
+    }
+    if (!this.#session || !this.#sessionId) throw new Error("session unavailable");
+    const session = this.#session;
+    const sessionId = this.#sessionId;
+    const collector = new MuseHistoryCollector(this.#options.config, sessionId);
+    this.#collector = collector;
+    this.#loadPermission = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const response = await Promise.race([
+        session.load(sessionId, this.#options.cwd, this.#mcpServers),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("history timeout")),
+            this.#options.historyTimeoutMs ?? 30_000);
+        }),
+        this.#startupCancelled.then(() => { throw new Error("host closed"); }),
+      ]);
+      if (this.#closing || this.#loadPermission || session.sessionId !== sessionId ||
+          (response.modes && response.modes.currentModeId !== this.#modes?.current)) {
+        throw new Error("history load changed session");
+      }
+      return { logs: collector.finish(), coverage: "full" as const };
+    } catch (error) {
+      this.#fail(new Error("muse history load failed"));
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      this.#collector = undefined;
+    }
+  }
+
   /** Drains queued turns in arrival order. */
   async #drain(): Promise<void> {
     if (this.#draining || !this.#started) return;
     this.#draining = true;
     try {
       while (!this.#closing) {
+        const job = this.#historyJobs.shift();
+        if (job) {
+          await job(() => this.#readHistory());
+          continue;
+        }
         const turn = this.#queue[0];
         if (!turn) break;
         this.#queue.shift();
@@ -588,6 +643,7 @@ export class MuseHost implements EngineAdapter {
       prompt = fitted.blocks;
       record.finish();
     }
+    this.#hadTurn = true;
     this.#active = turn;
     this.#signal = new AbortController();
     this.#text = "";
@@ -717,6 +773,10 @@ export class MuseHost implements EngineAdapter {
 
   #update(notification: acp.SessionNotification) {
     if (this.#closing || notification.sessionId !== this.#sessionId) return;
+    if (this.#collector) {
+      this.#collector.update(notification);
+      return;
+    }
     if (notification.update.sessionUpdate === "config_option_update") {
       if (!this.#checkModeConfig(notification.update.configOptions)) return;
       const selection = parseSelection(notification.update.configOptions);
@@ -780,6 +840,7 @@ export class MuseHost implements EngineAdapter {
     request: acp.RequestPermissionRequest,
     signal: AbortSignal,
   ): Promise<acp.RequestPermissionResponse> {
+    if (this.#collector) this.#loadPermission = true;
     if (this.#closing || !this.#active || request.sessionId !== this.#sessionId) {
       return { outcome: { outcome: "cancelled" } };
     }
