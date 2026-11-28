@@ -114,13 +114,10 @@ it.each(["low", undefined])("loads fresh effort %j", async (effort) => {
     }
     await host.send("hello");
     const args = JSON.parse(readFileSync(launch, "utf8")).args as string[];
-    expect(args[args.indexOf("-c") + 1]).toBe('run.system_prompt_append="persona"');
-    expect(args[args.indexOf("--model") + 1]).toBe("muse-spark-1.2");
-    const overrides = args.filter((arg) => arg.startsWith("model_reasoning_efforts="));
-    expect(overrides).toEqual(effort
-      ? ['model_reasoning_efforts={"muse-spark-1.2":"low"}'] : []);
-    expect(args.filter((arg) => arg === "-c")).toHaveLength(effort ? 2 : 1);
-    expect(args).not.toContain("--trust-workspace");
+    const expected = ["acp", "-c", 'run.system_prompt_append="persona"',
+      "--model", "muse-spark-1.2"];
+    if (effort) expected.push("-c", 'model_reasoning_efforts={"muse-spark-1.2":"low"}');
+    expect(args).toEqual(expected);
     expect(methods).not.toContain("session/set_config_option");
   } finally {
     host?.close();

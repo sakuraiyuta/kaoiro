@@ -70,12 +70,13 @@ it.each([
     expect(results).toContainEqual(expect.objectContaining({ ok: true }));
     const args = JSON.parse(readFileSync(launch, "utf8")).args as string[];
     expectPersonaArgs(args, "persona");
-    expect(args[args.indexOf("--model") + 1]).toBe("muse-spark-1.2");
-    const overrides = args.filter((arg) => arg.startsWith("model_reasoning_efforts="));
     const explicitEffort = operation === "spawn" && effort;
-    expect(overrides).toEqual(explicitEffort
-      ? ['model_reasoning_efforts={"muse-spark-1.2":"low"}'] : []);
-    expect(args.filter((arg) => arg === "-c")).toHaveLength(explicitEffort ? 2 : 1);
+    const expected = ["acp", "-c", 'run.system_prompt_append="persona"',
+      "--model", "muse-spark-1.2"];
+    if (explicitEffort) {
+      expected.push("-c", 'model_reasoning_efforts={"muse-spark-1.2":"low"}');
+    }
+    expect(args).toEqual(expected);
     const calls = readFileSync(methods, "utf8").split("\n");
     expect(calls).toContain(operation === "resume" ? "session/resume" : "session/new");
     expect(calls).not.toContain("session/set_config_option");
