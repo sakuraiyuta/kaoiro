@@ -1259,8 +1259,10 @@ export class Supervisor {
       delete withoutResume.effort;
       delete withoutResume.effortSource;
       if (previousParsed.resumeSessionId === undefined &&
-        !previousParsed.applyResumeSnapshot && previousParsed.effort !== undefined &&
-        previousParsed.model !== undefined && previousParsed.model !== "default" &&
+        !previousParsed.applyResumeSnapshot &&
+        previousParsed.effort !== undefined &&
+        previousParsed.model !== undefined &&
+        previousParsed.model !== "default" &&
         previousParsed.model === withoutResume.model) {
         withoutResume.effort = previousParsed.effort;
         if (previousParsed.effortSource !== undefined) {

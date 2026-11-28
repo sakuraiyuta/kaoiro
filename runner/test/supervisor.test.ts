@@ -141,7 +141,8 @@ function harness(
     ...(opts.getClaudeEngineCatalog === undefined
       ? {}
       : { getClaudeEngineCatalog: opts.getClaudeEngineCatalog }),
-    ...(opts.getMuseCatalog === undefined ? {} : { getMuseCatalog: opts.getMuseCatalog }),
+    ...(opts.getMuseCatalog === undefined ? {} :
+      { getMuseCatalog: opts.getMuseCatalog }),
     ...(opts.contextWorkBudgetPercent === undefined
       ? {}
       : { contextWorkBudgetPercent: opts.contextWorkBudgetPercent }),
@@ -3491,7 +3492,8 @@ describe("Muse reset effort", () => {
       h.sup.handleSpawn({ ...spawn,
         ...(kind === "resume" ? { resume_session_id: "old" } :
           { apply_resume_snapshot: true }),
-        resume_snapshot: { ...snapshot, effort: "low", effort_source: "launch" },
+        resume_snapshot: { ...snapshot, effort: "low",
+          effort_source: "launch" },
       });
       expect(h.configs[0]!.effort).toBeUndefined();
       h.sup.handleResetSession(reset);
