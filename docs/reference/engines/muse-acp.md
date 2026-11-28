@@ -12,12 +12,14 @@ Muse build is unmeasured; the effective model and effort are reported only
 from ACP responses, not verified as effective values.
 With workspace trust enabled, real-provider `tools/call`, approval enforcement
 during tool execution, and MCP after cold resume are unmeasured. Recovery from
-a runner-detected failure to the same session ID are also unmeasured. Server retention of the effort warning has not
+a runner-detected failure to the same session ID is also unmeasured. Server
+retention of the effort warning has not
 been checked in a Muse-specific integration test.
 
 The `muse` engine requires Muse Code on `PATH`, logged in with
 `muse login`. The wrapper launches `muse acp` once (plus `--model <id>`
-when a launch pick names a model, and `--trust-workspace` only on the
+when a launch pick names a model, `-c run.developer_prompt=...`, and
+`--trust-workspace` only on the
 operator's explicit opt-in below), initializes one ACP session
 (`session/new`, or `session/resume` for a cold resume) and uses
 `session/prompt` for each queued turn. It does not launch `muse` per turn.
@@ -98,8 +100,8 @@ as JSON in `-c run.developer_prompt=...`, and sends user text unchanged in
 ACP prompts. A running process retains its launch value; a new launch,
 including a cold resume, receives the current persona. Existing transcript
 history is not rewritten. In Muse Code 1.4.25 the launch setting was measured
-to persist after manual compaction; cold-resume precedence was observed with
-the echo provider. Real-provider cold resume remains unmeasured.
+to persist after manual compaction; cold-resume precedence was observed once
+with both the echo and Meta providers on that version.
 
 The launch setting overrides Muse's configured developer prompt for that
 process. Put common kaoiro instructions in `user-footer.md` instead. The
@@ -125,6 +127,8 @@ it `live`, a successful `session/resume` confirms the requested id, and a
 resume failure retains the requested id when the cause is not identifiable.
 A wrapper restart therefore relaunches with the stored resume id instead
 of starting over.
+The legacy persona-delivery checkpoint stays compatible with older wrappers;
+new sessions leave it false so a rollback re-sends the persona.
 
 ## Capabilities
 

@@ -6,7 +6,7 @@ const config = JSON.parse(readFileSync(process.argv.at(-1), "utf8"));
 class Reporter extends RecoveryReporter {
   confirm(id, delivered) {
     const marker = process.env.MUSE_RESPONSE_CRASH_MARKER;
-    if (delivered && marker && !existsSync(marker)) {
+    if (marker && !config.resume_session_id && !existsSync(marker)) {
       writeFileSync(marker, "crash before checkpoint");
       process.exit(1);
     }
@@ -29,18 +29,16 @@ const run = host.run();
 void run.catch(() => {});
 await started;
 if (!config.resume_session_id) {
-  host.close();
-  await run;
-  process.exitCode = 1;
-} else if (!config.muse_persona_delivered) {
-  try { await host.send("second"); } catch { process.exit(1); }
+  await host.send("first");
   host.close();
   await run;
   process.exitCode = 1;
 } else {
-  await host.send("third");
+  await host.send("second");
   writeFileSync(process.env.MUSE_RECOVERY_RESULT, JSON.stringify({
-    resume: config.resume_session_id, delivered: config.muse_persona_delivered,
+    resume: config.resume_session_id,
+    delivered: config.muse_persona_delivered ?? false,
+    checkpoint: JSON.parse(readFileSync(config.recovery_checkpoint_path, "utf8")),
   }));
   await run;
 }

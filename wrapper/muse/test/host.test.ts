@@ -78,7 +78,9 @@ describe("muse host", () => {
     "checks encoded UTF-8 argument size %i before spawn", async (size) => {
       const path = join(tmpdir(), `muse-persona-limit-${process.pid}.json`);
       const prefix = Buffer.byteLength('run.developer_prompt=""');
-      const persona = "界" + "x".repeat(size - prefix - 3);
+      const special = '界"\\\n\u0001';
+      const encodedSize = Buffer.byteLength(JSON.stringify(special)) - 2;
+      const persona = special + "x".repeat(size - prefix - encodedSize);
       const envelopes: Envelope[] = [];
       const host = new MuseHost({ config, cwd: process.cwd(), personaPrompt: persona,
         send: (e) => envelopes.push(e), decidePermission: async () => ({ allow: true }),
@@ -364,6 +366,7 @@ describe("muse host", () => {
         const relevant = Object.fromEntries(Object.entries(launch.env).filter(([key]) =>
           !isolationKeys.has(key)));
         expect(launch.args).toContain("acp");
+        expect(launch.args).not.toContain("--trust-workspace");
         expect(relevant).toEqual(env);
       } finally {
         rmSync(path, { force: true });

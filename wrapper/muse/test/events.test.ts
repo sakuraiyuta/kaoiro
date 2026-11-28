@@ -75,7 +75,11 @@ describe("process arguments and environment", () => {
   it("builds the resident ACP arguments, with a launch model pick", () => {
     expect(museAcpArgs()).toContain("acp");
     expect(museAcpArgs("default")).not.toContain("--model");
-    expect(museAcpArgs("muse-wonder")).toContain("muse-wonder");
+    for (const model of [undefined, "default", "muse-wonder"]) {
+      expect(museAcpArgs(model)).not.toContain("--trust-workspace");
+    }
+    const args = museAcpArgs("muse-wonder");
+    expect(args[args.indexOf("--model") + 1]).toBe("muse-wonder");
   });
 
   it("adds --trust-workspace only on the operator's explicit opt-in", () => {

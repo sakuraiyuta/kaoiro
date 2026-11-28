@@ -7,6 +7,13 @@ import { expect, it, vi } from "vitest";
 import { makeLauncher } from "../src/spawn.js";
 import { Supervisor } from "../src/supervisor.js";
 
+function expectPersonaArgs(args: string[], persona: string) {
+  const index = args.indexOf("-c");
+  expect(index).toBeGreaterThanOrEqual(0);
+  expect(args[index + 1]).toBe(`run.developer_prompt=${JSON.stringify(persona)}`);
+  expect(args).not.toContain("--trust-workspace");
+}
+
 it.each([
   ["spawn", "low", 1], ["spawn", undefined, 0],
   ["restore", "low", 1], ["restore", undefined, 0],
@@ -42,7 +49,7 @@ it.each([
     await vi.waitFor(() => expect(existsSync(output)).toBe(true), { timeout: 10_000 });
     expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ warnings });
     expect(results).toContainEqual(expect.objectContaining({ ok: true }));
-    expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
+    expectPersonaArgs(JSON.parse(readFileSync(launch, "utf8")).args, "persona");
     const calls = readFileSync(methods, "utf8").split("\n");
     expect(calls).toContain(operation.startsWith("restore") ? "session/resume" : "session/new");
     expect(calls).not.toContain("session/set_config_option");
@@ -86,7 +93,7 @@ it.each([" ", "x".repeat(257)])(
         resume: "fixture-session", warnings: 1, mode: { id: "promptUnmatched" },
       });
       expect(results).not.toContainEqual(expect.objectContaining({ ok: false }));
-      expect(JSON.parse(readFileSync(launch, "utf8")).args).toEqual(["acp"]);
+      expectPersonaArgs(JSON.parse(readFileSync(launch, "utf8")).args, "persona");
       const calls = readFileSync(methods, "utf8").split("\n");
       expect(calls).toContain("session/new");
       expect(calls).toContain("session/resume");
@@ -169,11 +176,13 @@ it(
 );
 
 it.each(["none", "before-response", "before-checkpoint"])(
-  "carries persona evidence through runner after %s", async (scenario) => {
+  "recovers native persona through runner after %s", async (scenario) => {
   const root = mkdtempSync(join(tmpdir(), "kaoiro-muse-persona-recovery-"));
   const result = join(root, "resumed.json");
   const prompts = join(root, "prompts.jsonl");
+  const launch = join(root, "launch.json");
   vi.stubEnv("MUSE_RECOVERY_RESULT", result);
+  vi.stubEnv("KAOIRO_TEST_LAUNCH_FILE", launch);
   if (scenario === "before-response")
     vi.stubEnv("MUSE_PROMPT_CRASH_MARKER", join(root, "received"));
   if (scenario === "before-checkpoint")
@@ -192,14 +201,15 @@ it.each(["none", "before-response", "before-checkpoint"])(
       persona: { id: "p", name: "P", sprite_set: "p" }, cwd: root, engine: "muse" });
     await vi.waitFor(() => expect(existsSync(result)).toBe(true), { timeout: 10_000 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({
-      resume: "fixture-session", delivered: true,
+      resume: "fixture-session", delivered: false,
+      checkpoint: expect.objectContaining({ state: "live",
+        session_id: "fixture-session", muse_persona_delivered: false }),
     });
     const inputs = readFileSync(prompts, "utf8").trim().split("\n")
       .map((line) => JSON.parse(line) as string);
-    expect(inputs).toHaveLength(scenario === "none" ? 2 : 3);
-    expect(inputs[0]).toContain("PERSONA_AND_FOOTER");
-    if (scenario !== "none") expect(inputs[1]).toContain("PERSONA_AND_FOOTER");
-    expect(inputs.at(-1)).toBe("third");
+    expect(inputs).toEqual(["first", "second"]);
+    expectPersonaArgs(JSON.parse(readFileSync(launch, "utf8")).args,
+      "PERSONA_AND_FOOTER");
   } finally {
     supervisor.stopAll();
     vi.unstubAllEnvs();
