@@ -25,7 +25,6 @@ function hasPngHeader(bytes: Buffer): boolean {
 type Prompt = {
   ok: true;
   blocks: ContentBlock[];
-  shortened: string[];
 } | {
   ok: false;
   reason: FileUploadRejectReason;
@@ -37,7 +36,6 @@ export function attachmentPrompt(
   uploads: readonly PendingUpload[],
 ): Prompt {
   const blocks: ContentBlock[] = [{ type: "text", text }];
-  const shortened: string[] = [];
   for (const upload of uploads) {
     const { mime, size, filename } = upload.meta;
     const position = blocks.length;
@@ -59,24 +57,23 @@ export function attachmentPrompt(
       continue;
     }
     const bytes = assembleBytes(upload);
-    const fitted = fitTextBody(bytes, TEXT_BYTE_LIMIT);
-    let body = fitted.body;
-    if (fitted.truncated) {
-      const note = "\n\n[...truncated, original " + size + " bytes]\n";
-      body = fitTextBody(bytes, TEXT_BYTE_LIMIT - Buffer.byteLength(note)).body;
-      if (body.length === 0) {
-        return { ok: false, reason: "text_too_large",
-          detail: "Attachment " + position + ": no text fits within the limit" };
-      }
-      shortened.push(position + " (" + Buffer.byteLength(body) +
-        " UTF-8 bytes sent, " + size + " original bytes)");
-      body += note;
+    // TextDecoder removes an optional three-byte UTF-8 BOM.
+    const fitted = fitTextBody(bytes, TEXT_BYTE_LIMIT + 3);
+    if (fitted.truncated || Buffer.byteLength(fitted.body) > TEXT_BYTE_LIMIT) {
+      return {
+        ok: false,
+        reason: "text_too_large",
+        detail: "Attachment " + position + ": decoded text exceeds " +
+          TEXT_BYTE_LIMIT + " UTF-8 bytes. Split or shorten the file and resend.",
+      };
     }
     const safeName = Buffer.from(attachmentName(filename)).toString("utf8");
     const name = encodeURIComponent(safeName);
     blocks.push({
       type: "resource",
-      resource: { uri: "attachment:///" + name, mimeType: "text/plain", text: body },
+      resource: {
+        uri: "attachment:///" + name, mimeType: "text/plain", text: fitted.body,
+      },
     });
   }
   const size = Buffer.byteLength(JSON.stringify(blocks));
@@ -84,5 +81,5 @@ export function attachmentPrompt(
     return { ok: false, reason: "total_request_over",
       detail: "ACP prompt is " + size + " bytes (limit " + PROMPT_BYTE_LIMIT + ")" };
   }
-  return { ok: true, blocks, shortened };
+  return { ok: true, blocks };
 }

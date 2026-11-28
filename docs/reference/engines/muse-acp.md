@@ -212,14 +212,16 @@ A ready session advertises `image` and `text` categories according to the
 native `image` and `embeddedContext` capabilities. Each file can use the
 common 128 MiB upload ceiling. The instruction leads the ACP prompt,
 followed by one block per unique attachment in submission order.
+A direct upload sent before readiness or during shutdown receives
+`mime_denied` at the upload boundary.
 
 - **PNG** uses an inline base64 `image` block. The wrapper checks the
   header and a limit of 3,583,490 raw bytes before encoding. Larger PNGs
   or a bad PNG header refuse the instruction with `unfittable_image`.
 - **Text and code** use an inline `text/plain` resource. The wrapper
-  decodes UTF-8 with replacement and sends up to 262,144 UTF-8 bytes
-  including any truncation note. When it omits a tail, the operator's
-  conversation records original and sent sizes before the prompt.
+  decodes UTF-8 with replacement. If the complete decoded text exceeds
+  262,144 UTF-8 bytes, it refuses the whole instruction before sending
+  with `text_too_large`. Split or shorten the file and send it again.
   Restricted Composer filtering uses the browser's MIME. A file with an
   empty or unrecognized MIME is refused even if its name suggests code.
 - **Combined** UTF-8 JSON for the text instruction and all fitted blocks

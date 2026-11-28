@@ -48,10 +48,12 @@ function png(length = 33) {
 function started({
   caps = { image: true, embeddedContext: true },
   delayed = false,
+  hangNew = false,
   watchdog = false,
 }: {
   caps?: { image?: boolean; embeddedContext?: boolean };
   delayed?: boolean;
+  hangNew?: boolean;
   watchdog?: boolean;
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "muse-upload-test-"));
@@ -59,6 +61,7 @@ function started({
   const cancel = join(root, "cancel");
   const cancelRelease = join(root, "cancel-release");
   const envelopes: Envelope[] = [];
+  const methods: string[] = [];
   let callbacks!: ServerLinkOptions;
   let host: MuseHost | undefined;
   const work = runMuseCli({
@@ -86,6 +89,7 @@ function started({
       ...(watchdog ? { watchdogTimeoutMs: 150 } : {}),
       env: {
         ...process.env,
+        ...(hangNew ? { KAOIRO_TEST_MUSE_HANG_NEW: "1" } : {}),
         KAOIRO_TEST_MUSE_PROMPT_CAPS: JSON.stringify(caps),
         KAOIRO_TEST_MUSE_BLOCKS_FILE: capture,
         ...(watchdog ? {
@@ -95,6 +99,9 @@ function started({
       },
     }),
     onHostCreated: value => { host = value; },
+    onMetadata: ({ direction, method }) => {
+      if (direction === "out" && method) methods.push(method);
+    },
   });
   void work.catch(() => {});
   disposable.push(async () => {
@@ -122,7 +129,7 @@ function started({
   }
 
   return {
-    callbacks, upload, envelopes, work,
+    callbacks, upload, envelopes, methods, work,
     close: () => host?.close(),
     ready: () => vi.waitFor(() => expect(host?.state).toBe("waiting_input"),
       { timeout: 5000 }),
@@ -132,9 +139,6 @@ function started({
       : [],
     cancelSeen: () => existsSync(cancel),
     releaseCancel: () => writeFileSync(cancelRelease, ""),
-    notices: () => envelopes.filter(e =>
-      e.type === "log" && e.payload.kind === "system" &&
-      String(e.payload.text).startsWith("Muse shortened text attachments")),
     rejections: () => envelopes.filter(e =>
       e.type === "attach_rejected" || e.type === "instruction_rejected"),
     results: (count: number) => vi.waitFor(() =>
@@ -169,7 +173,6 @@ describe("Muse CLI attachments", () => {
       ],
     })]);
     expect(t.rejections()).toEqual([]);
-    expect(t.notices()).toEqual([]);
   });
 
   it.each([
@@ -214,7 +217,7 @@ describe("Muse CLI attachments", () => {
     t.upload("oversize.png", "image/png", png(PNG_BYTE_LIMIT + 1));
     t.callbacks.onInstruction?.("oversize", ["oversize.png"]);
     t.upload("spoof.png", "image/png", Buffer.from("not a PNG"));
-    t.upload("sibling.txt", "text/plain", TEXT_BYTE_LIMIT + 1);
+    t.upload("sibling.txt", "text/plain", Buffer.from("valid"));
     t.callbacks.onInstruction?.("mixed", ["sibling.txt", "spoof.png"]);
     t.callbacks.onInstruction?.("after");
     await t.results(2);
@@ -225,10 +228,9 @@ describe("Muse CLI attachments", () => {
     ]);
     expect(t.rejections().at(-1)?.payload.detail).toContain("Attachment 2");
     expect(t.prompts()).toHaveLength(2);
-    expect(t.notices()).toEqual([]);
   });
 
-  it("counts the escaped block-array boundary and never reports a refused truncation", async () => {
+  it("counts the escaped block-array boundary", async () => {
     const t = started();
     await t.ready();
     const resource = { type: "resource", resource: {
@@ -244,52 +246,76 @@ describe("Muse CLI attachments", () => {
     await t.results(1);
     t.upload("short.txt", "text/plain", Buffer.from("ok"));
     t.callbacks.onInstruction?.("a" + exact, ["short.txt"]);
-    t.upload("long.txt", "text/plain", TEXT_BYTE_LIMIT + 1);
-    t.callbacks.onInstruction?.(exact, ["long.txt"]);
     t.callbacks.onInstruction?.("after");
     await t.results(2);
     expect(t.prompts()[0].bytes).toBe(PROMPT_BYTE_LIMIT);
     expect(t.prompts()).toHaveLength(2);
     expect(t.rejections().map(e => e.payload.reason))
-      .toEqual(["total_request_over", "total_request_over"]);
-    expect(t.notices()).toEqual([]);
+      .toEqual(["total_request_over"]);
   });
 
-  it.each([134217727, 134217728])("seals a %i-byte upload and sends a bounded prefix", async (size) => {
+  it.each([134_217_727, 134_217_728])(
+    "seals a %i-byte upload and refuses it as text before ACP",
+    async (size) => {
+      const t = started();
+      await t.ready();
+      t.callbacks.onInstruction?.("control");
+      await t.results(1);
+      t.callbacks.onAttachOpen?.({
+        upload_id: "over", filename: "over", mime: "text/plain",
+        size: 128 * 1024 * 1024 + 1, chunks: 1,
+      });
+      t.upload("full.txt", "text/plain", size);
+      t.callbacks.onInstruction?.("full", ["full.txt"]);
+      t.callbacks.onInstruction?.("after");
+      await t.results(2);
+      expect(t.rejections().map(e => e.payload.reason))
+        .toEqual(["size_over", "text_too_large"]);
+      expect(t.prompts()).toHaveLength(2);
+    },
+  );
+
+  it("sends exactly 262,144 decoded bytes and refuses 262,145", async () => {
     const t = started();
     await t.ready();
-    const limit = 128 * 1024 * 1024;
-    t.callbacks.onAttachOpen?.({
-      upload_id: "over", filename: "over", mime: "text/plain",
-      size: limit + 1, chunks: 1,
-    });
-    t.upload("full.txt", "text/plain", size);
-    t.upload("exact.txt", "text/plain", TEXT_BYTE_LIMIT);
-    t.callbacks.onInstruction?.("full", ["full.txt", "exact.txt"]);
+    const text = "x".repeat(262_144);
+    t.upload("exact.txt", "text/plain", Buffer.from("\ufeff" + text));
+    t.callbacks.onInstruction?.("exact", ["exact.txt"]);
     await t.results(1);
-    expect(t.rejections().map(e => e.payload.reason)).toEqual(["size_over"]);
-    const resource = t.prompts()[0].blocks[1].resource;
-    expect(Buffer.byteLength(resource.text)).toBe(TEXT_BYTE_LIMIT);
-    expect(resource.text).toContain("[...truncated, original " + size + " bytes]");
-    const exact = t.prompts()[0].blocks[2].resource.text;
-    expect(exact).toBe("x".repeat(TEXT_BYTE_LIMIT));
-    expect(t.notices()).toHaveLength(1);
-    expect(t.notices()[0]!.payload.text).toContain(size + " original bytes");
+    t.upload("valid.txt", "text/plain", Buffer.from("valid sibling"));
+    t.upload("over.txt", "text/plain", Buffer.from(text + "y"));
+    t.callbacks.onInstruction?.("over", ["valid.txt", "over.txt"]);
+    t.callbacks.onInstruction?.("after");
+    await t.results(2);
+    expect(t.prompts()).toHaveLength(2);
+    expect(t.prompts()[0].blocks[1].resource.text).toBe(text);
+    expect(t.rejections()).toEqual([expect.objectContaining({
+      type: "instruction_rejected",
+      payload: expect.objectContaining({
+        attachment_ids: ["valid.txt", "over.txt"],
+        reason: "text_too_large",
+        detail: expect.stringContaining("Attachment 2"),
+      }),
+    })]);
   });
 
-  it("clips only complete UTF-8 characters and replaces malformed input", async () => {
+  it("counts replacement characters toward the decoded text limit", async () => {
     const t = started();
     await t.ready();
-    const data = Buffer.concat([
-      Buffer.from([0xff]), Buffer.from("あ".repeat(TEXT_BYTE_LIMIT / 3)),
-    ]);
-    t.upload("utf8.txt", "text/plain", data);
-    t.callbacks.onInstruction?.("trim", ["utf8.txt"]);
+    const raw = Buffer.concat([Buffer.from([0xff]),
+      Buffer.from("あ".repeat((TEXT_BYTE_LIMIT - 3) / 3))]);
+    t.upload("fits.txt", "text/plain", raw);
+    t.callbacks.onInstruction?.("fits", ["fits.txt"]);
     await t.results(1);
-    const content: string = t.prompts()[0].blocks[1].resource.text;
-    expect(Buffer.byteLength(content)).toBeLessThanOrEqual(TEXT_BYTE_LIMIT);
-    expect(content.split("\n")[0]).toMatch(/^�あ+$/);
-    expect(content).toContain("[...truncated");
+    const text: string = t.prompts()[0].blocks[1].resource.text;
+    expect(text).toMatch(/^�あ+$/);
+    t.upload("decoding-expands.txt", "text/plain",
+      Buffer.concat([raw, Buffer.from("xy")]));
+    t.callbacks.onInstruction?.("over", ["decoding-expands.txt"]);
+    t.callbacks.onInstruction?.("after");
+    await t.results(2);
+    expect(t.prompts()).toHaveLength(2);
+    expect(t.rejections().map(e => e.payload.reason)).toEqual(["text_too_large"]);
   });
 
   it("drops idle staged uploads before the first queued prompt", async () => {
@@ -303,7 +329,6 @@ describe("Muse CLI attachments", () => {
     expect(t.prompts()).toHaveLength(1);
     expect(t.rejections().map(e => e.payload.reason))
       .toEqual(["interrupted", "interrupted"]);
-    expect(t.notices()).toEqual([]);
   });
 
   it("drops a queued upload in watchdog grace without another ACP prompt", async () => {
@@ -320,7 +345,17 @@ describe("Muse CLI attachments", () => {
     expect(t.prompts()).toHaveLength(2);
     expect(t.rejections().map(e => e.payload.reason))
       .toEqual(["interrupted", "interrupted"]);
-    expect(t.notices()).toEqual([]);
+  });
+
+  it("refuses attachments after initialize while session/new is pending", async () => {
+    const t = started({ hangNew: true });
+    await vi.waitFor(() => expect(t.methods).toContain("session/new"),
+      { timeout: 5000 });
+    t.upload("early.png", "image/png", png());
+    t.upload("early.txt", "text/plain", Buffer.from("early"));
+    expect(t.rejections().map(e => e.payload.reason))
+      .toEqual(["mime_denied", "mime_denied"]);
+    expect(t.prompts()).toEqual([]);
   });
 
   it("runs the interrupt intake path before creating the host", async () => {
@@ -351,6 +386,5 @@ describe("Muse CLI attachments", () => {
     expect(t.prompts()).toHaveLength(1);
     expect(t.rejections().map(e => e.payload.reason))
       .toEqual(["interrupted", "interrupted"]);
-    expect(t.notices()).toEqual([]);
   });
 });

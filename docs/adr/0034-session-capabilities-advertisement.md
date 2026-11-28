@@ -157,7 +157,7 @@ are added, expand the protocol vocabulary first. Treating an absent field as
 unrestricted preserves compatibility with existing Claude wrappers and rolling
 upgrades.
 
-#### Muse text attachment category
+#### #1303 addendum (2026-11-28): Text attachment category
 
 The closed vocabulary includes `"image"` and `"text"`. The text category
 covers `text/*` and the application MIME types JSON, XML, YAML

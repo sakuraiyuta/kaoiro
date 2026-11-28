@@ -566,7 +566,6 @@ export class MuseHost implements EngineAdapter {
   async #execute(turn: Turn): Promise<void> {
     const record = turn.attachments;
     let prompt: string | acp.ContentBlock[] = turn.text;
-    let shortened: string[] = [];
     if (record) {
       if (record.dropped) {
         turn.resolve();
@@ -586,7 +585,6 @@ export class MuseHost implements EngineAdapter {
         return;
       }
       prompt = fitted.blocks;
-      shortened = fitted.shortened;
       record.finish();
     }
     this.#active = turn;
@@ -610,15 +608,6 @@ export class MuseHost implements EngineAdapter {
       why: "the turn failed",
     };
     try {
-      if (shortened.length > 0) {
-        this.#options.send(makeLog(
-          this.#options.config, this.state, new Date().toISOString(), {
-            kind: "system",
-            text: "Muse shortened text attachments before sending. " +
-              "Only the prefixes will be sent: " + shortened.join(", "),
-          },
-        ));
-      }
       const response = await this.#session!.prompt(prompt);
       if (this.#closing) throw new Error("muse host closed");
       const interrupted = response.stopReason === "cancelled";

@@ -137,14 +137,14 @@ The Grok adapter refuses an instruction whose ACP prompt blocks serialize to mor
 
 Rejected: only “return the SDK rejection as-is”—the gap between the 128 MB cap and the SDK’s smaller limits would break the UX.
 
-#### Muse fit-to-ACP
+#### #1303 addendum (2026-11-28, operator approval): Muse fit-to-ACP
 
 Muse keeps F4's common 128 MiB per-file upload ceiling. After sealing,
 the wrapper sends supported PNG and UTF-8 text/code as inline ACP blocks.
-It checks PNG bytes and header before base64. It bounds text using a
-UTF-8 prefix with a notice in the resource and in the operator's
-conversation. The wrapper refuses an attached instruction before sending
-when fitted blocks exceed the serialized prompt budget. The
+It checks PNG bytes and header before base64. The wrapper refuses the
+whole instruction before sending if the complete decoded text for any
+file exceeds the per-file limit or the fitted blocks exceed the serialized
+prompt budget. The
 [Muse engine reference](../reference/engines/muse-acp.md#prompt-attachments)
 specifies the limits and evidence.
 

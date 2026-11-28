@@ -66,6 +66,11 @@ cannot represent.
     `supports_attachments: true` (unconditional; omit `attachment_types` = no
     type restriction,
     [issue #1143](https://github.com/sakuraiyuta/kaoiro/issues/1143))
+  - `wrapper/muse`: `supports_attachments: false` /
+    `attachment_types: []` until ready. On the first ready state, strict
+    `true` ACP flags `image` and `embeddedContext` enable the `image` and
+    `text` categories respectively. `supports_attachments` is true if
+    at least one category is enabled.
 - **`supports_model_switch` / `supports_effort_switch`** (implemented in
   phase-16, 2026-07-13, [ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md)
   F4): Advertise whether `set_model` / `set_effort` are accepted mid-session.
@@ -98,4 +103,4 @@ full topic index.
 
 See [the reply-basis contract](../inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.
 
-[text-category]: ../../adr/0034-session-capabilities-advertisement.md#muse-text-attachment-category
+[text-category]: ../../adr/0034-session-capabilities-advertisement.md#1303-addendum-2026-11-28-text-attachment-category
