@@ -20,10 +20,13 @@ afterEach(async () => {
   }
 });
 
-async function start(mode: string, timeout = 1000) {
+async function start(mode: string, timeout = 1000,
+  handler = vi.fn(async () => ({ content: [] }))) {
   const host = new MuseHost({ config, cwd: process.cwd(), personaPrompt: "test",
     send: () => {}, decidePermission: async () => ({ allow: true }), executable,
     resumeSessionId: "fixture-session", historyTimeoutMs: timeout,
+    toolDescriptors: [{ name: "past", description: "test",
+      inputSchema: { type: "object" }, handler }],
     env: { ...process.env, KAOIRO_TEST_HISTORY: mode } });
   hosts.push(host);
   void host.run().catch(() => {});
@@ -33,7 +36,8 @@ async function start(mode: string, timeout = 1000) {
 
 describe("Muse history", () => {
   it("collects ordered text without executing past tool calls", async () => {
-    const host = await start("ok");
+    const handler = vi.fn(async () => ({ content: [] }));
+    const host = await start("ok", 1000, handler);
     const logs = await new Promise<unknown[]>((resolve, reject) => {
       host.scheduleHistoryReplay(async read => {
         try { resolve((await read()).logs); } catch (error) { reject(error); }
@@ -42,6 +46,7 @@ describe("Muse history", () => {
     expect(logs.map((x: any) => [x.payload.kind, x.payload.text])).toEqual([
       ["user", "hello world"], ["assistant", "answer"],
     ]);
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("holds a turn until the load completes", async () => {

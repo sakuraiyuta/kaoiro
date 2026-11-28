@@ -125,6 +125,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         else void connectMcp(msg.params.mcpServers);
         reply(msg.id, { sessionId: sid, configOptions: configOptions(), modes: modes() });
         break;
+      case "session/list":
+        reply(msg.id, { sessions: [{ sessionId: sid, cwd: msg.params.cwd }] });
+        break;
       case "session/resume":
         if (msg.params.sessionId !== sid) return fail(msg.id, "unknown session");
         void connectMcp(msg.params.mcpServers);
