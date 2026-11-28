@@ -86,6 +86,21 @@ describe("Muse history", () => {
     await expect(turn).rejects.toThrow();
   });
 
+  it("omits injected inter-agent messages and image blocks", () => {
+    const collector = new MuseHistoryCollector(config, "s");
+    collector.update({ sessionId: "s", update: { sessionUpdate: "user_message_chunk",
+      content: { type: "text", text:
+        '[Inter-agent message — to reply, call send_to_agent with conversation_id="x".]' },
+    } });
+    collector.update({ sessionId: "s", update: { sessionUpdate: "agent_message_chunk",
+      content: { type: "image", data: "YQ==", mimeType: "image/png" },
+    } });
+    collector.update({ sessionId: "s", update: { sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "visible" },
+    } });
+    expect(collector.finish().map(log => log.payload.text)).toEqual(["visible"]);
+  });
+
   it("keeps only the newest 200 display rows", () => {
     const collector = new MuseHistoryCollector(config, "s");
     for (let i = 0; i < 205; i++) collector.update({ sessionId: "s", update: {
