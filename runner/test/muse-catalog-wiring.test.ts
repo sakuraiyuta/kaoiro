@@ -39,7 +39,7 @@ async function start(
   const grok = lane("grok");
   const publications: RunnerRegister[] = [];
   let control!: RunnerLinkOptions;
-  const launch = vi.fn(() => { throw new Error("fixture should not launch"); });
+  const launch = vi.fn(() => { throw new Error("fixture stops at launch"); });
   const sendSpawnResult = vi.fn();
   const runner = await runRunnerCli({
     installSignalHandlers: false,
@@ -121,6 +121,24 @@ it.each(["muse", "grok"] as const)(
     }
   }, 12_000,
 );
+
+it("launches a Muse model and effort from the published catalog", async () => {
+  const h = await start();
+  try {
+    h.muse.release();
+    await vi.waitFor(() => expect(models(h.publications.at(-1)!, "muse"))
+      .toContain("muse-spark-1.2"));
+    h.spawn("muse-spark-1.2", "low");
+    expect(h.launch).toHaveBeenCalledTimes(1);
+    expect(h.launch).toHaveBeenCalledWith(
+      "muse-fixture",
+      expect.objectContaining({ model: "muse-spark-1.2", effort: "low" }),
+      expect.any(String), undefined, undefined, "muse",
+    );
+  } finally {
+    await h.dispose();
+  }
+});
 
 it.each([
   ["empty", "empty or invalid model list"],

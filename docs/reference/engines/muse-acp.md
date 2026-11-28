@@ -2,7 +2,7 @@
 title: Muse ACP engine
 description: Resident ACP host for Muse Code's experimental `muse acp`, its capabilities and its declared limits.
 status: draft
-last_updated: 2026-11-25
+last_updated: 2026-11-28
 ---
 
 # Muse ACP engine
@@ -67,13 +67,16 @@ Muse-enabled runner opens one short-lived `muse serve --disable-shell
 the handshake. This probe creates no session and sends no model prompt.
 The runner gives the probe 10 seconds and aborts it during shutdown.
 The Meta `providerCatalog` result provides model IDs and per-model effort
-`variants`. Invalid or unavailable catalogs produce a runner warning.
+`variants`. The runner skips unrecognized variants and logs a warning if
+the catalog itself is invalid or unavailable.
 
 Before the startup probe publishes a catalog, or when the probe fails,
 only Default is published, so the fresh-spawn API rejects named
-model/effort pairs as stale. Explicit effort with model Default is also a
-spawn failure. In the dialog, Default model and Default effort leave the
-respective overrides out so Muse keeps its own settings.
+model/effort pairs as stale. If Muse is offline or its provider catalog
+cache is cold, a failed probe leaves only Default until the next runner
+start. An explicit effort with model Default or a non-string effort
+also fails the spawn. In the dialog, Default model and Default effort
+leave the respective overrides out so Muse keeps its own settings.
 
 For a new launch with a named model, the wrapper passes `--model <id>`.
 An explicit effort adds a separate `-c` argument containing
