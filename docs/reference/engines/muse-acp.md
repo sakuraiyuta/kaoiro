@@ -170,9 +170,10 @@ The 1.4.25 echo provider rejected turns using this setting; Meta succeeded.
 Muse supports `new` and `clear` through the runner's fresh relaunch. Both
 start a new session; the server controls the display difference. The
 wrapper asks the operator before every `request_session_reset` call and
-dispatches an approved reservation at its turn boundary. A director may
-also reset a Muse peer. The relaunched wrapper receives the current persona
-and model. An explicit effort survives only when it was passed to the
+dispatches an approved reservation at its turn boundary. The wait is bounded
+at 300 s, or at `permission_timeout_ms` when that is shorter, and a timeout
+denies. A director may also reset a Muse peer. The relaunched wrapper
+receives the current persona and model. An explicit effort survives only when it was passed to the
 previous process and its model matches the reset snapshot. Resume, restore,
 runner restart and rollback do not preserve that effort. The server adopts
 the fresh session ID after the wrapper reports it. See

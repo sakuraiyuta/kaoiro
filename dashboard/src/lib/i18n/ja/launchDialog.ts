@@ -30,7 +30,7 @@ export const launchDialog = {
   museCatalogHint:
     "モデル一覧はランナー起動時に取得します。デフォルトは Muse の設定に従います。",
   museEffortHint:
-    "effort は現 process に渡され、同じ model の場合だけ reset に引き継ぎます。再開・復元には引き継ぎません。",
+    "新規起動で渡した effort は、同じ model の場合だけ reset に引き継ぎます。再開・復元には引き継ぎません。",
   room: "部屋",
   model: "モデル",
   defaultOption: "既定",
