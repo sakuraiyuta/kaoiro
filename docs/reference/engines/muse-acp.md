@@ -18,7 +18,7 @@ been checked in a Muse-specific integration test.
 
 The `muse` engine requires Muse Code on `PATH`, logged in with
 `muse login`. The wrapper launches `muse acp` once (plus `--model <id>`
-when a launch pick names a model, `-c run.developer_prompt=...`, and
+when a launch pick names a model, `-c run.system_prompt_append=...`, and
 `--trust-workspace` only on the
 operator's explicit opt-in below), initializes one ACP session
 (`session/new`, or `session/resume` for a cold resume) and uses
@@ -96,27 +96,35 @@ cause this warning.
 ## Personality prompt
 
 The wrapper passes the server-composed persona and footer at process launch
-as JSON in `-c run.developer_prompt=...`, and sends user text unchanged in
-ACP prompts. A running process retains its launch value; a new launch,
-including a cold resume, receives the current persona. Existing transcript
-history is not rewritten. In Muse Code 1.4.25 the launch setting was measured
-to persist after manual compaction; cold-resume precedence was observed once
-with both the echo and Meta providers on that version.
+as JSON in `-c run.system_prompt_append=...`, and sends user text unchanged
+in ACP prompts. A running process retains its launch value; each new process,
+including cold resume, is supplied the current persona. Existing transcript
+history is not rewritten. Muse Code 1.4.25 with the Meta provider retained
+an unchanged append after manual compaction and cold resume.
 
-The launch setting overrides Muse's configured developer prompt for that
-process. Put common kaoiro instructions in `user-footer.md` instead. The
-persona and footer appear in the process argument list and may appear in
-Muse's internal session log; do not put secrets in them. Ordinary ACP
-transcript replay is distinct from that internal log.
+Before spawning Muse, kaoiro reads the user's `settings.json`. If nested
+`run.system_prompt_append` or the top-level dotted key is present, startup
+stops without reporting its value. Moving those instructions to
+`run.developer_prompt` is one option; it changes their position from system to
+developer instructions. The file is parsed in memory, but kaoiro does not
+extract, use, or pass the developer prompt. Nonregular, unreadable, malformed,
+or over-1-MiB files also stop startup. JSON duplicate-member interpretation
+can differ between parsers. Workspace and enterprise settings are not checked
+and may be overridden; a user settings file may also change between the check
+and Muse reading it. The persona and footer appear in the process argument
+list and may appear in Muse's internal session log; do not put secrets in them.
+Ordinary ACP transcript replay is distinct from that internal log.
 
 The complete JSON-encoded argument is limited to 16,384 UTF-8 bytes; an
 oversized argument stops startup and reports its size and limit. The limit
 leaves about 1.84 times the measured 8,890-byte maximum of bundled personas
 and the system footer, but user footers and overlays are not bounded by
 [ADR-0045](../../adr/0045-footer-file-externalization.md). Other OS command
-line limits may still prevent startup. Muse 1.4.25 was measured; older
-versions may reject the setting. An early Muse child exit does not currently
-produce a `MuseLaunchError` system log in the dashboard.
+line limits may still prevent startup. Muse 1.4.21 is the supported minimum;
+1.4.25 was measured. Older builds may reject the key, causing an early child
+exit without a `MuseLaunchError` log,
+or ignore it and run without the persona; neither outcome was measured.
+The 1.4.25 echo provider rejected turns using this setting; Meta succeeded.
 
 ## Session recovery
 

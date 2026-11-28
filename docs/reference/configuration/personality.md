@@ -70,7 +70,7 @@ including a resume. Whether the model sees them depends on the engine
 | Claude Code | Compaction or a new session. A resume keeps the system prompt the SDK recorded at the session's first request. |
 | Codex (app-server) | A new thread or compaction. A resumed thread keeps its recorded developer instructions. |
 | Antigravity | The next launch, including a resume. |
-| Muse | The next launch, including a resume. |
+| Muse | The wrapper supplies the current text at each launch, including resume. |
 | Claude Code, tool descriptions | Compaction or a new session, for a tool the session has already shown. A resume keeps the description recorded at that point; a tool added later arrives with its current text. |
 
 To make a footer change take effect sooner, send its gist to the running

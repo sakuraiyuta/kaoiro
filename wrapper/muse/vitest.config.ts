@@ -5,6 +5,7 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     setupFiles: [
       "../../scripts/test/fixtures/test-isolation.mjs",
+      "./test/settings-isolation.ts",
     ],
     testTimeout: 15_000,
   },

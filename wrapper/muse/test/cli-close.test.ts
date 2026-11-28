@@ -115,7 +115,7 @@ it.each([
     }
     await host.send("hello");
     const args = JSON.parse(readFileSync(launch, "utf8")).args as string[];
-    expect(args[args.indexOf("-c") + 1]).toBe('run.developer_prompt="persona"');
+    expect(args[args.indexOf("-c") + 1]).toBe('run.system_prompt_append="persona"');
     expect(methods).not.toContain("session/set_config_option");
   } finally {
     host?.close();

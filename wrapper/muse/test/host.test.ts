@@ -64,8 +64,8 @@ describe("muse host", () => {
         const index = args.indexOf("-c");
         expect(index).toBeGreaterThanOrEqual(0);
         const arg = args[index + 1]!;
-        expect(arg.startsWith("run.developer_prompt=")).toBe(true);
-        expect(JSON.parse(arg.slice("run.developer_prompt=".length))).toBe(persona);
+        expect(arg.startsWith("run.system_prompt_append=")).toBe(true);
+        expect(JSON.parse(arg.slice("run.system_prompt_append=".length))).toBe(persona);
         expect(JSON.parse(readFileSync(prompts, "utf8"))).toBe("hello");
       } finally {
         rmSync(path, { force: true });
@@ -77,7 +77,7 @@ describe("muse host", () => {
   it.each([16_383, 16_384, 16_385])(
     "checks encoded UTF-8 argument size %i before spawn", async (size) => {
       const path = join(tmpdir(), `muse-persona-limit-${process.pid}.json`);
-      const prefix = Buffer.byteLength('run.developer_prompt=""');
+      const prefix = Buffer.byteLength('run.system_prompt_append=""');
       const special = '界"\\\n\u0001';
       const encodedSize = Buffer.byteLength(JSON.stringify(special)) - 2;
       const persona = special + "x".repeat(size - prefix - encodedSize);
@@ -98,8 +98,10 @@ describe("muse host", () => {
             .toContain(host.state), { timeout: 5_000 });
           expect(host.state).toBe("error");
           await expect(run).rejects.toThrow(/16385 bytes.*16384/);
+          await expect(run).rejects.not.toThrow(persona);
           expect(existsSync(path)).toBe(false);
-          expect(JSON.stringify(envelopes)).not.toContain(persona);
+          expect(JSON.stringify(envelopes))
+            .not.toContain(JSON.stringify(persona).slice(1, -1));
         }
       } finally { rmSync(path, { force: true }); }
     },
@@ -352,7 +354,8 @@ describe("muse host", () => {
       const path = join(tmpdir(), `kaoiro-muse-launch-${process.pid}.json`);
       rmSync(path, { force: true });
       try {
-        const env = { PATH: process.env.PATH!, KAOIRO_TEST_LAUNCH_FILE: path,
+        const env = { PATH: process.env.PATH!, HOME: process.env.HOME!,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME!, KAOIRO_TEST_LAUNCH_FILE: path,
           KAOIRO_TEST_SENTINEL: "unchanged", MUSE_EXPERIMENTAL_ACP: "off",
           MUSE_TEST_SANDBOX: "upstream", MUSE_TEST_NETWORK: "upstream" };
         await started({ ...(resumeSessionId ? { resumeSessionId } : {}), env });
@@ -435,7 +438,7 @@ describe("muse host", () => {
     let release!: () => void;
     let late!: ToolHost;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    vi.spyOn(ToolHost, "listen").mockImplementation(async (...args) => {
+    const listen = vi.spyOn(ToolHost, "listen").mockImplementation(async (...args) => {
       await gate;
       late = await actualListen(...args);
       vi.spyOn(late, "close");
@@ -447,6 +450,7 @@ describe("muse host", () => {
     });
     hosts.push(host);
     const run = host.run();
+    await vi.waitFor(() => expect(listen).toHaveBeenCalled(), { timeout: 5_000 });
     host.close();
     await run;
     expect(host.processId).toBeUndefined();

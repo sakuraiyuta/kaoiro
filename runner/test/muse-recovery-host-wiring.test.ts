@@ -3,14 +3,25 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { makeLauncher } from "../src/spawn.js";
 import { Supervisor } from "../src/supervisor.js";
+
+let settingsRoot: string;
+beforeEach(() => {
+  settingsRoot = mkdtempSync(join(tmpdir(), "muse-runner-settings-"));
+  vi.stubEnv("HOME", settingsRoot);
+  vi.stubEnv("XDG_CONFIG_HOME", join(settingsRoot, "config"));
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(settingsRoot, { recursive: true, force: true });
+});
 
 function expectPersonaArgs(args: string[], persona: string) {
   const index = args.indexOf("-c");
   expect(index).toBeGreaterThanOrEqual(0);
-  expect(args[index + 1]).toBe(`run.developer_prompt=${JSON.stringify(persona)}`);
+  expect(args[index + 1]).toBe(`run.system_prompt_append=${JSON.stringify(persona)}`);
   expect(args).not.toContain("--trust-workspace");
 }
 

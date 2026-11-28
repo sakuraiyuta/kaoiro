@@ -29,7 +29,9 @@ import { AcpSession } from "./acp/session.js";
 import { connectAcp } from "./acp/connection.js";
 import { MuseLaunchError } from "./muse/errors.js";
 import { updateEvents } from "./muse/events.js";
-import { childEnvironment, museAcpArgs, MuseProcess } from "./muse/process.js";
+import {
+  checkUserAppend, childEnvironment, museAcpArgs, MuseProcess,
+} from "./muse/process.js";
 import {
   parseModes,
   parseSelection,
@@ -363,6 +365,8 @@ export class MuseHost implements EngineAdapter {
   async #startSteps(check: () => void): Promise<void> {
     const config = this.#options.config;
     const env = childEnvironment(this.#options.env ?? process.env);
+    await checkUserAppend(env);
+    check();
     const executable = this.#options.executable ?? config.engine_executable ?? "muse";
     const toolHost = await ToolHost.listen(this.#options.toolDescriptors ?? [], {
       turnSignal: () => this.#signal?.signal ?? null,

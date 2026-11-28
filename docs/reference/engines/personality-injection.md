@@ -43,7 +43,7 @@ registration, not persona text.
 request (`wrapper/grok/src/grok/wire.ts`).
 
 **Muse**: Pass the same string as JSON in the process launch setting
-`run.developer_prompt`. See the [Muse ACP engine](muse-acp.md#personality-prompt)
+`run.system_prompt_append`. See the [Muse ACP engine](muse-acp.md#personality-prompt)
 for argument visibility, size, and resume behavior.
 
 ## Constraints

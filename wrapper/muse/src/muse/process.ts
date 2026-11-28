@@ -1,9 +1,67 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { MuseLaunchError } from "./errors.js";
 
 export const SHUTDOWN_GRACE_MS = 3_000;
 export const MAX_PERSONA_ARG_BYTES = 16_384;
+const MAX_SETTINGS_BYTES = 1024 * 1024;
+
+export async function checkUserAppend(env: NodeJS.ProcessEnv): Promise<void> {
+  const xdg = env.XDG_CONFIG_HOME;
+  const root = xdg ? xdg : env.HOME ? join(env.HOME, ".config") : "";
+  if (!root || !isAbsolute(root)) {
+    throw new MuseLaunchError("muse user settings could not be checked");
+  }
+  const path = join(root, "muse", "settings.json");
+  let file;
+  try {
+    file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new MuseLaunchError("muse user settings could not be checked");
+  }
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > MAX_SETTINGS_BYTES) throw new Error();
+    const buffer = Buffer.alloc(MAX_SETTINGS_BYTES + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await file.read(buffer, size, buffer.length - size);
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    if (size > MAX_SETTINGS_BYTES) throw new Error();
+    const value: unknown = JSON.parse(buffer.subarray(0, size).toString("utf8"));
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error();
+    }
+    const settings = value as Record<string, unknown>;
+    const run = settings.run;
+    if (run !== undefined &&
+      (typeof run !== "object" || run === null || Array.isArray(run))) {
+      throw new Error();
+    }
+    if (Object.hasOwn(settings, "run.system_prompt_append") ||
+      (run !== undefined && Object.hasOwn(run, "system_prompt_append"))) {
+      throw new MuseLaunchError(
+        "muse user settings contain system_prompt_append; remove it or move " +
+        "instructions to developer_prompt (a different instruction position)",
+      );
+    }
+  } catch (error) {
+    if (error instanceof MuseLaunchError) throw error;
+    throw new MuseLaunchError("muse user settings could not be checked");
+  } finally {
+    try {
+      await file.close();
+    } catch {
+      throw new MuseLaunchError("muse user settings could not be checked");
+    }
+  }
+}
 
 /** The argument vector for the resident ACP process. `--trust-workspace`
  *  loads the project's own skills and rules, so it is passed only when the
@@ -16,7 +74,7 @@ export const MAX_PERSONA_ARG_BYTES = 16_384;
 export function museAcpArgs(model?: string, trustWorkspace = false,
   personaPrompt = ""): string[] {
   const args = ["acp"];
-  const personaArg = `run.developer_prompt=${JSON.stringify(personaPrompt)}`;
+  const personaArg = `run.system_prompt_append=${JSON.stringify(personaPrompt)}`;
   const bytes = Buffer.byteLength(personaArg, "utf8");
   if (bytes > MAX_PERSONA_ARG_BYTES) {
     throw new MuseLaunchError(
