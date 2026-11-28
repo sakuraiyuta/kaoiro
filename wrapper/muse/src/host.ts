@@ -110,7 +110,7 @@ class StartupAborted extends Error {
  * Declared limits of this adapter (see docs/reference/engines/
  * muse-acp.md): no kaoiro permission-mode or two-axis permission
  * switching (the ACP approval mode is the agent's own selector, set once
- * at startup), no attachments, no session reset, and no dashboard history
+ * at startup), no attachments and no dashboard history
  * replay. Each is rejected explicitly rather than silently ignored.
  */
 export class MuseHost implements EngineAdapter {
@@ -215,7 +215,8 @@ export class MuseHost implements EngineAdapter {
         supports_permission_mode_switch: false,
         supports_attachments: false,
         supports_user_input_dialog: true,
-        supports_session_reset: false,
+        supports_session_reset: true,
+        session_reset_modes: ["new", "clear"],
         supports_context_usage: true,
         permission_switch_axes: {},
       },

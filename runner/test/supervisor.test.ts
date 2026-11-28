@@ -88,6 +88,7 @@ function harness(
       | WrapperConfig["claude_engine_catalog"]
       | null
       | undefined;
+    getMuseCatalog?: SupervisorOptions["getMuseCatalog"];
     contextWorkBudgetPercent?: number;
     antigravityAuth?: SupervisorOptions["antigravityAuth"];
     antigravityExecutable?: AgyExecutableResolution;
@@ -140,6 +141,7 @@ function harness(
     ...(opts.getClaudeEngineCatalog === undefined
       ? {}
       : { getClaudeEngineCatalog: opts.getClaudeEngineCatalog }),
+    ...(opts.getMuseCatalog === undefined ? {} : { getMuseCatalog: opts.getMuseCatalog }),
     ...(opts.contextWorkBudgetPercent === undefined
       ? {}
       : { contextWorkBudgetPercent: opts.contextWorkBudgetPercent }),
@@ -3448,4 +3450,67 @@ describe("Supervisor launch-owned recovery", () => {
     } finally { diagnostic.mockRestore(); }
   });
 
+});
+
+describe("Muse reset effort", () => {
+  const catalog = () => [{ value: "muse-spark-1.2", display_name: "Spark",
+    effort_levels: ["low"] }];
+  const spawn = { ...spawnMsg, agent_id: "lab-pc-1.muse", engine: "muse",
+    model: "muse-spark-1.2", effort: "low" };
+  const snapshot = { model: "muse-spark-1.2", model_source: "launch" };
+  const reset = { agent_id: spawn.agent_id, mode: "new", request_id: "reset",
+    previous_session_id: "old", resume_snapshot: snapshot };
+
+  it("carries the delivered effort through repeated resets", () => {
+    const h = harness({ getMuseCatalog: catalog });
+    h.sup.handleSpawn(spawn);
+    h.sup.handleResetSession(reset);
+    h.children[0]!.exit();
+    expect(h.configs[1]).toMatchObject({ model: spawn.model, effort: "low" });
+    h.sup.handleResetSession({ ...reset, request_id: "reset-2" });
+    h.children[1]!.exit();
+    expect(h.configs[2]).toMatchObject({ model: spawn.model, effort: "low" });
+    h.sup.stopAll();
+  });
+
+  it.each([
+    ["different model", { model: "other", model_source: "launch" }],
+    ["default model", {}],
+  ])("does not carry effort to a %s", (_name, nextSnapshot) => {
+    const h = harness({ getMuseCatalog: catalog });
+    h.sup.handleSpawn(spawn);
+    h.sup.handleResetSession({ ...reset, resume_snapshot: nextSnapshot });
+    h.children[0]!.exit();
+    expect(h.configs[1]!.effort).toBeUndefined();
+    h.sup.stopAll();
+  });
+
+  it.each(["resume", "fresh-restore"])(
+    "does not revive effort withheld by %s", (kind) => {
+      const h = harness({ getMuseCatalog: catalog, exists: true });
+      h.sup.handleSpawn({ ...spawn,
+        ...(kind === "resume" ? { resume_session_id: "old" } :
+          { apply_resume_snapshot: true }),
+        resume_snapshot: { ...snapshot, effort: "low", effort_source: "launch" },
+      });
+      expect(h.configs[0]!.effort).toBeUndefined();
+      h.sup.handleResetSession(reset);
+      h.children[0]!.exit();
+      expect(h.configs[1]!.effort).toBeUndefined();
+      h.sup.stopAll();
+    },
+  );
+
+  it("does not revive effort after a failed reset rolls back", () => {
+    const h = harness({ getMuseCatalog: catalog, launchThrowsOnCall: 2 });
+    h.sup.handleSpawn(spawn);
+    h.sup.handleResetSession(reset);
+    h.children[0]!.exit();
+    expect(h.resumes[1]).toBe("old");
+    expect(h.configs[1]!.effort).toBeUndefined();
+    h.sup.handleResetSession({ ...reset, request_id: "reset-2" });
+    h.children[1]!.exit();
+    expect(h.configs[2]!.effort).toBeUndefined();
+    h.sup.stopAll();
+  });
 });

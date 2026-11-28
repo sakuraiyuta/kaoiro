@@ -1255,6 +1255,19 @@ export class Supervisor {
       requestId,
     };
     void _drop;
+    if (entry.parsed.engine === "muse") {
+      delete withoutResume.effort;
+      delete withoutResume.effortSource;
+      if (previousParsed.resumeSessionId === undefined &&
+        !previousParsed.applyResumeSnapshot && previousParsed.effort !== undefined &&
+        previousParsed.model !== undefined && previousParsed.model !== "default" &&
+        previousParsed.model === withoutResume.model) {
+        withoutResume.effort = previousParsed.effort;
+        if (previousParsed.effortSource !== undefined) {
+          withoutResume.effortSource = previousParsed.effortSource;
+        }
+      }
+    }
     entry.parsed = withoutResume;
     // Intentional cycle (same as handleRestart / handleSwitchSession):
     // reset the crash budget so the deliberate kill does not count.

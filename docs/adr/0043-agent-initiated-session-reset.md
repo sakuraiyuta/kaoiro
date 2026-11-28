@@ -157,6 +157,14 @@ reservation is sent only when the reserving turn's prompt returns with a stop
 reason other than `cancelled`. See the
 [Grok engine reference](../reference/engines/grok-acp.md#session-reset).
 
+### D4 Addendum (2026-11-29 — Muse asks on every reset)
+
+Muse exposes `request_session_reset` behind the wrapper-side operator
+approval gate on every call. An approved reservation dispatches at its
+owning turn's authoritative boundary. Muse's ACP approval judge may approve
+MCP calls itself, so it does not replace the wrapper gate. See the
+[Muse engine reference](../reference/engines/muse-acp.md#session-reset).
+
 ### D5 — Do not mechanize handoff; encourage externalization in the tool description
 
 Do not create a mechanism that stores a handoff summary before reset in the

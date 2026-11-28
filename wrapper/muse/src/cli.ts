@@ -9,8 +9,13 @@ import {
   InterAgentTool,
   makeLog,
   mergePendingDisplayNameSync,
+  operatorApprovalGated,
   PermissionBroker,
   QuestionBroker,
+  REQUEST_SESSION_RESET_TOOL_FQN,
+  requestSessionResetDescriptor,
+  SessionResetCoordinator,
+  validateRequestSessionResetInput,
   writeRedactedStderr,
   type Envelope,
   type ToolDescriptor,
@@ -79,6 +84,23 @@ export async function runMuseCli(
     send,
     onPendingChange: (pending) => host?.setPendingQuestion(pending),
   });
+  const sessionReset = new SessionResetCoordinator({
+    request: (mode, reason) => link
+      ? link.requestSessionReset(mode, reason)
+      : Promise.reject(new Error("server link unavailable")),
+    notify: (text) => {
+      const queued = chain.then(async () => {
+        await hostReady;
+        await host!.send(text);
+      });
+      chain = queued.catch(() => {});
+      return queued;
+    },
+    log: (text) => writeRedactedStderr(`${text}\n`),
+  });
+  const resetApprovalDeadlineMs = Math.min(
+    300_000, config.permission_timeout_ms ?? 300_000,
+  );
   const turns = {
     deliverySequencesForTurn: (token: string) =>
       (deliveries.get(token) ?? []).flatMap((envelope) => {
@@ -207,6 +229,8 @@ export async function runMuseCli(
     onPermissionDecision: (
       decision: Parameters<PermissionBroker["resolve"]>[0],
     ) => permission.resolve(decision),
+    onSessionResetFailed: ({ requestId, reason }) =>
+      sessionReset.onResetFailed(requestId, reason),
     onQuestionResponse: (answer: Parameters<QuestionBroker["resolve"]>[0]) =>
       question.resolve(answer),
     onInterrupt: () => {
@@ -320,6 +344,20 @@ export async function runMuseCli(
         toolDescriptors: [
           ...interAgent.descriptors(),
           askUserQuestionDescriptor((questions) => question.decide(questions)),
+          operatorApprovalGated(
+            requestSessionResetDescriptor({
+              reserve: (mode, reason) => sessionReset.reserve(mode, reason,
+                host?.activeInterAgentTurnToken() ?? undefined),
+              offerCompact: false,
+            }),
+            {
+              decide: (name, input, signal) => permission.decide(
+                name, input, signal, { deadlineMs: resetApprovalDeadlineMs },
+              ),
+              toolName: REQUEST_SESSION_RESET_TOOL_FQN,
+              validate: validateRequestSessionResetInput,
+            },
+          ),
           ...(dependencies.additionalTools ?? []),
         ],
         decidePermission: (
@@ -340,11 +378,14 @@ export async function runMuseCli(
           turnToken,
           conversationIds,
           error,
+          settled,
         }: {
           turnToken: string;
           conversationIds: string[];
           error?: { detail: string; reason?: string };
+          settled?: { authoritative: boolean; why?: string };
         }) => {
+          if (settled) sessionReset.onTurnEnd({ turnToken, ...settled });
           question.close();
           for (const notice of interAgent.resolveTurnEnd(
             turnToken,
