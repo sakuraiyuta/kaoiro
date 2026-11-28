@@ -192,9 +192,6 @@ export class MuseHost implements EngineAdapter {
       ...(selection.model
         ? { model: selection.model, model_source: this.#modelSource }
         : {}),
-      ...(selection.effort
-        ? { effort: selection.effort, effort_source: "default" }
-        : {}),
       ...(this.#modes
         ? {
           approval_mode: {
@@ -233,7 +230,6 @@ export class MuseHost implements EngineAdapter {
     return {
       engine: "muse",
       ...(ext.model ? { model: ext.model, model_source: ext.model_source } : {}),
-      ...(ext.effort ? { effort: ext.effort, effort_source: ext.effort_source } : {}),
       ...(ext.approval_mode ? { approval_mode: ext.approval_mode } : {}),
       ...(ext.context ? { context: ext.context } : {}),
     };
@@ -302,9 +298,10 @@ export class MuseHost implements EngineAdapter {
         }
         this.#started = true;
         this.#state("waiting_input");
-        if (typeof config.effort === "string" && config.effort !== "") {
+        if (!this.#resumed && config.effort) {
           this.#options.send(makeLog(config, this.state, new Date().toISOString(), {
-            kind: "system", text: "muse ignores the configured effort; using its default",
+            kind: "system",
+            text: `Muse effort configured at launch: ${config.effort}`,
           }));
         }
         if (prompt !== undefined) void this.send(prompt).catch(() => {});
@@ -364,6 +361,10 @@ export class MuseHost implements EngineAdapter {
 
   async #startSteps(check: () => void): Promise<void> {
     const config = this.#options.config;
+    const args = museAcpArgs({ model: config.model,
+      trustWorkspace: this.#settings.trustWorkspace,
+      effort: this.#options.resumeSessionId === undefined ? config.effort : undefined,
+      personaPrompt: this.#options.personaPrompt });
     const env = childEnvironment(this.#options.env ?? process.env);
     await checkUserAppend(env);
     check();
@@ -379,8 +380,7 @@ export class MuseHost implements EngineAdapter {
     check();
     const childProcess = new MuseProcess(
       executable,
-      museAcpArgs(config.model, this.#settings.trustWorkspace,
-        this.#options.personaPrompt),
+      args,
       this.#options.cwd,
       env,
     );

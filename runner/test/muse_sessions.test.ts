@@ -34,6 +34,13 @@ function fake(scenario: Record<string, unknown>) {
   };
 }
 
+const discoveryExchange = () => [
+  { argv: ["acp"], jsonrpc: "2.0", id: 1, method: "initialize",
+    params: { protocolVersion: 1, clientCapabilities: {} } },
+  { argv: ["acp"], jsonrpc: "2.0", id: 2, method: "session/list",
+    params: { cwd: CWD } },
+];
+
 const entry = (sessionId: string, cwd = CWD, extra: Record<string, unknown> = {}) =>
   ({ sessionId, cwd, title: `title ${sessionId}`, updatedAt: "2026-11-25T00:00:00Z", ...extra });
 
@@ -94,7 +101,7 @@ describe("muse session discovery over session/list", () => {
       { session_id: "sess-1", summary: "title sess-1", mtime: "2026-11-25T00:00:00Z" },
       { session_id: "sess-3" },
     ]);
-    expect(requests().map((r) => r.method)).toEqual(["initialize", "session/list"]);
+    expect(requests()).toEqual(discoveryExchange());
   });
 
   it("pages with the cursor until the last page", async () => {
@@ -123,6 +130,7 @@ describe("muse session discovery over session/list", () => {
     });
     await expect(museSessionExists(CWD, "sess-2", { executable: FAKE, env })).resolves.toBe(true);
     await expect(museSessionExists(CWD, "sess-9", { executable: FAKE, env })).resolves.toBe(false);
+    expect(requests()).toEqual([...discoveryExchange(), ...discoveryExchange()]);
     const before = requests().length;
     await expect(museSessionExists(CWD, "bad id!", { executable: FAKE, env })).resolves.toBe(false);
     expect(requests().length).toBe(before);

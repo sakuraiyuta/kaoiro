@@ -882,13 +882,14 @@ describe("muse host", () => {
     "rejects live selection and reports the session response: %s", async (resumeSessionId) => {
       const { host } = await started({ ...(resumeSessionId ? { resumeSessionId } : {}) });
       expect(host.statusExtSnapshot()).toMatchObject({
-        model: "muse-spark-1.3", effort: "high",
+        model: "muse-spark-1.3",
         session_capabilities: { supports_model_switch: false, supports_effort_switch: false },
       });
       await expect(host.setModel("muse-wonder")).rejects.toThrow(/unsupported/);
       await expect(host.setEffort("low")).rejects.toThrow(/unsupported/);
       await expect(host.send("partial-update")).resolves.toBeUndefined();
-      expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-spark-1.3", effort: "high" });
+      expect(host.statusExtSnapshot()).toMatchObject({ model: "muse-spark-1.3" });
+      expect(host.statusExtSnapshot()).not.toHaveProperty("effort");
       await expect(host.send("next")).resolves.toBeUndefined();
     },
   );

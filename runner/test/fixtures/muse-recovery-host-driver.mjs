@@ -22,7 +22,7 @@ const host = new MuseHost({
   decidePermission: async () => ({ allow: true }),
   send: (envelope) => {
     if (envelope.type === "log" && envelope.payload.kind === "system" &&
-      String(envelope.payload.text).includes("ignores the configured effort")) warnings.push(envelope);
+      String(envelope.payload.text).includes("Muse effort configured at launch")) warnings.push(envelope);
     if (envelope.type === "state_change" && envelope.state === "waiting_input") ready();
   },
 });

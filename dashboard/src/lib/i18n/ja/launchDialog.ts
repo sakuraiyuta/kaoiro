@@ -27,6 +27,10 @@ export const launchDialog = {
   cwd: "作業ディレクトリ",
   engine: "エンジン",
   museExperimental: "Muse (実験的)",
+  museCatalogHint:
+    "モデル一覧はランナー起動時に取得します。デフォルトは Muse の設定に従います。",
+  museEffortHint:
+    "effort は新規起動時に適用します。再開・復元には引き継ぎません。",
   room: "部屋",
   model: "モデル",
   defaultOption: "既定",

@@ -74,17 +74,42 @@ describe("process arguments and environment", () => {
   });
   it("builds the resident ACP arguments, with a launch model pick", () => {
     expect(museAcpArgs()).toContain("acp");
-    expect(museAcpArgs("default")).not.toContain("--model");
+    expect(museAcpArgs({ model: "default" })).not.toContain("--model");
     for (const model of [undefined, "default", "muse-wonder"]) {
-      expect(museAcpArgs(model)).not.toContain("--trust-workspace");
+      expect(museAcpArgs({ model })).not.toContain("--trust-workspace");
     }
-    const args = museAcpArgs("muse-wonder");
+    const args = museAcpArgs({ model: "muse-wonder" });
     expect(args[args.indexOf("--model") + 1]).toBe("muse-wonder");
   });
 
+  it.each([[undefined, "low"], ["default", "low"],
+    ["-invalid", "low"], ["muse-spark-1.2", "invalid"]])(
+    "refuses malformed launch pair %s/%s",
+    (model, effort) => {
+      expect(() => museAcpArgs({ model, effort })).toThrow(/model\/effort/);
+    },
+  );
+
   it("adds --trust-workspace only on the operator's explicit opt-in", () => {
-    expect(museAcpArgs(undefined, true)).toContain("--trust-workspace");
-    expect(museAcpArgs("muse-wonder", true)).toContain("--trust-workspace");
+    expect(museAcpArgs({ trustWorkspace: true })).toContain("--trust-workspace");
+    expect(museAcpArgs({ model: "muse-wonder", trustWorkspace: true }))
+      .toContain("--trust-workspace");
+  });
+
+  it("combines distinct persona and effort overrides with explicit trust", () => {
+    const options = { model: "muse-spark-1.2", effort: "low",
+      personaPrompt: "persona" };
+    for (const trustWorkspace of [false, true]) {
+      const args = museAcpArgs({ ...options, trustWorkspace });
+      const overrides = args.flatMap((arg, index) =>
+        arg === "-c" ? [args[index + 1]] : []);
+      expect(overrides).toHaveLength(2);
+      expect(overrides).toContain('run.system_prompt_append="persona"');
+      expect(overrides).toContain('model_reasoning_efforts={"muse-spark-1.2":"low"}');
+      expect(new Set(overrides.map((value) => value?.split("=")[0])).size).toBe(2);
+      expect(args[args.indexOf("--model") + 1]).toBe(options.model);
+      expect(args.includes("--trust-workspace")).toBe(trustWorkspace);
+    }
   });
 
   it("passes the environment through unchanged, ACP gate included", () => {

@@ -43,6 +43,7 @@ export interface RefreshEngineCatalogDeps {
   /** Live getter for the runner's Grok catalog (grok-catalog.ts), so a
    *  Claude refresh keeps it in the rebuilt register. */
   getGrokCatalog?: () => EngineModelInfo[] | undefined;
+  getMuseCatalog?: () => EngineModelInfo[] | undefined;
   updateRegister: (register: RunnerRegister<EngineKind>) => void;
   sendCatalogResult: (result: EngineCatalogResult) => void;
   /** issue #218: fixed for the process's whole lifetime (computed once at
@@ -129,6 +130,7 @@ async function handle(
         deps.getAntigravityCatalog(),
         deps.getDeliverySnapshot?.(),
         deps.getGrokCatalog?.(),
+        deps.getMuseCatalog?.(),
       );
       deps.updateRegister(nextRegister);
     }
